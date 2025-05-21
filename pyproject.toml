@@ -1,0 +1,11 @@
+[project]
+name = "app-mcp-server"
+version = "0.1.0"
+description = "A Model Context Protocol (MCP) server implementation"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli]",
+    "uvicorn",
+    "pytz",
+]
