@@ -1,7 +1,7 @@
 [project]
 name = "app-mcp-server"
-version = "0.1.0"
-description = "A Model Context Protocol (MCP) server implementation"
+version = "1.0.0"
+description = "Servidor FastMCP para o Rio de Janeiro"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,4 +10,5 @@ dependencies = [
     "pytz",
     "fastmcp>=2.9.2",
     "loguru>=0.7.3",
+    "fastapi>=0.115.14",
 ]
