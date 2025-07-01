@@ -2,10 +2,9 @@
 Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 """
 from fastmcp import FastMCP
-from fastmcp.client.auth import BearerAuth
 from loguru import logger
 
-from src.config import Settings, env
+from src.config.settings import Settings
 from src.tools import (
     add, subtract, multiply, divide, power,
     get_current_time, format_greeting
@@ -26,7 +25,6 @@ def create_app() -> FastMCP:
     mcp = FastMCP(
         name=Settings.SERVER_NAME,
         version=Settings.VERSION,
-        auth=BearerAuth(token=env.VALID_TOKENS)
     )
     
     # Configuração de logging
@@ -142,6 +140,9 @@ mcp = create_app()
 
 # Alias para retro-compatibilidade
 app = mcp
+
+# Para compatibilidade com deploy e serve_http.py
+http_app = mcp.http_app()
 
 
 if __name__ == "__main__":
