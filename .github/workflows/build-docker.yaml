@@ -20,7 +20,7 @@ jobs:
       - name: Extract metadata for Docker tags
         id: meta
         run: |
-          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/app-agentic-search"
+          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/app-mcp-server"
 
           if [ "${GITHUB_REF##*/}" == "main" ]; then
             COMMIT_HASH=${{ github.sha }}
