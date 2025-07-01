@@ -29,6 +29,7 @@ asgi_app = Starlette(
     routes=[
         Route("/health", health),
     ],
+    lifespan=http_app.lifespan,  # IMPORTANTE: passar o lifespan do FastMCP
 )
 
 # Montar o FastMCP app diretamente na raiz
