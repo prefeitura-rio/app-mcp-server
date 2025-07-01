@@ -105,7 +105,15 @@ def create_app() -> FastMCP:
 
 
 # Instância global da aplicação
-app = create_app()
+mcp = create_app()
+
+# Alias para retro-compatibilidade (algumas partes ainda importam `app`)
+app = mcp  # type: ignore
+
+# Exporte um ASGI app para transporte HTTP (Streamable HTTP)
+#   - Endpoint principal:   GET /mcp       (JSON-RPC)
+#   - Endpoint de mensagens:POST /mcp/messages
+http_app = mcp.http_app(path="/mcp", message_path="/mcp/messages")
 
 
 if __name__ == "__main__":
