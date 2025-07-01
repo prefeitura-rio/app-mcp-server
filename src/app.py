@@ -7,6 +7,7 @@ from fastmcp import FastMCP
 from loguru import logger
 
 from src.config.settings import Settings
+from src.middleware.check_token import CheckTokenMiddleware
 from src.tools import (
     add, subtract, multiply, divide, power,
     get_current_time, format_greeting
@@ -28,6 +29,8 @@ def create_app() -> FastMCP:
         name=Settings.SERVER_NAME,
         version=Settings.VERSION,
     )
+    
+    mcp.add_middleware(CheckTokenMiddleware())
     
     @mcp.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> PlainTextResponse:
