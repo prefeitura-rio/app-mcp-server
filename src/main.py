@@ -3,6 +3,7 @@ Ponto de entrada principal para o servidor FastMCP do Rio de Janeiro.
 """
 import os
 import sys
+import argparse
 from pathlib import Path
 
 # Adiciona o diretório raiz do projeto ao Python path
@@ -14,6 +15,6 @@ if __name__ == "__main__":
     mcp.run(
         transport="http",
         host="0.0.0.0",
-        port=8000,
+        port=80,
         path="/mcp"
     )
