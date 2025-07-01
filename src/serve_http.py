@@ -25,7 +25,7 @@ api = FastAPI(
     lifespan=mcp_subapp.lifespan,
 )
 
-@api.get("/")
+@api.get("/health")
 def root() -> dict[str, str]:
     """Endpoint simples de saúde"""
     return {"status": "ok", "mcp": "/mcp"}

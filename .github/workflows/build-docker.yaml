@@ -1,0 +1,46 @@
+name: Build Docker image
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
+
+      - name: Extract metadata for Docker tags
+        id: meta
+        run: |
+          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/app-agentic-search"
+
+          if [ "${GITHUB_REF##*/}" == "main" ]; then
+            COMMIT_HASH=${{ github.sha }}
+            TAGS="stable,$COMMIT_HASH"
+          elif [ "${GITHUB_REF##*/}" == "staging" ]; then
+            COMMIT_HASH=${{ github.sha }}
+            TAGS="latest,$COMMIT_HASH"
+          fi
+
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+          echo "TAGS=$TAGS" >> $GITHUB_ENV
+
+      - name: Build and tag Docker image
+        run: |
+          for TAG in $(echo $TAGS | tr "," "\n"); do
+            docker build -t $IMAGE_NAME:$TAG .
+          done
+
+      - name: Push Docker image
+        run: |
+          for TAG in $(echo $TAGS | tr "," "\n"); do
+            docker push $IMAGE_NAME:$TAG
+          done
