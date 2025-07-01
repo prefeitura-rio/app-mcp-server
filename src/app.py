@@ -1,6 +1,8 @@
 """
 Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 """
+from fastapi import Request
+from fastapi.responses import PlainTextResponse
 from fastmcp import FastMCP
 from loguru import logger
 
@@ -26,6 +28,10 @@ def create_app() -> FastMCP:
         name=Settings.SERVER_NAME,
         version=Settings.VERSION,
     )
+    
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health_check(request: Request) -> PlainTextResponse:
+        return PlainTextResponse("OK")
     
     # Configuração de logging
     logger.info(f"Inicializando {Settings.SERVER_NAME} v{Settings.VERSION}")
