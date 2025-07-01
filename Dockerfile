@@ -14,4 +14,4 @@ RUN uv sync
 
 EXPOSE 80
     
-CMD ["uv", "run", "uvicorn", "src.serve_http:asgi_app", "--host", "0.0.0.0", "--port", "80", "--workers", "1", "--log-level", "info"] 
+CMD ["uv", "run", "python", "-m", "src.main"] 

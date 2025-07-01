@@ -44,7 +44,7 @@ asgi_app = Starlette(
 )
 
 # Montar o FastMCP app no endpoint /mcp
-asgi_app.mount("/mcp", http_app)
+asgi_app.mount("/mcp/", http_app)
 
 if __name__ == "__main__":
     import uvicorn
