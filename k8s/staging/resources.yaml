@@ -2,12 +2,12 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: app-mcp-server
+  name: mcp
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: app-mcp-server
+      app: mcp
   strategy:
     rollingUpdate:
       maxSurge: 1
@@ -15,16 +15,16 @@ spec:
   template:
     metadata:
       labels:
-        app: app-mcp-server
+        app: mcp
     spec:
       containers:
-        - name: app-mcp-server
+        - name: mcp
           image: ghcr.io/prefeitura-rio/app-mcp-server:latest
           ports:
             - containerPort: 80
           envFrom:
             - secretRef:
-                name: app-mcp-server-secrets
+                name: mcp-secrets
           livenessProbe:
             httpGet:
               path: /health
@@ -50,27 +50,12 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: app-mcp-server
+  name: mcp
 spec:
   selector:
-    app: app-mcp-server
+    app: mcp
   ports:
     - protocol: TCP
       port: 80
       targetPort: 80
   type: ClusterIP
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  labels:
-    app: app-mcp-server
-  name: app-mcp-server
-spec:
-  ports:
-    - name: "80"
-      port: 80
-      targetPort: 80
-  selector:
-    app: app-mcp-server
