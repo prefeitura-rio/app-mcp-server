@@ -5,6 +5,12 @@ from .app import http_app
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+# Endpoint de saúde
+async def health(request):
+    return JSONResponse({"status": "ok", "service": "Rio MCP Server"})
 
 # Adicionar CORS ao http_app
 middleware = [
@@ -17,10 +23,12 @@ middleware = [
     )
 ]
 
-# Criar app Starlette com CORS e montar o FastMCP
+# Criar app Starlette com CORS e rota de saúde
 asgi_app = Starlette(
     middleware=middleware,
-    routes=[],
+    routes=[
+        Route("/health", health),
+    ],
 )
 
 # Montar o FastMCP app diretamente na raiz
