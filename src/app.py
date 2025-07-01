@@ -140,17 +140,3 @@ mcp = create_app()
 
 # Alias para retro-compatibilidade
 app = mcp
-
-# Para compatibilidade com deploy e serve_http.py
-http_app = mcp.http_app()
-
-
-if __name__ == "__main__":
-    # Executar com transporte HTTP nativo do FastMCP
-    logger.info("🚀 Iniciando servidor MCP com transporte HTTP...")
-    mcp.run(
-        transport="http",
-        host="0.0.0.0", 
-        port=80,
-        path="/mcp"
-    ) 
