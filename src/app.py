@@ -113,7 +113,7 @@ app = mcp  # type: ignore
 # Exporte um ASGI app para transporte HTTP (Streamable HTTP)
 #   - Endpoint principal:   GET /mcp       (JSON-RPC)
 #   - Endpoint de mensagens:POST /mcp/messages
-http_app = mcp.http_app(path="/mcp")
+http_app = mcp.http_app()
 
 
 if __name__ == "__main__":
