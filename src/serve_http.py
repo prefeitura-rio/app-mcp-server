@@ -1,7 +1,7 @@
 """
 Servidor HTTP para expor o FastMCP via ASGI.
 """
-from .app import http_app
+from src.app import http_app
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.applications import Starlette
@@ -12,28 +12,39 @@ from starlette.routing import Route
 async def health(request):
     return JSONResponse({"status": "ok", "service": "Rio MCP Server"})
 
-# Adicionar CORS ao http_app
+# Endpoint raiz com informações básicas
+async def root(request):
+    return JSONResponse({
+        "service": "Rio MCP Server",
+        "version": "1.0.0",
+        "mcp_endpoint": "/mcp",
+        "health_endpoint": "/health",
+        "status": "ready"
+    })
+
+# Adicionar CORS
 middleware = [
     Middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
         allow_credentials=True,
     )
 ]
 
-# Criar app Starlette com CORS e rota de saúde
+# Criar app Starlette com CORS e rotas próprias
 asgi_app = Starlette(
     middleware=middleware,
     routes=[
-        Route("/health", health),
+        Route("/", root, methods=["GET"]),
+        Route("/health", health, methods=["GET"]),
     ],
     lifespan=http_app.lifespan,  # IMPORTANTE: passar o lifespan do FastMCP
 )
 
-# Montar o FastMCP app diretamente na raiz
-asgi_app.mount("/", http_app)
+# Montar o FastMCP app no endpoint /mcp
+asgi_app.mount("/mcp", http_app)
 
 if __name__ == "__main__":
     import uvicorn

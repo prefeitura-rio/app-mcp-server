@@ -2,17 +2,15 @@
 Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 """
 from fastmcp import FastMCP
+from fastmcp.client.auth import BearerAuth
 from loguru import logger
 
-from src.middlewares.token_validation import create_bearer_middleware
-from src.config import env
-
-from .config import Settings
-from .tools import (
+from src.config import Settings, env
+from src.tools import (
     add, subtract, multiply, divide, power,
     get_current_time, format_greeting
 )
-from .resources import (
+from src.resources import (
     get_districts_list, get_rio_basic_info, get_greeting_message
 )
 
@@ -24,11 +22,11 @@ def create_app() -> FastMCP:
     Returns:
         Instância configurada do FastMCP
     """
-    # Inicializa o servidor FastMCP
+    # Inicializa o servidor FastMCP SEM middleware de autenticação para simplificar
     mcp = FastMCP(
         name=Settings.SERVER_NAME,
         version=Settings.VERSION,
-        middleware=[create_bearer_middleware(valid_tokens=env.VALID_TOKENS)]
+        auth=BearerAuth(token=env.VALID_TOKENS)
     )
     
     # Configuração de logging
@@ -37,26 +35,61 @@ def create_app() -> FastMCP:
     # ===== REGISTRAR TOOLS =====
     
     # Tools de calculadora
-    mcp.tool()(add)
-    mcp.tool()(subtract) 
-    mcp.tool()(multiply)
-    mcp.tool()(divide)
-    mcp.tool()(power)
+    @mcp.tool
+    def calculator_add(a: float, b: float) -> float:
+        """Soma dois números"""
+        return add(a, b)
+    
+    @mcp.tool
+    def calculator_subtract(a: float, b: float) -> float:
+        """Subtrai dois números"""
+        return subtract(a, b)
+    
+    @mcp.tool
+    def calculator_multiply(a: float, b: float) -> float:
+        """Multiplica dois números"""
+        return multiply(a, b)
+    
+    @mcp.tool
+    def calculator_divide(a: float, b: float) -> float:
+        """Divide dois números"""
+        return divide(a, b)
+    
+    @mcp.tool
+    def calculator_power(base: float, exponent: float) -> float:
+        """Calcula a potência de um número"""
+        return power(base, exponent)
     
     # Tools de data/hora
-    mcp.tool()(get_current_time)
-    mcp.tool()(format_greeting)
+    @mcp.tool
+    def time_current() -> str:
+        """Obtém a hora atual no Rio de Janeiro"""
+        return get_current_time()
+    
+    @mcp.tool
+    def greeting_format() -> str:
+        """Gera uma saudação personalizada baseada no horário"""
+        return format_greeting()
     
     # ===== REGISTRAR RESOURCES =====
     
     # Resource com lista de bairros
-    mcp.resource(f"{Settings.RESOURCE_PREFIX}districts")(get_districts_list)
+    @mcp.resource(f"{Settings.RESOURCE_PREFIX}districts")
+    def resource_districts():
+        """Lista de bairros do Rio de Janeiro"""
+        return get_districts_list()
     
     # Resource com informações básicas do Rio
-    mcp.resource(f"{Settings.RESOURCE_PREFIX}rio_info")(get_rio_basic_info)
+    @mcp.resource(f"{Settings.RESOURCE_PREFIX}rio_info")
+    def resource_rio_info():
+        """Informações básicas sobre o Rio de Janeiro"""
+        return get_rio_basic_info()
     
     # Resource com mensagem de boas-vindas
-    mcp.resource(f"{Settings.RESOURCE_PREFIX}greeting")(get_greeting_message)
+    @mcp.resource(f"{Settings.RESOURCE_PREFIX}greeting")
+    def resource_greeting():
+        """Mensagem de boas-vindas"""
+        return get_greeting_message()
     
     # ===== REGISTRAR PROMPTS =====
     
@@ -107,35 +140,16 @@ def create_app() -> FastMCP:
 # Instância global da aplicação
 mcp = create_app()
 
-# Alias para retro-compatibilidade (algumas partes ainda importam `app`)
-app = mcp  # type: ignore
-
-# Exporte um ASGI app para transporte HTTP (Streamable HTTP)
-#   - Endpoint principal:   GET /mcp       (JSON-RPC)
-#   - Endpoint de mensagens:POST /mcp/messages
-http_app = mcp.http_app()
+# Alias para retro-compatibilidade
+app = mcp
 
 
 if __name__ == "__main__":
-    # Para teste local
-    import asyncio
-    from fastmcp import Client
-    
-    async def test_server():
-        """Função de teste simples para o servidor"""
-        client = Client(app)
-        
-        async with client:
-            # Testa uma ferramenta
-            result = await client.call_tool("add", {"a": 5, "b": 3})
-            print(f"Teste de soma: {result}")
-            
-            # Testa um resource
-            districts = await client.get_resource("rio://resources/districts")
-            print(f"Primeiros 3 bairros: {districts[:3]}")
-            
-            # Testa saudação
-            greeting = await client.call_tool("format_greeting", {})
-            print(f"Saudação: {greeting}")
-    
-    asyncio.run(test_server()) 
+    # Executar com transporte HTTP nativo do FastMCP
+    logger.info("🚀 Iniciando servidor MCP com transporte HTTP...")
+    mcp.run(
+        transport="http",
+        host="0.0.0.0", 
+        port=8000,
+        path="/mcp"
+    ) 

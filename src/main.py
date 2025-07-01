@@ -1,26 +1,19 @@
 """
 Ponto de entrada principal para o servidor FastMCP do Rio de Janeiro.
 """
+import os
 import sys
 from pathlib import Path
-import uvicorn
-from app import http_app
 
-# Adiciona o diretório src ao Python path
-sys.path.insert(0, str(Path(__file__).parent))
+# Adiciona o diretório raiz do projeto ao Python path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-
-def main():
-    """Executa o servidor ASGI via Uvicorn (1 worker)."""
-    uvicorn.run(
-        "app:http_app",
-        host="0.0.0.0",
-        port=80,
-        log_level="info",
-        workers=1,
-        factory=False,
-    )
-
+from src.app import mcp
 
 if __name__ == "__main__":
-    main()
+    mcp.run(
+        transport="http",
+        host="0.0.0.0",
+        port=8000,
+        path="/mcp"
+    )
