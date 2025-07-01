@@ -13,6 +13,7 @@ from .config import Settings
 
 from fastapi import FastAPI
 from fastmcp.server.http import create_streamable_http_app
+from starlette.middleware.cors import CORSMiddleware
 
 # Cria sub-aplicação Starlette para o protocolo MCP
 mcp_subapp = create_streamable_http_app(mcp_app, "/")
@@ -25,6 +26,15 @@ api = FastAPI(
     lifespan=mcp_subapp.lifespan,
 )
 
+# Permitir requisições de qualquer origem (ajuste conforme necessidade)
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
+
 @api.get("/health")
 def root() -> dict[str, str]:
     """Endpoint simples de saúde"""
@@ -32,6 +42,11 @@ def root() -> dict[str, str]:
 
 # Monta o sub-app MCP
 api.mount("/mcp", mcp_subapp)
+
+# Endpoint GET simples dentro de /mcp/ (usado por "Test connection")
+@mcp_subapp.get("/")
+async def mcp_root() -> dict[str, str]:
+    return {"status": "mcp ok"}
 
 # ASGI app exportado para Uvicorn
 asgi_app = api
