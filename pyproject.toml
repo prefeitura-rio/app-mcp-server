@@ -8,4 +8,6 @@ dependencies = [
     "mcp[cli]",
     "uvicorn",
     "pytz",
+    "fastmcp>=2.9.2",
+    "loguru>=0.7.3",
 ]
