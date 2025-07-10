@@ -82,7 +82,7 @@ wheels = [
 [[package]]
 name = "app-mcp-server"
 version = "1.0.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "dotenv" },

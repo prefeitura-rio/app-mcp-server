@@ -14,11 +14,3 @@ dependencies = [
     "aiohttp>=3.12.13",
     "dotenv>=0.9.9",
 ]
-
-
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["."]
