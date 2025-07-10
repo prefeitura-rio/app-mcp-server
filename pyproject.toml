@@ -12,4 +12,13 @@ dependencies = [
     "loguru>=0.7.3",
     "fastapi>=0.115.14",
     "aiohttp>=3.12.13",
+    "dotenv>=0.9.9",
 ]
+
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
