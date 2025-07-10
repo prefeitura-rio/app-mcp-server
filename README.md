@@ -15,7 +15,7 @@ cd app-mcp-server
 uv sync
 ```
 
-3. Crie o arquivo `str/config/.env`:
+3. Crie o arquivo `src/config/.env`:
 ```env
 VALID_TOKENS="token"
 IS_LOCAL="true"
