@@ -3,7 +3,7 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 """
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
-from fastmcp import FastMCP
+
 from loguru import logger
 
 from src.config.settings import Settings
@@ -16,6 +16,11 @@ from src.resources import (
     get_districts_list, get_rio_basic_info, get_greeting_message
 )
 
+from src.config.env import IS_LOCAL
+if IS_LOCAL:
+    from mcp.server.fastmcp import FastMCP
+else:
+    from fastmcp import FastMCP
 
 def create_app() -> FastMCP:
     """
@@ -24,56 +29,56 @@ def create_app() -> FastMCP:
     Returns:
         Instância configurada do FastMCP
     """
-    # Inicializa o servidor FastMCP SEM middleware de autenticação para simplificar
+    # Inicializa o servidor FastMCP
     mcp = FastMCP(
         name=Settings.SERVER_NAME,
         version=Settings.VERSION,
     )
     
-    mcp.add_middleware(CheckTokenMiddleware())
-    
-    @mcp.custom_route("/health", methods=["GET"])
-    async def health_check(request: Request) -> PlainTextResponse:
-        return PlainTextResponse("OK")
-    
+    if not IS_LOCAL:
+        mcp.add_middleware(CheckTokenMiddleware())
+        
+        @mcp.custom_route("/health", methods=["GET"])
+        async def health_check(request: Request) -> PlainTextResponse:
+            return PlainTextResponse("OK")
     # Configuração de logging
     logger.info(f"Inicializando {Settings.SERVER_NAME} v{Settings.VERSION}")
     
     # ===== REGISTRAR TOOLS =====
     
     # Tools de calculadora
-    @mcp.tool
+    @mcp.tool()
     def calculator_add(a: float, b: float) -> float:
         """Soma dois números"""
         return add(a, b)
     
-    @mcp.tool
+    @mcp.tool()
     def calculator_subtract(a: float, b: float) -> float:
         """Subtrai dois números"""
         return subtract(a, b)
     
-    @mcp.tool
+    @mcp.tool()
     def calculator_multiply(a: float, b: float) -> float:
         """Multiplica dois números"""
         return multiply(a, b)
     
-    @mcp.tool
+    @mcp.tool()
     def calculator_divide(a: float, b: float) -> float:
         """Divide dois números"""
         return divide(a, b)
     
-    @mcp.tool
+    @mcp.tool()
     def calculator_power(base: float, exponent: float) -> float:
         """Calcula a potência de um número"""
         return power(base, exponent)
     
     # Tools de data/hora
-    @mcp.tool
+    @mcp.tool()
     def time_current() -> str:
         """Obtém a hora atual no Rio de Janeiro"""
         return get_current_time()
     
-    @mcp.tool
+    @mcp.tool()
     def greeting_format() -> str:
         """Gera uma saudação personalizada baseada no horário"""
         return format_greeting()
