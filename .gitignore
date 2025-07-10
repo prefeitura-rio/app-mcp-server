@@ -1,4 +1,14 @@
 # Virtual Environments
+
+test.py
+test.ipynb
+test.md
+
+**/**/test.py
+**/**/test.ipynb
+**/**/test.md
+
+
 .venv/
 venv/
 ENV/
