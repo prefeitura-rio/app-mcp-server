@@ -27,13 +27,13 @@ IS_LOCAL="true"
 
 Para usar a interface web local e testar todas as funcionalidades:
 
-**Importante**: Certifique-se de que `IS_LOCAL=true` no arquivo `.env`
+**Importante**: Certifique-se de que `IS_LOCAL=true` no arquivo `.env`. Para desativar a autenticação local adicione `DANGEROUSLY_OMIT_AUTH=true` ao `.env` e escolha `STDIO` como Transport Type na UI.
 
 ```bash
 uv run mcp dev src/app.py
 ```
 
-O servidor estará disponível em `http://localhost:6274`
+O servidor estará disponível em `http://localhost:627X`
 
 
 ### Opção 2: Execução Direta
