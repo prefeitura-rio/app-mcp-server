@@ -10,7 +10,7 @@ from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
 from src.tools import (
     add, subtract, multiply, divide, power,
-    get_current_time, format_greeting
+    get_current_time, format_greeting, get_equipaments_categories, get_equipaments
 )
 from src.resources import (
     get_districts_list, get_rio_basic_info, get_greeting_message
@@ -78,10 +78,21 @@ def create_app() -> FastMCP:
         """Obtém a hora atual no Rio de Janeiro"""
         return get_current_time()
     
+    
     @mcp.tool()
     def greeting_format() -> str:
         """Gera uma saudação personalizada baseada no horário"""
         return format_greeting()
+    
+    @mcp.tool()
+    def equipaments_categories() -> str:
+        """Obtém todas as categorias de equipamentos"""
+        return get_equipaments_categories()
+    
+    @mcp.tool()
+    def equipaments_by_address(address: str) -> str:
+        """Obtém os equipamentos mais proximos de um endereço"""
+        return get_equipaments(address)
     
     # ===== REGISTRAR RESOURCES =====
     

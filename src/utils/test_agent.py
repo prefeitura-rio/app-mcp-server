@@ -197,7 +197,7 @@ class GeminiService:
                 # Execute the tool using the connected MCP client
                 try:
                     tool_result = await mcp_client.call_tool(tool_name, **tool_args)
-                    logger.info(f"Resultado da ferramenta '{tool_name}': {tool_result}")
+                    # logger.info(f"Resultado da ferramenta '{tool_name}': {tool_result}")
                 except Exception as e:
                     logger.error(f"Error executing tool '{tool_name}': {e}")
                     tool_result = f"Error: {str(e)}"
@@ -220,17 +220,15 @@ async def main():
     
     gemini = GeminiService(mcp_server_params=mcp_server_params)
     system_prompt = f"""
-    Você é um assistente de matemática. 
-    
-    REGRAS OBRIGATÓRIAS:
-    1. Para QUALQUER operação matemática, você DEVE usar as ferramentas disponíveis
-    2. NUNCA calcule nada mentalmente - sempre use as ferramentas de calculadora
-    3. Execute uma operação por vez, aguarde o resultado, depois continue
-    4. Se não usar uma ferramenta para um cálculo, você estará violando as regras
+    Voce é um agente especializado em localizar equipamentos publicos da cidade do Rio de Janeiro.
+    Voce deve interpretar a pergunta do usuario e usar as ferramentas disponiveis para localizar os equipamentos que o auxilie.
+    Seu retorno deve conter todas as informações do equipamento encontrado.
+    Inclua a distancia do equipamento encontrado ao endereço do usuario.
     """
     
     query = f"""
-        Problema a ser resolvido: Quanto é ((73ˆ5)*10) + 93
+        Minha esposa está em trabalho de parto!! O que eu faco?
+        meu endereco é Avenida Presidente Vargas, 1
     """
     
     # Generate content with tools
