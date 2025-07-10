@@ -61,136 +61,45 @@ class MCPToolsManager:
         
         return await self.session.list_tools()
 
-    def call_tool(self, tool_name: str) -> Any:
+    async def call_tool(self, tool_name: str, **kwargs) -> Any:
         """
-        Create a callable function for a specific tool.
-        This allows us to execute database operations through the MCP server.
-
+        Execute a tool with the given arguments.
+        
         Args:
-            tool_name: The name of the tool to create a callable for
-
+            tool_name: The name of the tool to execute
+            **kwargs: Arguments to pass to the tool
+            
         Returns:
-            A callable async function that executes the specified tool
+            The result of the tool execution
         """
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
-
-        async def callable(*args, **kwargs):
-            response = await self.session.call_tool(tool_name, arguments=kwargs)
-            return response.content[0].text
-
-        return callable
+        
+        response = await self.session.call_tool(tool_name, arguments=kwargs)
+        return response.content[0].text
             
             
 class GeminiService:
-    def __init__(self):
+    def __init__(self, mcp_server_params: StdioServerParameters):
         """Inicializa o cliente Gemini com as configurações do ambiente."""
         self.api_key = env.GEMINI_API_KEY
         self.client = genai.Client(api_key=self.api_key)
+        self.mcp_manager = MCPToolsManager(server_params=mcp_server_params)
+        
         
     def get_client(self):
         """Retorna a instância do cliente Gemini."""
         return self.client
     
-    async def generate_content(
-        self,
-        query: str,
-        model: str = "gemini-2.5-flash",
-        temperature: float = 0.0,
-        retry_attempts: int = 3,
-        tools: List[Tool] = None,
-        tool_callables: Dict[str, Any] = None
-    ):
-        """
-        Generate content using Gemini with MCP tools support.
-        
-        Args:
-            query: The user query
-            model: The Gemini model to use
-            temperature: Temperature for generation
-            retry_attempts: Number of retry attempts
-            tools: List of Tool objects for Gemini
-            tool_callables: Dictionary mapping tool names to callable functions
-        """
-        if tools is None:
-            tools = []
-        if tool_callables is None:
-            tool_callables = {}
-            
-        logger.info(f"Iniciando pesquisa Google para: {query}")
-        
-        logger.info("Gerando conteúdo com Gemini...")
-        contents = [
-            Content(role="user", parts=[Part(text=query)])
-        ]
-        
-        generation_config = GenerateContentConfig(
-            temperature=temperature,
-            thinking_config=ThinkingConfig(
-                thinking_budget=-1,
-            ),
-            tools=tools,
-            response_mime_type="text/plain",
-        )
-        
-        client = self.get_client()
-        
-        while True:
-            response = await client.aio.models.generate_content(
-                model=model,
-                contents=contents,
-                config=generation_config,
-            )
-            candidate = response.candidates[0]
-            
-            # Check if the model decided to call a function
-            if not candidate.content.parts or not candidate.content.parts[0].function_call:
-                # If no function call, we are done. Return the final content.
-                contents.append(candidate.content)
-                return contents
-            
-            # The model made a function call
-            function_call = candidate.content.parts[0].function_call
-            tool_name = function_call.name
-            tool_args = dict(function_call.args)
-            logger.info(f"Modelo solicitou chamada da ferramenta: {tool_name} com args: {tool_args}")
-            
-            # Add the model's request to the conversation history
-            contents.append(candidate.content)
-            
-            # Check if we have a callable for this tool
-            if tool_name not in tool_callables:
-                raise ValueError(f"Tool '{tool_name}' not found in available callables")
-            
-            # Execute the tool
-            tool_result = await tool_callables[tool_name](**tool_args)
-            
-            logger.info(f"Resultado da ferramenta '{tool_name}': {tool_result}")
-
-            # Add the tool's response to the conversation history for the next turn
-            contents.append(Content(
-                role="user",
-                parts=[Part.from_function_response(
-                    name=tool_name,
-                    response={"result": tool_result},
-                )]
-            ))
     
-    
-async def main():
-    server_params = StdioServerParameters(
-        command="uv",
-        args=["run", "python", "src/main.py"]
-    )
-    
-    async with MCPToolsManager(server_params) as mcp_client:
+    async def get_tools_declarations(self,mcp_client):
+        """Get tool declarations for Gemini without creating callables"""
         # Get available tools from MCP server
         mcp_tools = await mcp_client.get_available_tools()
         
         # Prepare system prompt and tool declarations
         system_prompt_tools = ""
         tool_declarations = []
-        tool_callables = {}  # Dictionary to map tool names to callable functions
         
         for tool in mcp_tools.tools:
             # Parse parameters for Gemini format
@@ -215,30 +124,124 @@ async def main():
                 parameters=parsed_parameters,
             )
             tool_declarations.append(declaration)
-            
-            # Create callable function and add to mapping
-            tool_callables[tool.name] = mcp_client.call_tool(tool.name)
-    
-        # Initialize Gemini service
-        gemini = GeminiService()
 
-        # Create query
-        query = f"""
-        Quanto é ((73ˆ5)*10) + 93
+        return [Tool(function_declarations=tool_declarations)], system_prompt_tools
+    
+    async def generate_content(
+        self,
+        query: str,
+        system_prompt: str = None,
+        model: str = "gemini-2.5-flash",
+        temperature: float = 0.0,
+        retry_attempts: int = 3,
+    ):
+        """
+        Generate content using Gemini with MCP tools support.
+        
+        Args:
+            query: The user query
+            model: The Gemini model to use
+            temperature: Temperature for generation
+            retry_attempts: Number of retry attempts
         """
         
-        # Create tools list for Gemini
-        tools = [Tool(function_declarations=tool_declarations)]
-        
-        # Generate content with tools
-        content = await gemini.generate_content(
-            query=query, 
-            tools=tools,
-            tool_callables=tool_callables
-        )
-        
-        print("Final response:")
-        for c in content:
+        # Use the MCP manager as a context manager for the entire generation process
+        async with self.mcp_manager as mcp_client:
+            # Get tool declarations
+            tools, system_prompt_tools = await self.get_tools_declarations(mcp_client=mcp_client)
+            
+            logger.info(f"Iniciando pesquisa Google para: {query}")
+            logger.info("Gerando conteúdo com Gemini...")
+            
+            contents = [
+                Content(role="user", parts=[Part(text=query)])
+            ]
+            
+            generation_config = GenerateContentConfig(
+                temperature=temperature,
+                thinking_config=ThinkingConfig(
+                    thinking_budget=-1,
+                ),
+                tools=tools,
+                response_mime_type="text/plain",
+                system_instruction= [
+                    Part.from_text(text=system_prompt + "\n" + system_prompt_tools),
+                ] if system_prompt else None
+            )
+            client = self.get_client()
+            while True:
+                
+                
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=generation_config,
+                )
+                candidate = response.candidates[0]
+                
+                # Check if the model decided to call a function
+                if not candidate.content.parts or not candidate.content.parts[0].function_call:
+                    # If no function call, we are done. Return the final content.
+                    contents.append(candidate.content)
+                    return contents
+                
+                # The model made a function call
+                function_call = candidate.content.parts[0].function_call
+                tool_name = function_call.name
+                tool_args = dict(function_call.args)
+                logger.info(f"Modelo solicitou chamada da ferramenta: {tool_name} com args: {tool_args}")
+                
+                # Add the model's request to the conversation history
+                contents.append(candidate.content)
+                
+                # Execute the tool using the connected MCP client
+                try:
+                    tool_result = await mcp_client.call_tool(tool_name, **tool_args)
+                    logger.info(f"Resultado da ferramenta '{tool_name}': {tool_result}")
+                except Exception as e:
+                    logger.error(f"Error executing tool '{tool_name}': {e}")
+                    tool_result = f"Error: {str(e)}"
+
+                # Add the tool's response to the conversation history for the next turn
+                contents.append(Content(
+                    role="user",
+                    parts=[Part.from_function_response(
+                        name=tool_name,
+                        response={"result": tool_result},
+                    )]
+                ))
+    
+    
+async def main():
+    mcp_server_params = StdioServerParameters(
+        command="uv",
+        args=["run", "python", "src/main.py"]
+    )
+    
+    gemini = GeminiService(mcp_server_params=mcp_server_params)
+    system_prompt = f"""
+    Você é um assistente de matemática. 
+    
+    REGRAS OBRIGATÓRIAS:
+    1. Para QUALQUER operação matemática, você DEVE usar as ferramentas disponíveis
+    2. NUNCA calcule nada mentalmente - sempre use as ferramentas de calculadora
+    3. Execute uma operação por vez, aguarde o resultado, depois continue
+    4. Se não usar uma ferramenta para um cálculo, você estará violando as regras
+    """
+    
+    query = f"""
+        Problema a ser resolvido: Quanto é ((73ˆ5)*10) + 93
+    """
+    
+    # Generate content with tools
+    content = await gemini.generate_content(
+        query=query, 
+        system_prompt=system_prompt,
+        model="gemini-2.5-flash",
+    )
+    
+    print("Final response:")
+    for c in content:
             if c.role == "model" and c.parts:
                 for part in c.parts:
                     if hasattr(part, 'text') and part.text:
