@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from src.utils.prompts import SYSTEM_PROMPT_EAI
+
 
 class MCPToolsManager:
     def __init__(self, server_params: StdioServerParameters):
@@ -30,12 +32,12 @@ class MCPToolsManager:
         self.server_params = server_params
         self.session = None
         self._client = None
-        
+
     async def __aenter__(self):
         """Async context manager entry"""
         await self.connect()
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit"""
         if self.session:
@@ -51,56 +53,54 @@ class MCPToolsManager:
         self.session = await session.__aenter__()
         logger.info(f"Connected to MCP server: {self.server_params}")
         await self.session.initialize()
-    
+
     async def get_available_tools(self) -> List[Any]:
         """
         Retrieve a list of available tools from the MCP server.
         """
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
-        
+
         return await self.session.list_tools()
 
     async def call_tool(self, tool_name: str, **kwargs) -> Any:
         """
         Execute a tool with the given arguments.
-        
+
         Args:
             tool_name: The name of the tool to execute
             **kwargs: Arguments to pass to the tool
-            
+
         Returns:
             The result of the tool execution
         """
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
-        
+
         response = await self.session.call_tool(tool_name, arguments=kwargs)
         return response.content[0].text
-            
-            
+
+
 class GeminiService:
     def __init__(self, mcp_server_params: StdioServerParameters):
         """Inicializa o cliente Gemini com as configurações do ambiente."""
         self.api_key = env.GEMINI_API_KEY
         self.client = genai.Client(api_key=self.api_key)
         self.mcp_manager = MCPToolsManager(server_params=mcp_server_params)
-        
-        
+
     def get_client(self):
         """Retorna a instância do cliente Gemini."""
         return self.client
-    
-    
-    async def get_tools_declarations(self,mcp_client):
+
+    async def get_tools_declarations(self, mcp_client):
         """Get tool declarations for Gemini without creating callables"""
         # Get available tools from MCP server
         mcp_tools = await mcp_client.get_available_tools()
-        
+
         # Prepare system prompt and tool declarations
         system_prompt_tools = ""
         tool_declarations = []
-        
+
         for tool in mcp_tools.tools:
             # Parse parameters for Gemini format
             parsed_parameters = json.loads(
@@ -112,11 +112,11 @@ class GeminiService:
                 .replace("array", "ARRAY")
                 .replace("integer", "INTEGER")
             )
-            
+
             # Build system prompt
             system_prompt_tools += f"Tool Name: {tool.name}: {tool.description}\n"
             system_prompt_tools += f"Parameters: {json.dumps(parsed_parameters, indent=4, ensure_ascii=False)}\n"
-            
+
             # Create function declaration for Gemini
             declaration = FunctionDeclaration(
                 name=tool.name,
@@ -126,7 +126,7 @@ class GeminiService:
             tool_declarations.append(declaration)
 
         return [Tool(function_declarations=tool_declarations)], system_prompt_tools
-    
+
     async def generate_content(
         self,
         query: str,
@@ -137,26 +137,26 @@ class GeminiService:
     ):
         """
         Generate content using Gemini with MCP tools support.
-        
+
         Args:
             query: The user query
             model: The Gemini model to use
             temperature: Temperature for generation
             retry_attempts: Number of retry attempts
         """
-        
+
         # Use the MCP manager as a context manager for the entire generation process
         async with self.mcp_manager as mcp_client:
             # Get tool declarations
-            tools, system_prompt_tools = await self.get_tools_declarations(mcp_client=mcp_client)
-            
+            tools, system_prompt_tools = await self.get_tools_declarations(
+                mcp_client=mcp_client
+            )
+
             logger.info(f"Iniciando pesquisa Google para: {query}")
             logger.info("Gerando conteúdo com Gemini...")
-            
-            contents = [
-                Content(role="user", parts=[Part(text=query)])
-            ]
-            
+
+            contents = [Content(role="user", parts=[Part(text=query)])]
+
             generation_config = GenerateContentConfig(
                 temperature=temperature,
                 thinking_config=ThinkingConfig(
@@ -164,36 +164,44 @@ class GeminiService:
                 ),
                 tools=tools,
                 response_mime_type="text/plain",
-                system_instruction= [
-                    Part.from_text(text=system_prompt + "\n" + system_prompt_tools),
-                ] if system_prompt else None
+                system_instruction=(
+                    [
+                        Part.from_text(text=system_prompt + "\n" + system_prompt_tools),
+                    ]
+                    if system_prompt
+                    else None
+                ),
             )
             client = self.get_client()
             while True:
-                
-                
+
                 response = await client.aio.models.generate_content(
                     model=model,
                     contents=contents,
                     config=generation_config,
                 )
                 candidate = response.candidates[0]
-                
+
                 # Check if the model decided to call a function
-                if not candidate.content.parts or not candidate.content.parts[0].function_call:
+                if (
+                    not candidate.content.parts
+                    or not candidate.content.parts[0].function_call
+                ):
                     # If no function call, we are done. Return the final content.
                     contents.append(candidate.content)
                     return contents
-                
+
                 # The model made a function call
                 function_call = candidate.content.parts[0].function_call
                 tool_name = function_call.name
                 tool_args = dict(function_call.args)
-                logger.info(f"Modelo solicitou chamada da ferramenta: {tool_name} com args: {tool_args}")
-                
+                logger.info(
+                    f"Modelo solicitou chamada da ferramenta: {tool_name} com args: {tool_args}"
+                )
+
                 # Add the model's request to the conversation history
                 contents.append(candidate.content)
-                
+
                 # Execute the tool using the connected MCP client
                 try:
                     tool_result = await mcp_client.call_tool(tool_name, **tool_args)
@@ -203,64 +211,47 @@ class GeminiService:
                     tool_result = f"Error: {str(e)}"
 
                 # Add the tool's response to the conversation history for the next turn
-                contents.append(Content(
-                    role="user",
-                    parts=[Part.from_function_response(
-                        name=tool_name,
-                        response={"result": tool_result},
-                    )]
-                ))
-    
-    
+                contents.append(
+                    Content(
+                        role="user",
+                        parts=[
+                            Part.from_function_response(
+                                name=tool_name,
+                                response={"result": tool_result},
+                            )
+                        ],
+                    )
+                )
+
+
 async def main():
     mcp_server_params = StdioServerParameters(
-        command="uv",
-        args=["run", "python", "src/main.py"]
+        command="uv", args=["run", "python", "src/main.py"]
     )
-    
+
     gemini = GeminiService(mcp_server_params=mcp_server_params)
-    system_prompt = f"""
-Você é o "CariocaBot", um assistente virtual amigável e especialista em ajudar moradores e visitantes a encontrar os melhores equipamentos públicos na cidade do Rio de Janeiro. Sua missão é facilitar a vida do cidadão, fornecendo informações claras, úteis e de forma acolhedora, como um verdadeiro carioca.
 
-**Sua Personalidade:**
-*   **Amigável e prestativo:** Use uma linguagem calorosa e acessível. Trate o usuário como um amigo que está pedindo uma dica.
-*   **Especialista local:** Demonstre conhecimento sobre a cidade.
-*   **Confiável e direto:** Forneça as informações mais importantes de forma clara e objetiva.
-
-**Como você deve agir:**
-1.  **Interprete a necessidade:** Vá além da pergunta literal. Se o usuário busca uma "escola", entenda se ele precisa de uma creche, ensino fundamental ou médio. Se busca "atendimento médico", esclareça se é uma emergência ou uma consulta.
-2.  **Use suas ferramentas:** Utilize as ferramentas de busca para localizar os equipamentos que melhor atendem à solicitação, sempre considerando a localização do usuário como ponto de partida.
-3.  **Apresente os resultados de forma organizada:** Para cada equipamento encontrado.  O objetivo é criar um "card" de informações fáceis de ler.
-
-
-Voce deve responder o usuario in one shot, sem precisar de perguntas intermediarias.
-SEMPRE UTILIZE AS FERRAMENTAS DISPONIVEIS.
----
-
-
-
-    """
-    
+    # query = f"""
+    #     Minha esposa esta em trabalho de parto! o que eu faço?
+    #     meu endereco é Avenida Presidente Vargas, 1
+    # """
     query = f"""
-        Tava querendo dar uma curtida hoje, mais nao sei o que a prefeitura oferece de lazer, me da umas sugestoes ai
-        Nao quero nada muito longe, ate uns 2km ta bom
-        meu endereco é Avenida Presidente Vargas, 1
+        po, conheço uma pessoa que recebe bolsa familia mas nem precisa, tem carro, casa boa... como que eu faço pra denunciar isso? é sacanagem com quem precisa de vdd
     """
-    
     # Generate content with tools
     content = await gemini.generate_content(
-        query=query, 
-        system_prompt=system_prompt,
+        query=query,
+        system_prompt=SYSTEM_PROMPT_EAI,
         model="gemini-2.5-flash",
     )
-    
+
     print("Final response:")
     for c in content:
-            if c.role == "model" and c.parts:
-                for part in c.parts:
-                    if hasattr(part, 'text') and part.text:
-                        print(part.text)
-    
+        if c.role == "model" and c.parts:
+            for part in c.parts:
+                if hasattr(part, "text") and part.text:
+                    print(part.text)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
