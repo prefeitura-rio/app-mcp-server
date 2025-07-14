@@ -6,8 +6,15 @@ com ferramentas de cálculo, informações sobre o Rio de Janeiro e recursos
 de data/hora localizados.
 """
 
-from .app import app, create_app
+from .app import app, mcp, create_app
 from .config import Settings
+from src.config.env import IS_LOCAL
 
 __version__ = Settings.VERSION
-__all__ = ["app", "create_app", "Settings"]
+
+if IS_LOCAL:
+    __all__ = ["app", "mcp", "create_app", "Settings"]
+
+else:
+    __all__ = ["app", "create_app", "Settings"]
+
