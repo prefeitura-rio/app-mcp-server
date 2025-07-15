@@ -44,6 +44,7 @@ class MCPToolsManager:
             await self.session.__aexit__(exc_type, exc_val, exc_tb)
         if self._client:
             await self._client.__aexit__(exc_type, exc_val, exc_tb)
+        logger.info("Conexão com o servidor MCP encerrada.")
 
     async def connect(self):
         """Establishes connection to MCP server"""
@@ -55,28 +56,15 @@ class MCPToolsManager:
         await self.session.initialize()
 
     async def get_available_tools(self) -> List[Any]:
-        """
-        Retrieve a list of available tools from the MCP server.
-        """
+        """Retrieve a list of available tools from the MCP server."""
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
-
         return await self.session.list_tools()
 
     async def call_tool(self, tool_name: str, **kwargs) -> Any:
-        """
-        Execute a tool with the given arguments.
-
-        Args:
-            tool_name: The name of the tool to execute
-            **kwargs: Arguments to pass to the tool
-
-        Returns:
-            The result of the tool execution
-        """
+        """Execute a tool with the given arguments."""
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
-
         response = await self.session.call_tool(tool_name, arguments=kwargs)
         return response.content[0].text
 
@@ -87,6 +75,9 @@ class GeminiService:
         self.api_key = env.GEMINI_API_KEY
         self.client = genai.Client(api_key=self.api_key)
         self.mcp_manager = MCPToolsManager(server_params=mcp_server_params)
+        # --- ALTERAÇÃO AQUI ---
+        # Adicionado um atributo para armazenar o histórico da conversa.
+        self.history: List[Content] = []
 
     def get_client(self):
         """Retorna a instância do cliente Gemini."""
@@ -94,15 +85,10 @@ class GeminiService:
 
     async def get_tools_declarations(self, mcp_client):
         """Get tool declarations for Gemini without creating callables"""
-        # Get available tools from MCP server
         mcp_tools = await mcp_client.get_available_tools()
-
-        # Prepare system prompt and tool declarations
         system_prompt_tools = ""
         tool_declarations = []
-
         for tool in mcp_tools.tools:
-            # Parse parameters for Gemini format
             parsed_parameters = json.loads(
                 json.dumps(tool.inputSchema)
                 .replace("object", "OBJECT")
@@ -112,116 +98,125 @@ class GeminiService:
                 .replace("array", "ARRAY")
                 .replace("integer", "INTEGER")
             )
-
-            # Build system prompt
             system_prompt_tools += f"Tool Name: {tool.name}: {tool.description}\n"
             system_prompt_tools += f"Parameters: {json.dumps(parsed_parameters, indent=4, ensure_ascii=False)}\n"
-
-            # Create function declaration for Gemini
             declaration = FunctionDeclaration(
                 name=tool.name,
                 description=tool.description,
                 parameters=parsed_parameters,
             )
             tool_declarations.append(declaration)
-
         return [Tool(function_declarations=tool_declarations)], system_prompt_tools
 
-    async def generate_content(
+    # --- ALTERAÇÃO AQUI ---
+    # A função original 'generate_content' foi transformada em 'start_chat_session'
+    # para gerenciar o loop da conversa. A lógica interna foi preservada.
+    async def start_chat_session(
         self,
-        query: str,
-        system_prompt: str = None,
+        system_prompt: str,
         model: str = "gemini-2.5-flash",
         temperature: float = 0.0,
-        retry_attempts: int = 3,
     ):
-        """
-        Generate content using Gemini with MCP tools support.
+        """Inicia e gerencia uma sessão de chat interativa e contínua."""
+        print("Bem-vindo ao chat! Digite 'sair' para terminar.")
+        print("-" * 30)
 
-        Args:
-            query: The user query
-            model: The Gemini model to use
-            temperature: Temperature for generation
-            retry_attempts: Number of retry attempts
-        """
-
-        # Use the MCP manager as a context manager for the entire generation process
+        # O 'async with' agora envolve todo o loop do chat para manter a conexão.
         async with self.mcp_manager as mcp_client:
-            # Get tool declarations
+            # A preparação das ferramentas e configuração acontece uma vez, no início.
             tools, system_prompt_tools = await self.get_tools_declarations(
                 mcp_client=mcp_client
             )
 
-            logger.info(f"Iniciando pesquisa Google para: {query}")
-            logger.info("Gerando conteúdo com Gemini...")
-
-            contents = [Content(role="user", parts=[Part(text=query)])]
+            full_system_prompt = system_prompt + "\n" + system_prompt_tools
 
             generation_config = GenerateContentConfig(
                 temperature=temperature,
-                thinking_config=ThinkingConfig(
-                    thinking_budget=-1,
-                ),
+                thinking_config=ThinkingConfig(thinking_budget=-1),
                 tools=tools,
                 response_mime_type="text/plain",
-                system_instruction=(
-                    [
-                        Part.from_text(text=system_prompt + "\n" + system_prompt_tools),
-                    ]
-                    if system_prompt
-                    else None
-                ),
+                system_instruction=[Part.from_text(text=full_system_prompt)],
             )
+
+            # O cliente é obtido uma vez, respeitando a estrutura original.
             client = self.get_client()
+
+            # Loop principal da conversa.
             while True:
-
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=generation_config,
-                )
-                candidate = response.candidates[0]
-
-                # Check if the model decided to call a function
-                if (
-                    not candidate.content.parts
-                    or not candidate.content.parts[0].function_call
-                ):
-                    # If no function call, we are done. Return the final content.
-                    contents.append(candidate.content)
-                    return contents
-
-                # The model made a function call
-                function_call = candidate.content.parts[0].function_call
-                tool_name = function_call.name
-                tool_args = dict(function_call.args)
-                logger.info(
-                    f"Modelo solicitou chamada da ferramenta: {tool_name} com args: {tool_args}"
-                )
-
-                # Add the model's request to the conversation history
-                contents.append(candidate.content)
-
-                # Execute the tool using the connected MCP client
                 try:
-                    tool_result = await mcp_client.call_tool(tool_name, **tool_args)
-                    # logger.info(f"Resultado da ferramenta '{tool_name}': {tool_result}")
-                except Exception as e:
-                    logger.error(f"Error executing tool '{tool_name}': {e}")
-                    tool_result = f"Error: {str(e)}"
+                    query = input("Você: ")
+                    if query.lower() in ["sair", "exit", "quit"]:
+                        print("Até logo!")
+                        break
 
-                # Add the tool's response to the conversation history for the next turn
-                contents.append(
-                    Content(
-                        role="user",
-                        parts=[
-                            Part.from_function_response(
-                                name=tool_name,
-                                response={"result": tool_result},
+                    # Adiciona a mensagem do usuário ao histórico da classe.
+                    self.history.append(Content(role="user", parts=[Part(text=query)]))
+
+                    print("Gemini está pensando...")
+
+                    # --- LÓGICA ORIGINAL PRESERVADA ---
+                    # Este é o loop de chamada de ferramenta do seu código original,
+                    # agora operando sobre `self.history`.
+                    while True:
+                        response = await client.aio.models.generate_content(
+                            model=model,
+                            contents=self.history,  # Usa o histórico da classe
+                            config=generation_config,
+                        )
+                        candidate = response.candidates[0]
+
+                        # Adiciona a resposta do modelo (seja texto ou chamada de função) ao histórico.
+                        self.history.append(candidate.content)
+
+                        if (
+                            not candidate.content.parts
+                            or not candidate.content.parts[0].function_call
+                        ):
+                            # Se não houver chamada de função, o turno terminou.
+                            # Imprime a resposta e sai do loop de ferramentas.
+                            final_text = candidate.content.parts[0].text
+                            print(f"Gemini: {final_text}")
+                            break
+
+                        # O modelo fez uma chamada de função.
+                        function_call = candidate.content.parts[0].function_call
+                        tool_name = function_call.name
+                        tool_args = dict(function_call.args)
+                        logger.info(
+                            f"Modelo solicitou chamada da ferramenta: {tool_name} com args: {tool_args}"
+                        )
+
+                        try:
+                            tool_result = await mcp_client.call_tool(
+                                tool_name, **tool_args
                             )
-                        ],
-                    )
-                )
+                        except Exception as e:
+                            logger.error(f"Error executing tool '{tool_name}': {e}")
+                            tool_result = f"Error: {str(e)}"
+
+                        # Adiciona o resultado da ferramenta ao histórico para a próxima iteração do modelo.
+                        # CORREÇÃO CRÍTICA: A role para a resposta da ferramenta deve ser 'tool'.
+                        self.history.append(
+                            Content(
+                                role="tool",
+                                parts=[
+                                    Part.from_function_response(
+                                        name=tool_name,
+                                        response={"result": tool_result},
+                                    )
+                                ],
+                            )
+                        )
+                        # O loop de ferramentas continua, enviando o resultado de volta ao modelo.
+
+                    print("-" * 30)
+
+                except KeyboardInterrupt:
+                    print("\nAté logo!")
+                    break
+                except Exception as e:
+                    logger.error(f"Ocorreu um erro inesperado: {e}", exc_info=True)
+                    break
 
 
 async def main():
@@ -231,26 +226,10 @@ async def main():
 
     gemini = GeminiService(mcp_server_params=mcp_server_params)
 
-    # query = f"""
-    #     Minha esposa esta em trabalho de parto! o que eu faço?
-    #     meu endereco é Avenida Presidente Vargas, 1
-    # """
-    query = f"""
-        po, conheço uma pessoa que recebe bolsa familia mas nem precisa, tem carro, casa boa... como que eu faço pra denunciar isso? é sacanagem com quem precisa de vdd
-    """
-    # Generate content with tools
-    content = await gemini.generate_content(
-        query=query,
+    await gemini.start_chat_session(
         system_prompt=SYSTEM_PROMPT_EAI,
-        model="gemini-2.5-flash",
+        model="gemini-2.5-flash",  # Recomendo modelos mais recentes
     )
-
-    print("Final response:")
-    for c in content:
-        if c.role == "model" and c.parts:
-            for part in c.parts:
-                if hasattr(part, "text") and part.text:
-                    print(part.text)
 
 
 if __name__ == "__main__":
