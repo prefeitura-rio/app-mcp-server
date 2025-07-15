@@ -18,9 +18,9 @@ from src.tools.calculator import (
 )
 from src.tools.datetime_tools import get_current_time, format_greeting
 from src.tools.equipamentos import (
-    get_equipaments_categories,
-    get_equipaments,
-    get_equipaments_instructions,
+    get_equipments_categories,
+    get_equipments,
+    get_equipments_instructions,
 )
 from src.tools.search import get_google_search
 
@@ -102,7 +102,7 @@ def create_app() -> FastMCP:
         return get_google_search(query)
 
     @mcp.tool()
-    def equipaments_by_address(
+    def equipments_by_address(
         address: str, categories: Optional[List[str]] = []
     ) -> str:
         """
@@ -118,24 +118,24 @@ def create_app() -> FastMCP:
         Returns:
             Lista de equipamentos
         """
-        return get_equipaments(address=address, category=categories)
+        return get_equipments(address=address, category=categories)
 
     @mcp.tool()
-    def equipaments_instructions() -> str:
+    def equipments_instructions() -> str:
         """
         Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         """
-        return get_equipaments_instructions()
+        return get_equipments_instructions()
 
     @mcp.tool()
-    def equipaments_categories() -> str:
+    def equipments_categories() -> str:
         """
         Obtém todas as categorias de equipamentos.
         Deve ser chamada antes de equipaments_by_address.
         Returns:
             Lista de categorias de equipamentos
         """
-        return get_equipaments_categories()
+        return get_equipments_categories()
 
     # ===== REGISTRAR RESOURCES =====
 
