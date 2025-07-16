@@ -4,23 +4,26 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
-
+from typing import Optional, List
 from loguru import logger
 
 from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
-from src.tools import (
+from src.tools.calculator import (
     add,
     subtract,
     multiply,
     divide,
     power,
-    get_current_time,
-    format_greeting,
-    get_equipaments_categories,
-    get_equipaments,
-    get_google_search,
 )
+from src.tools.datetime_tools import get_current_time, format_greeting
+from src.tools.equipamentos import (
+    get_equipments_categories,
+    get_equipments,
+    get_equipments_instructions,
+)
+from src.tools.search import get_google_search
+
 from src.resources import get_districts_list, get_rio_basic_info, get_greeting_message
 
 from src.config.env import IS_LOCAL
@@ -93,20 +96,50 @@ def create_app() -> FastMCP:
         """Gera uma saudação personalizada baseada no horário"""
         return format_greeting()
 
-    # @mcp.tool()
-    # def equipaments_categories() -> str:
-    #     """Obtém todas as categorias de equipamentos"""
-    #     return get_equipaments_categories()
-
     @mcp.tool()
     def google_search(query: str) -> str:
         """Obtém os resultados da busca no Google"""
         return get_google_search(query)
 
     @mcp.tool()
-    def equipaments_by_address(address: str) -> str:
-        """Obtém os equipamentos mais proximos de um endereço"""
-        return get_equipaments(address)
+    def equipments_by_address(
+        address: str, categories: Optional[List[str]] = []
+    ) -> dict:
+        """
+        Obtém os equipamentos mais proximos de um endereço.
+        Args:
+            address: Endereço do equipamento
+            categories: Lista de categorias de equipamentos a serem filtrados. Deve obrigatoriamente seguir o nome exato das categorias retornadas na tool `equipments_instructions` na secao `categorias`.
+        Returns:
+            Lista de equipamentos
+        """
+        return {
+            "instructions": "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento",
+            "equipamentos": get_equipments(address=address, categories=categories),
+        }
+
+    @mcp.tool()
+    def equipments_instructions() -> dict:
+        """
+        Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
+        """
+        return {
+            "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` esse deve seguir o nome exato das categorias disponiveis na secao `categorias`. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias.",
+            "instrucoes": get_equipments_instructions(),
+            "categorias": get_equipments_categories(),
+        }
+
+    # @mcp.tool()
+    # def equipments_categories() -> dict:
+    #     """
+    #     Obtém todas as categorias de equipamentos.
+    #     Returns:
+    #         Lista de categorias de equipamentos
+    #     """
+    #     return {
+    #         "next_tool_instructions": "",
+    #         "categorias": ,
+    #     }
 
     # ===== REGISTRAR RESOURCES =====
 

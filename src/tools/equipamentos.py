@@ -1,43 +1,28 @@
-from src.config import env
-import requests
+from typing import Optional, List
 import json
+from src.utils.eai_api import eai_api
 
 
-class Equipamentos:
-    def __init__(self):
-        self.base_url = env.EAI_AGENT_URL
-        self.headers = {"Authorization": f"Bearer {env.EAI_AGENT_TOKEN}"}
-
-    def request_api(self, path: str, payload: dict = None, params: dict = None):
-        url = f"{self.base_url}{path}"
-        print(f"Requesting {url}")
-
-        response = requests.get(url, headers=self.headers, json=payload, params=params)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=4)
-
-
-equipaments = Equipamentos()
-
-
-def get_equipaments_categories():
+def get_equipments_categories() -> str:
     """
     Get allEquipaments categories
     """
-    return equipaments.request_api(path="/external/tools/equipments_category")
+    categories = eai_api.request_api(path="/external/tools/equipments_category")
+    return json.dumps(categories["categorias"], indent=4, ensure_ascii=False)
 
 
-def get_equipaments(address: str):
+def get_equipments(address: str, categories: Optional[List[str]] = []) -> str:
     """
     Get Equipaments by address
     """
-    params = {"address": address}
-    return equipaments.request_api(path=f"/external/tools/equipments", params=params)
+    params = {"address": address, "category": categories}
+    equipments = eai_api.request_api(path=f"/external/tools/equipments", params=params)
+    return json.dumps(equipments["equipamentos"], indent=4, ensure_ascii=False)
 
 
-def get_google_search(query: str):
+def get_equipments_instructions() -> str:
     """
-    Get google search results
+    Get Equipaments instructions
     """
-    params = {"query": query}
-    return equipaments.request_api(path=f"/letta/tools/google_search", params=params)
+    instructions = eai_api.request_api(path="/external/tools/equipments_instructions")
+    return json.dumps(instructions, indent=4, ensure_ascii=False)
