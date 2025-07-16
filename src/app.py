@@ -104,38 +104,42 @@ def create_app() -> FastMCP:
     @mcp.tool()
     def equipments_by_address(
         address: str, categories: Optional[List[str]] = []
-    ) -> str:
+    ) -> dict:
         """
         Obtém os equipamentos mais proximos de um endereço.
-        Essa tool exige a chamada da tool equipaments_instructions e equipaments_categories.
-        equipaments_instructions: para definir quais sao os procedimentos de uso dos equipamentos.
-        equipaments_categories: para definir quais sao as categorias de equipamentos.
-
         Args:
             address: Endereço do equipamento
-            categories: Lista de categorias de equipamentos a serem filtrados. Se não for informado, serão retornados todos os equipamentos.
-
+            categories: Lista de categorias de equipamentos a serem filtrados. Deve obrigatoriamente seguir o nome exato das categorias retornadas na tool `equipments_instructions` na secao `categorias`.
         Returns:
             Lista de equipamentos
         """
-        return get_equipments(address=address, category=categories)
+        return {
+            "instructions": "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento",
+            "equipamentos": get_equipments(address=address, categories=categories),
+        }
 
     @mcp.tool()
-    def equipments_instructions() -> str:
+    def equipments_instructions() -> dict:
         """
         Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         """
-        return get_equipments_instructions()
+        return {
+            "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` esse deve seguir o nome exato das categorias disponiveis na secao `categorias`. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias.",
+            "instrucoes": get_equipments_instructions(),
+            "categorias": get_equipments_categories(),
+        }
 
-    @mcp.tool()
-    def equipments_categories() -> str:
-        """
-        Obtém todas as categorias de equipamentos.
-        Deve ser chamada antes de equipaments_by_address.
-        Returns:
-            Lista de categorias de equipamentos
-        """
-        return get_equipments_categories()
+    # @mcp.tool()
+    # def equipments_categories() -> dict:
+    #     """
+    #     Obtém todas as categorias de equipamentos.
+    #     Returns:
+    #         Lista de categorias de equipamentos
+    #     """
+    #     return {
+    #         "next_tool_instructions": "",
+    #         "categorias": ,
+    #     }
 
     # ===== REGISTRAR RESOURCES =====
 

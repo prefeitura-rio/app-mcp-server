@@ -14,7 +14,7 @@ class EAIApi:
 
         response = requests.get(url, headers=self.headers, json=payload, params=params)
         response.raise_for_status()
-        return json.dumps(response.json(), indent=4, ensure_ascii=False)
+        return response.json()
 
 
 eai_api = EAIApi()
