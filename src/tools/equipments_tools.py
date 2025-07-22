@@ -9,41 +9,41 @@ from src.utils.bigquery import save_response_in_bq_background
 
 
 async def get_equipments_categories() -> str:
-    result = await get_category_equipments()
+    response = await get_category_equipments()
     asyncio.create_task(
         save_response_in_bq_background(
-            data=result,
+            data=response,
             endpoint="/tools/equipments_categories",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
         )
     )
-    return result
+    return response
 
 
 async def get_equipments(address: str, categories: Optional[List[str]] = []) -> str:
-    result = await get_pluscode_coords_equipments(
+    response = await get_pluscode_coords_equipments(
         address=address, categories=categories
     )
     asyncio.create_task(
         save_response_in_bq_background(
-            data=result,
+            data=response,
             endpoint="/tools/equipments",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
         )
     )
-    return result["data"]
+    return response["data"]
 
 
 async def get_equipments_instructions() -> str:
-    result = await get_tematic_instructions_for_equipments()
+    response = await get_tematic_instructions_for_equipments()
     asyncio.create_task(
         save_response_in_bq_background(
-            data=result,
+            data=response,
             endpoint="/tools/equipments_instructions",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
         )
     )
-    return result
+    return response
