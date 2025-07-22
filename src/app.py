@@ -5,8 +5,9 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 from typing import Optional, List
-from loguru import logger
+import json
 
+from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
 from src.tools.calculator import (
@@ -26,7 +27,11 @@ from src.tools.equipments_tools import (
 
 from src.tools.search import get_google_search
 
-from src.resources import get_districts_list, get_rio_basic_info, get_greeting_message
+from src.resources.rio_info import (
+    get_districts_list,
+    get_rio_basic_info,
+    get_greeting_message,
+)
 
 from src.config.env import IS_LOCAL
 
@@ -99,13 +104,9 @@ def create_app() -> FastMCP:
         return format_greeting()
 
     @mcp.tool()
-    async def google_search(query: str) -> str:
+    async def google_search(query: str) -> dict:
         """Obtém os resultados da busca no Google"""
         response = await get_google_search(query)
-        import json
-
-        print(50 * "=")
-        print(json.dumps(response, indent=4, ensure_ascii=False))
         return response
 
     @mcp.tool()

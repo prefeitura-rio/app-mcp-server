@@ -5,7 +5,7 @@ import requests
 
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
-from loguru import logger
+from src.utils.log import logger
 
 
 class CustomJSONEncoder(json.JSONEncoder):

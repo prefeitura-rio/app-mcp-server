@@ -7,7 +7,7 @@ import json
 import src.config.env as env
 from datetime import datetime
 import pytz
-from loguru import logger
+from src.utils.log import logger
 
 
 def get_bigquery_client() -> bigquery.Client:
@@ -88,7 +88,7 @@ def save_response_in_bq(
             json_data, table_full_name, job_config=job_config
         )
         job.result()
-        logger.info(f"Resposta salva no BigQuery: {table_full_name}")
+        # logger.info(f"Resposta salva no BigQuery: {table_full_name}")
     except Exception:
         raise Exception(json_data)
 

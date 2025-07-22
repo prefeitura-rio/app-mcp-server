@@ -3,7 +3,7 @@ Ferramentas de calculadora básica para o servidor FastMCP.
 """
 
 from typing import Union
-from ..config import FEATURES_CONFIG
+from src.config.settings import FEATURES_CONFIG
 
 
 def add(a: float, b: float) -> float:

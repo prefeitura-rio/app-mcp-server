@@ -14,12 +14,7 @@ from google.genai.types import (
     FunctionDeclaration,
 )
 from src.config import env
-import logging
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+from src.utils.log import logger
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -190,6 +185,9 @@ class GeminiService:
                             tool_result = await mcp_client.call_tool(
                                 tool_name, **tool_args
                             )
+                            # logger.info(
+                            #     f"Tool result: {json.dumps(tool_result, indent=4, ensure_ascii=False)}"
+                            # )
                         except Exception as e:
                             logger.error(f"Error executing tool '{tool_name}': {e}")
                             tool_result = f"Error: {str(e)}"

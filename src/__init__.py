@@ -7,7 +7,7 @@ de data/hora localizados.
 """
 
 from src.app import app, mcp, create_app
-from src.config import Settings
+from src.config.settings import Settings
 from src.config.env import IS_LOCAL
 
 __version__ = Settings.VERSION
