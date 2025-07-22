@@ -5,7 +5,7 @@ Utilitários para manipulação de data e hora no timezone do Rio de Janeiro.
 from datetime import datetime
 from typing import Dict, Any
 import pytz
-from src.config import Settings
+from src.config.settings import Settings
 
 
 def get_rio_timezone():
