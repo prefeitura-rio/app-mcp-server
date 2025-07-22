@@ -5,7 +5,8 @@ import requests
 
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
-from src.utils.log import logger
+
+# from src.utils.log import logger
 
 
 class CustomJSONEncoder(json.JSONEncoder):
@@ -71,11 +72,11 @@ def get_plus8_coords_from_address(address: str):
     if coords == {}:
         coords = get_coords_from_google_maps_api(address=address)
     if coords == {}:
-        logger.error("No coords from nominatim or google maps, returning None")
+        # logger.error("No coords from nominatim or google maps, returning None")
         return None
 
     coords_info = json.dumps(coords, ensure_ascii=False, indent=2)
-    logger.info(f"\nGeolocated info:\n {coords_info}")
+    # logger.info(f"\nGeolocated info:\n {coords_info}")
     plus8 = olc.encode(latitude=coords["lat"], longitude=coords["lng"], codeLength=8)
-    logger.info(f"Encoded plus8 {plus8}")
+    # logger.info(f"Encoded plus8 {plus8}")
     return plus8, coords

@@ -9,7 +9,7 @@ from src.tools.equipments.utils import (
 from src.config import env as config
 from src.utils.bigquery import get_bigquery_client
 
-from src.utils.log import logger
+# from src.utils.log import logger
 
 
 def get_bigquery_result(query: str):
@@ -124,7 +124,7 @@ async def get_pluscode_coords_equipments(address, categories: Optional[List[str]
         """
 
     if categories:
-        logger.info(f"Categories: {categories}")
+        # logger.info(f"Categories: {categories}")
         categorias_filter = "and t.categoria in ("
         for i in range(len(categories)):
             if i != len(categories) - 1:
@@ -135,20 +135,23 @@ async def get_pluscode_coords_equipments(address, categories: Optional[List[str]
         categorias_filter += ")"
         query = query.replace("__replace_categories__", categorias_filter)
     else:
-        logger.info("No categories provided. Returning all categories.")
+        # logger.info("No categories provided. Returning all categories.")
         query = query.replace("__replace_categories__", "")
 
     try:
         data = get_bigquery_result(query=query)
 
         return {
-            "address": address,
+            "inputs": {
+                "address": address,
+                "categories": categories,
+            },
             "coords": coords,
             "plus8": plus8,
             "data": data,
         }
     except Exception as e:
-        logger.error(f"Erro no request do bigquery: {e}")
+        # logger.error(f"Erro no request do bigquery: {e}")
         return {
             "error": "Erro no request do bigquery",
             "message": str(e),

@@ -1,8 +1,10 @@
+import logging
 from loguru import logger
 
-# import logging
 
-# logging.basicConfig(
-#     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-# )
-# logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+logger.disable("httpx")
+logger.disable("httpcore")

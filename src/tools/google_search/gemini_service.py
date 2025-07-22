@@ -50,7 +50,7 @@ class GeminiService:
                 async with asyncio.timeout(120):  # 120 segundos para toda a operação
                     formatted_prompt = web_searcher_instructions(research_topic=query)
 
-                    logger.info("Gerando conteúdo com Gemini...")
+                    # logger.info("Gerando conteúdo com Gemini...")
 
                     tools = [
                         Tool(google_search=GoogleSearch()),
@@ -79,7 +79,7 @@ class GeminiService:
                         urls_to_resolve=candidate.grounding_metadata.grounding_chunks
                     )
 
-                    logger.info("Processando citações...")
+                    # logger.info("Processando citações...")
                     citations = get_citations(
                         response=response, resolved_urls_map=resolved_urls_map
                     )
@@ -231,10 +231,10 @@ async def process_link(session, link: dict):
                 except:
                     # Se parsing falhar, usa URI original
                     link["url"] = uri
-                    link["error"] = f"Timeout ou erro de conexão: {error_msg[:100]}"
+                    link["error"] = f"Timeout ou erro de conexão: {error_msg}"
             else:
                 link["url"] = uri
-                link["error"] = f"Erro ao resolver URL: {error_msg[:100]}"
+                link["error"] = f"Erro ao resolver URL: {error_msg}"
             return link
 
 
@@ -246,7 +246,7 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     unique_urls = list(set([uri.web.uri for uri in urls_to_resolve]))
     urls = [{"uri": uri} for uri in unique_urls]
 
-    logger.info(f"Resolvendo {len(urls)} URLs únicas")
+    # logger.info(f"Resolvendo {len(urls)} URLs únicas")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
@@ -269,9 +269,9 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
         # Trata exceções não capturadas
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(
-                    f"Erro não tratado ao processar URL {urls[i]['uri']}: {result}"
-                )
+                # logger.error(
+                #     f"Erro não tratado ao processar URL {urls[i]['uri']}: {result}"
+                # )
                 urls[i]["url"] = urls[i]["uri"]
                 urls[i]["error"] = str(result)
             else:
