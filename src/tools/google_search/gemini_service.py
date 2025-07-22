@@ -14,7 +14,6 @@ from google.genai.types import (
     GenerateContentResponse,
 )
 import src.config.env as env
-from src.utils.bigquery import get_bigquery_client
 from uuid import uuid4
 
 from datetime import datetime
