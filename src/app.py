@@ -17,11 +17,13 @@ from src.tools.calculator import (
     power,
 )
 from src.tools.datetime_tools import get_current_time, format_greeting
-from src.tools.equipamentos import (
+
+from src.tools.equipments_tools import (
     get_equipments_categories,
     get_equipments,
     get_equipments_instructions,
 )
+
 from src.tools.search import get_google_search
 
 from src.resources import get_districts_list, get_rio_basic_info, get_greeting_message
@@ -97,12 +99,17 @@ def create_app() -> FastMCP:
         return format_greeting()
 
     @mcp.tool()
-    def google_search(query: str) -> str:
+    async def google_search(query: str) -> str:
         """Obtém os resultados da busca no Google"""
-        return get_google_search(query)
+        response = await get_google_search(query)
+        import json
+
+        print(50 * "=")
+        print(json.dumps(response, indent=4, ensure_ascii=False))
+        return response
 
     @mcp.tool()
-    def equipments_by_address(
+    async def equipments_by_address(
         address: str, categories: Optional[List[str]] = []
     ) -> dict:
         """
@@ -113,33 +120,24 @@ def create_app() -> FastMCP:
         Returns:
             Lista de equipamentos
         """
+        response = await get_equipments(address=address, categories=categories)
         return {
             "instructions": "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento",
-            "equipamentos": get_equipments(address=address, categories=categories),
+            "equipamentos": response,
         }
 
     @mcp.tool()
-    def equipments_instructions() -> dict:
+    async def equipments_instructions() -> dict:
         """
         Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         """
+        instructions = await get_equipments_instructions()
+        categories = await get_equipments_categories()
         return {
-            "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` esse deve seguir o nome exato das categorias disponiveis na secao `categorias`. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias.",
-            "instrucoes": get_equipments_instructions(),
-            "categorias": get_equipments_categories(),
+            "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` esse deve seguir o nome exato das categorias disponiveis na secao `categorias` NAO UTILLIZE CATEGORIAS DAS INSTRUCOES!!!. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias.",
+            "instrucoes": instructions,
+            "categorias": categories,
         }
-
-    # @mcp.tool()
-    # def equipments_categories() -> dict:
-    #     """
-    #     Obtém todas as categorias de equipamentos.
-    #     Returns:
-    #         Lista de categorias de equipamentos
-    #     """
-    #     return {
-    #         "next_tool_instructions": "",
-    #         "categorias": ,
-    #     }
 
     # ===== REGISTRAR RESOURCES =====
 
