@@ -34,7 +34,7 @@ async def get_equipments(address: str, categories: Optional[List[str]] = []) -> 
         )
     )
 
-    if response["data"]:
+    if response.get("data", None):
         return response["data"]
     else:
         return {
