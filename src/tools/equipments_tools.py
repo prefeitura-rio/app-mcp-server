@@ -39,7 +39,7 @@ async def get_equipments(address: str, categories: Optional[List[str]] = []) -> 
     else:
         return {
             "error": "Nenhum equipamento encontrado",
-            "message": "Utilize a tool `equipments_instructions` para conferir instruções sobre os equipamentos disponíveis, regras de uso e categorias permitidas.",
+            "message": "Sempre utilize a tool `equipments_instructions` antes de chamar a tool `equipments_by_address`. Assim, você poderá conferir instruções sobre os equipamentos disponíveis, regras de uso e categorias permitidas.",
         }
 
 
