@@ -213,3 +213,5 @@ mcp = create_app()
 
 # Alias para retro-compatibilidade
 app = mcp
+
+# comment to trigger github actions
