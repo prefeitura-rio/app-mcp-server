@@ -33,7 +33,14 @@ async def get_equipments(address: str, categories: Optional[List[str]] = []) -> 
             table_id="mcp",
         )
     )
-    return response["data"]
+
+    if response["data"]:
+        return response["data"]
+    else:
+        return {
+            "error": "Nenhum equipamento encontrado",
+            "message": "Utilize a tool `equipments_instructions` para conferir instruções sobre os equipamentos disponíveis, regras de uso e categorias permitidas.",
+        }
 
 
 async def get_equipments_instructions() -> str:
