@@ -43,10 +43,11 @@ class GeminiService:
         max_retry_attempts = retry_attempts
         request_id = str(uuid4())
         retry_count = 0
+        last_exception = None
         while retry_attempts > 0:
             try:
                 # Timeout total para toda a operação
-                async with asyncio.timeout(120):  # 120 segundos para toda a operação
+                async with asyncio.timeout(60 * 3):
                     formatted_prompt = web_searcher_instructions(research_topic=query)
 
                     # logger.info("Gerando conteúdo com Gemini...")
@@ -98,7 +99,6 @@ class GeminiService:
                     logger.info(
                         f"Pesquisa concluída com {len(sources_gathered)} fontes"
                     )
-                    retry_attempts = -1
 
                     return {
                         "id": request_id,
@@ -113,47 +113,36 @@ class GeminiService:
                     }
 
             except asyncio.TimeoutError:
-                if retry_attempts == 0:
-                    return {
-                        "id": request_id,
-                        "text": "Pesquisa Google demorou muito tempo (timeout de 90s)",
-                        "sources": [],
-                        "web_search_queries": [],
-                        "tokens_metadata": {},
-                        "retry_attempts": retry_attempts,
-                        "model": model,
-                        "temperature": temperature,
-                        "query": query,
-                    }
+                last_exception = "Timeout na pesquisa Google após 120 segundos"
+                logger.error(f"{last_exception} para query: {query}")
 
-                logger.error(
-                    f"Timeout na pesquisa Google após 90 segundos para query: {query}"
-                )
-                logger.info(
-                    f"Remaning attempts {retry_attempts} of {max_retry_attempts}"
-                )
-                retry_attempts -= 1
-                retry_count += 1
             except Exception as e:
-
-                if retry_attempts == 0:
-                    return {
-                        "id": request_id,
-                        "text": str(e),
-                        "sources": [],
-                        "web_search_queries": [],
-                        "tokens_metadata": {},
-                        "retry_attempts": retry_attempts,
-                        "model": model,
-                        "temperature": temperature,
-                        "query": query,
-                    }
+                last_exception = e
                 logger.error(f"Erro na pesquisa Google: {e}")
+
+            retry_attempts -= 1
+            retry_count += 1
+            if retry_attempts > 0:
                 logger.info(
-                    f"Remaning attempts {retry_attempts} of {max_retry_attempts}"
+                    f"Tentativa {retry_count}/{max_retry_attempts} falhou. Tentando novamente..."
                 )
-                retry_attempts -= 1
-                retry_count += 1
+                await asyncio.sleep(1)  # Pausa antes de tentar novamente
+
+        # Se todas as tentativas falharem
+        logger.error(
+            f"Todas as {max_retry_attempts} tentativas de pesquisa falharam para a query: {query}"
+        )
+        return {
+            "id": request_id,
+            "text": f"Erro na pesquisa Google após {max_retry_attempts} tentativas: {last_exception}",
+            "sources": [],
+            "web_search_queries": [],
+            "tokens_metadata": {},
+            "retry_attempts": retry_count,
+            "model": model,
+            "temperature": temperature,
+            "query": query,
+        }
 
     def get_tokens_metadata(self, response: GenerateContentResponse) -> dict:
         usage_metadata = response.usage_metadata
