@@ -33,6 +33,8 @@ class GeminiService:
         return self.client
 
     import os
+
+
 from typing import Dict, Any, List, Optional, Union
 import asyncio
 import random
@@ -78,13 +80,12 @@ class GeminiService:
         logger.info(f"Iniciando pesquisa Google para: {query}")
         request_id = str(uuid4())
         last_exception = None
-
+        formatted_prompt = web_searcher_instructions(research_topic=query)
         for attempt in range(retry_attempts):
             try:
                 # Timeout total para toda a operação
                 async with asyncio.timeout(180):  # 180 segundos para toda a operação
-                    formatted_prompt = web_searcher_instructions(research_topic=query)
-
+                    logger.info(f"Prompt Length: {len(formatted_prompt)}")
                     tools = [
                         Tool(google_search=GoogleSearch()),
                         Tool(url_context=UrlContext()),
@@ -143,9 +144,14 @@ class GeminiService:
                         "temperature": temperature,
                         "query": query,
                     }
-            
-            except (google_exceptions.PermissionDenied, google_exceptions.InvalidArgument) as e:
-                logger.error(f"Erro não recuperável na API Google: {e}. Não haverá nova tentativa.")
+
+            except (
+                google_exceptions.PermissionDenied,
+                google_exceptions.InvalidArgument,
+            ) as e:
+                logger.error(
+                    f"Erro não recuperável na API Google: {e}. Não haverá nova tentativa."
+                )
                 last_exception = e
                 break  # Interrompe em erros de cliente (4xx)
 
@@ -153,9 +159,12 @@ class GeminiService:
                 asyncio.TimeoutError,
                 google_exceptions.InternalServerError,
                 google_exceptions.ServiceUnavailable,
+                google_exceptions.ResourceExhausted,
             ) as e:
                 last_exception = e
-                logger.warning(f"Erro transiente na API Google: {e}. Tentando novamente...")
+                logger.warning(
+                    f"Erro transiente na API Google: {e}. Tentando novamente..."
+                )
 
             except Exception as e:
                 last_exception = e
