@@ -32,6 +32,42 @@ class GeminiService:
         """Retorna a instância do cliente Gemini."""
         return self.client
 
+    import os
+from typing import Dict, Any, List, Optional, Union
+import asyncio
+import random
+from pathlib import Path
+from google import genai
+from google.api_core import exceptions as google_exceptions
+from google.genai.types import (
+    Tool,
+    UrlContext,
+    ThinkingConfig,
+    GenerateContentConfig,
+    GoogleSearch,
+    Content,
+    Part,
+    GenerateContentResponse,
+)
+import src.config.env as env
+from uuid import uuid4
+
+from datetime import datetime
+import httpx
+
+from src.utils.log import logger
+
+
+class GeminiService:
+    def __init__(self):
+        """Inicializa o cliente Gemini com as configurações do ambiente."""
+        self.api_key = env.GEMINI_API_KEY
+        self.client = genai.Client(api_key=self.api_key)
+
+    def get_client(self):
+        """Retorna a instância do cliente Gemini."""
+        return self.client
+
     async def google_search(
         self,
         query: str,
@@ -40,17 +76,14 @@ class GeminiService:
         retry_attempts: int = 3,
     ):
         logger.info(f"Iniciando pesquisa Google para: {query}")
-        max_retry_attempts = retry_attempts
         request_id = str(uuid4())
-        retry_count = 0
         last_exception = None
-        while retry_attempts > 0:
+
+        for attempt in range(retry_attempts):
             try:
                 # Timeout total para toda a operação
-                async with asyncio.timeout(60 * 3):
+                async with asyncio.timeout(180):  # 180 segundos para toda a operação
                     formatted_prompt = web_searcher_instructions(research_topic=query)
-                    logger.info(f"Prompt Length: {len(formatted_prompt)}")
-                    # logger.info("Gerando conteúdo com Gemini...")
 
                     tools = [
                         Tool(google_search=GoogleSearch()),
@@ -79,7 +112,6 @@ class GeminiService:
                         urls_to_resolve=candidate.grounding_metadata.grounding_chunks
                     )
 
-                    # logger.info("Processando citações...")
                     citations = get_citations(
                         response=response, resolved_urls_map=resolved_urls_map
                     )
@@ -106,39 +138,51 @@ class GeminiService:
                         "sources": sources_gathered,
                         "web_search_queries": web_search_queries,
                         "tokens_metadata": tokens_metadata,
-                        "retry_attempts": retry_count,
+                        "retry_attempts": attempt,
                         "model": model,
                         "temperature": temperature,
                         "query": query,
                     }
+            
+            except (google_exceptions.PermissionDenied, google_exceptions.InvalidArgument) as e:
+                logger.error(f"Erro não recuperável na API Google: {e}. Não haverá nova tentativa.")
+                last_exception = e
+                break  # Interrompe em erros de cliente (4xx)
 
-            except asyncio.TimeoutError:
-                last_exception = "Timeout na pesquisa Google após 120 segundos"
-                logger.error(f"{last_exception} para query: {query}")
+            except (
+                asyncio.TimeoutError,
+                google_exceptions.InternalServerError,
+                google_exceptions.ServiceUnavailable,
+            ) as e:
+                last_exception = e
+                logger.warning(f"Erro transiente na API Google: {e}. Tentando novamente...")
 
             except Exception as e:
                 last_exception = e
-                logger.error(f"Erro na pesquisa Google: {e}")
+                logger.error(f"Erro inesperado durante a pesquisa Google: {e}")
 
-            retry_attempts -= 1
-            retry_count += 1
-            if retry_attempts > 0:
+            # Se não for a última tentativa, espera antes de tentar novamente
+            if attempt < retry_attempts - 1:
+                # Exponential backoff com jitter
+                wait_time = (2**attempt) + random.uniform(0, 1)
                 logger.info(
-                    f"Tentativa {retry_count}/{max_retry_attempts} falhou. Tentando novamente..."
+                    f"Tentativa {attempt + 1}/{retry_attempts} falhou. "
+                    f"Aguardando {wait_time:.2f}s para a próxima tentativa."
                 )
-                await asyncio.sleep(1)  # Pausa antes de tentar novamente
+                await asyncio.sleep(wait_time)
 
         # Se todas as tentativas falharem
         logger.error(
-            f"Todas as {max_retry_attempts} tentativas de pesquisa falharam para a query: {query}"
+            f"Todas as {retry_attempts} tentativas de pesquisa falharam para a query: {query}. "
+            f"Último erro: {last_exception}"
         )
         return {
             "id": request_id,
-            "text": f"Erro na pesquisa Google após {max_retry_attempts} tentativas: {last_exception}",
+            "text": f"Erro na pesquisa Google após {retry_attempts} tentativas: {last_exception}",
             "sources": [],
             "web_search_queries": [],
             "tokens_metadata": {},
-            "retry_attempts": retry_count,
+            "retry_attempts": retry_attempts,
             "model": model,
             "temperature": temperature,
             "query": query,

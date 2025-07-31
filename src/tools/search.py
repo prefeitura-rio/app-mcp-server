@@ -12,7 +12,7 @@ async def get_google_search(query: str):
         query=query,
         model="gemini-2.5-flash-lite-preview-06-17",
         temperature=0.0,
-        retry_attempts=3,
+        retry_attempts=5,
     )
 
     asyncio.create_task(
