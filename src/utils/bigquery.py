@@ -96,15 +96,21 @@ def save_response_in_bq(
 async def save_response_in_bq_background(data, endpoint, dataset_id, table_id):
     """
     Asynchronous wrapper for saving the response in BigQuery.
+    Catches and logs exceptions to prevent crashing background tasks.
     """
-    # Since save_response_in_bq is a regular synchronous function,
-    # we run it in an executor to avoid blocking the event loop.
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,  # Uses the default ThreadPoolExecutor
-        save_response_in_bq,
-        data,
-        endpoint,
-        dataset_id,
-        table_id,
-    )
+    try:
+        # Since save_response_in_bq is a regular synchronous function,
+        # we run it in an executor to avoid blocking the event loop.
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,  # Uses the default ThreadPoolExecutor
+            save_response_in_bq,
+            data,
+            endpoint,
+            dataset_id,
+            table_id,
+        )
+    except Exception:
+        logger.exception(
+            f"Failed to save response to BigQuery in background for endpoint: {endpoint}"
+        )
