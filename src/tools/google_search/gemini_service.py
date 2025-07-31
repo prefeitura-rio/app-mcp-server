@@ -49,7 +49,7 @@ class GeminiService:
                 # Timeout total para toda a operação
                 async with asyncio.timeout(60 * 3):
                     formatted_prompt = web_searcher_instructions(research_topic=query)
-
+                    logger.info(f"Prompt Length: {len(formatted_prompt)}")
                     # logger.info("Gerando conteúdo com Gemini...")
 
                     tools = [
