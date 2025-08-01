@@ -75,7 +75,7 @@ class GeminiService:
         query: str,
         model: str = "gemini-2.5-flash",
         temperature: float = 0.0,
-        retry_attempts: int = 3,
+        retry_attempts: int = 1,
     ):
         logger.info(f"Iniciando pesquisa Google para: {query}")
         request_id = str(uuid4())
