@@ -482,7 +482,7 @@ def format_text_with_citations(text, citations_data):
             ),
             url,
         )
-        sources_list += f" - [{num}] [{label}]({url})\n"
+        sources_list += f" - [{num}] {url}\n"
 
     return modified_text + sources_list
 

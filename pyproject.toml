@@ -19,6 +19,7 @@ dependencies = [
     "google-cloud-storage>=3.2.0",
     "google-cloud-bigquery>=3.35.0",
     "google-cloud-bigquery-storage>=2.32.0",
+    "crawl4ai>=0.7.2",
 ]
 
 
