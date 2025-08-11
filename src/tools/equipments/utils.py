@@ -68,7 +68,8 @@ def get_plus8_coords_from_address(address: str):
         str: The plus8 from the address.
     """
     # try to use nominatim api
-    coords = get_coords_from_nominatim_api(address=address)
+    # coords = get_coords_from_nominatim_api(address=address)
+    coords = {}
     if coords == {}:
         coords = get_coords_from_google_maps_api(address=address)
     if coords == {}:
