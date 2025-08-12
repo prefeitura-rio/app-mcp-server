@@ -28,9 +28,13 @@ def get_bigquery_result(query: str):
     return json.loads(data_str)
 
 
-async def get_pluscode_coords_equipments(address, categories: Optional[List[str]] = []):
+async def get_pluscode_coords_equipments(
+    address, categories: Optional[List[str]] = []
+) -> dict:
 
     plus8, coords = get_plus8_coords_from_address(address=address)
+    if not coords:
+        raise Exception("No coords found")
 
     if plus8:
         latitude = coords["lat"]
@@ -156,10 +160,9 @@ async def get_pluscode_coords_equipments(address, categories: Optional[List[str]
             "error": "Erro no request do bigquery",
             "message": str(e),
         }
-    return None
 
 
-async def get_category_equipments():
+async def get_category_equipments() -> dict:
     query = f"""
         with
         equipamentos as (
@@ -194,7 +197,7 @@ async def get_category_equipments():
     return categories
 
 
-async def get_tematic_instructions_for_equipments():
+async def get_tematic_instructions_for_equipments() -> List[dict]:
     query = f"""
         SELECT 
             * 

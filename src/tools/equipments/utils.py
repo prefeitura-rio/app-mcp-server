@@ -1,5 +1,6 @@
 import json
 import datetime
+from typing import Tuple, Optional, Union
 
 import requests
 
@@ -25,7 +26,7 @@ class CustomJSONEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def get_coords_from_nominatim_api(address: str):
+def get_coords_from_nominatim_api(address: str) -> dict:
     params = {"q": address, "format": "json", "addressdetails": 1, "limit": 1}
     headers = {
         "User-Agent": "YourAppName/1.0 (your.email@example.com)"  # Required by Nominatim
@@ -45,7 +46,7 @@ def get_coords_from_nominatim_api(address: str):
     return {}
 
 
-def get_coords_from_google_maps_api(address: str):
+def get_coords_from_google_maps_api(address: str) -> dict:
     address = address + " - Rio de Janeiro, RJ"
     params = {"address": address, "key": env.GOOGLE_MAPS_API_KEY}
     response = requests.get(env.GOOGLE_MAPS_API_URL, params=params)
@@ -58,7 +59,7 @@ def get_coords_from_google_maps_api(address: str):
     return {}
 
 
-def get_plus8_coords_from_address(address: str):
+def get_plus8_coords_from_address(address: str) -> Tuple[Optional[str], Optional[dict]]:
     """Get the plus8 from an address.
 
     Args:
@@ -74,7 +75,7 @@ def get_plus8_coords_from_address(address: str):
         coords = get_coords_from_google_maps_api(address=address)
     if coords == {}:
         # logger.error("No coords from nominatim or google maps, returning None")
-        return None
+        return None, None
 
     coords_info = json.dumps(coords, ensure_ascii=False, indent=2)
     # logger.info(f"\nGeolocated info:\n {coords_info}")

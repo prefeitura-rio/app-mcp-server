@@ -8,7 +8,7 @@ from src.tools.equipments.pluscode_service import (
 from src.utils.bigquery import save_response_in_bq_background
 
 
-async def get_equipments_categories() -> str:
+async def get_equipments_categories() -> dict:
     response = await get_category_equipments()
     asyncio.create_task(
         save_response_in_bq_background(
@@ -21,7 +21,9 @@ async def get_equipments_categories() -> str:
     return response
 
 
-async def get_equipments(address: str, categories: Optional[List[str]] = []) -> str:
+async def get_equipments(
+    address: str, categories: Optional[List[str]] = []
+) -> List[dict]:
     response = await get_pluscode_coords_equipments(
         address=address, categories=categories
     )
@@ -37,13 +39,15 @@ async def get_equipments(address: str, categories: Optional[List[str]] = []) -> 
     if response.get("data", None):
         return response["data"]
     else:
-        return {
-            "error": "Nenhum equipamento encontrado",
-            "message": "Sempre utilize a tool `equipments_instructions` antes de chamar a tool `equipments_by_address`. Assim, você poderá conferir instruções sobre os equipamentos disponíveis, regras de uso e categorias permitidas.",
-        }
+        return [
+            {
+                "error": "Nenhum equipamento encontrado",
+                "message": "Sempre utilize a tool `equipments_instructions` antes de chamar a tool `equipments_by_address`. Assim, você poderá conferir instruções sobre os equipamentos disponíveis, regras de uso e categorias permitidas.",
+            }
+        ]
 
 
-async def get_equipments_instructions() -> str:
+async def get_equipments_instructions() -> List[dict]:
     response = await get_tematic_instructions_for_equipments()
     asyncio.create_task(
         save_response_in_bq_background(

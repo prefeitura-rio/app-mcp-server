@@ -123,7 +123,7 @@ def create_app() -> FastMCP:
         """
         response = await get_equipments(address=address, categories=categories)
         if "error" in response:
-            return response
+            return {"error": response}
         return {
             "instructions": "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento",
             "equipamentos": response,
