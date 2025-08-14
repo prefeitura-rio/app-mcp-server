@@ -26,6 +26,7 @@ from src.tools.equipments_tools import (
 )
 
 from src.tools.search import get_google_search
+from src.tools.feedback_tools import store_user_feedback
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -142,6 +143,21 @@ def create_app() -> FastMCP:
             "categorias": categories,
         }
 
+    @mcp.tool()
+    async def user_feedback(user_id: str, feedback: str) -> dict:
+        """
+        Armazena feedback do usuário no BigQuery com timestamp automático.
+        
+        Args:
+            user_id: ID único do usuário que está fornecendo o feedback
+            feedback: Texto do feedback fornecido pelo usuário
+            
+        Returns:
+            Dict com confirmação de sucesso, timestamp e instruções para resposta
+        """
+        response = await store_user_feedback(user_id, feedback)
+        return response
+
     # ===== REGISTRAR RESOURCES =====
 
     # Resource com lista de bairros
@@ -197,7 +213,7 @@ def create_app() -> FastMCP:
     # ===== LOG DE INICIALIZAÇÃO =====
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
-    logger.info(f"Tools registradas: calculadora (5), data/hora (2)")
+    logger.info(f"Tools registradas: calculadora (5), data/hora (2), busca (1), equipamentos (2), feedback (1)")
     logger.info(f"Resources registrados: 3")
     logger.info(f"Prompts registrados: 1")
 

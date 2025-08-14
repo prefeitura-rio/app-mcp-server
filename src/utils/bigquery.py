@@ -114,3 +114,90 @@ async def save_response_in_bq_background(data, endpoint, dataset_id, table_id):
         logger.exception(
             f"Failed to save response to BigQuery in background for endpoint: {endpoint}"
         )
+
+
+def save_feedback_in_bq(
+    user_id: str,
+    feedback: str,
+    timestamp: str,
+    dataset_id: str = "brutos_eai_logs",
+    table_id: str = "feedback",
+    project_id: str = "rj-iplanrio",
+):
+    """
+    Saves user feedback directly to BigQuery with feedback-specific schema.
+    
+    Args:
+        user_id: User identifier
+        feedback: User feedback text
+        timestamp: Timestamp when feedback was submitted
+        dataset_id: BigQuery dataset ID
+        table_id: BigQuery table ID
+        project_id: GCP project ID
+    """
+    table_full_name = f"{project_id}.{dataset_id}.{table_id}"
+    logger.info(f"Salvando feedback no BigQuery: {table_full_name}")
+    
+    schema = [
+        bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("feedback", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("timestamp", "DATETIME", mode="REQUIRED"),
+        bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
+    ]
+
+    job_config = bigquery.LoadJobConfig(
+        schema=schema,
+        write_disposition="WRITE_APPEND",
+        time_partitioning=bigquery.TimePartitioning(
+            type_=bigquery.TimePartitioningType.DAY,
+            field="data_particao",
+        ),
+    )
+    
+    data_to_save = {
+        "user_id": user_id,
+        "feedback": feedback,
+        "timestamp": timestamp,
+        "data_particao": timestamp.split("T")[0],
+    }
+    
+    json_data = json.loads(json.dumps([data_to_save]))
+    client = get_bigquery_client()
+
+    try:
+        job = client.load_table_from_json(
+            json_data, table_full_name, job_config=job_config
+        )
+        job.result()
+        logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
+    except Exception as e:
+        logger.error(f"Erro ao salvar feedback no BigQuery: {str(e)}")
+        raise Exception(f"Failed to save feedback: {str(e)}")
+
+
+async def save_feedback_in_bq_background(
+    user_id: str,
+    feedback: str,
+    timestamp: str,
+    dataset_id: str = "brutos_eai_logs",
+    table_id: str = "feedback",
+):
+    """
+    Asynchronous wrapper for saving feedback in BigQuery.
+    Catches and logs exceptions to prevent crashing background tasks.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            save_feedback_in_bq,
+            user_id,
+            feedback,
+            timestamp,
+            dataset_id,
+            table_id,
+        )
+    except Exception:
+        logger.exception(
+            f"Failed to save feedback to BigQuery in background for user: {user_id}"
+        )
