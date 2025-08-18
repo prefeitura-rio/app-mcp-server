@@ -52,13 +52,20 @@ def save_response_in_bq(
     dataset_id: str,
     table_id: str,
     project_id: str = "rj-iplanrio",
+    environment: str = None,
 ):
+    from src.config.env import ENVIRONMENT
+    
+    # Use passed environment or default from config
+    env_value = environment if environment is not None else ENVIRONMENT
+    
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando resposta no BigQuery: {table_full_name}")
     schema = [
         bigquery.SchemaField("datetime", "DATETIME", mode="NULLABLE"),
         bigquery.SchemaField("endpoint", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("data", "JSON", mode="NULLABLE"),
+        bigquery.SchemaField("environment", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
     ]
 
@@ -78,6 +85,7 @@ def save_response_in_bq(
         "datetime": datetime_to_save,
         "endpoint": endpoint,
         "data": data,
+        "environment": env_value,
         "data_particao": datetime_to_save.split("T")[0],
     }
     json_data = json.loads(json.dumps([data_to_save]))
@@ -93,7 +101,7 @@ def save_response_in_bq(
         raise Exception(json_data)
 
 
-async def save_response_in_bq_background(data, endpoint, dataset_id, table_id):
+async def save_response_in_bq_background(data, endpoint, dataset_id, table_id, environment=None):
     """
     Asynchronous wrapper for saving the response in BigQuery.
     Catches and logs exceptions to prevent crashing background tasks.
@@ -109,6 +117,8 @@ async def save_response_in_bq_background(data, endpoint, dataset_id, table_id):
             endpoint,
             dataset_id,
             table_id,
+            "rj-iplanrio",  # project_id
+            environment,
         )
     except Exception:
         logger.exception(
@@ -120,6 +130,7 @@ def save_feedback_in_bq(
     user_id: str,
     feedback: str,
     timestamp: str,
+    environment: str,
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "feedback",
     project_id: str = "rj-iplanrio",
@@ -131,6 +142,7 @@ def save_feedback_in_bq(
         user_id: User identifier
         feedback: User feedback text
         timestamp: Timestamp when feedback was submitted
+        environment: Environment where feedback was generated (staging, prod, etc.)
         dataset_id: BigQuery dataset ID
         table_id: BigQuery table ID
         project_id: GCP project ID
@@ -141,6 +153,7 @@ def save_feedback_in_bq(
     schema = [
         bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("feedback", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("timestamp", "DATETIME", mode="REQUIRED"),
         bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
     ]
@@ -157,6 +170,7 @@ def save_feedback_in_bq(
     data_to_save = {
         "user_id": user_id,
         "feedback": feedback,
+        "environment": environment,
         "timestamp": timestamp,
         "data_particao": timestamp.split("T")[0],
     }
@@ -179,6 +193,7 @@ async def save_feedback_in_bq_background(
     user_id: str,
     feedback: str,
     timestamp: str,
+    environment: str,
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "feedback",
 ):
@@ -194,6 +209,7 @@ async def save_feedback_in_bq_background(
             user_id,
             feedback,
             timestamp,
+            environment,
             dataset_id,
             table_id,
         )

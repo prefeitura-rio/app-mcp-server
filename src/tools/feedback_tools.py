@@ -1,11 +1,12 @@
 """
-Ferramentas para armazenar feedback de usuários no BigQuery.
+Ferramentas de feedback para o servidor FastMCP.
 """
 
 import asyncio
 from typing import Dict, Any
 from src.utils.bigquery import save_feedback_in_bq_background, get_datetime
 from src.utils.log import logger
+from src.config.env import ENVIRONMENT
 
 
 async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
@@ -40,14 +41,13 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
         # Gera timestamp
         timestamp = get_datetime()
         
-        # Salva no BigQuery em background usando a função especializada para feedback
+        # Salva no BigQuery de forma assíncrona
         asyncio.create_task(
             save_feedback_in_bq_background(
                 user_id=user_id.strip(),
                 feedback=feedback.strip(),
                 timestamp=timestamp,
-                dataset_id="brutos_eai_logs",
-                table_id="feedback",
+                environment=ENVIRONMENT,
             )
         )
 

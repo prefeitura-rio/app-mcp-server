@@ -35,4 +35,4 @@ def format_greeting() -> str:
     else:
         greeting = "Boa noite"
 
-    return f"{greeting}! Hoje é {weekday}, {date_br}. No Rio de Janeiro são {time_info['time']}."
+    return f"Responda: `{greeting}!` e fale um pouco sobre você e sobre o que você sabe fazer. Reforce que você é um canal seguro e oficial."
