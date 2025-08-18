@@ -15,6 +15,7 @@ GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
 GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
 
+ENVIRONMENT = getenv_or_action("ENVIRONMENT", default="staging", action="ignore")
 
 GCP_SERVICE_ACCOUNT_CREDENTIALS = getenv_or_action(
     "GCP_SERVICE_ACCOUNT_CREDENTIALS", action="raise"
