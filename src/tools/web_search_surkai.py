@@ -26,7 +26,9 @@ async def surkai_search(query: str, k: int = 6, lang: str = "pt-BR"):
         "query": query
     }
     
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=120)
+    
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(url, headers=headers, json=payload) as response:
             response.raise_for_status()
             return await response.json()
