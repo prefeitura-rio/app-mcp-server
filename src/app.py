@@ -113,7 +113,15 @@ def create_app() -> FastMCP:
     
     @mcp.tool()
     async def web_search_surkai(query: str) -> dict:
-        """Obtém os resultados da busca no Surkai"""
+        """
+        Calls the surkai api to retrieve a web search.
+
+        Parameters:
+            query (str): The query that will serve as a search on surkai.
+
+        Returns:
+            dict: The API response as JSON containing the results of the research.
+        """
         response = await surkai_search(query)
         return response
 
