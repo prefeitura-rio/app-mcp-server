@@ -7,6 +7,7 @@ from fastapi.responses import PlainTextResponse
 from typing import Optional, List
 import json
 
+from src.tools.web_search_surkai import surkai_search
 from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
@@ -108,6 +109,20 @@ def create_app() -> FastMCP:
     async def google_search(query: str) -> dict:
         """Obtém os resultados da busca no Google"""
         response = await get_google_search(query)
+        return response
+    
+    @mcp.tool()
+    async def web_search_surkai(query: str) -> dict:
+        """
+        Calls the surkai api to retrieve a web search.
+
+        Parameters:
+            query (str): The query that will serve as a search on surkai.
+
+        Returns:
+            dict: The API response as JSON containing the results of the research.
+        """
+        response = await surkai_search(query)
         return response
 
     @mcp.tool()
