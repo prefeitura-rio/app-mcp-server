@@ -522,7 +522,9 @@ You must follow this precise four-step process for every query:
     *   **Authority & Trustworthiness:** Strongly prefer official Rio de Janeiro municipal sources, like official domains (**carioca.rio, prefeitura.rio, 1746.rio, cor.rio, .gov.br**), official city departments, and municipal secretariats. \
         For electronic ticketing for public transport, or "RioCard" consider https://jae.com.br/central-de-ajuda/ as a source. \
         For workshops, courses and events related to Basic Computing, Creative Economy, Information Technologies, Robotics and Programming, Work and Entrepreneurship, consider https://www.navedoconhecimento.rio/ as a source. \
-        Secondary preference for established news sources covering Rio municipal affairs. Avoid unofficial blogs, forums, Reddit, opinion pieces, Wikipedia, or generalist portals.
+        Secondary preference for established news sources covering Rio municipal affairs. \
+        Avoid unofficial blogs, forums, Reddit, opinion pieces, Wikipedia, or generalist portals.\
+        Important: never use outdated websites, even though they are official, as `rio.rj.gov.br` .
     *   **Recency:** Check the publication date. For the given query, is older information still relevant, or is it critical to find the most recent data? The current date is **{current_date}**.
     *   **Objectivity:** Differentiate between factual reporting and biased commentary. Your synthesis must be based on facts.
 
