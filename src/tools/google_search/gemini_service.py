@@ -108,6 +108,26 @@ class GeminiService:
 
                     logger.info("Resposta recebida do Gemini")
                     candidate = response.candidates[0]
+                    
+                    # Check if grounding metadata and chunks exist
+                    if (
+                        not candidate.grounding_metadata 
+                        or not candidate.grounding_metadata.grounding_chunks
+                    ):
+                        # No grounding chunks found - likely all sources were filtered or unavailable
+                        logger.warning("Nenhuma fonte confiável encontrada para a consulta")
+                        return {
+                            "id": request_id,
+                            "text": "Desculpe, mas não consegui encontrar informações confiáveis sobre este tópico em fontes oficiais. Esta consulta pode estar fora do escopo do meu conhecimento, que se concentra em serviços municipais do Rio de Janeiro e fontes governamentais oficiais.",
+                            "sources": [],
+                            "web_search_queries": [],
+                            "tokens_metadata": {},
+                            "retry_attempts": attempt,
+                            "model": model,
+                            "temperature": temperature,
+                            "query": query,
+                        }
+                    
                     logger.info("Resolvendo URLs das fontes...")
                     resolved_urls_map = await resolve_urls(
                         urls_to_resolve=candidate.grounding_metadata.grounding_chunks
@@ -118,6 +138,21 @@ class GeminiService:
                     )
                     modified_text = format_text_with_citations(response.text, citations)
                     sources_gathered = get_sources_list(citations, modified_text)
+
+                    # Check if all sources were filtered out by blacklist
+                    if not sources_gathered and citations:
+                        logger.warning("Todas as fontes encontradas estão na blacklist")
+                        return {
+                            "id": request_id,
+                            "text": "Desculpe, mas as informações encontradas para esta consulta vêm de fontes que estão fora do escopo do meu conhecimento. Eu me concentro em fornecer informações sobre serviços municipais do Rio de Janeiro usando apenas fontes governamentais oficiais e confiáveis.",
+                            "sources": [],
+                            "web_search_queries": candidate.grounding_metadata.web_search_queries if candidate.grounding_metadata else [],
+                            "tokens_metadata": self.get_tokens_metadata(response=response),
+                            "retry_attempts": attempt,
+                            "model": model,
+                            "temperature": temperature,
+                            "query": query,
+                        }
 
                     web_search_queries = []
                     if (
@@ -456,6 +491,10 @@ def format_text_with_citations(text, citations_data):
     for citation in citations_data:
         # A maioria dos segmentos tem um 'index' que podemos usar
         try:
+            # Skip citations with no segments (filtered out by blacklist)
+            if not citation["segments"]:
+                continue
+                
             url = citation["segments"][0]["url"]
             if url not in source_map:
                 source_map[url] = citation["segments"][0].get(
@@ -468,7 +507,7 @@ def format_text_with_citations(text, citations_data):
             citation_num = source_map[url]
             temp_citations.append({**citation, "citation_num": citation_num})
         except (KeyError, IndexError):
-            # Ignora citações malformadas
+            # Ignora citações malformadas ou vazias
             continue
 
     # 2. Ordenar as citações pelo 'end_index' em ordem DECRESCENTE.
@@ -510,7 +549,7 @@ def format_text_with_citations(text, citations_data):
             (
                 c["segments"][0]["label"]
                 for c in citations_data
-                if c["segments"][0]["url"] == url
+                if c["segments"] and c["segments"][0]["url"] == url
             ),
             url,
         )
@@ -578,7 +617,6 @@ You must follow this precise four-step process for every query:
         For electronic ticketing for public transport, or "RioCard" consider https://jae.com.br/central-de-ajuda/ as a source. \
         For workshops, courses and events related to Basic Computing, Creative Economy, Information Technologies, Robotics and Programming, Work and Entrepreneurship and Artificial Intelligence consider https://www.navedoconhecimento.rio/ as a source. \
         Secondary preference for established news sources covering Rio municipal affairs. \
-        It is prohibited to use this domains as source: {env.LINK_BLACKLIST} \
         Avoid unofficial blogs, forums, opinion pieces, or generalist portals.
     *   **Recency:** Check the publication date. For the given query, is older information still relevant, or is it critical to find the most recent data? The current date is **{current_date}**.
     *   **Objectivity:** Differentiate between factual reporting and biased commentary. Your synthesis must be based on facts.
