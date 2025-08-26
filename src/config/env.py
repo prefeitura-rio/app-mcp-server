@@ -26,3 +26,5 @@ GOOGLE_BIGQUERY_PAGE_SIZE = int(
 NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 
 SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY")
+
+LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")

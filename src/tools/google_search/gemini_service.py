@@ -523,8 +523,8 @@ You must follow this precise four-step process for every query:
         For electronic ticketing for public transport, or "RioCard" consider https://jae.com.br/central-de-ajuda/ as a source. \
         For workshops, courses and events related to Basic Computing, Creative Economy, Information Technologies, Robotics and Programming, Work and Entrepreneurship, consider https://www.navedoconhecimento.rio/ as a source. \
         Secondary preference for established news sources covering Rio municipal affairs. \
-        Avoid unofficial blogs, forums, Reddit, opinion pieces, Wikipedia, or generalist portals.\
-        Important: never use outdated websites, even though they are official, as `rio.rj.gov.br` .
+        It is prohibited to use this domains as source: {env.LINK_BLACKLIST} \
+        Avoid unofficial blogs, forums, opinion pieces, or generalist portals.
     *   **Recency:** Check the publication date. For the given query, is older information still relevant, or is it critical to find the most recent data? The current date is **{current_date}**.
     *   **Objectivity:** Differentiate between factual reporting and biased commentary. Your synthesis must be based on facts.
 
