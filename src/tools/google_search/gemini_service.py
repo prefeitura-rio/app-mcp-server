@@ -382,16 +382,48 @@ def get_citations(response, resolved_urls_map):
                 try:
                     chunk = candidate.grounding_metadata.grounding_chunks[ind]
                     resolved_url = resolved_urls_map.get(chunk.web.uri, None)
-
-                    citation["segments"].append(
-                        {
-                            "label": chunk.web.title,
-                            "uri": chunk.web.uri,
-                            "url": resolved_url["url"],
-                            # "text": support.segment.text,
-                            # "error": resolved_url["error"],
-                        }
-                    )
+                    
+                    # Skip if resolved_url is None or doesn't have the expected structure
+                    if not resolved_url or "url" not in resolved_url:
+                        continue
+                    
+                    # Check if the URL's domain is blacklisted
+                    from urllib.parse import urlparse
+                    try:
+                        parsed_url = urlparse(resolved_url["url"])
+                        domain = parsed_url.netloc.lower()
+                        
+                        # Get blacklisted domains from environment
+                        blacklisted_domains = env.LINK_BLACKLIST
+                        is_blacklisted = any(
+                            blacklisted_domain.strip().lower() in domain 
+                            for blacklisted_domain in blacklisted_domains 
+                            if blacklisted_domain.strip()
+                        )
+                        
+                        # Only add to citations if not blacklisted
+                        if not is_blacklisted:
+                            citation["segments"].append(
+                                {
+                                    "label": chunk.web.title,
+                                    "uri": chunk.web.uri,
+                                    "url": resolved_url["url"],
+                                    # "text": support.segment.text,
+                                    # "error": resolved_url["error"],
+                                }
+                            )
+                    except Exception:
+                        # If there's any error with URL parsing or blacklist checking, 
+                        # fall back to the original behavior (include the citation)
+                        citation["segments"].append(
+                            {
+                                "label": chunk.web.title,
+                                "uri": chunk.web.uri,
+                                "url": resolved_url["url"],
+                                # "text": support.segment.text,
+                                # "error": resolved_url["error"],
+                            }
+                        )
                 except (IndexError, AttributeError, NameError):
                     # Handle cases where chunk, web, uri, or resolved_map might be problematic
                     # For simplicity, we'll just skip adding this particular segment link
@@ -493,10 +525,33 @@ def get_sources_list(citations_data, modified_text):
     )
     seen_uris = set()
     sources_gathered = []
+    
+    # Get blacklisted domains from environment
+    blacklisted_domains = env.LINK_BLACKLIST
+    
     for source in all_segments:
         if source["uri"] not in seen_uris and source["url"] in modified_text:
-            seen_uris.add(source["uri"])
-            sources_gathered.append(source)
+            try:
+                # Check if the URL's domain is in the blacklist
+                from urllib.parse import urlparse
+                parsed_url = urlparse(source["url"])
+                domain = parsed_url.netloc.lower()
+                
+                # Check if any blacklisted domain matches the source domain
+                is_blacklisted = any(
+                    blacklisted_domain.strip().lower() in domain 
+                    for blacklisted_domain in blacklisted_domains 
+                    if blacklisted_domain.strip()
+                )
+                
+                if not is_blacklisted:
+                    seen_uris.add(source["uri"])
+                    sources_gathered.append(source)
+            except Exception:
+                # If there's any error with URL parsing or blacklist checking,
+                # fall back to the original behavior (include the source)
+                seen_uris.add(source["uri"])
+                sources_gathered.append(source)
 
     for index, source in enumerate(sources_gathered):
         source["index"] = index + 1
@@ -521,7 +576,7 @@ You must follow this precise four-step process for every query:
 2.  **Evaluate Search Results:** As you process the search results, you must act as a critical filter. Prioritize and weigh information based on these criteria:
     *   **Authority & Trustworthiness:** Strongly prefer official Rio de Janeiro municipal sources, like official domains (**carioca.rio, prefeitura.rio, 1746.rio, cor.rio, .gov.br**), official city departments, and municipal secretariats. \
         For electronic ticketing for public transport, or "RioCard" consider https://jae.com.br/central-de-ajuda/ as a source. \
-        For workshops, courses and events related to Basic Computing, Creative Economy, Information Technologies, Robotics and Programming, Work and Entrepreneurship, consider https://www.navedoconhecimento.rio/ as a source. \
+        For workshops, courses and events related to Basic Computing, Creative Economy, Information Technologies, Robotics and Programming, Work and Entrepreneurship and Artificial Intelligence consider https://www.navedoconhecimento.rio/ as a source. \
         Secondary preference for established news sources covering Rio municipal affairs. \
         It is prohibited to use this domains as source: {env.LINK_BLACKLIST} \
         Avoid unofficial blogs, forums, opinion pieces, or generalist portals.
