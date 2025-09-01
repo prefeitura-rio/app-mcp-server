@@ -36,6 +36,7 @@ from src.resources.rio_info import (
 )
 
 from src.config.env import IS_LOCAL
+import src.config.env as env
 
 if IS_LOCAL:
     from mcp.server.fastmcp import FastMCP
@@ -149,11 +150,11 @@ def create_app() -> FastMCP:
     async def equipments_instructions(
         tema: str = "geral"
     ) -> dict:
-        """
+        f"""
         Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         
         Args:
-            tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado.
+            tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {env.EQUIPMENTS_VALID_THEMES}.
             
         Returns:
             Dict contendo instruções detalhadas, categorias disponíveis e próximos passos para localizar equipamentos. Em caso de tema inválido, também retorna informações sobre os temas válidos.
