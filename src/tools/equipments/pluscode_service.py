@@ -197,11 +197,13 @@ async def get_category_equipments() -> dict:
     return categories
 
 
-async def get_tematic_instructions_for_equipments() -> List[dict]:
+async def get_tematic_instructions_for_equipments(tema: str = 'geral') -> List[dict]:
+    where_clause = f"WHERE tema = '{tema}'" if tema != 'geral' else ""
     query = f"""
         SELECT 
             * 
-        FROM `rj-iplanrio.plus_codes.equipamentos_instrucoes`
+        FROM `rj-iplanrio.plus_codes.equipamentos_instrucoes` 
+        {where_clause}
     """
     data = get_bigquery_result(query=query)
     return data
