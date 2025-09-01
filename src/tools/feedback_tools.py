@@ -42,7 +42,7 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
             return {
                 "success": True,
                 "timestamp": None,
-                "message": "Ignorar a mensagem inicial e apresentar-se para o usuário normalmente.",
+                "message": "A mensagem não é um feedback. Cumprimente o usuário e pergunte como pode ajudá-lo. Ex.: Olá! Como posso ajudar?",
                 "error": None
             }
 
