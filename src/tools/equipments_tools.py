@@ -33,13 +33,16 @@ def get_instructions_for_categories(categories: List[str]) -> str:
     health_categories = ["CF", "CMS"]
     
     if any(cat in categories for cat in health_categories):
-        return """
-        - Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
+        return """- Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
         1.  **Apresente a equipe de forma personalizada**: Chame-a de "**a sua equipe de saúde da família**" e informe o nome dela.
         2.  **Forneça APENAS o contato da equipe**: Informe o número de telefone da equipe, deixando claro que o contato é via **WhatsApp**.
         3.  **NÃO INFORME** o telefone geral da unidade (CF/CMS) para não confundir o cidadão. Informe apenas se a equipe da família não tiver telefone.
         4.  **Explique o papel da equipe**: De forma sucinta, diga que é a equipe responsável por cuidar da saúde dele e de sua família.
-        *   **Exemplo de como estruturar a resposta**: "A unidade de saúde mais próxima para você é a **[Nome da CF/CMS]**. Lá, **a sua equipe de saúde da família, chamada [Nome da Equipe]**, é a responsável por cuidar de você e da sua família. Se precisar entrar em contato, o **WhatsApp da sua equipe é [Número do WhatsApp da Equipe]**."
+        *   **Exemplo de como estruturar a resposta**: "A unidade de saúde mais próxima para você é:
+                - **[Nome da CF/CMS]
+                - Endereço: [Endereço da CF/CMS]**
+                - Horário de funcionamento: [Horário de Funcionamento da CF/CMS]** 
+            Lá, **a sua equipe de saúde da família, chamada [Nome da Equipe]**, é a responsável por cuidar de você e da sua família. Se precisar entrar em contato, o **WhatsApp da sua equipe é [Número do WhatsApp da Equipe]**."
         """
     
     # Instruções padrão para outras categorias
