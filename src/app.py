@@ -22,7 +22,7 @@ from src.tools.datetime_tools import get_current_time, format_greeting
 
 from src.tools.equipments_tools import (
     get_equipments_categories,
-    get_equipments,
+    get_equipments_with_instructions,
     get_equipments_instructions,
 )
 
@@ -138,13 +138,7 @@ def create_app() -> FastMCP:
         Returns:
             Lista de equipamentos
         """
-        response = await get_equipments(address=address, categories=categories)
-        if "error" in response:
-            return {"error": response}
-        return {
-            "instructions": "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento",
-            "equipamentos": response,
-        }
+        return await get_equipments_with_instructions(address=address, categories=categories)
 
     @mcp.tool()
     async def equipments_instructions(

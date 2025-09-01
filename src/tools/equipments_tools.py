@@ -8,6 +8,73 @@ from src.tools.equipments.pluscode_service import (
 from src.utils.bigquery import save_response_in_bq_background
 from src.config.env import EQUIPMENTS_VALID_THEMES
 
+
+def get_valid_themes() -> List[str]:
+    """
+    Retorna a lista de temas válidos para equipamentos.
+    
+    Returns:
+        Lista de temas válidos configurados via variável de ambiente
+    """
+    return EQUIPMENTS_VALID_THEMES
+
+
+def get_instructions_for_categories(categories: List[str]) -> str:
+    """
+    Retorna instruções específicas baseadas nas categorias de equipamentos.
+    
+    Args:
+        categories: Lista de categorias de equipamentos
+        
+    Returns:
+        String com instruções específicas para as categorias
+    """
+    # Categorias de saúde que requerem instruções específicas
+    health_categories = ["CF", "CMS"]
+    
+    if any(cat in categories for cat in health_categories):
+        return """
+        - Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
+        1.  **Apresente a equipe de forma personalizada**: Chame-a de "**a sua equipe de saúde da família**" e informe o nome dela.
+        2.  **Forneça APENAS o contato da equipe**: Informe o número de telefone da equipe, deixando claro que o contato é via **WhatsApp**.
+        3.  **NÃO INFORME** o telefone geral da unidade (CF/CMS) para não confundir o cidadão. Informe apenas se a equipe da família não tiver telefone.
+        4.  **Explique o papel da equipe**: De forma sucinta, diga que é a equipe responsável por cuidar da saúde dele e de sua família.
+        *   **Exemplo de como estruturar a resposta**: "A unidade de saúde mais próxima para você é a **[Nome da CF/CMS]**. Lá, **a sua equipe de saúde da família, chamada [Nome da Equipe]**, é a responsável por cuidar de você e da sua família. Se precisar entrar em contato, o **WhatsApp da sua equipe é [Número do WhatsApp da Equipe]**."
+        """
+    
+    # Instruções padrão para outras categorias
+    return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
+
+
+async def get_equipments_with_instructions(
+    address: str, categories: Optional[List[str]] = []
+) -> dict:
+    """
+    Obtém equipamentos por endereço e retorna com instruções apropriadas.
+    
+    Args:
+        address: Endereço para busca
+        categories: Lista de categorias para filtrar
+        
+    Returns:
+        Dict com equipamentos e instruções específicas
+    """
+    # Buscar equipamentos
+    equipments_data = await get_equipments(address=address, categories=categories)
+    
+    # Verificar se há erro
+    if isinstance(equipments_data, list) and len(equipments_data) > 0 and "error" in equipments_data[0]:
+        return {"error": equipments_data}
+    
+    # Obter instruções baseadas nas categorias
+    instructions = get_instructions_for_categories(categories)
+    
+    return {
+        "instructions": instructions,
+        "equipamentos": equipments_data,
+    }
+
+
 async def get_equipments_categories() -> dict:
     response = await get_category_equipments()
     asyncio.create_task(
