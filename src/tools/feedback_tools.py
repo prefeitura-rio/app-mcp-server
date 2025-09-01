@@ -38,6 +38,14 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
                 "message": None
             }
 
+        if feedback.strip() == "closed_beta_feedback":
+            return {
+                "success": True,
+                "timestamp": None,
+                "message": "Ignorar a mensagem inicial e apresentar-se para o usuário normalmente.",
+                "error": None
+            }
+
         # Gera timestamp
         timestamp = get_datetime()
         
