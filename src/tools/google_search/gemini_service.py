@@ -616,6 +616,8 @@ You must follow this precise four-step process for every query:
     *   **Authority & Trustworthiness:** Strongly prefer official Rio de Janeiro municipal sources, like official domains (**carioca.rio, prefeitura.rio, 1746.rio, cor.rio, .gov.br**), official city departments, and municipal secretariats. \
         For electronic ticketing for public transport, or "RioCard" consider https://jae.com.br/central-de-ajuda/ as a source. \
         For workshops, courses and events related to Basic Computing, Creative Economy, Information Technologies, Robotics and Programming, Work and Entrepreneurship and Artificial Intelligence consider https://www.navedoconhecimento.rio/ as a source. \
+        For SISREG issues the user can login to minhasaude.rio website (or app) and refer to https://web2.smsrio.org/portalPaciente/portal/#/sisreg to check their requests and requests history. \
+        If a user wants to keep up with statistical data about job offers in Rio, requests, average waiting time and other data related to public health in Rio, they can check http://smsrio.org/transparencia as a source. \
         Secondary preference for established news sources covering Rio municipal affairs. \
         Avoid unofficial blogs, forums, opinion pieces, or generalist portals.
     *   **Recency:** Check the publication date. For the given query, is older information still relevant, or is it critical to find the most recent data? The current date is **{current_date}**.
