@@ -129,6 +129,15 @@ async def get_pluscode_coords_equipments(
 
     if categories:
         # logger.info(f"Categories: {categories}")
+        
+        # If either "CF" or "CMS" in categories, ensure all 3 are included
+        target_categories = ["CF", "CMS"]
+        if any(cat in categories for cat in target_categories):
+            required_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
+            for cat in required_categories:
+                if cat not in categories:
+                    categories.append(cat)
+        
         categorias_filter = "and t.categoria in ("
         for i in range(len(categories)):
             if i != len(categories) - 1:
@@ -197,11 +206,13 @@ async def get_category_equipments() -> dict:
     return categories
 
 
-async def get_tematic_instructions_for_equipments() -> List[dict]:
+async def get_tematic_instructions_for_equipments(tema: str = 'geral') -> List[dict]:
+    where_clause = f"WHERE tema = '{tema}'" if tema != 'geral' else ""
     query = f"""
         SELECT 
             * 
         FROM `rj-iplanrio.plus_codes.equipamentos_instrucoes`
+        {where_clause}
     """
     data = get_bigquery_result(query=query)
     return data

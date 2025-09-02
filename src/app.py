@@ -22,7 +22,7 @@ from src.tools.datetime_tools import get_current_time, format_greeting
 
 from src.tools.equipments_tools import (
     get_equipments_categories,
-    get_equipments,
+    get_equipments_with_instructions,
     get_equipments_instructions,
 )
 
@@ -36,6 +36,7 @@ from src.resources.rio_info import (
 )
 
 from src.config.env import IS_LOCAL
+import src.config.env as env
 
 if IS_LOCAL:
     from mcp.server.fastmcp import FastMCP
@@ -137,20 +138,22 @@ def create_app() -> FastMCP:
         Returns:
             Lista de equipamentos
         """
-        response = await get_equipments(address=address, categories=categories)
-        if "error" in response:
-            return {"error": response}
-        return {
-            "instructions": "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento",
-            "equipamentos": response,
-        }
+        return await get_equipments_with_instructions(address=address, categories=categories)
 
     @mcp.tool()
-    async def equipments_instructions() -> dict:
+    async def equipments_instructions(
+        tema: str = "geral"
+    ) -> dict:
+        f"""
+        Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
+        
+        Args:
+            tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {env.EQUIPMENTS_VALID_THEMES}.
+            
+        Returns:
+            Dict contendo instruções detalhadas, categorias disponíveis e próximos passos para localizar equipamentos. Em caso de tema inválido, também retorna informações sobre os temas válidos.
         """
-        Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
-        """
-        instructions = await get_equipments_instructions()
+        instructions = await get_equipments_instructions(tema=tema)
         categories = await get_equipments_categories()
         return {
             "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` que deve seguir o nome exato das categorias disponiveis na secao `categorias`. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias. NAO UTILIZE CATEGORIAS DAS INSTRUÇÕES! Utilize única e exclusivamente as categorias disponiveis na secao `categorias`, que estão nesse mesmo json.",

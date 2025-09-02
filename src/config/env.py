@@ -25,4 +25,12 @@ GOOGLE_BIGQUERY_PAGE_SIZE = int(
 )
 NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 
-SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY")
+SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
+
+LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
+
+# Configuração para temas válidos da ferramenta de equipamentos
+EQUIPMENTS_VALID_THEMES = getenv_or_action(
+    "EQUIPMENTS_VALID_THEMES", 
+    default="cultura,saude,educacao,geral"
+).split(",")
