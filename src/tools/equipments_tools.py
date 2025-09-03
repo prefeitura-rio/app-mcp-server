@@ -19,7 +19,7 @@ def get_valid_themes() -> List[str]:
     return EQUIPMENTS_VALID_THEMES
 
 
-def get_instructions_for_categories(categories: List[str]) -> str:
+def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
     """
     Retorna instruções específicas baseadas nas categorias de equipamentos.
 
@@ -32,7 +32,7 @@ def get_instructions_for_categories(categories: List[str]) -> str:
     # Categorias de saúde que requerem instruções específicas
     health_categories = ["CF", "CMS"]
 
-    if any(cat in categories for cat in health_categories):
+    if categories and any(cat in categories for cat in health_categories):
         return """- Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
         1.  **Apresente a equipe de forma personalizada**: Chame-a de "**a sua equipe de saúde da família**" e informe o nome dela.
         2.  **Forneça APENAS o contato da equipe**: Informe o número de telefone da equipe, deixando claro que o contato é via **WhatsApp**.
@@ -75,7 +75,7 @@ async def get_equipments_with_instructions(
         return {"error": equipments_data}
 
     # Obter instruções baseadas nas categorias
-    instructions = get_instructions_for_categories(categories)
+    instructions = get_instructions_for_categories(categories=categories)
 
     return {
         "instructions": instructions,
@@ -99,6 +99,17 @@ async def get_equipments_categories() -> dict:
 async def get_equipments(
     address: str, categories: Optional[List[str]] = []
 ) -> List[dict]:
+
+    cf_cms_categories = ["CF", "CMS"]
+    equipe_familia_category = "EQUIPE DA FAMILIA"
+
+    if categories and equipe_familia_category in categories:
+        categories += cf_cms_categories
+    if categories and any(cat in cf_cms_categories for cat in categories):
+        categories.append(equipe_familia_category)
+    if categories:
+        categories = list(set(categories))
+
     response = await get_pluscode_coords_equipments(
         address=address, categories=categories
     )
