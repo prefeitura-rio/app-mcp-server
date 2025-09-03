@@ -100,13 +100,12 @@ async def get_equipments(
     address: str, categories: Optional[List[str]] = []
 ) -> List[dict]:
 
-    cf_cms_categories = ["CF", "CMS"]
-    equipe_familia_category = "EQUIPE DA FAMILIA"
+    atencao_primaria_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
 
-    if categories and equipe_familia_category in categories:
-        categories += cf_cms_categories
-    if categories and any(cat in cf_cms_categories for cat in categories):
-        categories.append(equipe_familia_category)
+    if categories and any(cat in atencao_primaria_categories for cat in categories):
+        # Garantir que apenas categorias válidas sejam usadas
+        categories += atencao_primaria_categories
+
     if categories:
         categories = list(set(categories))
 
