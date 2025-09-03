@@ -19,7 +19,7 @@ VERSION_PLACEHOLDER = {
 
 
 def get_git_commit_hash():
-    """Obtém o hash do commit atual"""
+    """Obtém o hash do commit atual."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],

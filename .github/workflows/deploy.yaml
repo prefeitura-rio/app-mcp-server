@@ -1,0 +1,84 @@
+name: Deploy - Update Version and Build
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # 2. Update tool version
+      - name: Update tool version
+        run: |
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          echo "Current commit: $COMMIT_HASH"
+          
+          cat > src/utils/tool_version.json << EOF
+          {
+            "version": "v$COMMIT_HASH",
+            "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "description": "Tool version for cache invalidation"
+          }
+          EOF
+          
+          echo "✅ Tool version updated to: v$COMMIT_HASH"
+
+      # 3. Commit version update if changed
+      - name: Commit version update
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          if ! git diff --quiet src/utils/tool_version.json; then
+            git add src/utils/tool_version.json
+            git commit -m "chore: update tool version to $(git rev-parse --short HEAD) 🤖"
+            git push
+            echo "✅ Version committed and pushed"
+          else
+            echo "ℹ️ No version changes to commit"
+          fi
+
+      # 4. Build Docker image (after version update)
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
+
+      - name: Extract metadata for Docker tags
+        id: meta
+        run: |
+          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/app-mcp-server"
+
+          if [ "${GITHUB_REF##*/}" == "main" ]; then
+            COMMIT_HASH=${{ github.sha }}
+            TAGS="stable,$COMMIT_HASH"
+          elif [ "${GITHUB_REF##*/}" == "staging" ]; then
+            COMMIT_HASH=${{ github.sha }}
+            TAGS="latest,$COMMIT_HASH"
+          fi
+
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+          echo "TAGS=$TAGS" >> $GITHUB_ENV
+
+      - name: Build and tag Docker image
+        run: |
+          for TAG in $(echo $TAGS | tr "," "\n"); do
+            docker build -t $IMAGE_NAME:$TAG .
+          done
+
+      - name: Push Docker image
+        run: |
+          for TAG in $(echo $TAGS | tr "," "\n"); do
+            docker push $IMAGE_NAME:$TAG
+          done
+          
+          echo "🚀 Docker images pushed successfully"
