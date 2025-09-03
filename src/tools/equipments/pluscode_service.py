@@ -131,12 +131,12 @@ async def get_pluscode_coords_equipments(
         # logger.info(f"Categories: {categories}")
         
         # If either "CF" or "CMS" in categories, ensure all 3 are included
-        target_categories = ["CF", "CMS"]
-        if any(cat in categories for cat in target_categories):
-            required_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
-            for cat in required_categories:
-                if cat not in categories:
-                    categories.append(cat)
+        # target_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
+        # if any(cat in categories for cat in target_categories):
+        #     required_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
+        #     for cat in required_categories:
+        #         if cat not in categories:
+        #             categories.append(cat)
         
         categorias_filter = "and t.categoria in ("
         for i in range(len(categories)):
