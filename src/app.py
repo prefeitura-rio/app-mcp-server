@@ -145,17 +145,20 @@ def create_app() -> FastMCP:
             address=address, categories=categories
         )
 
-    @mcp.tool()
-    async def equipments_instructions(tema: str = "geral") -> dict:
-        f"""
-        [TOOL_VERSION: {TOOL_VERSION}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
+    @mcp.tool(
+        description="""
+        [TOOL_VERSION: {tool_version}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         
         Args:
-            tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {env.EQUIPMENTS_VALID_THEMES}.
+            tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {valid_themes}.
             
         Returns:
             Dict contendo instruções detalhadas, categorias disponíveis e próximos passos para localizar equipamentos. Em caso de tema inválido, também retorna informações sobre os temas válidos.
-        """
+        """.format(
+            tool_version=TOOL_VERSION, valid_themes=env.EQUIPMENTS_VALID_THEMES
+        ).strip()
+    )
+    async def equipments_instructions(tema: str = "geral") -> dict:
         instructions = await get_equipments_instructions(tema=tema)
         categories = await get_equipments_categories()
         response = {
