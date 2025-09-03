@@ -148,9 +148,7 @@ def create_app() -> FastMCP:
     @mcp.tool()
     async def equipments_instructions(tema: str = "geral") -> dict:
         f"""
-        [TOOL_VERSION: {TOOL_VERSION}] 
-        
-        Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
+        [TOOL_VERSION: {TOOL_VERSION}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         
         Args:
             tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {env.EQUIPMENTS_VALID_THEMES}.
