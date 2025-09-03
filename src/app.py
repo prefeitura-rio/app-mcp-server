@@ -37,11 +37,14 @@ from src.resources.rio_info import (
 
 from src.config.env import IS_LOCAL
 import src.config.env as env
+from src.utils.tool_versioning import add_tool_version, get_tool_version_from_file
 
 if IS_LOCAL:
     from mcp.server.fastmcp import FastMCP
 else:
     from fastmcp import FastMCP
+
+TOOL_VERSION = get_tool_version_from_file()["version"]
 
 
 def create_app() -> FastMCP:
@@ -111,7 +114,7 @@ def create_app() -> FastMCP:
         """Obtém os resultados da busca no Google"""
         response = await get_google_search(query)
         return response
-    
+
     @mcp.tool()
     async def web_search_surkai(query: str) -> dict:
         """
@@ -138,13 +141,15 @@ def create_app() -> FastMCP:
         Returns:
             Lista de equipamentos
         """
-        return await get_equipments_with_instructions(address=address, categories=categories)
+        return await get_equipments_with_instructions(
+            address=address, categories=categories
+        )
 
     @mcp.tool()
-    async def equipments_instructions(
-        tema: str = "geral"
-    ) -> dict:
+    async def equipments_instructions(tema: str = "geral") -> dict:
         f"""
+        [TOOL_VERSION: {TOOL_VERSION}] 
+        
         Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         
         Args:
@@ -155,21 +160,22 @@ def create_app() -> FastMCP:
         """
         instructions = await get_equipments_instructions(tema=tema)
         categories = await get_equipments_categories()
-        return {
+        response = {
             "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` que deve seguir o nome exato das categorias disponiveis na secao `categorias`. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias. NAO UTILIZE CATEGORIAS DAS INSTRUÇÕES! Utilize única e exclusivamente as categorias disponiveis na secao `categorias`, que estão nesse mesmo json.",
             "instrucoes": instructions,
             "categorias": categories,
         }
+        return add_tool_version(response)
 
     @mcp.tool()
     async def user_feedback(user_id: str, feedback: str) -> dict:
         """
         Armazena feedback do usuário no BigQuery com timestamp automático.
-        
+
         Args:
             user_id: ID único do usuário que está fornecendo o feedback
             feedback: Texto do feedback fornecido pelo usuário
-            
+
         Returns:
             Dict com confirmação de sucesso, timestamp e instruções para resposta
         """
@@ -231,7 +237,9 @@ def create_app() -> FastMCP:
     # ===== LOG DE INICIALIZAÇÃO =====
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
-    logger.info(f"Tools registradas: calculadora (5), data/hora (2), busca (1), equipamentos (2), feedback (1)")
+    logger.info(
+        f"Tools registradas: calculadora (5), data/hora (2), busca (1), equipamentos (2), feedback (1)"
+    )
     logger.info(f"Resources registrados: 3")
     logger.info(f"Prompts registrados: 1")
 

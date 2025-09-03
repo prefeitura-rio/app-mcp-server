@@ -2,6 +2,8 @@
 Ferramentas de data e hora para o servidor FastMCP.
 """
 
+import json
+
 from typing import Dict, Any
 from src.utils.datetime_utils import get_current_rio_time
 
