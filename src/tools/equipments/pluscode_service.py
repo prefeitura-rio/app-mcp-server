@@ -50,6 +50,7 @@ async def get_pluscode_coords_equipments(
                     cast(eq.distancia_metros as int64) as distancia_metros,
                     t.secretaria_responsavel,
                     t.categoria,
+                    eq.id_equipamento,
                     eq.nome_oficial,
                     eq.nome_popular,
                     eq.endereco.logradouro,
@@ -93,6 +94,7 @@ async def get_pluscode_coords_equipments(
                     eq.plus11,
                     CAST(st_distance(ST_GEOGPOINT(eq.longitude,eq.latitude), ST_GEOGPOINT({longitude}, {latitude})) AS INT64) as distancia_metros,                    t.secretaria_responsavel,
                     t.categoria,
+                    eq.id_equipamento,
                     eq.nome_oficial,
                     eq.nome_popular,
                     eq.endereco.logradouro,
@@ -129,15 +131,15 @@ async def get_pluscode_coords_equipments(
 
     if categories:
         # logger.info(f"Categories: {categories}")
-        
+
         # If either "CF" or "CMS" in categories, ensure all 3 are included
-        target_categories = ["CF", "CMS"]
-        if any(cat in categories for cat in target_categories):
-            required_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
-            for cat in required_categories:
-                if cat not in categories:
-                    categories.append(cat)
-        
+        # target_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
+        # if any(cat in categories for cat in target_categories):
+        #     required_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
+        #     for cat in required_categories:
+        #         if cat not in categories:
+        #             categories.append(cat)
+
         categorias_filter = "and t.categoria in ("
         for i in range(len(categories)):
             if i != len(categories) - 1:
@@ -152,6 +154,7 @@ async def get_pluscode_coords_equipments(
         query = query.replace("__replace_categories__", "")
 
     try:
+        # print(query)
         data = get_bigquery_result(query=query)
 
         return {
@@ -206,8 +209,8 @@ async def get_category_equipments() -> dict:
     return categories
 
 
-async def get_tematic_instructions_for_equipments(tema: str = 'geral') -> List[dict]:
-    where_clause = f"WHERE tema = '{tema}'" if tema != 'geral' else ""
+async def get_tematic_instructions_for_equipments(tema: str = "geral") -> List[dict]:
+    where_clause = f"WHERE tema = '{tema}'" if tema != "geral" else ""
     query = f"""
         SELECT 
             * 
