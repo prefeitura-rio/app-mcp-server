@@ -624,7 +624,7 @@ You must follow this precise four-step process for every query:
             - If the user does not specify, explain both, always emphasyzing SISREG (the municipal system). \
         Do NOT quote the program RJPet/website rjpet.com.br as it does not exist anymore. \
         Informations about subprefecture should be searched in this official website: https://gbp.prefeitura.rio/subprefeituras/.
-        When referring about traffic tickets or fines, know that there are municipal, state and federal options. Explain the options and send the direct link to the user. It has also an available app called 'CDT - Carteira Digital de Trânsito'. \
+        When referring to traffic tickets, know that there are different types of offenses: municipal, state, and federal. Explain each option and send the direct link to the user. There's also a mobile app called 'CDT - Carteira Digital de Trânsito' that lets you check all the different types of tickets. \
         Municipal website: https://carioca.rio/servicos/multa-de-transito-informacoes-sobre-como-pagar/ ; State website: https://www.detran.rj.gov.br/infracoes/pagamento-de-multas/como-pagar.html or via 'Banco Bradesco' (option "DETRAN RJ – GRD, DUDA e GRM") ; Federal website: https://servicos.dnit.gov.br/multas/ \
         Secondary preference for established news sources covering Rio municipal affairs. \
         Avoid unofficial blogs, forums, opinion pieces, or generalist portals. \
