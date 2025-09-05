@@ -14,7 +14,7 @@ def get_bigquery_client() -> bigquery.Client:
     """Get the BigQuery client.
 
     Returns:
-        bigquery.Client: The BigQuery client.
+        bigquery.Client: The BigQuery client
     """
     credentials = get_gcp_credentials(
         scopes=[
@@ -55,10 +55,10 @@ def save_response_in_bq(
     environment: str = None,
 ):
     from src.config.env import ENVIRONMENT
-    
+
     # Use passed environment or default from config
     env_value = environment if environment is not None else ENVIRONMENT
-    
+
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando resposta no BigQuery: {table_full_name}")
     schema = [
@@ -101,7 +101,9 @@ def save_response_in_bq(
         raise Exception(json_data)
 
 
-async def save_response_in_bq_background(data, endpoint, dataset_id, table_id, environment=None):
+async def save_response_in_bq_background(
+    data, endpoint, dataset_id, table_id, environment=None
+):
     """
     Asynchronous wrapper for saving the response in BigQuery.
     Catches and logs exceptions to prevent crashing background tasks.
@@ -137,7 +139,7 @@ def save_feedback_in_bq(
 ):
     """
     Saves user feedback directly to BigQuery with feedback-specific schema.
-    
+
     Args:
         user_id: User identifier
         feedback: User feedback text
@@ -149,7 +151,7 @@ def save_feedback_in_bq(
     """
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando feedback no BigQuery: {table_full_name}")
-    
+
     schema = [
         bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("feedback", "STRING", mode="REQUIRED"),
@@ -166,7 +168,7 @@ def save_feedback_in_bq(
             field="data_particao",
         ),
     )
-    
+
     data_to_save = {
         "user_id": user_id,
         "feedback": feedback,
@@ -174,7 +176,7 @@ def save_feedback_in_bq(
         "timestamp": timestamp,
         "data_particao": timestamp.split("T")[0],
     }
-    
+
     json_data = json.loads(json.dumps([data_to_save]))
     client = get_bigquery_client()
 
