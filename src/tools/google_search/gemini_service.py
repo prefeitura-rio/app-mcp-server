@@ -616,14 +616,19 @@ You must follow this precise four-step process for every query:
     *   **Authority & Trustworthiness:** Strongly prefer official Rio de Janeiro municipal sources, like official domains (**carioca.rio, prefeitura.rio, 1746.rio, cor.rio, .gov.br**), official city departments, and municipal secretariats. \
         For electronic ticketing for public transport, or "RioCard" consider https://jae.com.br/central-de-ajuda/ as a source. \
         For workshops, courses and events related to Basic Computing, Creative Economy, Information Technologies, Robotics and Programming, Work and Entrepreneurship and Artificial Intelligence consider https://www.navedoconhecimento.rio/ as a source. \
-        For SISREG position in line (health issues) the user can login to minhasaude.rio website (or app) and then check their requests and requests history ONLY in https://web2.smsrio.org/portalPaciente/portal/#/sisreg. \
-        You should NOT recommend the 'Portal da Transparência' for these kind of problems. ONLY if the user wants to keep up with STATISTICAL DATA about job offers in Rio, requests, average waiting time and other data related to public health in Rio, they can check http://smsrio.org/transparencia as a source. \
+        For queries about checking position in waiting lists or scheduling appointments for health services (exams, consultations, surgeries): \
+            - SISREG (municipal): Always give priority to explaining access via the MinhaSaude.rio portal or mobile app, which requires login either with a registered account or via Gov.br. The direct and official link for tracking is: https://web2.smsrio.org/portalPaciente/portal/#/sisreg. In this panel, citizens can consult their open requests as well as their request history. \
+            - Transparency (municipal): If the user asks for statistical data (average waiting time, number of requests, evolution of service availability, etc.) provide the transparency dashboard: http://smsrio.org/transparencia. Never use this link for individual request tracking. \
+            - SER (state): If the procedure has been scheduled by a state health unit, the tracking may be through the 'Sistema de Regulação' (SER). This is separate from SISREG. Provide the official link: https://painel.saude.rj.gov.br/usuario-do-sus/usuario-do-sus.html. \
+            - If the user explicitly mentions **only SISREG or only SER**, respond only about the mentioned system. \
+            - If the user does not specify, explain both, always emphasyzing SISREG (the municipal system). \
         Do NOT quote the program RJPet/website rjpet.com.br as it does not exist anymore. \
         Informations about subprefecture should be searched in this official website: https://gbp.prefeitura.rio/subprefeituras/.
         When referring about traffic tickets or fines, know that there are municipal, state and federal options. Explain the options and send the direct link to the user. It has also an available app called 'CDT - Carteira Digital de Trânsito'. \
         Municipal website: https://carioca.rio/servicos/multa-de-transito-informacoes-sobre-como-pagar/ ; State website: https://www.detran.rj.gov.br/infracoes/pagamento-de-multas/como-pagar.html or via 'Banco Bradesco' (option "DETRAN RJ – GRD, DUDA e GRM") ; Federal website: https://servicos.dnit.gov.br/multas/ \
         Secondary preference for established news sources covering Rio municipal affairs. \
-        Avoid unofficial blogs, forums, opinion pieces, or generalist portals.
+        Avoid unofficial blogs, forums, opinion pieces, or generalist portals. \
+        When login via Gov.br is available, inform the user about it, as it is the official government authentication system. \
 
     *   **Recency:** Check the publication date. For the given query, is older information still relevant, or is it critical to find the most recent data? The current date is **{current_date}**.
     *   **Objectivity:** Differentiate between factual reporting and biased commentary. Your synthesis must be based on facts.
