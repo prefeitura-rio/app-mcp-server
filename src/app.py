@@ -28,6 +28,7 @@ from src.tools.equipments_tools import (
 
 from src.tools.search import get_google_search
 from src.tools.feedback_tools import store_user_feedback
+from src.tools.floodings import flooding_response_guidelines
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -181,6 +182,11 @@ def create_app() -> FastMCP:
             Dict com confirmação de sucesso, timestamp e instruções para resposta
         """
         response = await store_user_feedback(user_id, feedback)
+        return response
+
+    @mcp.tool()
+    async def flooding_response():
+        response = await flooding_response_guidelines()
         return response
 
     # ===== REGISTRAR RESOURCES =====
