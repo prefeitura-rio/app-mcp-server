@@ -34,3 +34,9 @@ EQUIPMENTS_VALID_THEMES = getenv_or_action(
     "EQUIPMENTS_VALID_THEMES", 
     default="cultura,saude,educacao,geral"
 ).split(",")
+
+# PGM API Configuration
+CHATBOT_INTEGRATIONS_URL = getenv_or_action("CHATBOT_INTEGRATIONS_URL", action="ignore")
+CHATBOT_INTEGRATIONS_KEY = getenv_or_action("CHATBOT_INTEGRATIONS_KEY", action="ignore")
+CHATBOT_PGM_API_URL = getenv_or_action("CHATBOT_PGM_API_URL", action="ignore")
+CHATBOT_PGM_ACCESS_KEY = getenv_or_action("CHATBOT_PGM_ACCESS_KEY", action="ignore")

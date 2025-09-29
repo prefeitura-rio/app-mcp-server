@@ -3,7 +3,7 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 """
 
 from fastapi import Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List
 import json
 
@@ -29,6 +29,7 @@ from src.tools.equipments_tools import (
 from src.tools.search import get_google_search
 from src.tools.feedback_tools import store_user_feedback
 from src.tools.floodings import flooding_response_guidelines
+from src.tools.divida_ativa import emitir_guia_a_vista, emitir_guia_regularizacao, consultar_debitos
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -244,7 +245,56 @@ def create_app() -> FastMCP:
             base_prompt += f"\n\nContexto adicional: {context}"
 
         return base_prompt
+    
+    @mcp.custom_route("/consulta_debitos", methods=["POST"])
+    async def da_consulta_debitos(request: Request) -> JSONResponse:
+        """
+        Endpoint para consultar débitos do contribuinte
+        """
+        try:
+            parameters = await request.json()
+            result = await consultar_debitos(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=500
+            )
 
+    @mcp.custom_route("/emitir_guia", methods=["POST"])
+    async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de pagamento à vista
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_a_vista(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=500
+            )
+        
+    @mcp.custom_route("/emitir_guia_regularizacao", methods=["POST"])
+    async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de regularização
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_regularizacao(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=500
+            )
+    
+    
     # ===== LOG DE INICIALIZAÇÃO =====
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
