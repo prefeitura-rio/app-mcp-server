@@ -286,51 +286,54 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         itens_pagamento = {} 
         indice = 0
 
-        # Build header message
+        msg.append(f'*{mapeia_descricoes[parameters["consulta_debitos"]]}*')
+
         if parameters["consulta_debitos"] == "numeroAutoInfracao":
-            msg.append(f'{mapeia_descricoes[parameters["consulta_debitos"]]}: {parameters[parameters["consulta_debitos"]]} {parameters["anoAutoInfracao"]}')
+            msg.append(f'{parameters[parameters["consulta_debitos"]]} {parameters["anoAutoInfracao"]}')
         else:
-            msg.append(f'{mapeia_descricoes[parameters["consulta_debitos"]]}: {parameters[parameters["consulta_debitos"]]}')
-        
+            msg.append(f'{parameters[parameters["consulta_debitos"]]}')
+                
         if parameters["consulta_debitos"] == "inscricaoImobiliaria":
-            msg.append(f'\nEndereço do Imóvel: {registros.get("enderecoImovel", "N/A")}')
+            msg.append('\n*Endereço do Imóvel:*')
+            msg.append(f'{registros.get("enderecoImovel", "N/A")}')
         
-        msg.append(f'\nData de Vencimento: {registros.get("dataVencimento", "N/A")}')
-        
-        # Process debts
         debitos_nao_parcelados = registros.get("debitosNaoParceladosComSaldoTotal", {})
         cdas_nao_ajuizadas = debitos_nao_parcelados.get("cdasNaoAjuizadasNaoParceladas", [])
         efs_nao_parceladas = debitos_nao_parcelados.get("efsNaoParceladas", [])
         guias_parceladas = registros.get("guiasParceladasComSaldoTotal", {}).get("guiasParceladas", [])
 
-        # Process non-installment CDAs and EFs
-        if cdas_nao_ajuizadas or efs_nao_parceladas:
-            msg.append(f'\nDébitos não parcelados - Saldo Total da Dívida {debitos_nao_parcelados.get("saldoTotalNaoParcelado", "N/A")}')
-
-            if cdas_nao_ajuizadas:
-                msg.append("\nCDAs não parceladas")
-                for _, cda in enumerate(cdas_nao_ajuizadas):
-                    indice += 1
-                    itens_pagamento[indice] = cda["cdaId"]
-                    msg.append(f'*{indice}.*\t*Certidão {cda["cdaId"]}* - Saldo {cda.get("valorSaldoTotal", "N/A")}')
-                return_dict["lista_cdas"] = [cda["cdaId"] for cda in cdas_nao_ajuizadas]
-
-            if efs_nao_parceladas:
-                msg.append("\nEFs não parceladas")
-                for _, ef in enumerate(efs_nao_parceladas):
-                    indice += 1
-                    itens_pagamento[indice] = ef["numeroExecucaoFiscal"]
-                    msg.append(f'*{indice}.*\t*Execução Fiscal {ef["numeroExecucaoFiscal"]}* - Saldo {ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")}')
-                return_dict["lista_efs"] = [ef["numeroExecucaoFiscal"] for ef in efs_nao_parceladas]
-
-        # Process installment guides
         if guias_parceladas:
-            msg.append("\nGuias de parcelamento vigentes")
+            msg.append("\n*Guias de parcelamento encontradas:*")
             for _, guia in enumerate(guias_parceladas):
                 indice += 1
                 itens_pagamento[indice] = guia["numero"]
-                msg.append(f'*{indice}.*\t*Guia nº {guia["numero"]}* - Data do Último Pagamento: {guia.get("dataUltimoPagamento", "N/A")}')
+                msg.append(f'*{indice}.* *Guia nº {guia["numero"]}* - Data do Último Pagamento: {guia.get("dataUltimoPagamento", "N/A")}')
             return_dict["lista_guias"] = [guia["numero"] for guia in guias_parceladas]
+
+        if cdas_nao_ajuizadas or efs_nao_parceladas:
+            if cdas_nao_ajuizadas:
+                msg.append("\n*Certidões de Dívida Ativa não parceladas:*")
+                for _, cda in enumerate(cdas_nao_ajuizadas):
+                    indice += 1
+                    itens_pagamento[indice] = cda["cdaId"]
+                    msg.append(f'*{indice}.* *CDA {cda["cdaId"]}*')
+                    msg.append(f'Valor: R$ {cda.get("valorSaldoTotal", "N/A")}')
+                return_dict["lista_cdas"] = [cda["cdaId"] for cda in cdas_nao_ajuizadas]
+
+            if efs_nao_parceladas:
+                msg.append("\n*Execuções Fiscais não parceladas:*")
+                for _, ef in enumerate(efs_nao_parceladas):
+                    indice += 1Ç
+                    itens_pagamento[indice] = ef["numeroExecucaoFiscal"]
+                    msg.append(f'*{indice}.* *EF {ef["numeroExecucaoFiscal"]}*')
+                    msg.append(f'Valor: R$ {ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")}')
+                return_dict["lista_efs"] = [ef["numeroExecucaoFiscal"] for ef in efs_nao_parceladas]
+            
+            msg.append('\n*Débitos não parcelados:*')
+            msg.append('Valor total da dívida:')
+            msg.append(f'R$ {debitos_nao_parcelados.get("saldoTotalNaoParcelado", "N/A")}')
+
+        msg.append(f'\n*Data de Vencimento:* {registros.get("dataVencimento", "N/A")}')
 
         # Update return dictionary
         return_dict.update({
