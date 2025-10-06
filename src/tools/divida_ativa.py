@@ -3,10 +3,70 @@ Ferramentas para emissão de guia de regularização.
 """
 
 import ast
+import time
+from functools import wraps
 from typing import Dict, Any, Optional
 from src.tools.utils import internal_request
 from src.utils.log import logger
 from src.config import env
+
+
+def log_execution_time(func):
+    """Decorator to log function execution time."""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        # Check if request start time was passed from HTTP endpoint
+        parameters = args[0] if args else kwargs.get('parameters', {})
+        if isinstance(parameters, dict) and '_request_start_time' in parameters:
+            start_time = parameters.pop('_request_start_time')
+            logger.info({
+                "event": "function_processing_started",
+                "function": func.__name__,
+                "http_request_start": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time)),
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+            })
+        else:
+            start_time = time.time()
+            logger.info({
+                "event": "request_started",
+                "function": func.__name__,
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time)),
+                "timestamp_epoch": start_time
+            })
+        
+        try:
+            result = await func(*args, **kwargs)
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            
+            logger.info({
+                "event": "request_completed",
+                "function": func.__name__,
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time)),
+                "timestamp_epoch": end_time,
+                "duration_seconds": round(elapsed_time, 3),
+                "status": "success"
+            })
+            
+            return result
+            
+        except Exception as e:
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            
+            logger.error({
+                "event": "request_failed",
+                "function": func.__name__,
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time)),
+                "timestamp_epoch": end_time,
+                "duration_seconds": round(elapsed_time, 3),
+                "status": "error",
+                "error": str(e)
+            })
+            
+            raise
+    
+    return wrapper
 
 
 async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> dict:
@@ -160,6 +220,7 @@ async def processar_registros(
     return message
 
 
+@log_execution_time
 async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any]:
     """
     Emite guia de regularização.
@@ -196,6 +257,7 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
             "message": "Erro ao emitir guia de regularização"
         }
 
+@log_execution_time
 async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
     """
     Emite guia à vista.
@@ -233,6 +295,7 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+@log_execution_time
 async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
     """
     Consulta débitos do contribuinte.
@@ -286,7 +349,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         itens_pagamento = {} 
         indice = 0
 
-        msg.append(f'*{mapeia_descricoes[parameters["consulta_debitos"]]}*')
+        msg.append(f'*{mapeia_descricoes[parameters["consulta_debitos"]]}*:')
 
         if parameters["consulta_debitos"] == "numeroAutoInfracao":
             msg.append(f'{parameters[parameters["consulta_debitos"]]} {parameters["anoAutoInfracao"]}')
@@ -323,7 +386,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
             if efs_nao_parceladas:
                 msg.append("\n*Execuções Fiscais não parceladas:*")
                 for _, ef in enumerate(efs_nao_parceladas):
-                    indice += 1Ç
+                    indice += 1
                     itens_pagamento[indice] = ef["numeroExecucaoFiscal"]
                     msg.append(f'*{indice}.* *EF {ef["numeroExecucaoFiscal"]}*')
                     msg.append(f'Valor: R$ {ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")}')
