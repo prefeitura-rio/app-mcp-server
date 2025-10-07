@@ -250,11 +250,14 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
         return result
         
     except Exception as e:
-        logger.error(f"Error emitting guia regularizacao: {str(e)}")
+        logger.error({
+            f"Error emitting guia regularizacao: {str(e)}",
+            parameters,
+        })
         return {
             "success": False,
             "error": str(e),
-            "message": "Erro ao emitir guia de regularização"
+            "message": "Erro ao emitir guia de regularização",
         }
 
 @log_execution_time
@@ -287,11 +290,15 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         return result
         
     except Exception as e:
-        logger.error(f"Error emitting guia a vista: {str(e)}")
+        logger.error({
+            f"Error emitting guia a vista: {str(e)}",
+            parameters,
+        })
+
         return {
             "success": False,
             "error": str(e),
-            "message": "Erro ao emitir guia à vista"
+            "message": "Erro ao emitir guia à vista",
         }
 
 
@@ -412,8 +419,12 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         return return_dict
         
     except Exception as e:
-        logger.error(f"Error consulting debts: {str(e)}")
+        logger.error({
+            f"Error consulting debts: {str(e)}",
+            parameters,
+        })
+
         return {
             "api_resposta_sucesso": False,
-            "api_descricao_erro": f"Erro ao consultar débitos: {str(e)}"
+            "api_descricao_erro": f"Erro ao consultar débitos: {str(e)}",
         }
