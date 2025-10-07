@@ -27,6 +27,7 @@ from src.tools.equipments_tools import (
 )
 
 from src.tools.search import get_google_search
+from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
 from src.tools.floodings import flooding_response_guidelines
 from src.tools.divida_ativa import emitir_guia_a_vista, emitir_guia_regularizacao, consultar_debitos
@@ -169,6 +170,71 @@ def create_app() -> FastMCP:
             "categorias": categories,
         }
         return add_tool_version(response)
+
+    @mcp.tool()
+    async def get_all_user_memories(phone_number: str) -> List[dict]:
+        """Get all memory banks of a user.
+
+        Args:
+            phone_number (str): The user's phone number.
+
+        Returns:
+            List[dict]: A list of memory banks.
+        """
+        response = await get_memories(phone_number)
+        return response
+
+    @mcp.tool()
+    async def get_user_memory(phone_number: str, memory_name: str) -> dict:
+        """Get a single memory bank of a user.
+
+        Args:
+            phone_number (str): The user's phone number.
+            memory_name (str): The name of the memory bank.
+
+        Returns:
+            dict: A single memory bank.
+        """
+        response = await get_memories(phone_number, memory_name)
+        return response
+
+    @mcp.tool()
+    async def create_user_memory(
+        phone_number: str, memory_name: str, memory_bank: dict
+    ) -> dict:
+        """Create a memory bank for a user.
+
+        Args:
+            phone_number (str): The user's phone number.
+            memory_name (str): The name of the memory bank.
+            memory_bank (dict): A complete memory bank.
+
+        Returns:
+            dict: The memory bank or an error message.
+        """
+        response = await upsert_memory(
+            phone_number, memory_name, memory_bank, exists=False
+        )
+        return response
+
+    @mcp.tool()
+    async def update_user_memory(
+        phone_number: str, memory_name: str, memory_bank: dict
+    ) -> dict:
+        """Update a memory bank from a user.
+
+        Args:
+            phone_number (str): The user's phone number.
+            memory_name (str): The name of the memory bank.
+            memory_bank (dict): A complete memory bank that contains fields with updated data.
+
+        Returns:
+            dict: The memory bank or an error message.
+        """
+        response = await upsert_memory(
+            phone_number, memory_name, memory_bank, exists=False
+        )
+        return response
 
     @mcp.tool()
     async def user_feedback(user_id: str, feedback: str) -> dict:
