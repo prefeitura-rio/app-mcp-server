@@ -4,7 +4,7 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
-from typing import Optional, List
+from typing import Optional, List, Union
 import json
 
 from src.tools.web_search_surkai import surkai_search
@@ -172,28 +172,17 @@ def create_app() -> FastMCP:
         return add_tool_version(response)
 
     @mcp.tool()
-    async def get_all_user_memories(phone_number: str) -> List[dict]:
-        """Get all memory banks of a user.
+    async def get_user_memory(
+        phone_number: str, memory_name: Optional[Union[str, None]] = None
+    ) -> Union[dict, List[dict]]:
+        """Get a single memory bank of a user given its phone number and memory name. If no `memory_name` is passed as parameter, get the list of all memory banks of the user.
 
         Args:
             phone_number (str): The user's phone number.
+            memory_name (Union[str, None], optional): The name of the memory bank. Defaults to None.
 
         Returns:
-            List[dict]: A list of memory banks.
-        """
-        response = await get_memories(phone_number)
-        return response
-
-    @mcp.tool()
-    async def get_user_memory(phone_number: str, memory_name: str) -> dict:
-        """Get a single memory bank of a user.
-
-        Args:
-            phone_number (str): The user's phone number.
-            memory_name (str): The name of the memory bank.
-
-        Returns:
-            dict: A single memory bank.
+            Union[dict, List[dict]]: A single memory bank or a list of all memory banks.
         """
         response = await get_memories(phone_number, memory_name)
         return response

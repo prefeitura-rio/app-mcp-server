@@ -44,6 +44,10 @@ async def get_memories(
     # GET /v1/memory/{phone_number}
     # GET /v1/memory/{phone_number}/{memory_name}
 
+    # Handle empty strings as memory name
+    if isinstance(memory_name, str) and len(memory_name.strip()) == 0:
+        memory_name = None
+
     url = "{}/v1/memory/{}".format(RMI_API_URL, phone_number)
     if memory_name is not None:
         url += "/{}".format(memory_name)
