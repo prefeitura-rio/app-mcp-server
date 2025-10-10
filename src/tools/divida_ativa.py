@@ -173,6 +173,7 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
         efs = []
         guias = []
 
+
         dict_itens = ast.literal_eval(parameters.get("dicionario_itens"))
 
         for sequencial in itens_informados:
