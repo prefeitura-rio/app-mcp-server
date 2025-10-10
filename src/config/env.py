@@ -27,6 +27,9 @@ NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 
 SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
 
+RMI_API_URL = getenv_or_action("RMI_API_URL")
+RMI_API_KEY = getenv_or_action("RMI_API_KEY")
+
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
