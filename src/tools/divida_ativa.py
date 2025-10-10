@@ -142,6 +142,9 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
     Returns:
         Parâmetros processados ou None se não houver parâmetros válidos
     """
+    logger.info("Parâmetros recebidos para emissão de guia:")
+    logger.info(parameters)
+
     try:
         itens_informados = list(ast.literal_eval(parameters.get("itens_informados", [])).values())
     except:
