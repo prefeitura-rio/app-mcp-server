@@ -150,8 +150,22 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
     })
 
     try:
-        itens_informados = list(ast.literal_eval(parameters.get("itens_informados", [])).values())
-    except:
+        itens = parameters.get("itens_informados", [])
+        if isinstance(itens, str):
+            itens_informados = list(ast.literal_eval(itens).values())
+        elif isinstance(itens, dict):
+            itens_informados = list(itens.values())
+        elif isinstance(itens, list):
+            itens_informados = itens
+        else:
+            itens_informados = [str(int(float(itens)))]
+    except Exception as e:
+        logger.error({
+            "event": "da_emitir_guia_parse_error",
+            "error": str(e),
+            "parameters": parameters,
+            "itens_informados_raw": parameters.get("itens_informados")
+        })
         itens_informados = [str(int(float(parameters.get("itens_informados", 1))))]
 
     try:
@@ -181,7 +195,12 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
 
         return parametros_entrada
 
-    except:  # noqa
+    except Exception as e:
+        logger.error({
+            "event": "da_emitir_guia_processing_error",
+            "error": str(e),
+            "parameters": parameters
+        })
         return {"opcao_invalida": True}
 
 
