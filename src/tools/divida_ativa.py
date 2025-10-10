@@ -61,7 +61,8 @@ def log_execution_time(func):
                 "timestamp_epoch": end_time,
                 "duration_seconds": round(elapsed_time, 3),
                 "status": "error",
-                "error": str(e)
+                "error": str(e),
+                "parameters": args[0] if args else kwargs.get('parameters', {})
             })
             
             raise
@@ -142,8 +143,11 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
     Returns:
         Parâmetros processados ou None se não houver parâmetros válidos
     """
-    logger.info("Parâmetros recebidos para emissão de guia:")
-    logger.info(parameters)
+    logger.info({
+        "event": "da_emitir_guia_started",
+        "tipo": tipo,
+        "parameters": parameters
+    })
 
     try:
         itens_informados = list(ast.literal_eval(parameters.get("itens_informados", [])).values())
@@ -254,8 +258,9 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
         
     except Exception as e:
         logger.error({
-            f"Error emitting guia regularizacao: {str(e)}",
-            parameters,
+            "event": "emitir_guia_regularizacao_error",
+            "error": str(e),
+            "parameters": parameters
         })
         return {
             "success": False,
@@ -294,8 +299,9 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error({
-            f"Error emitting guia a vista: {str(e)}",
-            parameters,
+            "event": "emitir_guia_a_vista_error",
+            "error": str(e),
+            "parameters": parameters
         })
 
         return {
@@ -431,8 +437,9 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error({
-            f"Error consulting debts: {str(e)}",
-            parameters,
+            "event": "consultar_debitos_error",
+            "error": str(e),
+            "parameters": parameters
         })
 
         return {
