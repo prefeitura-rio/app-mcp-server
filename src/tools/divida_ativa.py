@@ -150,15 +150,14 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
     })
 
     try:
-        itens = parameters.get("itens_informados", [])
-        if isinstance(itens, str):
-            itens_informados = list(ast.literal_eval(itens).values())
-        elif isinstance(itens, dict):
-            itens_informados = list(itens.values())
-        elif isinstance(itens, list):
-            itens_informados = itens
+        itens_raw = parameters.get("itens_informados", [])
+        if isinstance(itens_raw, str):
+            itens_informados = ast.literal_eval(itens_raw.strip())
+        elif isinstance(itens_raw, list):
+            itens_informados = itens_raw
         else:
-            itens_informados = [str(int(float(itens)))]
+            itens_informados = [str(int(float(itens_raw)))]
+
     except Exception as e:
         logger.error({
             "event": "da_emitir_guia_parse_error",
@@ -169,26 +168,26 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
         itens_informados = [str(int(float(parameters.get("itens_informados", 1))))]
 
     try:
-        cdas = []
-        efs = []
-        guias = []
+        cdas, efs, guias = []
 
-
-        dict_itens = ast.literal_eval(parameters.get("dicionario_itens"))
+        dict_itens_raw = parameters.get("dicionario_itens", "{}")
+        dict_itens =  ast.literal_eval(dict_itens_raw)
+        if not isinstance(dict_itens, dict):
+            raise ValueError("dict_itens não é um dicionário válido")
 
         for sequencial in itens_informados:
+            valor = dict_itens.get(str(sequencial))
+            
             if tipo == "a_vista":
-                if dict_itens[sequencial] in parameters.get("lista_cdas", []):
-                    cdas.append(dict_itens[sequencial])
-                elif dict_itens in parameters.get("lista_efs", []):
-                    efs.append(dict_itens[sequencial])
+                if valor in parameters.get("lista_cdas", []):
+                    cdas.append(valor)
+                elif valor in parameters.get("lista_efs", []):
+                    efs.append(valor)
             elif tipo == "regularizacao":
-                if dict_itens[sequencial] in parameters.get("lista_guias", []):
-                    guias.append(dict_itens[sequencial])
+                if valor in parameters.get("lista_guias", []):
+                    guias.append(valor)
 
-        parametros_entrada = {
-            "origem_solicitação": 0,
-        }
+        parametros_entrada = {"origem_solicitação": 0}
         if tipo == "a_vista":
             parametros_entrada.update({"cdas": cdas, "efs": efs})
         elif tipo == "regularizacao":
