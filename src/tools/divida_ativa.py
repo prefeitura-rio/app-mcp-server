@@ -168,7 +168,7 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
         itens_informados = [str(int(float(parameters.get("itens_informados", 1))))]
 
     try:
-        cdas, efs, guias = []
+        cdas, efs, guias = [], [], []
 
         dict_itens_raw = parameters.get("dicionario_itens", "{}")
         dict_itens =  ast.literal_eval(dict_itens_raw)
