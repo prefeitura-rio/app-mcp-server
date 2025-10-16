@@ -177,16 +177,26 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
         if not isinstance(dict_itens, dict):
             raise ValueError("dict_itens não é um dicionário válido")
 
+        # Parse das listas de CDAs, EFs e Guias
+        lista_cdas_raw = parameters.get("lista_cdas", "[]")
+        lista_cdas = ast.literal_eval(lista_cdas_raw) if isinstance(lista_cdas_raw, str) else lista_cdas_raw
+        
+        lista_efs_raw = parameters.get("lista_efs", "[]")
+        lista_efs = ast.literal_eval(lista_efs_raw) if isinstance(lista_efs_raw, str) and lista_efs_raw else []
+        
+        lista_guias_raw = parameters.get("lista_guias", "[]")
+        lista_guias = ast.literal_eval(lista_guias_raw) if isinstance(lista_guias_raw, str) else lista_guias_raw
+
         for sequencial in itens_informados:
             valor = dict_itens.get(str(sequencial))
             
             if tipo == "a_vista":
-                if valor in parameters.get("lista_cdas", []):
+                if valor in lista_cdas:
                     cdas.append(valor)
-                elif valor in parameters.get("lista_efs", []):
+                elif valor in lista_efs:
                     efs.append(valor)
             elif tipo == "regularizacao":
-                if valor in parameters.get("lista_guias", []):
+                if valor in lista_guias:
                     guias.append(valor)
 
         parametros_entrada = {"origem_solicitação": 0}
@@ -396,16 +406,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         efs_nao_parceladas = debitos_nao_parcelados.get("efsNaoParceladas", [])
         guias_parceladas = registros.get("guiasParceladasComSaldoTotal", {}).get("guiasParceladas", [])
 
-        if guias_parceladas:
-            msg.append("\n*Guias de parcelamento encontradas:*")
-            for _, guia in enumerate(guias_parceladas):
-                indice += 1
-                itens_pagamento[indice] = guia["numero"]
-                msg_guia = f'*{indice}.* *Guia nº {guia["numero"]}* - Data do Último Pagamento: {guia.get("dataUltimoPagamento", "N/A")}'
-                msg.append(msg_guia)
-                debitos.append({"guia": guia["numero"], "data_ultimo_pagamento": guia.get("dataUltimoPagamento", "N/A")})
-            return_dict["lista_guias"] = [guia["numero"] for guia in guias_parceladas]
-
+        # Preenche o dicionário e constrói a mensagem na mesma ordem: CDAs, EFs, Guias
         if cdas_nao_ajuizadas or efs_nao_parceladas:
             if cdas_nao_ajuizadas:
                 msg.append("\n*Certidões de Dívida Ativa não parceladas:*")
@@ -428,6 +429,16 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
                     msg.append(f'Valor: {ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")}')
                     debitos.append({"ef": ef["numeroExecucaoFiscal"], "valor": ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")})
                 return_dict["lista_efs"] = [ef["numeroExecucaoFiscal"] for ef in efs_nao_parceladas]
+
+        if guias_parceladas:
+            msg.append("\n*Guias de parcelamento encontradas:*")
+            for _, guia in enumerate(guias_parceladas):
+                indice += 1
+                itens_pagamento[indice] = guia["numero"]
+                msg_guia = f'*{indice}.* *Guia nº {guia["numero"]}* - Data do Último Pagamento: {guia.get("dataUltimoPagamento", "N/A")}'
+                msg.append(msg_guia)
+                debitos.append({"guia": guia["numero"], "data_ultimo_pagamento": guia.get("dataUltimoPagamento", "N/A")})
+            return_dict["lista_guias"] = [guia["numero"] for guia in guias_parceladas]
             
             msg.append('\n*Débitos não parcelados:*')
             msg.append('Valor total da dívida:')
