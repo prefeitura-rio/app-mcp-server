@@ -8,6 +8,7 @@ from typing import Optional, List, Union
 import json
 
 from src.tools.web_search_surkai import surkai_search
+from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
@@ -130,6 +131,20 @@ def create_app() -> FastMCP:
             dict: The API response as JSON containing the results of the research.
         """
         response = await surkai_search(query)
+        return response
+
+    @mcp.tool()
+    async def dharma_search_tool(query: str) -> dict:
+        """
+        Calls the Dharma API to get AI-powered responses about Rio de Janeiro municipal services.
+
+        Parameters:
+            query (str): The user's message/question to send to the AI assistant.
+
+        Returns:
+            dict: The API response containing the AI message, referenced documents, and metadata.
+        """
+        response = await dharma_search(query)
         return response
 
     @mcp.tool()
@@ -354,7 +369,7 @@ def create_app() -> FastMCP:
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
     logger.info(
-        f"Tools registradas: calculadora (5), data/hora (2), busca (1), equipamentos (2), feedback (1)"
+        f"Tools registradas: calculadora (5), data/hora (2), busca (3), equipamentos (2), feedback (1)"
     )
     logger.info(f"Resources registrados: 3")
     logger.info(f"Prompts registrados: 1")
