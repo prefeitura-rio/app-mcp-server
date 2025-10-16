@@ -234,16 +234,9 @@ async def processar_registros(
     message["api_resposta_sucesso"] = True
 
     for _, item in enumerate(registros):
-        barcode = item["codigoDeBarras"]
-        pdf_file = item["pdf"]
-        pix = item["codigoQrEMVPix"]
-
-        if pix:
-            message["pix"] = pix
-        else:
-            message["codigo_de_barras"] = barcode
-
-        message["link"] = pdf_file
+        message["codigo_de_barras"] = item["codigoDeBarras"]
+        message["link"] = item["pdf"]
+        message["pix"] = item["codigoQrEMVPix"]
 
     return message
 
