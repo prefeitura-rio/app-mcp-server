@@ -150,9 +150,11 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
     })
 
     try:
-        itens_raw = parameters.get("itens_informados", [])
+        itens_raw = parameters.get("itens_informados", []).strip()
         if isinstance(itens_raw, str):
-            itens_informados = ast.literal_eval(itens_raw.strip())
+            itens_informados = ast.literal_eval(itens_raw)
+            if not isinstance(itens_informados, (list, tuple)):
+                itens_informados = [str(int(float(itens_informados)))]
         elif isinstance(itens_raw, list):
             itens_informados = itens_raw
         else:
