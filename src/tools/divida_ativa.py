@@ -178,13 +178,22 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
             raise ValueError("dict_itens não é um dicionário válido")
 
         lista_cdas_raw = parameters.get("lista_cdas", "[]")
-        lista_cdas = ast.literal_eval(lista_cdas_raw) if isinstance(lista_cdas_raw, str) else lista_cdas_raw
+        if isinstance(lista_cdas_raw, str) and lista_cdas_raw.strip():
+            lista_cdas = ast.literal_eval(lista_cdas_raw)
+        else:
+            lista_cdas = lista_cdas_raw if lista_cdas_raw else []
         
         lista_efs_raw = parameters.get("lista_efs", "[]") 
-        lista_efs = ast.literal_eval(lista_efs_raw) if isinstance(lista_efs_raw, str) and lista_efs_raw else []
+        if isinstance(lista_efs_raw, str) and lista_efs_raw.strip():
+            lista_efs = ast.literal_eval(lista_efs_raw)
+        else:
+            lista_efs = lista_efs_raw if lista_efs_raw else []
         
         lista_guias_raw = parameters.get("lista_guias", "[]")
-        lista_guias = ast.literal_eval(lista_guias_raw) if isinstance(lista_guias_raw, str) else lista_guias_raw
+        if isinstance(lista_guias_raw, str) and lista_guias_raw.strip():
+            lista_guias = ast.literal_eval(lista_guias_raw)
+        else:
+            lista_guias = lista_guias_raw if lista_guias_raw else []
 
         for sequencial in itens_informados:
             valor = dict_itens.get(str(sequencial))
