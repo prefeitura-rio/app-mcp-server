@@ -29,26 +29,26 @@ class MemoryBank(BaseModel):
 
 
 async def get_memories(
-    phone_number: str, memory_name: Optional[str] = None
+    user_id: str, memory_name: Optional[str] = None
 ) -> Union[dict, List[dict]]:
     """Get a user's memory bank.
 
     Args:
-        phone_number (str): The user's phone number.
+        user_id (str): The user's phone number.
         memory_name (str, optional): The name of the memory bank. If None is given, return a list of all memory banks. Defaults to None.
 
     Returns:
         Union[dict, List[dict]]: Memory bank list or single memory bank.
     """
 
-    # GET /v1/memory/{phone_number}
-    # GET /v1/memory/{phone_number}/{memory_name}
+    # GET /v1/memory/{user_id}
+    # GET /v1/memory/{user_id}/{memory_name}
 
     # Handle empty strings as memory name
     if isinstance(memory_name, str) and len(memory_name.strip()) == 0:
         memory_name = None
 
-    url = "{}/v1/memory/{}".format(RMI_API_URL, phone_number)
+    url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
     if memory_name is not None:
         url += "/{}".format(memory_name)
     headers = {"Authorization": "Bearer {}".format(RMI_API_KEY)}
@@ -62,7 +62,7 @@ async def get_memories(
 
 
 async def upsert_memory(
-    phone_number: str,
+    user_id: str,
     memory_name: str,
     memory_bank: MemoryBank,
     exists: Optional[bool] = True,
@@ -70,7 +70,7 @@ async def upsert_memory(
     """Create or update a user's memory bank.
 
     Args:
-        phone_number (str): The user's phone number.
+        user_id (str): The user's phone number.
         memory_name (str): The name of the memory bank.
         memory_bank (MemoryBank): Memory bank data.
         exists (bool, optional): Whether the memory bank already exists. Defaults to True.
@@ -79,8 +79,8 @@ async def upsert_memory(
         dict: A dictionary with status of the operation.
     """
 
-    # POST /v1/memory/{phone_number}
-    # PUT /v1/memory/{phone_number}/{memory_name}
+    # POST /v1/memory/{user_id}
+    # PUT /v1/memory/{user_id}/{memory_name}
 
     if exists:
         method = "PUT"
@@ -92,7 +92,7 @@ async def upsert_memory(
     except ValidationError:
         return {"status": "Error", "detail": "Invalid memory bank"}
 
-    url = "{}/v1/memory/{}".format(RMI_API_URL, phone_number)
+    url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
     if exists:
         url += "/{}".format(memory_name)
     headers = {"Authorization": "Bearer {}".format(RMI_API_KEY)}

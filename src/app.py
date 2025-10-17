@@ -8,6 +8,7 @@ from typing import Optional, List, Union
 import json
 
 from src.tools.web_search_surkai import surkai_search
+from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
@@ -133,6 +134,20 @@ def create_app() -> FastMCP:
         return response
 
     @mcp.tool()
+    async def dharma_search_tool(query: str) -> dict:
+        """
+        Calls the Dharma API to get AI-powered responses about Rio de Janeiro municipal services.
+
+        Parameters:
+            query (str): The user's message/question to send to the AI assistant.
+
+        Returns:
+            dict: The API response containing the AI message, referenced documents, and metadata.
+        """
+        response = await dharma_search(query)
+        return response
+
+    @mcp.tool()
     async def equipments_by_address(
         address: str, categories: Optional[List[str]] = []
     ) -> dict:
@@ -173,28 +188,28 @@ def create_app() -> FastMCP:
 
     @mcp.tool()
     async def get_user_memory(
-        phone_number: str, memory_name: Optional[Union[str, None]] = None
+        user_id: str, memory_name: Optional[Union[str, None]] = None
     ) -> Union[dict, List[dict]]:
         """Get a single memory bank of a user given its phone number and memory name. If no `memory_name` is passed as parameter, get the list of all memory banks of the user.
 
         Args:
-            phone_number (str): The user's phone number.
+            user_id (str): The user's phone number.
             memory_name (Union[str, None], optional): The name of the memory bank. Defaults to None.
 
         Returns:
             Union[dict, List[dict]]: A single memory bank or a list of all memory banks.
         """
-        response = await get_memories(phone_number, memory_name)
+        response = await get_memories(user_id, memory_name)
         return response
 
     @mcp.tool()
     async def create_user_memory(
-        phone_number: str, memory_name: str, memory_bank: dict
+        user_id: str, memory_name: str, memory_bank: dict
     ) -> dict:
         """Create a memory bank for a user.
 
         Args:
-            phone_number (str): The user's phone number.
+            user_id (str): The user's phone number.
             memory_name (str): The name of the memory bank.
             memory_bank (dict): A complete memory bank.
 
@@ -202,18 +217,18 @@ def create_app() -> FastMCP:
             dict: The memory bank or an error message.
         """
         response = await upsert_memory(
-            phone_number, memory_name, memory_bank, exists=False
+            user_id, memory_name, memory_bank, exists=False
         )
         return response
 
     @mcp.tool()
     async def update_user_memory(
-        phone_number: str, memory_name: str, memory_bank: dict
+        user_id: str, memory_name: str, memory_bank: dict
     ) -> dict:
         """Update a memory bank from a user.
 
         Args:
-            phone_number (str): The user's phone number.
+            user_id (str): The user's phone number.
             memory_name (str): The name of the memory bank.
             memory_bank (dict): A complete memory bank that contains fields with updated data.
 
@@ -221,7 +236,7 @@ def create_app() -> FastMCP:
             dict: The memory bank or an error message.
         """
         response = await upsert_memory(
-            phone_number, memory_name, memory_bank, exists=False
+            user_id, memory_name, memory_bank, exists=False
         )
         return response
 
@@ -354,7 +369,7 @@ def create_app() -> FastMCP:
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
     logger.info(
-        f"Tools registradas: calculadora (5), data/hora (2), busca (1), equipamentos (2), feedback (1)"
+        f"Tools registradas: calculadora (5), data/hora (2), busca (3), equipamentos (2), feedback (1)"
     )
     logger.info(f"Resources registrados: 3")
     logger.info(f"Prompts registrados: 1")
