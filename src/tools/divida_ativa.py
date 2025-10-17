@@ -134,7 +134,7 @@ async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> 
 
 async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict[str, Any]]:
     """
-    Processa os parâmetros para emissão de guia.
+    Processa os parâmetros para emissão de guia
     
     Args:
         parameters: Parâmetros da requisição
