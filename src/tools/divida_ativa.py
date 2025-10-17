@@ -414,7 +414,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
                     itens_pagamento[indice] = cda["cdaId"]
                     msg_cda = f'*{indice}.* *CDA {cda["cdaId"]}*'
                     msg.append(msg_cda)
-                    msg.append(f'Valor: R$ {cda.get("valorSaldoTotal", "N/A")}')
+                    msg.append(f'Valor: {cda.get("valorSaldoTotal", "N/A")}')
                     debitos.append({"cda": cda["cdaId"], "valor": cda.get("valorSaldoTotal", "N/A")})
                 return_dict["lista_cdas"] = [cda["cdaId"] for cda in cdas_nao_ajuizadas]
 
@@ -425,7 +425,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
                     itens_pagamento[indice] = ef["numeroExecucaoFiscal"]
                     msg_exec = f'*{indice}.* *EF {ef["numeroExecucaoFiscal"]}*'
                     msg.append(msg_exec)
-                    msg.append(f'Valor: R$ {ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")}')
+                    msg.append(f'Valor: {ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")}')
                     debitos.append({"ef": ef["numeroExecucaoFiscal"], "valor": ef.get("saldoExecucaoFiscalNaoParcelada", "N/A")})
                 return_dict["lista_efs"] = [ef["numeroExecucaoFiscal"] for ef in efs_nao_parceladas]
             
@@ -441,7 +441,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
 
             msg.append('\n*Débitos não parcelados:*')
             msg.append('Valor total da dívida:')
-            msg.append(f'R$ {debitos_nao_parcelados.get("saldoTotalNaoParcelado", "N/A")}')
+            msg.append(f'{debitos_nao_parcelados.get("saldoTotalNaoParcelado", "N/A")}')
 
         msg.append(f'\n*Data de Vencimento:* {registros.get("dataVencimento", "N/A")}')
 
