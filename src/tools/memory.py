@@ -6,7 +6,8 @@ from typing import List, Optional, Union
 import aiohttp
 from pydantic import BaseModel, ValidationError
 
-from src.config.env import RMI_API_URL, RMI_API_KEY
+from src.config.env import RMI_API_URL
+from src.utils.rmi_oauth2 import get_authorization_header, is_oauth2_configured
 
 
 class MemoryType(Enum):
@@ -51,7 +52,12 @@ async def get_memories(
     url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
     if memory_name is not None:
         url += "/{}".format(memory_name)
-    headers = {"Authorization": "Bearer {}".format(RMI_API_KEY)}
+    
+    # Use OAuth2 if configured, otherwise return unauthorized error
+    if not is_oauth2_configured():
+        return {"status": "Error", "detail": "Unauthorized: OAuth2 not configured"}
+    
+    headers = {"Authorization": await get_authorization_header()}
 
     timeout = aiohttp.ClientTimeout(total=120)
 
@@ -64,7 +70,7 @@ async def get_memories(
 async def upsert_memory(
     user_id: str,
     memory_name: str,
-    memory_bank: MemoryBank,
+    memory_bank: dict,
     exists: Optional[bool] = True,
 ) -> dict:
     """Create or update a user's memory bank.
@@ -72,7 +78,7 @@ async def upsert_memory(
     Args:
         user_id (str): The user's phone number.
         memory_name (str): The name of the memory bank.
-        memory_bank (MemoryBank): Memory bank data.
+        memory_bank (dict): Memory bank data as a dictionary.
         exists (bool, optional): Whether the memory bank already exists. Defaults to True.
 
     Returns:
@@ -95,13 +101,18 @@ async def upsert_memory(
     url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
     if exists:
         url += "/{}".format(memory_name)
-    headers = {"Authorization": "Bearer {}".format(RMI_API_KEY)}
+    
+    # Use OAuth2 if configured, otherwise return unauthorized error
+    if not is_oauth2_configured():
+        return {"status": "Error", "detail": "Unauthorized: OAuth2 not configured"}
+    
+    headers = {"Authorization": await get_authorization_header()}
 
     timeout = aiohttp.ClientTimeout(total=120)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.request(
-            method, url, headers=headers, body=validated_memory_bank
+            method, url, headers=headers, json=validated_memory_bank
         ) as response:
             response.raise_for_status()
             return await response.json()
