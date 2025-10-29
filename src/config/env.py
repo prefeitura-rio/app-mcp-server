@@ -33,14 +33,15 @@ RMI_API_URL = getenv_or_action("RMI_API_URL", action="ignore")
 RMI_OAUTH_ISSUER = getenv_or_action("RMI_OAUTH_ISSUER", action="ignore")
 RMI_OAUTH_CLIENT_ID = getenv_or_action("RMI_OAUTH_CLIENT_ID", action="ignore")
 RMI_OAUTH_CLIENT_SECRET = getenv_or_action("RMI_OAUTH_CLIENT_SECRET", action="ignore")
-RMI_OAUTH_SCOPES = getenv_or_action("RMI_OAUTH_SCOPES", default="profile email", action="ignore")
+RMI_OAUTH_SCOPES = getenv_or_action(
+    "RMI_OAUTH_SCOPES", default="profile email", action="ignore"
+)
 
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
 EQUIPMENTS_VALID_THEMES = getenv_or_action(
-    "EQUIPMENTS_VALID_THEMES", 
-    default="cultura,saude,educacao,geral"
+    "EQUIPMENTS_VALID_THEMES", default="cultura,saude,educacao,geral"
 ).split(",")
 
 # PGM API Configuration
@@ -48,3 +49,22 @@ CHATBOT_INTEGRATIONS_URL = getenv_or_action("CHATBOT_INTEGRATIONS_URL", action="
 CHATBOT_INTEGRATIONS_KEY = getenv_or_action("CHATBOT_INTEGRATIONS_KEY", action="ignore")
 CHATBOT_PGM_API_URL = getenv_or_action("CHATBOT_PGM_API_URL", action="ignore")
 CHATBOT_PGM_ACCESS_KEY = getenv_or_action("CHATBOT_PGM_ACCESS_KEY", action="ignore")
+
+
+# IPTU API Configuration
+IPTU_API_URL = getenv_or_action("IPTU_API_URL")
+IPTU_API_TOKEN = getenv_or_action("IPTU_API_TOKEN")
+
+SHORT_API_URL = getenv_or_action("SHORT_API_URL")
+SHORT_API_TOKEN = getenv_or_action("SHORT_API_TOKEN")
+
+WA_IPTU_URL = getenv_or_action("WA_IPTU_URL")
+WA_IPTU_TOKEN = getenv_or_action("WA_IPTU_TOKEN")
+WA_IPTU_PUBLIC_KEY = getenv_or_action("WA_IPTU_PUBLIC_KEY")
+
+WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT")
+
+DIVIDA_ATIVA_API_URL = getenv_or_action("DIVIDA_ATIVA_API_URL")
+DIVIDA_ATIVA_ACCESS_KEY = getenv_or_action("DIVIDA_ATIVA_ACCESS_KEY")
+REDIS_URL = getenv_or_action("REDIS_URL")
+REDIS_TTL_SECONDS = int(getenv_or_action("REDIS_TTL_SECONDS"))

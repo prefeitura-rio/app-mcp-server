@@ -31,7 +31,15 @@ from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
 from src.tools.floodings import flooding_response_guidelines
-from src.tools.divida_ativa import emitir_guia_a_vista, emitir_guia_regularizacao, consultar_debitos
+from src.tools.divida_ativa import (
+    emitir_guia_a_vista,
+    emitir_guia_regularizacao,
+    consultar_debitos,
+)
+from src.tools.langgraph_workflows import (
+    multi_step_service as mss,
+    _get_workflow_descriptions,
+)
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -216,9 +224,7 @@ def create_app() -> FastMCP:
         Returns:
             dict: The memory bank or an error message.
         """
-        response = await upsert_memory(
-            user_id, memory_name, memory_bank, exists=False
-        )
+        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
         return response
 
     @mcp.tool()
@@ -235,9 +241,7 @@ def create_app() -> FastMCP:
         Returns:
             dict: The memory bank or an error message.
         """
-        response = await upsert_memory(
-            user_id, memory_name, memory_bank, exists=False
-        )
+        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
         return response
 
     @mcp.tool()
@@ -258,10 +262,21 @@ def create_app() -> FastMCP:
     @mcp.tool(
         description="""
         [TOOL_VERSION: {tool_version}] Disponibiliza roteiro orientativo para instruir moradores sobre prevencao, resposta e recuperacao em cenarios de alagamentos e inundacoes no Rio de Janeiro, incluindo contatos de emergencia e orientacao sobre o tom adequado conforme o nivel de urgencia.
-        """.format(tool_version=TOOL_VERSION).strip()
+        """.format(
+            tool_version=TOOL_VERSION
+        ).strip()
     )
     async def flooding_response():
         response = await flooding_response_guidelines()
+        return response
+
+    @mcp.tool(description=_get_workflow_descriptions())
+    async def multi_step_service(
+        service_name: str, user_id: str, payload: Optional[dict] = None
+    ) -> dict:
+        response = await mss(
+            service_name=service_name, user_id=user_id, payload=payload
+        )
         return response
 
     # ===== REGISTRAR RESOURCES =====
@@ -315,7 +330,7 @@ def create_app() -> FastMCP:
             base_prompt += f"\n\nContexto adicional: {context}"
 
         return base_prompt
-    
+
     @mcp.custom_route("/consulta_debitos", methods=["POST"])
     async def da_consulta_debitos(request: Request) -> JSONResponse:
         """
@@ -327,10 +342,7 @@ def create_app() -> FastMCP:
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
             logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(
-                content={"error": str(e)},
-                status_code=500
-            )
+            return JSONResponse(content={"error": str(e)}, status_code=500)
 
     @mcp.custom_route("/emitir_guia", methods=["POST"])
     async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
@@ -343,11 +355,8 @@ def create_app() -> FastMCP:
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
             logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(
-                content={"error": str(e)},
-                status_code=500
-            )
-        
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
     @mcp.custom_route("/emitir_guia_regularizacao", methods=["POST"])
     async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
         """
@@ -359,12 +368,8 @@ def create_app() -> FastMCP:
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
             logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(
-                content={"error": str(e)},
-                status_code=500
-            )
-    
-    
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
     # ===== LOG DE INICIALIZAÇÃO =====
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
