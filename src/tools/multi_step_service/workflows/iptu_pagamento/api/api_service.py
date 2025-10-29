@@ -53,7 +53,7 @@ class IPTUAPIService:
         """Inicializa o serviço com configurações da API."""
         self.api_base_url = env.IPTU_API_URL
         self.api_token = env.IPTU_API_TOKEN
-        self.proxy = "http://proxy.squirrel-regulus.ts.net:3128"
+        self.proxy = env.PROXY_URL
 
         logger.info(f"IPTUAPIService initialized with API URL: {self.api_base_url}")
 

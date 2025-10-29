@@ -68,3 +68,6 @@ DIVIDA_ATIVA_API_URL = getenv_or_action("DIVIDA_ATIVA_API_URL")
 DIVIDA_ATIVA_ACCESS_KEY = getenv_or_action("DIVIDA_ATIVA_ACCESS_KEY")
 REDIS_URL = getenv_or_action("REDIS_URL")
 REDIS_TTL_SECONDS = int(getenv_or_action("REDIS_TTL_SECONDS"))
+
+
+PROXY_URL = getenv_or_action("PROXY_URL")
