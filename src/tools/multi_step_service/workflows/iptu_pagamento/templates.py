@@ -16,7 +16,7 @@ class IPTUMessageTemplates:
     @staticmethod
     def solicitar_inscricao() -> str:
         """Mensagem solicitando inscrição imobiliária."""
-        return "📋 Para consultar o IPTU, informe a inscrição imobiliária do seu imóvel (8 a 15 dígitos)."
+        return "📋 Para consultar o IPTU, informe a **inscrição imobiliária** do seu imóvel."
 
     @staticmethod
     def escolher_ano(inscricao: str, endereco: str, proprietario: str) -> str:
@@ -322,8 +322,13 @@ Para uma nova consulta, informe uma nova inscrição imobiliária."""
             texto += "\n"
 
         # Saldos totais
-        if divida_info.saldo_total_divida and divida_info.saldo_total_divida != "R$0,00":
-            texto += f"💰 **Saldo total da dívida:** {divida_info.saldo_total_divida}\n\n"
+        if (
+            divida_info.saldo_total_divida
+            and divida_info.saldo_total_divida != "R$0,00"
+        ):
+            texto += (
+                f"💰 **Saldo total da dívida:** {divida_info.saldo_total_divida}\n\n"
+            )
 
         texto += """🔗 **Para emitir guias de pagamento da Dívida Ativa:**
 👉 Acesse: https://daminternet.rio.rj.gov.br/divida

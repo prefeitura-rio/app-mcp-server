@@ -12,7 +12,7 @@ class InscricaoImobiliariaPayload(BaseModel):
 
     inscricao_imobiliaria: str = Field(
         ...,
-        description="Inscrição imobiliária (8-15 dígitos, formatação opcional)",
+        description="Inscrição imobiliária do imóvel",
     )
 
     @field_validator("inscricao_imobiliaria", mode="before")
@@ -21,16 +21,14 @@ class InscricaoImobiliariaPayload(BaseModel):
         """
         Valida e sanitiza a inscrição imobiliária.
 
-        Remove caracteres não numéricos e valida comprimento (8-15 dígitos).
+        Remove caracteres não numéricos e valida comprimento.
         """
         # Remove todos os caracteres não numéricos
         clean_inscricao = re.sub(r"[^0-9]", "", v)
 
-        # Valida comprimento mínimo
         if len(clean_inscricao) < 8:
-            raise ValueError("Inscrição imobiliária deve ter no mínimo 8 dígitos")
+            clean_inscricao = clean_inscricao.zfill(8)
 
-        # Valida comprimento máximo
         if len(clean_inscricao) > 15:
             raise ValueError("Inscrição imobiliária não pode ter mais de 15 dígitos")
 
