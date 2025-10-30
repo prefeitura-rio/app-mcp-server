@@ -29,6 +29,9 @@ def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
     Returns:
         String com instruções específicas para as categorias
     """
+    # Categorias de pontos de apoio da Defesa Civil
+    apoio_categories = ["PONTOS_DE_APOIO"]
+
     # Categorias de saúde que requerem instruções específicas
     health_categories = ["CF", "CMS"]
 
@@ -39,16 +42,41 @@ def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
         3.  **NÃO INFORME** o telefone geral da unidade (CF/CMS) para não confundir o cidadão. Informe apenas se a equipe da família não tiver telefone.
         4.  Não cite que a unidade é a **mais próxima** ou a **mais indicada**. Apenas informe que é a unidade que atende a região do cidadão.
         5.  **Explique o papel da equipe**: De forma sucinta, diga que é a equipe responsável por cuidar da saúde dele e de sua família.
-        6.  **Exemplo de como estruturar a resposta**: 
+        6.  **Exemplo de como estruturar a resposta**:
             "A unidade de saúde que atende a sua região é:
                 - **[Nome da CF/CMS]**
                 - **Endereço:** [Endereço da CF/CMS]
                 - **Distância:** [Distância da CF/CMS]
-                - **Horário de funcionamento:** [Horário de Funcionamento da CF/CMS] 
+                - **Horário de funcionamento:** [Horário de Funcionamento da CF/CMS]
             Lá, **a sua equipe de saúde da família**, chamada **[Nome da Equipe]**, é a responsável por cuidar de você e da sua família. Se precisar entrar em contato, o **WhatsApp** da sua equipe é [Número do WhatsApp da Equipe]."
         7. Caso a distância seja maior ou igual a 1000 metros, informar com a distância em quilômetros ao invés de metros. Formatar número para ter apenas uma casa decimal.
         """
 
+    if categories and any(cat in categories for cat in apoio_categories):
+        return """- Ao apresentar um Ponto de Apoio da Defesa Civil, siga este formato OBRIGATORIAMENTE:
+        1.  **Contextualize o que é um Ponto de Apoio**: Explique de forma breve que são locais preparados pela Defesa Civil para acolhimento temporário da população em situações de emergência, como enchentes, deslizamentos ou outras situações de risco.
+        2.  **Apresente o equipamento mais próximo** com as seguintes informações:
+            - **Nome do equipamento**
+            - **Endereço completo** (logradouro, número, bairro)
+            - **Distância**: Caso a distância seja maior ou igual a 1000 metros, informar em quilômetros (com 1 casa decimal). Caso contrário, informar em metros.
+        3.  **Quando procurar um Ponto de Apoio**: Oriente que estes locais devem ser procurados em situações como:
+            - Enchentes ou alagamentos que impossibilitem permanência em casa
+            - Deslizamentos de terra ou risco iminente
+            - Situações de risco estrutural na residência
+            - Outras emergências orientadas pela Defesa Civil
+        4.  **Contato de Emergência da Defesa Civil**: SEMPRE informe ao final que em caso de emergência, o cidadão pode ligar para a **Defesa Civil no 199** (funciona 24 horas).
+        5.  **Exemplo de como estruturar a resposta**:
+            "O ponto de apoio mais próximo do seu endereço é:
+                - **[Nome do Equipamento]**
+                - **Endereço:** [Endereço Completo]
+                - **Distância:** [X metros ou X,X km]
+                - **Horário de funcionamento:** [Horário, se disponível]
+
+            Os pontos de apoio são locais preparados pela Defesa Civil para acolhimento temporário em situações de emergência, como enchentes, deslizamentos ou outras situações de risco.
+
+            **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
+        6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
+        """
     # Instruções padrão para outras categorias
     return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
 
