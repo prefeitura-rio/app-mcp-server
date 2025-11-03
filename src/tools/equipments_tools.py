@@ -132,10 +132,13 @@ async def get_equipments(
 ) -> List[dict]:
 
     atencao_primaria_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
+    assistencia_social_categories = ["CRAS", "CAS"]
 
     if categories and any(cat in atencao_primaria_categories for cat in categories):
         # Garantir que apenas categorias válidas sejam usadas
         categories += atencao_primaria_categories
+    elif categories and any(cat in assistencia_social_categories for cat in categories):
+        categories += assistencia_social_categories
 
     if categories:
         categories = list(set(categories))

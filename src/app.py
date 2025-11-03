@@ -3,11 +3,12 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 """
 
 from fastapi import Request
-from fastapi.responses import PlainTextResponse
-from typing import Optional, List
+from fastapi.responses import PlainTextResponse, JSONResponse
+from typing import Optional, List, Union
 import json
 
 from src.tools.web_search_surkai import surkai_search
+from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
@@ -27,7 +28,18 @@ from src.tools.equipments_tools import (
 )
 
 from src.tools.search import get_google_search
+from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
+from src.tools.floodings import flooding_response_guidelines
+from src.tools.divida_ativa import (
+    emitir_guia_a_vista,
+    emitir_guia_regularizacao,
+    consultar_debitos,
+)
+from src.tools.langgraph_workflows import (
+    multi_step_service as mss,
+    _get_workflow_descriptions,
+)
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -130,6 +142,20 @@ def create_app() -> FastMCP:
         return response
 
     @mcp.tool()
+    async def dharma_search_tool(query: str) -> dict:
+        """
+        Calls the Dharma API to get AI-powered responses about Rio de Janeiro municipal services.
+
+        Parameters:
+            query (str): The user's message/question to send to the AI assistant.
+
+        Returns:
+            dict: The API response containing the AI message, referenced documents, and metadata.
+        """
+        response = await dharma_search(query)
+        return response
+
+    @mcp.tool()
     async def equipments_by_address(
         address: str, categories: Optional[List[str]] = []
     ) -> dict:
@@ -169,6 +195,56 @@ def create_app() -> FastMCP:
         return add_tool_version(response)
 
     @mcp.tool()
+    async def get_user_memory(
+        user_id: str, memory_name: Optional[Union[str, None]] = None
+    ) -> Union[dict, List[dict]]:
+        """Get a single memory bank of a user given its phone number and memory name. If no `memory_name` is passed as parameter, get the list of all memory banks of the user.
+
+        Args:
+            user_id (str): The user's phone number.
+            memory_name (Union[str, None], optional): The name of the memory bank. Defaults to None.
+
+        Returns:
+            Union[dict, List[dict]]: A single memory bank or a list of all memory banks.
+        """
+        response = await get_memories(user_id, memory_name)
+        return response
+
+    @mcp.tool()
+    async def create_user_memory(
+        user_id: str, memory_name: str, memory_bank: dict
+    ) -> dict:
+        """Create a memory bank for a user.
+
+        Args:
+            user_id (str): The user's phone number.
+            memory_name (str): The name of the memory bank.
+            memory_bank (dict): A complete memory bank.
+
+        Returns:
+            dict: The memory bank or an error message.
+        """
+        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
+        return response
+
+    @mcp.tool()
+    async def update_user_memory(
+        user_id: str, memory_name: str, memory_bank: dict
+    ) -> dict:
+        """Update a memory bank from a user.
+
+        Args:
+            user_id (str): The user's phone number.
+            memory_name (str): The name of the memory bank.
+            memory_bank (dict): A complete memory bank that contains fields with updated data.
+
+        Returns:
+            dict: The memory bank or an error message.
+        """
+        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
+        return response
+
+    @mcp.tool()
     async def user_feedback(user_id: str, feedback: str) -> dict:
         """
         Armazena feedback do usuário no BigQuery com timestamp automático.
@@ -181,6 +257,26 @@ def create_app() -> FastMCP:
             Dict com confirmação de sucesso, timestamp e instruções para resposta
         """
         response = await store_user_feedback(user_id, feedback)
+        return response
+
+    @mcp.tool(
+        description="""
+        [TOOL_VERSION: {tool_version}] Disponibiliza roteiro orientativo para instruir moradores sobre prevencao, resposta e recuperacao em cenarios de alagamentos e inundacoes no Rio de Janeiro, incluindo contatos de emergencia e orientacao sobre o tom adequado conforme o nivel de urgencia.
+        """.format(
+            tool_version=TOOL_VERSION
+        ).strip()
+    )
+    async def flooding_response():
+        response = await flooding_response_guidelines()
+        return response
+
+    @mcp.tool(description=_get_workflow_descriptions())
+    async def multi_step_service(
+        service_name: str, user_id: str, payload: Optional[dict] = None
+    ) -> dict:
+        response = await mss(
+            service_name=service_name, user_id=user_id, payload=payload
+        )
         return response
 
     # ===== REGISTRAR RESOURCES =====
@@ -235,11 +331,50 @@ def create_app() -> FastMCP:
 
         return base_prompt
 
+    @mcp.custom_route("/consulta_debitos", methods=["POST"])
+    async def da_consulta_debitos(request: Request) -> JSONResponse:
+        """
+        Endpoint para consultar débitos do contribuinte
+        """
+        try:
+            parameters = await request.json()
+            result = await consultar_debitos(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/emitir_guia", methods=["POST"])
+    async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de pagamento à vista
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_a_vista(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/emitir_guia_regularizacao", methods=["POST"])
+    async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de regularização
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_regularizacao(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
     # ===== LOG DE INICIALIZAÇÃO =====
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
     logger.info(
-        f"Tools registradas: calculadora (5), data/hora (2), busca (1), equipamentos (2), feedback (1)"
+        f"Tools registradas: calculadora (5), data/hora (2), busca (3), equipamentos (2), feedback (1)"
     )
     logger.info(f"Resources registrados: 3")
     logger.info(f"Prompts registrados: 1")
