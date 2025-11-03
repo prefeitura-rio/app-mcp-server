@@ -27,6 +27,8 @@ from src.tools.equipments_tools import (
     get_equipments_instructions,
 )
 
+from src.tools.cor_alert_tools import create_cor_alert, check_nearby_alerts
+
 from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
@@ -269,6 +271,79 @@ def create_app() -> FastMCP:
     async def flooding_response():
         response = await flooding_response_guidelines()
         return response
+
+    @mcp.tool(
+        description="""
+        [TOOL_VERSION: {tool_version}] Verifica se existem alertas do COR próximos nas últimas 12 horas.
+
+        IMPORTANTE: SEMPRE chame esta tool ANTES de criar um novo alerta com cor_alert.
+        Esta tool verifica alertas em um raio de 3km do endereço fornecido nas últimas 12 horas.
+
+        Se encontrar alertas similares na área, NÃO crie alerta duplicado.
+        Informe ao usuário que o alerta já foi registrado na região e forneça os detalhes dos alertas existentes.
+
+        Use apenas para casos graves relacionados a enchente/alagamento/danos por chuvas fortes.
+
+        Args:
+            address: Endereço aproximado da ocorrência atual (obrigatório)
+
+        Returns:
+            Lista de alertas próximos + instrução sobre duplicação
+        """.format(
+            tool_version=TOOL_VERSION
+        ).strip()
+    )
+    async def check_cor_alerts_nearby(address: str) -> dict:
+        response = await check_nearby_alerts(address)
+        return add_tool_version(response)
+
+    @mcp.tool(
+        description="""
+        [TOOL_VERSION: {tool_version}] Cria alerta para o COR em casos graves de enchente/alagamento/danos por chuvas fortes.
+
+        IMPORTANTE:
+        - SEMPRE chame check_cor_alerts_nearby ANTES de usar esta tool para verificar alertas duplicados
+        - Use APENAS para situações de severidade ALTA ou CRITICA
+        - NÃO crie alerta se já existe similar nas últimas 12h em raio de 3km
+        - Não use para casos menores ou individuais que não sejam disruptivos para a cidade
+
+        Severidades aceitas:
+        - alta: Situação grave que requer atenção imediata do COR
+        - critica: Situação extremamente grave com risco iminente à população
+
+        Tipos de alerta aceitos:
+        - alagamento: Acúmulo de água em vias ou áreas urbanas
+        - enchente: Transbordamento de rios ou córregos
+        - dano_chuva: Danos estruturais causados por chuvas fortes
+
+        Args:
+            user_id: ID do usuário reportando (obrigatório)
+            alert_type: Tipo do alerta - "alagamento", "enchente" ou "dano_chuva" (obrigatório)
+            severity: Nível de severidade - "alta" ou "critica" (obrigatório)
+            description: Descrição detalhada incluindo todo o contexto da conversa (obrigatório)
+            address: Endereço aproximado da ocorrência (obrigatório)
+
+        Returns:
+            Confirmação do alerta criado com ID único e timestamp
+        """.format(
+            tool_version=TOOL_VERSION
+        ).strip()
+    )
+    async def cor_alert(
+        user_id: str,
+        alert_type: str,
+        severity: str,
+        description: str,
+        address: str
+    ) -> dict:
+        response = await create_cor_alert(
+            user_id=user_id,
+            alert_type=alert_type,
+            severity=severity,
+            description=description,
+            address=address
+        )
+        return add_tool_version(response)
 
     @mcp.tool(description=_get_workflow_descriptions())
     async def multi_step_service(

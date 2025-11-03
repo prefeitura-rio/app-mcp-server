@@ -63,7 +63,6 @@ def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
             - Enchentes ou alagamentos que impossibilitem permanência em casa
             - Deslizamentos de terra ou risco iminente
             - Situações de risco estrutural na residência
-            - Outras emergências orientadas pela Defesa Civil
         4.  **Contato de Emergência da Defesa Civil**: SEMPRE informe ao final que em caso de emergência, o cidadão pode ligar para a **Defesa Civil no 199** (funciona 24 horas).
         5.  **Exemplo de como estruturar a resposta**:
             "O ponto de apoio mais próximo do seu endereço é:
@@ -76,6 +75,8 @@ def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
 
             **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
         6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
+
+        []
         """
     # Instruções padrão para outras categorias
     return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"

@@ -219,3 +219,171 @@ async def save_feedback_in_bq_background(
         logger.exception(
             f"Failed to save feedback to BigQuery in background for user: {user_id}"
         )
+
+
+def save_cor_alert_in_bq(
+    alert_id: str,
+    user_id: str,
+    alert_type: str,
+    severity: str,
+    description: str,
+    address: str,
+    latitude: float,
+    longitude: float,
+    bairro: str,
+    timestamp: str,
+    environment: str,
+    dataset_id: str = "brutos_eai_logs",
+    table_id: str = "cor_alerts",
+    project_id: str = "rj-iplanrio",
+):
+    """
+    Saves COR alert directly to BigQuery with alert-specific schema.
+
+    Args:
+        alert_id: Unique alert identifier (UUID)
+        user_id: User identifier
+        alert_type: Type of alert ("alagamento", "enchente", "dano_chuva")
+        severity: Alert severity ("alta" or "critica")
+        description: Detailed description of the problem
+        address: Address provided by user
+        latitude: Geocoded latitude (nullable)
+        longitude: Geocoded longitude (nullable)
+        bairro: Neighborhood extracted from geocoding (nullable)
+        timestamp: Timestamp when alert was created
+        environment: Environment where alert was generated (staging, prod, etc.)
+        dataset_id: BigQuery dataset ID
+        table_id: BigQuery table ID
+        project_id: GCP project ID
+    """
+    table_full_name = f"{project_id}.{dataset_id}.{table_id}"
+    logger.info(f"Salvando alerta COR no BigQuery: {table_full_name}")
+
+    schema = [
+        bigquery.SchemaField("alert_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alert_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("severity", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("description", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("address", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("bairro", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("created_at", "DATETIME", mode="REQUIRED"),
+        bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
+    ]
+
+    job_config = bigquery.LoadJobConfig(
+        schema=schema,
+        write_disposition="WRITE_APPEND",
+        time_partitioning=bigquery.TimePartitioning(
+            type_=bigquery.TimePartitioningType.DAY,
+            field="data_particao",
+        ),
+    )
+
+    data_to_save = {
+        "alert_id": alert_id,
+        "user_id": user_id,
+        "alert_type": alert_type,
+        "severity": severity,
+        "description": description,
+        "address": address,
+        "latitude": latitude,
+        "longitude": longitude,
+        "bairro": bairro,
+        "created_at": timestamp,
+        "environment": environment,
+        "data_particao": timestamp.split("T")[0],
+    }
+
+    json_data = json.loads(json.dumps([data_to_save]))
+    client = get_bigquery_client()
+
+    try:
+        job = client.load_table_from_json(
+            json_data, table_full_name, job_config=job_config
+        )
+        job.result()
+        logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
+    except Exception as e:
+        logger.error(f"Erro ao salvar alerta COR no BigQuery: {str(e)}")
+        raise Exception(f"Failed to save COR alert: {str(e)}")
+
+
+async def save_cor_alert_in_bq_background(
+    alert_id: str,
+    user_id: str,
+    alert_type: str,
+    severity: str,
+    description: str,
+    address: str,
+    latitude: float,
+    longitude: float,
+    bairro: str,
+    timestamp: str,
+    environment: str,
+    dataset_id: str = "brutos_eai_logs",
+    table_id: str = "cor_alerts",
+):
+    """
+    Asynchronous wrapper for saving COR alert in BigQuery.
+    Catches and logs exceptions to prevent crashing background tasks.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            save_cor_alert_in_bq,
+            alert_id,
+            user_id,
+            alert_type,
+            severity,
+            description,
+            address,
+            latitude,
+            longitude,
+            bairro,
+            timestamp,
+            environment,
+            dataset_id,
+            table_id,
+        )
+    except Exception:
+        logger.exception(
+            f"Failed to save COR alert to BigQuery in background for alert_id: {alert_id}"
+        )
+
+
+def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
+    """
+    Executes a BigQuery query and returns results as a list of dictionaries.
+
+    Args:
+        query: SQL query to execute
+        page_size: Number of rows per page (optional, uses env default)
+
+    Returns:
+        List of dictionaries with query results
+    """
+    from src.config.env import GOOGLE_BIGQUERY_PAGE_SIZE
+
+    page_size = page_size if page_size is not None else GOOGLE_BIGQUERY_PAGE_SIZE
+    client = get_bigquery_client()
+
+    try:
+        logger.info(f"Executando query no BigQuery: {query[:100]}...")
+        query_job = client.query(query)
+        results = query_job.result(page_size=page_size)
+
+        # Convert results to list of dictionaries
+        rows = []
+        for row in results:
+            rows.append(dict(row.items()))
+
+        logger.info(f"Query executada com sucesso. {len(rows)} linhas retornadas.")
+        return rows
+    except Exception as e:
+        logger.error(f"Erro ao executar query no BigQuery: {str(e)}")
+        raise Exception(f"Failed to execute BigQuery query: {str(e)}")
