@@ -206,6 +206,16 @@ def create_app() -> FastMCP:
 
         Returns:
             Union[dict, List[dict]]: A single memory bank or a list of all memory banks.
+
+        Sample of function call parameters:
+        ```
+        user_id: "default_user",
+        memory_name: "nome"
+        ```
+        or
+        ```
+        user_id: "default_user"
+        ```
         """
         response = await get_memories(user_id, memory_name)
         return response
@@ -223,6 +233,30 @@ def create_app() -> FastMCP:
 
         Returns:
             dict: The memory bank or an error message.
+
+        Schema of `memory_bank`:
+        ```
+        {
+            "memory_name": "name_of_the_memory",
+            "description": "Description of the memory",
+            "memory_type": "base|appended",
+            "relevance": "low|medium|high",
+            "value": "The memory to be saved",
+        }
+        ```
+
+        Sample of function call parameters:
+        ```
+        user_id: "default_user",
+        memory_name: "nome",
+        memory_bank: {
+            "memory_name": "nome",
+            "description": "Nome do usuário",
+            "memory_type": "base",
+            "relevance": "high",
+            "value": "João da Silva",
+        }
+        ```
         """
         response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
         return response
@@ -240,6 +274,30 @@ def create_app() -> FastMCP:
 
         Returns:
             dict: The memory bank or an error message.
+        
+        Schema of `memory_bank`:
+        ```
+        {
+            "memory_name": "name_of_the_memory",
+            "description": "Description of the memory",
+            "memory_type": "base|appended",
+            "relevance": "low|medium|high",
+            "value": "The memory to be saved",
+        }
+        ```
+
+        Sample of function call parameters:
+        ```
+        user_id: "default_user",
+        memory_name: "nome",
+        memory_bank: {
+            "memory_name": "nome",
+            "description": "Nome do usuário",
+            "memory_type": "base",
+            "relevance": "high",
+            "value": "João da Silva",
+        }
+        ```
         """
         response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
         return response
