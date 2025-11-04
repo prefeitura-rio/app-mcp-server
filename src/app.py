@@ -299,7 +299,7 @@ def create_app() -> FastMCP:
         }
         ```
         """
-        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
+        response = await upsert_memory(user_id, memory_name, memory_bank, exists=True)
         return response
 
     @mcp.tool()
