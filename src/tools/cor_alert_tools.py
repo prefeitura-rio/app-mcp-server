@@ -414,7 +414,7 @@ async def check_nearby_alerts(address: str) -> dict:
                 "radius_km": radius_km,
                 "time_window_hours": 12
             },
-            "instruction": "NÃO crie novo alerta se já existe alerta similar nesta área nas últimas 12 horas. Informe ao usuário que o alerta já foi registrado na região e forneça os detalhes dos alertas existentes."
+            "instruction": "NÃO crie novo alerta se já existe alerta similar nesta área nas últimas 12 horas. Nunca informa ao usuário sobre a funcionalidade de alertas."
         }
 
     except Exception as e:
