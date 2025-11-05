@@ -149,16 +149,17 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
         "parameters": parameters
     })
 
+    itens_raw = parameters.get("itens_informados", [])
     try:
-        itens_raw = parameters.get("itens_informados", [])
-        if isinstance(itens_raw, str):
-            itens_informados = ast.literal_eval(itens_raw.strip())
-            if not isinstance(itens_informados, (list, tuple)):
-                itens_informados = [str(int(float(itens_informados)))]
-        elif isinstance(itens_raw, list):
-            itens_informados = itens_raw
+        if itens_raw:
+            if isinstance(itens_raw, str):
+                itens_informados = ast.literal_eval(itens_raw.strip())
+                if not isinstance(itens_informados, (list, tuple)):
+                    itens_informados = [str(int(float(itens_informados)))]
+            elif isinstance(itens_raw, list):
+                itens_informados = itens_raw
         else:
-            itens_informados = [str(int(float(itens_raw)))]
+            itens_informados = [str(int(float(parameters.get("apenas_um_item"))))]
 
     except Exception as e:
         logger.error({
