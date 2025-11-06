@@ -221,10 +221,10 @@ def create_app() -> FastMCP:
         return response
 
     @mcp.tool()
-    async def create_user_memory(
+    async def upsert_user_memory(
         user_id: str, memory_name: str, memory_bank: dict
     ) -> dict:
-        """Create a memory bank for a user.
+        """Create or update a memory bank for a user.
 
         Args:
             user_id (str): The user's phone number.
@@ -258,48 +258,7 @@ def create_app() -> FastMCP:
         }
         ```
         """
-        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
-        return response
-
-    @mcp.tool()
-    async def update_user_memory(
-        user_id: str, memory_name: str, memory_bank: dict
-    ) -> dict:
-        """Update a memory bank from a user.
-
-        Args:
-            user_id (str): The user's phone number.
-            memory_name (str): The name of the memory bank.
-            memory_bank (dict): A complete memory bank that contains fields with updated data.
-
-        Returns:
-            dict: The memory bank or an error message.
-        
-        Schema of `memory_bank`:
-        ```
-        {
-            "memory_name": "name_of_the_memory",
-            "description": "Description of the memory",
-            "memory_type": "base|appended",
-            "relevance": "low|medium|high",
-            "value": "The memory to be saved",
-        }
-        ```
-
-        Sample of function call parameters:
-        ```
-        user_id: "default_user",
-        memory_name: "nome",
-        memory_bank: {
-            "memory_name": "nome",
-            "description": "Nome do usuário",
-            "memory_type": "base",
-            "relevance": "high",
-            "value": "João da Silva",
-        }
-        ```
-        """
-        response = await upsert_memory(user_id, memory_name, memory_bank, exists=True)
+        response = await upsert_memory(user_id, memory_name, memory_bank)
         return response
 
     @mcp.tool()
