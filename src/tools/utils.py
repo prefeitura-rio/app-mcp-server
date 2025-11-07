@@ -51,4 +51,13 @@ async def internal_request(
         async with session.request(
             "POST", integrations_url, headers=headers, data=payload
         ) as response:
-            return await response.json(content_type=None)
+            text = await response.text()
+            if not text:
+                logger.warning(f"Empty response from {url}")
+                return None
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON from {url}: {e}")
+                logger.error(f"Response text: {text[:500]}")  # Log first 500 chars
+                raise

@@ -109,17 +109,14 @@ async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> 
         "headers": {"Authorization": token},
         "data": data,
     }
-    
-    logger.info(f"pgm_api - Enviando para: {request_url}")
-    logger.info(f"pgm_api - Dados enviados: {request_data}")
-    
+        
     response = await internal_request(
         url=request_url,
         method="POST",
         request_kwargs=request_data,
     )
 
-    logger.info(f"pgm_api - Resposta recebida: {response}")
+    logger.info(f"pgm_api - Resposta recebida para [{data}]: {response}")
 
     if response is None:
         logger.info("A API não retornou nada. Valor esperado para o endpoint de cadastro de usuários.")
