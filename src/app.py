@@ -30,7 +30,6 @@ from src.tools.equipments_tools import (
 from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
-from src.tools.floodings import flooding_response_guidelines
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -274,17 +273,6 @@ def create_app() -> FastMCP:
             Dict com confirmação de sucesso, timestamp e instruções para resposta
         """
         response = await store_user_feedback(user_id, feedback)
-        return response
-
-    @mcp.tool(
-        description="""
-        [TOOL_VERSION: {tool_version}] Disponibiliza roteiro orientativo para instruir moradores sobre prevencao, resposta e recuperacao em cenarios de alagamentos e inundacoes no Rio de Janeiro, incluindo contatos de emergencia e orientacao sobre o tom adequado conforme o nivel de urgencia.
-        """.format(
-            tool_version=TOOL_VERSION
-        ).strip()
-    )
-    async def flooding_response():
-        response = await flooding_response_guidelines()
         return response
 
     @mcp.tool(description=_get_workflow_descriptions())
