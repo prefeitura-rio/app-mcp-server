@@ -47,7 +47,8 @@ async def internal_request(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {key}",
     }
-    async with aiohttp.ClientSession() as session:
+
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=400)) as session:
         async with session.request(
             "POST", integrations_url, headers=headers, data=payload
         ) as response:
