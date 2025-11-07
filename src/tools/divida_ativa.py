@@ -365,7 +365,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         # Build input parameters
         parametros_entrada = {
             "origem_solicitação": 0,
-            parameters["consulta_debitos"]: parameters[parameters["consulta_debitos"]]
+            parameters["consulta_debitos"]: parameters[parameters["consulta_debitos"]].strip()
         }
 
         if parameters["consulta_debitos"] == "numeroAutoInfracao":
