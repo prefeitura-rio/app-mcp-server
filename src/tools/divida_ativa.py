@@ -103,18 +103,23 @@ async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> 
     token = f'Bearer {auth_response["access_token"]}'
     logger.info("Token de autenticação obtido com sucesso")
 
+    request_url = env.CHATBOT_PGM_API_URL + f"/{endpoint}"
+    request_data = {
+        "verify": False,
+        "headers": {"Authorization": token},
+        "data": data,
+    }
+    
+    logger.info(f"pgm_api - Enviando para: {request_url}")
+    logger.info(f"pgm_api - Dados enviados: {request_data}")
+    
     response = await internal_request(
-        url=env.CHATBOT_PGM_API_URL + f"/{endpoint}",
+        url=request_url,
         method="POST",
-        request_kwargs={
-            "verify": False,
-            "headers": {"Authorization": token},
-            "data": data,
-        },
+        request_kwargs=request_data,
     )
 
-    logger.info("Resposta da solicitação POST:")
-    logger.info(response)
+    logger.info(f"pgm_api - Resposta recebida: {response}")
 
     if response is None:
         logger.info("A API não retornou nada. Valor esperado para o endpoint de cadastro de usuários.")
