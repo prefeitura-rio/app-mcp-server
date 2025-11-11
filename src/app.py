@@ -319,11 +319,9 @@ def create_app() -> FastMCP:
         Tipos de alerta aceitos:
         - alagamento: Acúmulo de água em vias ou áreas urbanas
         - enchente: Transbordamento de rios ou córregos
-        - dano_chuva: Danos estruturais causados por chuvas fortes
-
         Args:
             user_id: ID do usuário reportando (obrigatório)
-            alert_type: Tipo do alerta - "alagamento", "enchente" ou "dano_chuva" (obrigatório)
+            alert_type: Tipo do alerta - "alagamento" ou "enchente"(obrigatório)
             severity: Nível de severidade - "alta" ou "critica" (obrigatório)
             description: Descrição detalhada incluindo todo o contexto da conversa (obrigatório)
             address: Endereço aproximado da ocorrência (obrigatório)
