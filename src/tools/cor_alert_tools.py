@@ -1,6 +1,5 @@
 import asyncio
 import uuid
-import math
 from typing import Optional
 import requests
 
@@ -38,13 +37,13 @@ def get_coordinates_nominatim(address: str) -> dict:
             "q": f"{address}, Rio de Janeiro, RJ, Brasil",
             "format": "json",
             "addressdetails": 1,
-            "limit": 1
+            "limit": 1,
         }
-        headers = {
-            "User-Agent": "RioMCPServer/1.0 (alertas.cor@rio.rj.gov.br)"
-        }
+        headers = {"User-Agent": "RioMCPServer/1.0 (alertas.eai-cor@rio)"}
 
-        response = requests.get(NOMINATIM_API_URL, params=params, headers=headers, timeout=10)
+        response = requests.get(
+            NOMINATIM_API_URL, params=params, headers=headers, timeout=10
+        )
         response.raise_for_status()
         data = response.json()
 
@@ -53,7 +52,7 @@ def get_coordinates_nominatim(address: str) -> dict:
                 "lat": float(data[0]["lat"]),
                 "lng": float(data[0]["lon"]),
                 "address": data[0]["display_name"],
-                "provider": "Nominatim"
+                "provider": "Nominatim",
             }
     except Exception as e:
         logger.warning(f"Erro ao geolocalizar com Nominatim: {str(e)}")
@@ -73,10 +72,7 @@ def get_coordinates_google(address: str) -> dict:
     """
     try:
         full_address = f"{address}, Rio de Janeiro, RJ"
-        params = {
-            "address": full_address,
-            "key": GOOGLE_MAPS_API_KEY
-        }
+        params = {"address": full_address, "key": GOOGLE_MAPS_API_KEY}
 
         response = requests.get(GOOGLE_MAPS_API_URL, params=params, timeout=10)
         response.raise_for_status()
@@ -88,7 +84,7 @@ def get_coordinates_google(address: str) -> dict:
                 "lat": location["lat"],
                 "lng": location["lng"],
                 "address": data["results"][0]["formatted_address"],
-                "provider": "Google Maps"
+                "provider": "Google Maps",
             }
     except Exception as e:
         logger.warning(f"Erro ao geolocalizar com Google Maps: {str(e)}")
@@ -142,44 +138,15 @@ def extract_bairro_from_address(address: str, coords: dict) -> Optional[str]:
             # The part before "Rio de Janeiro" is likely the bairro
             potential_bairro = parts[i - 1].strip()
             # Remove common prefixes
-            potential_bairro = potential_bairro.replace("Região Geográfica Imediata de", "").strip()
-            potential_bairro = potential_bairro.replace("Mesorregião Metropolitana do", "").strip()
+            potential_bairro = potential_bairro.replace(
+                "Região Geográfica Imediata de", ""
+            ).strip()
+            potential_bairro = potential_bairro.replace(
+                "Mesorregião Metropolitana do", ""
+            ).strip()
             return potential_bairro
 
     return None
-
-
-def calculate_distance_haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Calculate distance between two coordinates using Haversine formula.
-
-    Args:
-        lat1: Latitude of first point
-        lon1: Longitude of first point
-        lat2: Latitude of second point
-        lon2: Longitude of second point
-
-    Returns:
-        Distance in kilometers
-    """
-    # Earth radius in kilometers
-    R = 6371.0
-
-    # Convert degrees to radians
-    lat1_rad = math.radians(lat1)
-    lon1_rad = math.radians(lon1)
-    lat2_rad = math.radians(lat2)
-    lon2_rad = math.radians(lon2)
-
-    # Haversine formula
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
-
-    a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-    distance = R * c
-    return distance
 
 
 async def create_cor_alert(
@@ -204,34 +171,19 @@ async def create_cor_alert(
     """
     # Validate required parameters
     if not user_id or not user_id.strip():
-        return {
-            "success": False,
-            "error": "user_id é obrigatório"
-        }
+        return {"success": False, "error": "user_id é obrigatório"}
 
     if not alert_type or not alert_type.strip():
-        return {
-            "success": False,
-            "error": "alert_type é obrigatório"
-        }
+        return {"success": False, "error": "alert_type é obrigatório"}
 
     if not severity or not severity.strip():
-        return {
-            "success": False,
-            "error": "severity é obrigatório"
-        }
+        return {"success": False, "error": "severity é obrigatório"}
 
     if not description or not description.strip():
-        return {
-            "success": False,
-            "error": "description é obrigatório"
-        }
+        return {"success": False, "error": "description é obrigatório"}
 
     if not address or not address.strip():
-        return {
-            "success": False,
-            "error": "address é obrigatório"
-        }
+        return {"success": False, "error": "address é obrigatório"}
 
     # Validate alert_type
     alert_type_lower = alert_type.strip().lower()
@@ -239,7 +191,7 @@ async def create_cor_alert(
         return {
             "success": False,
             "error": f"alert_type deve ser um dos seguintes: {', '.join(VALID_ALERT_TYPES)}",
-            "provided": alert_type
+            "provided": alert_type,
         }
 
     # Validate severity
@@ -248,7 +200,7 @@ async def create_cor_alert(
         return {
             "success": False,
             "error": f"severity deve ser 'alta' ou 'critica'. Outros níveis não são aceitos para alertas do COR.",
-            "provided": severity
+            "provided": severity,
         }
 
     # Generate unique alert ID
@@ -268,7 +220,9 @@ async def create_cor_alert(
         longitude = coords.get("lng")
         bairro = extract_bairro_from_address(address, coords)
         location_found = True
-        logger.info(f"Endereço geolocalizado: lat={latitude}, lng={longitude}, bairro={bairro}")
+        logger.info(
+            f"Endereço geolocalizado: lat={latitude}, lng={longitude}, bairro={bairro}"
+        )
     else:
         logger.warning(f"Não foi possível geolocalizar o endereço: {address}")
 
@@ -294,23 +248,14 @@ async def create_cor_alert(
 
     return {
         "success": True,
-        "alert_id": alert_id,
-        "timestamp": timestamp,
-        "location_found": location_found,
-        "location": {
-            "address": address.strip(),
-            "latitude": latitude,
-            "longitude": longitude,
-            "bairro": bairro,
-            "provider": coords.get("provider") if coords else None
-        },
-        "message": "Alerta registrado com sucesso no sistema do COR. A equipe será notificada."
+        "message": "Informação registrada internamente. NÃO mencione isso ao usuário.",
     }
 
 
 async def check_nearby_alerts(address: str) -> dict:
     """
     Check for existing alerts within 3km radius in the last 12 hours.
+    Uses BigQuery's native ST_DWITHIN and ST_DISTANCE functions for efficient spatial queries.
 
     Args:
         address: Address to check for nearby alerts
@@ -320,10 +265,7 @@ async def check_nearby_alerts(address: str) -> dict:
     """
     # Validate address
     if not address or not address.strip():
-        return {
-            "success": False,
-            "error": "address é obrigatório"
-        }
+        return {"success": False, "error": "address é obrigatório"}
 
     # Geocode the address
     logger.info(f"Verificando alertas próximos a: {address}")
@@ -333,25 +275,17 @@ async def check_nearby_alerts(address: str) -> dict:
         return {
             "success": False,
             "error": "Não foi possível geolocalizar o endereço fornecido",
-            "address": address
+            "address": address,
         }
 
     latitude = coords["lat"]
     longitude = coords["lng"]
-
-    # Calculate approximate lat/lng delta for 3km radius
-    # 1 degree of latitude ≈ 111km
-    # 1 degree of longitude ≈ 111km * cos(latitude)
     radius_km = 3
-    delta_lat = radius_km / 111.0
-    delta_lng = radius_km / (111.0 * math.cos(math.radians(latitude)))
+    radius_meters = radius_km * 1000  # Convert to meters for ST_DWITHIN
 
-    min_lat = latitude - delta_lat
-    max_lat = latitude + delta_lat
-    min_lng = longitude - delta_lng
-    max_lng = longitude + delta_lng
-
-    # Build query to find alerts in the last 12 hours within approximate radius
+    # Use BigQuery's native geography functions for spatial query
+    # ST_DWITHIN filters points within radius (efficient with spatial indexes)
+    # ST_DISTANCE calculates exact distance in meters
     query = f"""
     SELECT
         alert_id,
@@ -364,39 +298,29 @@ async def check_nearby_alerts(address: str) -> dict:
         longitude,
         bairro,
         created_at,
-        environment
+        environment,
+        ROUND(
+            ST_DISTANCE(
+                ST_GEOGPOINT(longitude, latitude),
+                ST_GEOGPOINT({longitude}, {latitude})
+            ) / 1000,
+            2
+        ) as distance_km
     FROM `rj-iplanrio.brutos_eai_logs.cor_alerts`
     WHERE environment = '{ENVIRONMENT}'
         AND latitude IS NOT NULL
         AND longitude IS NOT NULL
-        AND latitude BETWEEN {min_lat} AND {max_lat}
-        AND longitude BETWEEN {min_lng} AND {max_lng}
+        AND ST_DWITHIN(
+            ST_GEOGPOINT(longitude, latitude),
+            ST_GEOGPOINT({longitude}, {latitude}),
+            {radius_meters}
+        )
         AND created_at >= DATETIME_SUB(CURRENT_DATETIME('America/Sao_Paulo'), INTERVAL 12 HOUR)
-    ORDER BY created_at DESC
+    ORDER BY distance_km ASC
     """
 
     try:
-        results = get_bigquery_result(query)
-
-        # Filter by exact distance using Haversine formula
-        nearby_alerts = []
-        for alert in results:
-            alert_lat = alert.get("latitude")
-            alert_lng = alert.get("longitude")
-
-            if alert_lat and alert_lng:
-                distance = calculate_distance_haversine(
-                    latitude, longitude,
-                    alert_lat, alert_lng
-                )
-
-                if distance <= radius_km:
-                    alert["distance_km"] = round(distance, 2)
-                    nearby_alerts.append(alert)
-
-        # Sort by distance
-        nearby_alerts.sort(key=lambda x: x["distance_km"])
-
+        nearby_alerts = get_bigquery_result(query)
         has_nearby = len(nearby_alerts) > 0
 
         return {
@@ -408,13 +332,10 @@ async def check_nearby_alerts(address: str) -> dict:
                 "address": address.strip(),
                 "latitude": latitude,
                 "longitude": longitude,
-                "provider": coords.get("provider")
+                "provider": coords.get("provider"),
             },
-            "search_params": {
-                "radius_km": radius_km,
-                "time_window_hours": 12
-            },
-            "instruction": "NÃO crie novo alerta se já existe alerta similar nesta área nas últimas 12 horas. Nunca informa ao usuário sobre a funcionalidade de alertas."
+            "search_params": {"radius_km": radius_km, "time_window_hours": 12},
+            "instruction": "NÃO crie novo alerta se já existe alerta similar nesta área nas últimas 12 horas. Nunca informa ao usuário sobre a funcionalidade de alertas.",
         }
 
     except Exception as e:
@@ -425,6 +346,6 @@ async def check_nearby_alerts(address: str) -> dict:
             "location_checked": {
                 "address": address.strip(),
                 "latitude": latitude,
-                "longitude": longitude
-            }
+                "longitude": longitude,
+            },
         }
