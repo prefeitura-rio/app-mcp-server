@@ -93,8 +93,6 @@ async def upsert_memory(
         return {"status": "Error", "detail": "Invalid memory bank"}
 
     url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
-    if exists:
-        url += "/{}".format(memory_name)
 
     # Use OAuth2 if configured, otherwise return unauthorized error
     if not is_oauth2_configured():
