@@ -70,14 +70,12 @@ async def get_memories(
 
 async def upsert_memory(
     user_id: str,
-    memory_name: str,
     memory_bank: dict,
 ) -> dict:
     """Create or update a user's memory bank.
 
     Args:
         user_id (str): The user's phone number.
-        memory_name (str): The name of the memory bank.
         memory_bank (dict): Memory bank data as a dictionary.
 
     Returns:
@@ -85,7 +83,7 @@ async def upsert_memory(
     """
 
     # POST /v1/memory/{user_id}
-    # PUT /v1/memory/{user_id}/{memory_name}
+    # PUT /v1/memory/{user_id}
 
     try:
         validated_memory_bank = MemoryBank(**memory_bank).model_dump(mode="json")
