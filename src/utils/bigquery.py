@@ -1,11 +1,12 @@
 import asyncio
 from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 from google.oauth2 import service_account
 from typing import List
 import base64
 import json
 import src.config.env as env
-from datetime import datetime
+from datetime import datetime, date
 import pytz
 from src.utils.log import logger
 
@@ -163,6 +164,7 @@ def save_feedback_in_bq(
     job_config = bigquery.LoadJobConfig(
         schema=schema,
         write_disposition="WRITE_APPEND",
+        create_disposition="CREATE_IF_NEEDED",
         time_partitioning=bigquery.TimePartitioning(
             type_=bigquery.TimePartitioningType.DAY,
             field="data_particao",
@@ -230,7 +232,6 @@ def save_cor_alert_in_bq(
     address: str,
     latitude: float,
     longitude: float,
-    bairro: str,
     timestamp: str,
     environment: str,
     dataset_id: str = "brutos_eai_logs",
@@ -249,7 +250,6 @@ def save_cor_alert_in_bq(
         address: Address provided by user
         latitude: Geocoded latitude (nullable)
         longitude: Geocoded longitude (nullable)
-        bairro: Neighborhood extracted from geocoding (nullable)
         timestamp: Timestamp when alert was created
         environment: Environment where alert was generated (staging, prod, etc.)
         dataset_id: BigQuery dataset ID
@@ -268,7 +268,6 @@ def save_cor_alert_in_bq(
         bigquery.SchemaField("address", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
         bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
-        bigquery.SchemaField("bairro", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("created_at", "DATETIME", mode="REQUIRED"),
         bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
@@ -277,6 +276,7 @@ def save_cor_alert_in_bq(
     job_config = bigquery.LoadJobConfig(
         schema=schema,
         write_disposition="WRITE_APPEND",
+        create_disposition="CREATE_IF_NEEDED",
         time_partitioning=bigquery.TimePartitioning(
             type_=bigquery.TimePartitioningType.DAY,
             field="data_particao",
@@ -292,7 +292,6 @@ def save_cor_alert_in_bq(
         "address": address,
         "latitude": latitude,
         "longitude": longitude,
-        "bairro": bairro,
         "created_at": timestamp,
         "environment": environment,
         "data_particao": timestamp.split("T")[0],
@@ -321,7 +320,6 @@ async def save_cor_alert_in_bq_background(
     address: str,
     latitude: float,
     longitude: float,
-    bairro: str,
     timestamp: str,
     environment: str,
     dataset_id: str = "brutos_eai_logs",
@@ -344,7 +342,6 @@ async def save_cor_alert_in_bq_background(
             address,
             latitude,
             longitude,
-            bairro,
             timestamp,
             environment,
             dataset_id,
@@ -380,10 +377,21 @@ def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
         # Convert results to list of dictionaries
         rows = []
         for row in results:
-            rows.append(dict(row.items()))
+            row_dict = {}
+            for key, value in row.items():
+                # Convert datetime/date objects to ISO format strings for JSON serialization
+                if isinstance(value, (datetime, date)):
+                    row_dict[key] = value.isoformat()
+                else:
+                    row_dict[key] = value
+            rows.append(row_dict)
 
         logger.info(f"Query executada com sucesso. {len(rows)} linhas retornadas.")
         return rows
+    except NotFound as e:
+        logger.warning(f"Tabela não encontrada no BigQuery: {str(e)}")
+        # Return empty list when table doesn't exist yet - allows graceful degradation
+        return []
     except Exception as e:
         logger.error(f"Erro ao executar query no BigQuery: {str(e)}")
         raise Exception(f"Failed to execute BigQuery query: {str(e)}")

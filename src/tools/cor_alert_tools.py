@@ -112,43 +112,6 @@ def geocode_address(address: str) -> dict:
     return coords
 
 
-def extract_bairro_from_address(address: str, coords: dict) -> Optional[str]:
-    """
-    Extract bairro (neighborhood) from geocoded address.
-
-    Args:
-        address: Original address
-        coords: Geocoded coordinates dictionary
-
-    Returns:
-        Bairro name or None if not found
-    """
-    if not coords or "address" not in coords:
-        return None
-
-    full_address = coords.get("address", "")
-
-    # Try to extract bairro from address components
-    # Common patterns: "Bairro, Cidade" or "Rua X - Bairro, Cidade"
-    parts = full_address.split(",")
-
-    # Look for Rio de Janeiro reference
-    for i, part in enumerate(parts):
-        if "Rio de Janeiro" in part and i > 0:
-            # The part before "Rio de Janeiro" is likely the bairro
-            potential_bairro = parts[i - 1].strip()
-            # Remove common prefixes
-            potential_bairro = potential_bairro.replace(
-                "Região Geográfica Imediata de", ""
-            ).strip()
-            potential_bairro = potential_bairro.replace(
-                "Mesorregião Metropolitana do", ""
-            ).strip()
-            return potential_bairro
-
-    return None
-
-
 async def create_cor_alert(
     user_id: str,
     alert_type: str,
@@ -212,16 +175,14 @@ async def create_cor_alert(
 
     latitude = None
     longitude = None
-    bairro = None
     location_found = False
 
     if coords:
         latitude = coords.get("lat")
         longitude = coords.get("lng")
-        bairro = extract_bairro_from_address(address, coords)
         location_found = True
         logger.info(
-            f"Endereço geolocalizado: lat={latitude}, lng={longitude}, bairro={bairro}"
+            f"Endereço geolocalizado: lat={latitude}, lng={longitude}"
         )
     else:
         logger.warning(f"Não foi possível geolocalizar o endereço: {address}")
@@ -240,7 +201,6 @@ async def create_cor_alert(
             address=address.strip(),
             latitude=latitude,
             longitude=longitude,
-            bairro=bairro,
             timestamp=timestamp,
             environment=ENVIRONMENT,
         )
@@ -296,7 +256,6 @@ async def check_nearby_alerts(address: str) -> dict:
         address,
         latitude,
         longitude,
-        bairro,
         created_at,
         environment,
         ROUND(
