@@ -103,18 +103,20 @@ async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> 
     token = f'Bearer {auth_response["access_token"]}'
     logger.info("Token de autenticação obtido com sucesso")
 
+    request_url = env.CHATBOT_PGM_API_URL + f"/{endpoint}"
+    request_data = {
+        "verify": False,
+        "headers": {"Authorization": token},
+        "data": data,
+    }
+        
     response = await internal_request(
-        url=env.CHATBOT_PGM_API_URL + f"/{endpoint}",
+        url=request_url,
         method="POST",
-        request_kwargs={
-            "verify": False,
-            "headers": {"Authorization": token},
-            "data": data,
-        },
+        request_kwargs=request_data,
     )
 
-    logger.info("Resposta da solicitação POST:")
-    logger.info(response)
+    logger.info(f"pgm_api - Resposta recebida para [{data}]: {response}")
 
     if response is None:
         logger.info("A API não retornou nada. Valor esperado para o endpoint de cadastro de usuários.")
@@ -149,16 +151,17 @@ async def da_emitir_guia(parameters: Dict[str, Any], tipo: str) -> Optional[Dict
         "parameters": parameters
     })
 
+    itens_raw = parameters.get("itens_informados", [])
     try:
-        itens_raw = parameters.get("itens_informados", [])
-        if isinstance(itens_raw, str):
-            itens_informados = ast.literal_eval(itens_raw.strip())
-            if not isinstance(itens_informados, (list, tuple)):
-                itens_informados = [str(int(float(itens_informados)))]
-        elif isinstance(itens_raw, list):
-            itens_informados = itens_raw
+        if itens_raw:
+            if isinstance(itens_raw, str):
+                itens_informados = ast.literal_eval(itens_raw.strip())
+                if not isinstance(itens_informados, (list, tuple)):
+                    itens_informados = [str(int(float(itens_informados)))]
+            elif isinstance(itens_raw, list):
+                itens_informados = itens_raw
         else:
-            itens_informados = [str(int(float(itens_raw)))]
+            itens_informados = [str(int(float(parameters.get("apenas_um_item"))))]
 
     except Exception as e:
         logger.error({
@@ -254,7 +257,8 @@ async def processar_registros(
     for _, item in enumerate(registros):
         message["codigo_de_barras"] = item["codigoDeBarras"]
         message["link"] = item["pdf"]
-        message["pix"] = item["codigoQrEMVPix"]
+        if item["codigoQrEMVPix"]:
+            message["pix"] = item["codigoQrEMVPix"]
 
     return message
 
@@ -363,7 +367,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         # Build input parameters
         parametros_entrada = {
             "origem_solicitação": 0,
-            parameters["consulta_debitos"]: parameters[parameters["consulta_debitos"]]
+            parameters["consulta_debitos"]: parameters[parameters["consulta_debitos"]].strip()
         }
 
         if parameters["consulta_debitos"] == "numeroAutoInfracao":
