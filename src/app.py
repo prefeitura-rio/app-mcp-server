@@ -32,7 +32,6 @@ from src.tools.cor_alert_tools import create_cor_alert, check_nearby_alerts
 from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
-from src.tools.floodings import flooding_response_guidelines
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -208,15 +207,25 @@ def create_app() -> FastMCP:
 
         Returns:
             Union[dict, List[dict]]: A single memory bank or a list of all memory banks.
+
+        Sample of function call parameters:
+        ```
+        user_id: "default_user",
+        memory_name: "nome"
+        ```
+        or
+        ```
+        user_id: "default_user"
+        ```
         """
         response = await get_memories(user_id, memory_name)
         return response
 
     @mcp.tool()
-    async def create_user_memory(
+    async def upsert_user_memory(
         user_id: str, memory_name: str, memory_bank: dict
     ) -> dict:
-        """Create a memory bank for a user.
+        """Create or update a memory bank for a user.
 
         Args:
             user_id (str): The user's phone number.
@@ -225,25 +234,32 @@ def create_app() -> FastMCP:
 
         Returns:
             dict: The memory bank or an error message.
+
+        Schema of `memory_bank`:
+        ```
+        {
+            "memory_name": "name_of_the_memory",
+            "description": "Description of the memory",
+            "memory_type": "base|appended",
+            "relevance": "low|medium|high",
+            "value": "The memory to be saved",
+        }
+        ```
+
+        Sample of function call parameters:
+        ```
+        user_id: "default_user",
+        memory_name: "nome",
+        memory_bank: {
+            "memory_name": "nome",
+            "description": "Nome do usuário",
+            "memory_type": "base",
+            "relevance": "high",
+            "value": "João da Silva",
+        }
+        ```
         """
-        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
-        return response
-
-    @mcp.tool()
-    async def update_user_memory(
-        user_id: str, memory_name: str, memory_bank: dict
-    ) -> dict:
-        """Update a memory bank from a user.
-
-        Args:
-            user_id (str): The user's phone number.
-            memory_name (str): The name of the memory bank.
-            memory_bank (dict): A complete memory bank that contains fields with updated data.
-
-        Returns:
-            dict: The memory bank or an error message.
-        """
-        response = await upsert_memory(user_id, memory_name, memory_bank, exists=False)
+        response = await upsert_memory(user_id, memory_name, memory_bank)
         return response
 
     @mcp.tool()
@@ -259,17 +275,6 @@ def create_app() -> FastMCP:
             Dict com confirmação de sucesso, timestamp e instruções para resposta
         """
         response = await store_user_feedback(user_id, feedback)
-        return response
-
-    @mcp.tool(
-        description="""
-        [TOOL_VERSION: {tool_version}] Disponibiliza roteiro orientativo para instruir moradores sobre prevencao, resposta e recuperacao em cenarios de alagamentos e inundacoes no Rio de Janeiro, incluindo contatos de emergencia e orientacao sobre o tom adequado conforme o nivel de urgencia.
-        """.format(
-            tool_version=TOOL_VERSION
-        ).strip()
-    )
-    async def flooding_response():
-        response = await flooding_response_guidelines()
         return response
 
     @mcp.tool(
@@ -330,18 +335,14 @@ def create_app() -> FastMCP:
         ).strip()
     )
     async def cor_alert(
-        user_id: str,
-        alert_type: str,
-        severity: str,
-        description: str,
-        address: str
+        user_id: str, alert_type: str, severity: str, description: str, address: str
     ) -> dict:
         response = await create_cor_alert(
             user_id=user_id,
             alert_type=alert_type,
             severity=severity,
             description=description,
-            address=address
+            address=address,
         )
         return add_tool_version(response)
 
