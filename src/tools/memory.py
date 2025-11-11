@@ -4,7 +4,6 @@ from enum import Enum
 from typing import List, Optional, Union
 
 import aiohttp
-from aiohttp.web_exceptions import HTTPNotFound
 from pydantic import BaseModel, ValidationError
 
 from src.config.env import RMI_API_URL
@@ -109,10 +108,13 @@ async def upsert_memory(
                 response.raise_for_status()
                 return await response.json()
     # If the memory bank does not exists, creates it
-    except HTTPNotFound:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.request(
-                "POST", url, headers=headers, json=validated_memory_bank
-            ) as response:
-                response.raise_for_status()
-                return await response.json()
+    except aiohttp.ClientResponseError as e:
+        if e.status == 404:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(
+                    "POST", url, headers=headers, json=validated_memory_bank
+                ) as response:
+                    response.raise_for_status()
+                    return await response.json()
+        else:
+            raise
