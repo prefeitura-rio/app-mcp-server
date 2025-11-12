@@ -41,7 +41,8 @@ LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
 EQUIPMENTS_VALID_THEMES = getenv_or_action(
-    "EQUIPMENTS_VALID_THEMES", default="cultura,saude,educacao,geral,incidentes_hidricos"
+    "EQUIPMENTS_VALID_THEMES", 
+    default="cultura,saude,educacao,geral,assistencia_social,incidentes_hidricos"
 ).split(",")
 
 # PGM API Configuration

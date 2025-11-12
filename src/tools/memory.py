@@ -4,7 +4,6 @@ from enum import Enum
 from typing import List, Optional, Union
 
 import aiohttp
-from aiohttp.web_exceptions import HTTPNotFound
 from pydantic import BaseModel, ValidationError
 
 from src.config.env import RMI_API_URL
@@ -70,14 +69,12 @@ async def get_memories(
 
 async def upsert_memory(
     user_id: str,
-    memory_name: str,
     memory_bank: dict,
 ) -> dict:
     """Create or update a user's memory bank.
 
     Args:
         user_id (str): The user's phone number.
-        memory_name (str): The name of the memory bank.
         memory_bank (dict): Memory bank data as a dictionary.
 
     Returns:
@@ -85,7 +82,7 @@ async def upsert_memory(
     """
 
     # POST /v1/memory/{user_id}
-    # PUT /v1/memory/{user_id}/{memory_name}
+    # PUT /v1/memory/{user_id}
 
     try:
         validated_memory_bank = MemoryBank(**memory_bank).model_dump(mode="json")
@@ -93,8 +90,6 @@ async def upsert_memory(
         return {"status": "Error", "detail": "Invalid memory bank"}
 
     url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
-    if exists:
-        url += "/{}".format(memory_name)
 
     # Use OAuth2 if configured, otherwise return unauthorized error
     if not is_oauth2_configured():
@@ -113,10 +108,13 @@ async def upsert_memory(
                 response.raise_for_status()
                 return await response.json()
     # If the memory bank does not exists, creates it
-    except HTTPNotFound:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.request(
-                "POST", url, headers=headers, json=validated_memory_bank
-            ) as response:
-                response.raise_for_status()
-                return await response.json()
+    except aiohttp.ClientResponseError as e:
+        if e.status == 404:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(
+                    "POST", url, headers=headers, json=validated_memory_bank
+                ) as response:
+                    response.raise_for_status()
+                    return await response.json()
+        else:
+            raise
