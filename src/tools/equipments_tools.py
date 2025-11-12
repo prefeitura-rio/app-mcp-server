@@ -1,4 +1,5 @@
 import asyncio
+from asyncio.log import logger
 from typing import Optional, List
 from src.tools.equipments.pluscode_service import (
     get_category_equipments,
@@ -19,21 +20,31 @@ def get_valid_themes() -> List[str]:
     return EQUIPMENTS_VALID_THEMES
 
 
-def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
+def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
     """
-    Retorna instruções específicas baseadas nas categorias de equipamentos.
+    Retorna instruções específicas baseadas nos dados dos equipamentos retornados.
+    Analisa múltiplos campos (categoria, esfera, etc.) para determinar instruções apropriadas.
 
     Args:
-        categories: Lista de categorias de equipamentos
+        equipments_data: Lista de equipamentos com seus dados completos
 
     Returns:
-        String com instruções específicas para as categorias
+        String com instruções específicas baseadas nos critérios encontrados
     """
-    # Categorias de saúde que requerem instruções específicas
+    if not equipments_data or not isinstance(equipments_data, list):
+        return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
+    
+    instructions_parts = []
+    
+    # Verificar se há equipamentos de saúde (CF ou CMS)
     health_categories = ["CF", "CMS"]
-
-    if categories and any(cat in categories for cat in health_categories):
-        return """- Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
+    has_health_equipment = any(
+        eq.get("categoria") in health_categories 
+        for eq in equipments_data
+    )
+    
+    if has_health_equipment:
+        instructions_parts.append("""- Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
         1.  **Apresente a equipe de forma personalizada**: Chame-a de "**a sua equipe de saúde da família**" e informe o nome dela.
         2.  **Forneça APENAS o contato da equipe**: Informe o número de telefone da equipe, deixando claro que o contato é via **WhatsApp**.
         3.  **NÃO INFORME** o telefone geral da unidade (CF/CMS) para não confundir o cidadão. Informe apenas se a equipe da família não tiver telefone.
@@ -46,10 +57,24 @@ def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
                 - **Distância:** [Distância da CF/CMS]
                 - **Horário de funcionamento:** [Horário de Funcionamento da CF/CMS] 
             Lá, **a sua equipe de saúde da família**, chamada **[Nome da Equipe]**, é a responsável por cuidar de você e da sua família. Se precisar entrar em contato, o **WhatsApp** da sua equipe é [Número do WhatsApp da Equipe]."
-        7. Caso a distância seja maior ou igual a 1000 metros, informar com a distância em quilômetros ao invés de metros. Formatar número para ter apenas uma casa decimal.
-        """
-
-    # Instruções padrão para outras categorias
+        7. Caso a distância seja maior ou igual a 1000 metros, informar com a distância em quilômetros ao invés de metros. Formatar número para ter apenas uma casa decimal.""")
+    
+    # Verificar se há equipamentos estaduais
+    has_estadual = any(
+        "ESTADUAL" in str(eq.get("esfera", "")).upper()
+        for eq in equipments_data
+    )
+    
+    if has_estadual:
+        instructions_parts.append("""- Para equipamentos de esfera ESTADUAL:
+        1. Informe claramente que o equipamento é de responsabilidade do **Governo do Estado do Rio de Janeiro**.
+        2. Explique que a prefeitura não tem gestão sobre este equipamento e que os dados podem estar desatualizados.""")
+    
+    # Se houver instruções específicas, retorná-las combinadas
+    if instructions_parts:
+        return "\n\n".join(instructions_parts)
+    
+    # Instruções padrão caso não haja critérios específicos
     return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
 
 
@@ -77,8 +102,8 @@ async def get_equipments_with_instructions(
     ):
         return {"error": equipments_data}
 
-    # Obter instruções baseadas nas categorias
-    instructions = get_instructions_for_categories(categories=categories)
+    # Obter instruções baseadas nos dados reais dos equipamentos
+    instructions = get_instructions_for_equipments(equipments_data=equipments_data)
 
     return {
         "instructions": instructions,
