@@ -45,3 +45,9 @@ uv run src/main.py
 ```
 
 O servidor estará disponível em `http://localhost:80/mcp/`
+
+
+### REDIS port-forward
+
+`kubectx rj-superapp or rj-superapp-staging`
+`kubectl port-forward svc/mcp-redis -n mcp 6379:6379`

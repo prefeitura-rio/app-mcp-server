@@ -41,7 +41,8 @@ LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
 EQUIPMENTS_VALID_THEMES = getenv_or_action(
-    "EQUIPMENTS_VALID_THEMES", default="cultura,saude,educacao,geral,incidentes_hidricos"
+    "EQUIPMENTS_VALID_THEMES",
+    default="cultura,saude,educacao,geral,incidentes_hidricos",
 ).split(",")
 
 # PGM API Configuration
@@ -63,6 +64,8 @@ WA_IPTU_TOKEN = getenv_or_action("WA_IPTU_TOKEN")
 WA_IPTU_PUBLIC_KEY = getenv_or_action("WA_IPTU_PUBLIC_KEY")
 
 WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT")
+WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")
+
 
 DIVIDA_ATIVA_API_URL = getenv_or_action("DIVIDA_ATIVA_API_URL")
 DIVIDA_ATIVA_ACCESS_KEY = getenv_or_action("DIVIDA_ATIVA_ACCESS_KEY")
