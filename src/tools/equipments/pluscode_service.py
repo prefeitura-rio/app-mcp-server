@@ -63,6 +63,7 @@ async def get_pluscode_coords_equipments(
                     eq.contato,
                     eq.ativo,
                     eq.aberto_ao_publico,
+                    eq.esfera,
                     eq.horario_funcionamento,
                     eq.updated_at,
                 from `rj-iplanrio.plus_codes.codes` t, unnest(equipamentos) as eq
@@ -107,6 +108,7 @@ async def get_pluscode_coords_equipments(
                     eq.contato,
                     eq.ativo,
                     eq.aberto_ao_publico,
+                    eq.esfera,
                     eq.horario_funcionamento,
                     eq.updated_at,
                 FROM tb_territorio t
