@@ -682,7 +682,7 @@ class IPTUAPIService:
 
         google_credentials = self.get_credentials_from_env()
         client = storage.Client(credentials=google_credentials)
-        bucket = client.bucket("langgraph-workflows")
+        bucket = client.bucket(env.WORKFLOWS_GCS_BUCKET)
 
         file_data = base64.b64decode(base64_content)
 

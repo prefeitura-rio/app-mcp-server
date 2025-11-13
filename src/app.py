@@ -223,13 +223,12 @@ def create_app() -> FastMCP:
 
     @mcp.tool()
     async def upsert_user_memory(
-        user_id: str, memory_name: str, memory_bank: dict
+        user_id: str, memory_bank: dict
     ) -> dict:
         """Create or update a memory bank for a user.
 
         Args:
             user_id (str): The user's phone number.
-            memory_name (str): The name of the memory bank.
             memory_bank (dict): A complete memory bank.
 
         Returns:
@@ -249,7 +248,6 @@ def create_app() -> FastMCP:
         Sample of function call parameters:
         ```
         user_id: "default_user",
-        memory_name: "nome",
         memory_bank: {
             "memory_name": "nome",
             "description": "Nome do usuário",
@@ -259,7 +257,7 @@ def create_app() -> FastMCP:
         }
         ```
         """
-        response = await upsert_memory(user_id, memory_name, memory_bank)
+        response = await upsert_memory(user_id, memory_bank)
         return response
 
     @mcp.tool()
