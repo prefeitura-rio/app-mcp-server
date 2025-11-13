@@ -287,7 +287,10 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
         entrada = await da_emitir_guia(parameters, tipo="regularizacao")
         
         if not entrada:
-            return {"success": False, "message": "Nenhum parâmetro fornecido", "data": {}}
+            return {
+                "api_resposta_sucesso": False,
+                "api_descricao_erro": "Nenhum parâmetro válido fornecido"
+            }
         
         return await processar_registros(
             endpoint="v2/guiapagamento/emitir/regularizacao",
@@ -302,9 +305,8 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
             "parameters": parameters
         })
         return {
-            "success": False,
-            "error": str(e),
-            "message": "Erro ao emitir guia de regularização",
+            "api_resposta_sucesso": False,
+            "api_descricao_erro": f"Erro ao emitir guia de regularização: {str(e)}",
         }
 
 @log_execution_time
@@ -313,7 +315,10 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         entrada = await da_emitir_guia(parameters, tipo="a_vista")
         
         if not entrada:
-            return {"success": False, "message": "Nenhum parâmetro fornecido", "data": {}}
+            return {
+                "api_resposta_sucesso": False,
+                "api_descricao_erro": "Nenhum parâmetro válido fornecido"
+            }
         
         return await processar_registros(
             endpoint="v2/guiapagamento/emitir/avista",
@@ -329,9 +334,8 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         })
 
         return {
-            "success": False,
-            "error": str(e),
-            "message": "Erro ao emitir guia à vista",
+            "api_resposta_sucesso": False,
+            "api_descricao_erro": f"Erro ao emitir guia à vista: {str(e)}",
         }
 
 
