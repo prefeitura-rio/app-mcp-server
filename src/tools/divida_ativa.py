@@ -126,7 +126,9 @@ async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> 
             return response.get("data")
         
         logger.info(f'Erro durante a solicitação: {response["data"][0]["value"]}')
-        motivos = "\n\n".join(item.get("value") for item in response.get("data", []))
+
+        mensagens_unicas = list(set(item.get("value") for item in response.get("data", []) if item.get("value")))
+        motivos = "\n\n".join(mensagens_unicas) if len(mensagens_unicas) > 1 else mensagens_unicas[0] if mensagens_unicas else "Erro desconhecido"
         
         return {"erro": True, "motivos": motivos}
             
@@ -272,6 +274,7 @@ async def processar_registros(
     for item in registros:
         message["codigo_de_barras"] = item["codigoDeBarras"]
         message["link"] = item["pdf"]
+        message["data_vencimento"] = item["dataVencimento"]
         if item["codigoQrEMVPix"]:
             message["pix"] = item["codigoQrEMVPix"]
 

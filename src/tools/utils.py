@@ -48,7 +48,7 @@ async def internal_request(
         "Authorization": f"Bearer {key}",
     }
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=400)) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         async with session.request(
             "POST", integrations_url, headers=headers, data=payload
         ) as response:
@@ -61,4 +61,7 @@ async def internal_request(
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON from {url}: {e}")
                 logger.error(f"Response text: {text[:500]}")  # Log first 500 chars
+                # Check if it's a gateway timeout or other timeout-related error
+                if "504 Gateway Time-out" in text or "502 Bad Gateway" in text or "timeout" in text.lower():
+                    raise TimeoutError(f"Gateway timeout from {url}")
                 raise
