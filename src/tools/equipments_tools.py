@@ -76,7 +76,7 @@ def get_instructions_for_categories(categories: Optional[List[str]]) -> str:
             **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
         6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
 
-        []
+        Caso o usuário esteja reportando uma situação de enchente ou alagamento com risco iminente, oriente PRIMEIRO a ligar para o 199 antes de se deslocar e avalie o uso de alert_cor.
         """
     # Instruções padrão para outras categorias
     return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
