@@ -274,8 +274,9 @@ async def processar_registros(
     for item in registros:
         message["codigo_de_barras"] = item["codigoDeBarras"]
         message["link"] = item["pdf"]
-        message["data_vencimento"] = item["dataVencimento"]
-        if item["codigoQrEMVPix"]:
+        if "dataVencimento" in item:
+            message["data_vencimento"] = item["dataVencimento"]
+        if item.get("codigoQrEMVPix"):
             message["pix"] = item["codigoQrEMVPix"]
 
     return message
