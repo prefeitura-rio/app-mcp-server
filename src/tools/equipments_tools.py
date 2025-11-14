@@ -190,8 +190,16 @@ async def get_equipments(
     else:
         return [
             {
-                "error": "Nenhum equipamento encontrado",
-                "message": "Sempre utilize a tool `equipments_instructions` antes de chamar a tool `equipments_by_address`. Assim, você poderá conferir instruções sobre os equipamentos disponíveis, regras de uso e categorias permitidas.",
+            "error": "Nenhum equipamento encontrado",
+            "message": (
+                "Sempre utilize a tool `equipments_instructions` antes de chamar a tool "
+                "`equipments_by_address`. Assim, você poderá conferir instruções sobre os "
+                "equipamentos disponíveis, regras de uso e categorias permitidas. "
+                "Adicionalmente, verifique se o endereço fornecido é válido e completo. "
+                "Exemplo: 'Rua <NOME DA RUA>, <NUMERO> - <BAIRRO>, <CIDADE> - <ESTADO>'. "
+                "Caso o endereço não esteja completo, confirme com o usuário os detalhes "
+                "faltantes."
+            ),
             }
         ]
 
