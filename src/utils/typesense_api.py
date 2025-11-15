@@ -55,6 +55,7 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
                     "resumo_plaintext": metadata.get("resumo_plaintext", ""),
                     "servico_nao_cobre": metadata.get("servico_nao_cobre", ""),
                     "tempo_atendimento": metadata.get("tempo_atendimento", ""),
+                    "score_info": metadata.get("score_info", {}),
                 }
             )
 
