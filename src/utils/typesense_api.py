@@ -1,6 +1,7 @@
 import httpx
 from pydantic import BaseModel
 from typing import Optional, Literal
+from src.config.env import TYPESENSE_HUB_SEARCH_URL
 
 
 class HubSearchRequest(BaseModel):
@@ -17,11 +18,11 @@ class HubSearchRequest(BaseModel):
 
 
 async def hub_search(request: HubSearchRequest) -> Optional[dict]:
-    url = "https://services.staging.app.dados.rio/app-busca-search/api/v1/search"
     params = request.model_dump()
     header = {"Authorization": "Bearer"}
-    response = httpx.get(url, params=params, headers=header, timeout=30.0)
-    print(f"Request URL: {response.url}")
+    response = httpx.get(
+        TYPESENSE_HUB_SEARCH_URL, params=params, headers=header, timeout=30.0
+    )
     response.raise_for_status()
     r = response.json()
 

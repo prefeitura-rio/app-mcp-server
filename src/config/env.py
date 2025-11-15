@@ -28,6 +28,10 @@ NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
 DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
 
+
+TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
+
+
 # OAuth2 Configuration for RMI API
 RMI_API_URL = getenv_or_action("RMI_API_URL", action="ignore")
 RMI_OAUTH_ISSUER = getenv_or_action("RMI_OAUTH_ISSUER", action="ignore")
