@@ -41,6 +41,10 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
 
     # Categorias de saúde que requerem instruções específicas
     health_categories = ["CF", "CMS"]
+
+    # Categorias de assistencia social que requerem instruções específicas
+    social_assistance_categories = ["CRAS"]
+
     has_health_equipment = any(
         eq.get("categoria") in health_categories 
         for eq in equipments_data
@@ -102,6 +106,19 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
             **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
         6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
         """)
+
+    has_cras = any(
+        eq.get("categoria") in social_assistance_categories
+        for eq in equipments_data
+    )
+
+    if has_cras:
+        instructions_parts.append("""- Ao apresentar um CRAS (Centro de Referência de Assistência Social), alerte explicitamente que o atendimento presencial exige agendamento prévio. Para orientar o cidadão, apresente as opções de agendamento de forma listada:
+        Pela internet: Acesse o site http://cadunico.rio
+        Por telefone: Ligue para a Central 1746 ou para (21) 3460-1746.
+        Como confirmar: Após agendar, o cidadão pode confirmar o status acessando http://cadunico.rio e inserindo o CPF.
+        """)
+                                  
 
     # Se houver instruções específicas, retorná-las combinadas
     if instructions_parts:
