@@ -11,18 +11,23 @@ async def get_google_search(query: str):
     """
     final_response = {}
     bq_response = {}
-    response_typesense = await hub_search(
-        HubSearchRequest(
-            q=query,
-            type="hybrid",
-            threshold_semantic=0.8,
-            threshold_keyword=0.8,
-            threshold_hybrid=0.8,
-            alpha=0.8,
-            per_page=2,
-            page=1,
-        )
+
+    hub_request = HubSearchRequest(
+        q=query,
+        type="ai",
+        threshold_semantic=0.9,
+        threshold_keyword=1,
+        threshold_hybrid=0.9,
+        threshold_ai=0.85,
+        page=1,
+        per_page=2,
+        alpha=0.9,
     )
+
+    if hub_request.type == "ai":
+        hub_request.generate_scores = True
+
+    response_typesense = await hub_search(request=hub_request)
 
     if (
         response_typesense

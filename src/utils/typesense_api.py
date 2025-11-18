@@ -9,12 +9,14 @@ class HubSearchRequest(BaseModel):
     type: Optional[Literal["keyword", "semantic", "hybrid", "ai"]] = "ai"
     page: Optional[int] = 1
     per_page: Optional[int] = 10
-    include_inactive: Optional[bool] = True
     alpha: Optional[float] = 0.3  # 1 -> semantic, 0 -> keyword
-    exclude_agent_exclusive: Optional[bool] = False
-    threshold_semantic: Optional[float] = 1
+    threshold_semantic: Optional[float] = 0.9
     threshold_keyword: Optional[float] = 1
-    threshold_hybrid: Optional[float] = 1
+    threshold_hybrid: Optional[float] = 0.9
+    threshold_ai: Optional[float] = 0.9
+    generate_scores: Optional[bool] = False
+    include_inactive: Optional[bool] = True
+    exclude_agent_exclusive: Optional[bool] = False
 
 
 async def hub_search(request: HubSearchRequest) -> Optional[dict]:
@@ -57,6 +59,7 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
                     "servico_nao_cobre": metadata.get("servico_nao_cobre", ""),
                     "tempo_atendimento": metadata.get("tempo_atendimento", ""),
                     "score_info": metadata.get("score_info", {}),
+                    "ai_score": metadata.get("ai_score", {}),
                 }
             )
 
