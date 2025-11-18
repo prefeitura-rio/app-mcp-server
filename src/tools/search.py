@@ -14,13 +14,13 @@ async def get_google_search(query: str):
 
     hub_request = HubSearchRequest(
         q=query,
-        type="ai",
-        threshold_semantic=0.9,
+        type="semantic",
+        threshold_semantic=0.8,
         threshold_keyword=1,
         threshold_hybrid=0.9,
         threshold_ai=0.85,
         page=1,
-        per_page=2,
+        per_page=5,
         alpha=0.9,
     )
 
