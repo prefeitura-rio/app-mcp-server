@@ -11,6 +11,7 @@ if os.path.exists("src/config/.env"):
 VALID_TOKENS = getenv_or_action("VALID_TOKENS")
 IS_LOCAL = getenv_or_action("IS_LOCAL", default="false", action="ignore") == "true"
 GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
+GEMINI_MODEL = getenv_or_action("GEMINI_MODEL", default="gemini-3-pro-preview", action="ignore")
 
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
 GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
