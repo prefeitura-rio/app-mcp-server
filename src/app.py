@@ -21,11 +21,11 @@ from src.tools.calculator import (
 )
 from src.tools.datetime_tools import get_current_time, format_greeting
 
-from src.tools.equipments_tools import (
-    get_equipments_categories,
-    get_equipments_with_instructions,
-    get_equipments_instructions,
-)
+# from src.tools.equipments_tools import (
+#     get_equipments_categories,
+#     get_equipments_with_instructions,
+#     get_equipments_instructions,
+# )
 
 from src.tools.cor_alert_tools import create_cor_alert, check_nearby_alerts
 
@@ -156,44 +156,44 @@ def create_app() -> FastMCP:
         response = await dharma_search(query)
         return response
 
-    @mcp.tool()
-    async def equipments_by_address(
-        address: str, categories: Optional[List[str]] = []
-    ) -> dict:
-        """
-        Obtém os equipamentos mais proximos de um endereço.
-        Args:
-            address: Endereço do equipamento
-            categories: Lista de categorias de equipamentos a serem filtrados. Deve obrigatoriamente seguir o nome exato das categorias retornadas na tool `equipments_instructions` na secao `categorias`.
-        Returns:
-            Lista de equipamentos
-        """
-        return await get_equipments_with_instructions(
-            address=address, categories=categories
-        )
+    # @mcp.tool()
+    # async def equipments_by_address(
+    #     address: str, categories: Optional[List[str]] = []
+    # ) -> dict:
+    #     """
+    #     Obtém os equipamentos mais proximos de um endereço.
+    #     Args:
+    #         address: Endereço do equipamento
+    #         categories: Lista de categorias de equipamentos a serem filtrados. Deve obrigatoriamente seguir o nome exato das categorias retornadas na tool `equipments_instructions` na secao `categorias`.
+    #     Returns:
+    #         Lista de equipamentos
+    #     """
+    #     return await get_equipments_with_instructions(
+    #         address=address, categories=categories
+    #     )
 
-    @mcp.tool(
-        description="""
-        [TOOL_VERSION: {tool_version}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
-        
-        Args:
-            tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {valid_themes}.
-            
-        Returns:
-            Dict contendo instruções detalhadas, categorias disponíveis e próximos passos para localizar equipamentos. Em caso de tema inválido, também retorna informações sobre os temas válidos.
-        """.format(
-            tool_version=TOOL_VERSION, valid_themes=env.EQUIPMENTS_VALID_THEMES
-        ).strip()
-    )
-    async def equipments_instructions(tema: str = "geral") -> dict:
-        instructions = await get_equipments_instructions(tema=tema)
-        categories = await get_equipments_categories()
-        response = {
-            "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` que deve seguir o nome exato das categorias disponiveis na secao `categorias`. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias. NAO UTILIZE CATEGORIAS DAS INSTRUÇÕES! Utilize única e exclusivamente as categorias disponiveis na secao `categorias`, que estão nesse mesmo json.",
-            "instrucoes": instructions,
-            "categorias": categories,
-        }
-        return add_tool_version(response)
+    # @mcp.tool(
+    #     description="""
+    #     [TOOL_VERSION: {tool_version}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
+
+    #     Args:
+    #         tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {valid_themes}.
+
+    #     Returns:
+    #         Dict contendo instruções detalhadas, categorias disponíveis e próximos passos para localizar equipamentos. Em caso de tema inválido, também retorna informações sobre os temas válidos.
+    #     """.format(
+    #         tool_version=TOOL_VERSION, valid_themes=env.EQUIPMENTS_VALID_THEMES
+    #     ).strip()
+    # )
+    # async def equipments_instructions(tema: str = "geral") -> dict:
+    #     instructions = await get_equipments_instructions(tema=tema)
+    #     categories = await get_equipments_categories()
+    #     response = {
+    #         "next_too_instructions": "**Atenção:** Para localizar os equipamentos mais próximos, *você deve obrigatoriamente solicitar o endereço do usuário*. Após o usuário fornecer o endereço, *você deve imediatamente chamar a tool `equipments_by_address`* utilizando o endereço informado. **Não se esqueça de chamar a tool `equipments_by_address` após o endereço ser informado.** A ferramenta `equipments_by_address` exige o parametro `categories` que deve seguir o nome exato das categorias disponiveis na secao `categorias`. NÃO É NECESSARIO CHAMAR A TOOL `google_search` para buscar informacoes sobre os equipamentos ou endereço, pois a tool `equipments_by_address` já retorna todas as informacoes necessárias. NAO UTILIZE CATEGORIAS DAS INSTRUÇÕES! Utilize única e exclusivamente as categorias disponiveis na secao `categorias`, que estão nesse mesmo json.",
+    #         "instrucoes": instructions,
+    #         "categorias": categories,
+    #     }
+    #     return add_tool_version(response)
 
     @mcp.tool()
     async def get_user_memory(
@@ -222,9 +222,7 @@ def create_app() -> FastMCP:
         return response
 
     @mcp.tool()
-    async def upsert_user_memory(
-        user_id: str, memory_bank: dict
-    ) -> dict:
+    async def upsert_user_memory(user_id: str, memory_bank: dict) -> dict:
         """Create or update a memory bank for a user.
 
         Args:
