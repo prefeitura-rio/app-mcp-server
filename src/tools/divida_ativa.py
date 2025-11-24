@@ -346,13 +346,33 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         return_dict = {}
 
         tipo_consulta = parameters["consulta_debitos"]
+        valor_usuario = parameters.get(tipo_consulta, "").strip()
+        valor_limpo = ''.join(c for c in valor_usuario if c.isdigit())
+        
+        if not valor_limpo:
+            return {
+                "api_resposta_sucesso": False,
+                "api_descricao_erro": f"O valor informado '{valor_usuario}' não é válido."
+            }
+        
         parametros_entrada = {
             "origem_solicitação": 0,
-            tipo_consulta: parameters[tipo_consulta].strip()
+            tipo_consulta: valor_limpo
         }
 
+        ano_limpo = ""
+        
         if tipo_consulta == "numeroAutoInfracao":
-            parametros_entrada["anoAutoInfracao"] = parameters["anoAutoInfracao"]
+            ano_usuario = parameters.get("anoAutoInfracao", "").strip()
+            ano_limpo = ''.join(c for c in ano_usuario if c.isdigit())
+            
+            if not ano_limpo:
+                return {
+                    "api_resposta_sucesso": False,
+                    "api_descricao_erro": f"Por favor, informe apenas números para o ano do Auto de Infração. O valor informado '{ano_usuario}' não contém números válidos."
+                }
+            
+            parametros_entrada["anoAutoInfracao"] = ano_limpo
         
         registros = await pgm_api(
             endpoint="v2/cdas/dividas-contribuinte", 
@@ -382,9 +402,9 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         msg.append(f'*{mapeia_descricoes[tipo_consulta]}*:')
 
         if tipo_consulta == "numeroAutoInfracao":
-            msg.append(f'{parameters[tipo_consulta]} {parameters["anoAutoInfracao"]}')
+            msg.append(f'{valor_limpo} {ano_limpo}')
         else:
-            msg.append(f'{parameters[tipo_consulta]}')
+            msg.append(f'{valor_limpo}')
                 
         if tipo_consulta == "inscricaoImobiliaria":
             msg.append('\n*Endereço do Imóvel:*')
