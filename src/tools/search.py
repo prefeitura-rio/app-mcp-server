@@ -3,6 +3,9 @@ import asyncio
 from src.tools.google_search.gemini_service import gemini_service
 from src.utils.bigquery import save_response_in_bq_background
 
+from src.config import env
+
+
 
 async def get_google_search(query: str):
     """
@@ -10,7 +13,7 @@ async def get_google_search(query: str):
     """
     response = await gemini_service.google_search(
         query=query,
-        model="gemini-2.5-flash-lite-preview-06-17",
+        model=env.GEMINI_MODEL,
         temperature=0.0,
         retry_attempts=1,
     )

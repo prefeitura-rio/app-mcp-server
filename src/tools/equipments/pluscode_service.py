@@ -63,6 +63,7 @@ async def get_pluscode_coords_equipments(
                     eq.contato,
                     eq.ativo,
                     eq.aberto_ao_publico,
+                    eq.esfera,
                     eq.horario_funcionamento,
                     eq.updated_at,
                 from `rj-iplanrio.plus_codes.codes` t, unnest(equipamentos) as eq
@@ -92,7 +93,8 @@ async def get_pluscode_coords_equipments(
                     eq.plus8,
                     eq.plus10,
                     eq.plus11,
-                    CAST(st_distance(ST_GEOGPOINT(eq.longitude,eq.latitude), ST_GEOGPOINT({longitude}, {latitude})) AS INT64) as distancia_metros,                    t.secretaria_responsavel,
+                    CAST(st_distance(ST_GEOGPOINT(eq.longitude,eq.latitude), ST_GEOGPOINT({longitude}, {latitude})) AS INT64) as distancia_metros,
+                    t.secretaria_responsavel,
                     t.categoria,
                     eq.id_equipamento,
                     eq.nome_oficial,
@@ -107,6 +109,7 @@ async def get_pluscode_coords_equipments(
                     eq.contato,
                     eq.ativo,
                     eq.aberto_ao_publico,
+                    eq.esfera,
                     eq.horario_funcionamento,
                     eq.updated_at,
                 FROM tb_territorio t
@@ -117,11 +120,19 @@ async def get_pluscode_coords_equipments(
             ),
             
            final_tb as (
-                select *
-                from equipamentos eq
-                UNION ALL
+                -- Prioridade para equipamentos do territorio
                 SELECT * 
                 FROM equipamentos_territorio
+                UNION ALL
+                -- Adiciona equipamentos da grid apenas se a categoria não existe no territorio
+                SELECT *
+                FROM equipamentos eq
+                WHERE NOT EXISTS (
+                    SELECT 1 
+                    FROM equipamentos_territorio et
+                    WHERE et.secretaria_responsavel = eq.secretaria_responsavel
+                    AND et.categoria = eq.categoria
+                )
             )
 
             SELECT *
