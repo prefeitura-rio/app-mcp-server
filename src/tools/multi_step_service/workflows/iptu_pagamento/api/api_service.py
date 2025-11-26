@@ -490,7 +490,7 @@ class IPTUAPIService:
 
             url = f"{env.WA_IPTU_URL}/{inscricao_clean}"
             headers = {"Authorization": auth_header}
-
+            logger.info(f"Imovel info URL: {url}")
             async with httpx.AsyncClient(proxy=self.proxy, timeout=30.0) as client:
                 response = await client.get(url, headers=headers)
 

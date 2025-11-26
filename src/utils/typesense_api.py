@@ -6,10 +6,10 @@ from src.config.env import TYPESENSE_HUB_SEARCH_URL
 
 class HubSearchRequest(BaseModel):
     q: str
-    type: Optional[Literal["keyword", "semantic", "hybrid", "ai"]] = "ai"
+    type: Optional[Literal["keyword", "semantic", "hybrid", "ai"]] = "hybrid"
     page: Optional[int] = 1
     per_page: Optional[int] = 10
-    alpha: Optional[float] = 0.3  # 1 -> semantic, 0 -> keyword
+    alpha: Optional[float] = 0.8  # 1 -> semantic, 0 -> keyword
     threshold_semantic: Optional[float] = 0.9
     threshold_keyword: Optional[float] = 1
     threshold_hybrid: Optional[float] = 0.9
