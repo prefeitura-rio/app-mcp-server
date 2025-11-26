@@ -485,13 +485,12 @@ class IPTUAPIService:
             encrypted_token = encrypt_token_rsa(
                 chave_publica_pem=env.WA_IPTU_PUBLIC_KEY, token=env.WA_IPTU_TOKEN
             )
-
             auth_header = f"Basic {encrypted_token}"
 
             url = f"{env.WA_IPTU_URL}/{inscricao_clean}"
             headers = {"Authorization": auth_header}
             logger.info(f"Imovel info URL: {url}")
-            async with httpx.AsyncClient(proxy=self.proxy, timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url, headers=headers)
 
             if response.status_code == 200:
