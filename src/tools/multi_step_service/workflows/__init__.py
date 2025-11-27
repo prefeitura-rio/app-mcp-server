@@ -22,7 +22,7 @@ from src.tools.multi_step_service.workflows.equipments.equipments_workflow impor
 workflows = [
     # BankAccountWorkflow,
     IPTUWorkflow,
-    EquipmentsWorkflow,
+    # EquipmentsWorkflow,
 ]
 
 # Lista de workflows disponíveis para import fácil
