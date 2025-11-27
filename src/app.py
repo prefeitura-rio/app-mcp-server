@@ -48,7 +48,7 @@ from src.resources.rio_info import (
     get_greeting_message,
 )
 
-from src.config.env import IS_LOCAL
+from src.config.env import IS_LOCAL, EXCLUDED_TOOLS
 import src.config.env as env
 from src.utils.tool_versioning import add_tool_version, get_tool_version_from_file
 
@@ -58,6 +58,11 @@ else:
     from fastmcp import FastMCP
 
 TOOL_VERSION = get_tool_version_from_file()["version"]
+
+# Parse excluded tools list
+EXCLUDED_TOOLS_SET = set(
+    tool.strip() for tool in EXCLUDED_TOOLS.split(",") if tool.strip()
+)
 
 
 def create_app() -> FastMCP:
@@ -73,6 +78,16 @@ def create_app() -> FastMCP:
         version=Settings.VERSION,
     )
 
+    def conditional_mcp_tool(tool_name: str, **kwargs):
+        """Wrapper to conditionally register tools based on EXCLUDED_TOOLS"""
+        def decorator(func):
+            if tool_name not in EXCLUDED_TOOLS_SET:
+                return mcp.tool(**kwargs)(func)
+            else:
+                logger.info(f"Tool '{tool_name}' excluded from registration")
+                return func
+        return decorator
+
     if not IS_LOCAL:
         mcp.add_middleware(CheckTokenMiddleware())
 
@@ -82,53 +97,55 @@ def create_app() -> FastMCP:
 
     # Configuração de logging
     logger.info(f"Inicializando {Settings.SERVER_NAME} v{Settings.VERSION}")
+    if EXCLUDED_TOOLS_SET:
+        logger.info(f"Tools excluídas: {', '.join(sorted(EXCLUDED_TOOLS_SET))}")
 
     # ===== REGISTRAR TOOLS =====
 
     # Tools de calculadora
-    @mcp.tool()
+    @conditional_mcp_tool("calculator_add")
     def calculator_add(a: float, b: float) -> float:
         """Soma dois números"""
         return add(a, b)
 
-    @mcp.tool()
+    @conditional_mcp_tool("calculator_subtract")
     def calculator_subtract(a: float, b: float) -> float:
         """Subtrai dois números"""
         return subtract(a, b)
 
-    @mcp.tool()
+    @conditional_mcp_tool("calculator_multiply")
     def calculator_multiply(a: float, b: float) -> float:
         """Multiplica dois números"""
         return multiply(a, b)
 
-    @mcp.tool()
+    @conditional_mcp_tool("calculator_divide")
     def calculator_divide(a: float, b: float) -> float:
         """Divide dois números"""
         return divide(a, b)
 
-    @mcp.tool()
+    @conditional_mcp_tool("calculator_power")
     def calculator_power(base: float, exponent: float) -> float:
         """Calcula a potência de um número"""
         return power(base, exponent)
 
     # Tools de data/hora
-    @mcp.tool()
+    @conditional_mcp_tool("time_current")
     def time_current() -> str:
         """Obtém a hora atual no Rio de Janeiro"""
         return get_current_time()
 
-    @mcp.tool()
+    @conditional_mcp_tool("greeting_format")
     def greeting_format() -> str:
         """Gera uma saudação personalizada baseada no horário"""
         return format_greeting()
 
-    @mcp.tool()
+    @conditional_mcp_tool("google_search")
     async def google_search(query: str) -> dict:
         """Obtém os resultados da busca no Google"""
         response = await get_google_search(query)
         return response
 
-    @mcp.tool()
+    @conditional_mcp_tool("web_search_surkai")
     async def web_search_surkai(query: str) -> dict:
         """
         Calls the surkai api to retrieve a web search.
@@ -142,7 +159,7 @@ def create_app() -> FastMCP:
         response = await surkai_search(query)
         return response
 
-    @mcp.tool()
+    @conditional_mcp_tool("dharma_search_tool")
     async def dharma_search_tool(query: str) -> dict:
         """
         Calls the Dharma API to get AI-powered responses about Rio de Janeiro municipal services.
@@ -156,7 +173,7 @@ def create_app() -> FastMCP:
         response = await dharma_search(query)
         return response
 
-    @mcp.tool()
+    @conditional_mcp_tool("equipments_by_address")
     async def equipments_by_address(
         address: str, categories: Optional[List[str]] = []
     ) -> dict:
@@ -172,7 +189,8 @@ def create_app() -> FastMCP:
             address=address, categories=categories
         )
 
-    @mcp.tool(
+    @conditional_mcp_tool(
+        "equipments_instructions",
         description="""
         [TOOL_VERSION: {tool_version}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
         
@@ -195,7 +213,7 @@ def create_app() -> FastMCP:
         }
         return add_tool_version(response)
 
-    @mcp.tool()
+    @conditional_mcp_tool("get_user_memory")
     async def get_user_memory(
         user_id: str, memory_name: Optional[Union[str, None]] = None
     ) -> Union[dict, List[dict]]:
@@ -221,7 +239,7 @@ def create_app() -> FastMCP:
         response = await get_memories(user_id, memory_name)
         return response
 
-    @mcp.tool()
+    @conditional_mcp_tool("upsert_user_memory")
     async def upsert_user_memory(user_id: str, memory_bank: dict) -> dict:
         """Create or update a memory bank for a user.
 
@@ -258,7 +276,7 @@ def create_app() -> FastMCP:
         response = await upsert_memory(user_id, memory_bank)
         return response
 
-    @mcp.tool()
+    @conditional_mcp_tool("user_feedback")
     async def user_feedback(user_id: str, feedback: str) -> dict:
         """
         Armazena feedback do usuário no BigQuery com timestamp automático.
@@ -273,7 +291,8 @@ def create_app() -> FastMCP:
         response = await store_user_feedback(user_id, feedback)
         return response
 
-    @mcp.tool(
+    @conditional_mcp_tool(
+        "check_cor_alerts_nearby",
         description="""
         [TOOL_VERSION: {tool_version}] Verifica se existem alertas do COR próximos nas últimas 12 horas.
 
@@ -302,7 +321,8 @@ def create_app() -> FastMCP:
         response = await check_nearby_alerts(address)
         return add_tool_version(response)
 
-    @mcp.tool(
+    @conditional_mcp_tool(
+        "cor_alert",
         description="""
         [TOOL_VERSION: {tool_version}] Registra informação interna SILENCIOSA sobre incidentes graves de enchente/alagamento/danos por chuvas fortes.
 
@@ -351,7 +371,7 @@ def create_app() -> FastMCP:
         )
         return add_tool_version(response)
 
-    @mcp.tool(description=_get_workflow_descriptions())
+    @conditional_mcp_tool("multi_step_service", description=_get_workflow_descriptions())
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
     ) -> dict:
@@ -454,15 +474,20 @@ def create_app() -> FastMCP:
     # ===== LOG DE INICIALIZAÇÃO =====
 
     logger.info(f"Servidor FastMCP configurado com sucesso!")
-    logger.info(
-        f"Tools registradas: calculadora (5), data/hora (2), busca (3), equipamentos (2), feedback (1)"
-    )
-    logger.info(f"Resources registrados: 3")
-    logger.info(f"Prompts registrados: 1")
 
     if Settings.DEBUG:
         logger.debug("Modo DEBUG ativado")
         logger.debug(f"Configurações: {Settings.get_server_info()}")
+
+    # Log todas as tools registradas
+    try:
+        if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, '_tools'):
+            tool_names = list(mcp._tool_manager._tools.keys())
+            logger.info(f"Tools registradas ({len(tool_names)}): {sorted(tool_names)}")
+        else:
+            logger.warning("Não foi possível acessar a lista de tools registradas")
+    except Exception as e:
+        logger.warning(f"Erro ao listar tools: {e}")
 
     return mcp
 

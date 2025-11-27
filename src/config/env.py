@@ -48,7 +48,15 @@ LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 EQUIPMENTS_VALID_THEMES = getenv_or_action(
     "EQUIPMENTS_VALID_THEMES",
     default="cultura,saude,educacao,geral,assistencia_social,incidentes_hidricos",
-).split(",")
+)
+
+# Configuração para excluir ferramentas do servidor MCP
+# Lista de nomes de ferramentas separados por vírgula (ex: "calculator_add,google_search")
+EXCLUDED_TOOLS = getenv_or_action(
+    "EXCLUDED_TOOLS",
+    default="user_feedback",
+    action="ignore"
+)
 
 # PGM API Configuration
 CHATBOT_INTEGRATIONS_URL = getenv_or_action("CHATBOT_INTEGRATIONS_URL", action="ignore")
