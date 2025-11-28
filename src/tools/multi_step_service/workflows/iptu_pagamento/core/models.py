@@ -3,7 +3,7 @@ Modelos Pydantic para validação do workflow IPTU Ano Vigente
 """
 
 from typing import Literal, Optional, List, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
 
@@ -110,8 +110,7 @@ class Guia(BaseModel):
     esta_quitada: Optional[bool] = None
     esta_em_aberto: Optional[bool] = None
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class DadosGuias(BaseModel):
@@ -147,8 +146,7 @@ class Cota(BaseModel):
     linha_digitavel: Optional[str] = None
     darf_data: Optional[dict] = None
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class DadosCotas(BaseModel):
@@ -169,8 +167,7 @@ class CotaDarm(BaseModel):
     ncota: str = Field(alias="ncota")
     valor: str = Field(alias="valor")  # Formato brasileiro "89,44"
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class Darm(BaseModel):
@@ -210,8 +207,7 @@ class Darm(BaseModel):
     valor_numerico: Optional[float] = None
     codigo_barras: Optional[str] = None  # Derivado da sequencia_numerica
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class DadosDarm(BaseModel):
