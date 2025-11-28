@@ -33,7 +33,7 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
     """
     if not equipments_data or not isinstance(equipments_data, list):
         return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
-    
+
     instructions_parts = []
 
     # Categorias de pontos de apoio da Defesa Civil
@@ -46,12 +46,12 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
     social_assistance_categories = ["CRAS"]
 
     has_health_equipment = any(
-        eq.get("categoria") in health_categories 
-        for eq in equipments_data
+        eq.get("categoria") in health_categories for eq in equipments_data
     )
-    
+
     if has_health_equipment:
-        instructions_parts.append("""- Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
+        instructions_parts.append(
+            """- Ao apresentar uma unidade de Atenção Primária (CF ou CMS), siga este formato OBRIGATORIAMENTE:
         1.  **Apresente a equipe de forma personalizada**: Chame-a de "**a sua equipe de saúde da família**" e informe o nome dela.
         2.  **Forneça APENAS o contato da equipe**: Informe o número de telefone da equipe, deixando claro que o contato é via **WhatsApp**.
         3.  **NÃO INFORME** o telefone geral da unidade (CF/CMS) para não confundir o cidadão. Informe apenas se a equipe da família não tiver telefone.
@@ -64,26 +64,26 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
                 - **Distância:** [Distância da CF/CMS]
                 - **Horário de funcionamento:** [Horário de Funcionamento da CF/CMS]
             Lá, **a sua equipe de saúde da família**, chamada **[Nome da Equipe]**, é a responsável por cuidar de você e da sua família. Se precisar entrar em contato, o **WhatsApp** da sua equipe é [Número do WhatsApp da Equipe]."
-        7. Caso a distância seja maior ou igual a 1000 metros, informar com a distância em quilômetros ao invés de metros. Formatar número para ter apenas uma casa decimal.""")
-    
+        7. Caso a distância seja maior ou igual a 1000 metros, informar com a distância em quilômetros ao invés de metros. Formatar número para ter apenas uma casa decimal."""
+        )
+
     # Verificar se há equipamentos estaduais
     has_estadual = any(
-        "ESTADUAL" in str(eq.get("esfera", "")).upper()
-        for eq in equipments_data
+        "ESTADUAL" in str(eq.get("esfera", "")).upper() for eq in equipments_data
     )
-    
+
     if has_estadual:
-        instructions_parts.append("""- Para equipamentos de esfera ESTADUAL:
+        instructions_parts.append(
+            """- Para equipamentos de esfera ESTADUAL:
         1. Informe claramente que o equipamento é de responsabilidade do **Governo do Estado do Rio de Janeiro**.
-        2. Explique que a prefeitura não tem gestão sobre este equipamento e que os dados podem estar desatualizados.""")
-    
-    has_apoio = any(
-        eq.get("categoria") in apoio_categories    
-        for eq in equipments_data
-    )
-    
+        2. Explique que a prefeitura não tem gestão sobre este equipamento e que os dados podem estar desatualizados."""
+        )
+
+    has_apoio = any(eq.get("categoria") in apoio_categories for eq in equipments_data)
+
     if has_apoio:
-        instructions_parts.append("""- Ao apresentar um Ponto de Apoio da Defesa Civil, siga este formato OBRIGATORIAMENTE:
+        instructions_parts.append(
+            """- Ao apresentar um Ponto de Apoio da Defesa Civil, siga este formato OBRIGATORIAMENTE:
         1.  **Contextualize o que é um Ponto de Apoio**: Explique de forma breve que são locais preparados pela Defesa Civil para acolhimento temporário da população em situações de emergência, como enchentes, deslizamentos ou outras situações de risco.
         2.  **Apresente o equipamento mais próximo** com as seguintes informações:
             - **Nome do equipamento**
@@ -102,23 +102,25 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
                 - **Horário de funcionamento:** [Horário, se disponível]
 
             Os pontos de apoio são locais preparados pela Defesa Civil para acolhimento temporário em situações de emergência, como enchentes, deslizamentos ou outras situações de risco.
+            Antes de oferecer um ponto de apoio, informe ao usuário que ele deve juntar seus documentos pessoais, medicamentos essenciais e itens de higiene pessoal antes de se deslocar.
 
             **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
         6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
-        """)
+        """
+        )
 
     has_cras = any(
-        eq.get("categoria") in social_assistance_categories
-        for eq in equipments_data
+        eq.get("categoria") in social_assistance_categories for eq in equipments_data
     )
 
     if has_cras:
-        instructions_parts.append("""- Ao apresentar um CRAS (Centro de Referência de Assistência Social), alerte explicitamente que o atendimento presencial exige agendamento prévio. Para orientar o cidadão, apresente as opções de agendamento de forma listada:
+        instructions_parts.append(
+            """- Ao apresentar um CRAS (Centro de Referência de Assistência Social), alerte explicitamente que o atendimento presencial exige agendamento prévio. Para orientar o cidadão, apresente as opções de agendamento de forma listada:
         Pela internet: Acesse o site http://cadunico.rio
         Por telefone: Ligue para a Central 1746 ou para (21) 3460-1746.
         Como confirmar: Após agendar, o cidadão pode confirmar o status acessando http://cadunico.rio e inserindo o CPF.
-        """)
-                                  
+        """
+        )
 
     # Se houver instruções específicas, retorná-las combinadas
     if instructions_parts:
@@ -207,16 +209,16 @@ async def get_equipments(
     else:
         return [
             {
-            "error": "Nenhum equipamento encontrado",
-            "message": (
-                "Sempre utilize a tool `equipments_instructions` antes de chamar a tool "
-                "`equipments_by_address`. Assim, você poderá conferir instruções sobre os "
-                "equipamentos disponíveis, regras de uso e categorias permitidas. "
-                "Adicionalmente, verifique se o endereço fornecido é válido e completo. "
-                "Exemplo: 'Rua <NOME DA RUA>, <NUMERO> - <BAIRRO>, <CIDADE> - <ESTADO>'. "
-                "Caso o endereço não esteja completo, confirme com o usuário os detalhes "
-                "faltantes."
-            ),
+                "error": "Nenhum equipamento encontrado",
+                "message": (
+                    "Sempre utilize a tool `equipments_instructions` antes de chamar a tool "
+                    "`equipments_by_address`. Assim, você poderá conferir instruções sobre os "
+                    "equipamentos disponíveis, regras de uso e categorias permitidas. "
+                    "Adicionalmente, verifique se o endereço fornecido é válido e completo. "
+                    "Exemplo: 'Rua <NOME DA RUA>, <NUMERO> - <BAIRRO>, <CIDADE> - <ESTADO>'. "
+                    "Caso o endereço não esteja completo, confirme com o usuário os detalhes "
+                    "faltantes."
+                ),
             }
         ]
 
