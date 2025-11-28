@@ -90,6 +90,16 @@ PROXY_URL = getenv_or_action("PROXY_URL")
 
 
 ## eai engine
+MCP_EXCLUDED_TOOLS = (
+    getenv_or_action("MCP_EXCLUDED_TOOLS").split(",")
+    if getenv_or_action("MCP_EXCLUDED_TOOLS", default="")
+    else []
+)
+
+MPC_SERVER_URL = getenv_or_action("MPC_SERVER_URL", action="ignore")
+MPC_API_TOKEN = getenv_or_action("MPC_API_TOKEN", action="ignore")
+
+
 EAI_AGENT_URL = getenv_or_action("EAI_AGENT_URL", action="ignore")
 EAI_AGENT_TOKEN = getenv_or_action("EAI_AGENT_TOKEN", action="ignore")
 
@@ -107,12 +117,6 @@ GCS_BUCKET = getenv_or_action("GCS_BUCKET", action="ignore")
 PROJECT_NUMBER = getenv_or_action("PROJECT_NUMBER", action="ignore")
 REASONING_ENGINE_ID = getenv_or_action("REASONING_ENGINE_ID", action="ignore")
 
-
-MCP_EXCLUDED_TOOLS = (
-    getenv_or_action("MCP_EXCLUDED_TOOLS").split(",")
-    if getenv_or_action("MCP_EXCLUDED_TOOLS", default="")
-    else []
-)
 
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = getenv_or_action(
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", action="ignore"
