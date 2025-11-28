@@ -7,6 +7,11 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from src.config import env
 
 
+from src.utils.log import logger
+
+logger.debug(env.MPC_SERVER_URL)
+
+
 async def get_mcp_tools(
     include_tools: Optional[List[str]] = None, exclude_tools: Optional[List[str]] = None
 ) -> List[BaseTool]:
