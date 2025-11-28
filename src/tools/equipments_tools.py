@@ -102,7 +102,7 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
                 - **Horário de funcionamento:** [Horário, se disponível]
 
             Os pontos de apoio são locais preparados pela Defesa Civil para acolhimento temporário em situações de emergência, como enchentes, deslizamentos ou outras situações de risco.
-            Informe também ao usuário que antes de ir a um ponto de apoio ele deve juntar seus documentos pessoais, medicamentos essenciais e itens de higiene.
+            Antes de oferecer um ponto de apoio, informe ao usuário que ele deve juntar seus documentos pessoais, medicamentos essenciais e itens de higiene pessoal antes de se deslocar.
 
             **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
         6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
