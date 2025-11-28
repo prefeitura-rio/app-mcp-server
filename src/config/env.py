@@ -96,8 +96,8 @@ MCP_EXCLUDED_TOOLS = (
     else []
 )
 
-MPC_SERVER_URL = getenv_or_action("MPC_SERVER_URL", action="ignore")
-MPC_API_TOKEN = getenv_or_action("MPC_API_TOKEN", action="ignore")
+MCP_SERVER_URL = getenv_or_action("MCP_SERVER_URL", action="ignore")
+MCP_API_TOKEN = getenv_or_action("MCP_API_TOKEN", action="ignore")
 
 
 EAI_AGENT_URL = getenv_or_action("EAI_AGENT_URL", action="ignore")
