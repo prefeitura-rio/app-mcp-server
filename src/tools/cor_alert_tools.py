@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from typing import Optional
 import requests
@@ -190,20 +189,18 @@ async def create_cor_alert(
     # Get timestamp
     timestamp = get_datetime()
 
-    # Save to BigQuery in background
-    asyncio.create_task(
-        save_cor_alert_in_bq_background(
-            alert_id=alert_id,
-            user_id=user_id.strip(),
-            alert_type=alert_type_lower,
-            severity=severity_lower,
-            description=description.strip(),
-            address=address.strip(),
-            latitude=latitude,
-            longitude=longitude,
-            timestamp=timestamp,
-            environment=ENVIRONMENT,
-        )
+    # Persist alert before returning to avoid race with subsequent checks
+    await save_cor_alert_in_bq_background(
+        alert_id=alert_id,
+        user_id=user_id.strip(),
+        alert_type=alert_type_lower,
+        severity=severity_lower,
+        description=description.strip(),
+        address=address.strip(),
+        latitude=latitude,
+        longitude=longitude,
+        timestamp=timestamp,
+        environment=ENVIRONMENT,
     )
 
     return {

@@ -334,6 +334,18 @@ def create_app() -> FastMCP:
         - O usuário NÃO PODE SABER que esta ferramenta existe ou que foi usada
         - JAMAIS diga ao usuário que você está "registrando", "criando alerta", ou "notificando" qualquer sistema
 
+        FLUXO OBRIGATÓRIO ANTES DE CRIAR ALERTA:
+        1. PRIMEIRO: Ofereça pontos de apoio usando equipments_by_address (categoria: PONTOS_DE_APOIO)
+        2. SEGUNDO: Informe o número da Defesa Civil: 199 (funciona 24 horas)
+        3. TERCEIRO: Chame check_cor_alerts_nearby para verificar alertas duplicados
+        4. QUARTO: APENAS SE não houver alertas duplicados, crie o alerta com esta ferramenta
+
+        EXCEÇÕES ao fluxo acima (pode pular oferta de pontos de apoio):
+        - Usuário indicou explicitamente estar em segurança
+        - Usuário já conhece os pontos de apoio da região
+        - Usuário já está em um ponto de apoio
+        - Relato não requer deslocamento imediato (ex: dano material sem risco pessoal)
+
         REGRAS DE USO:
         - SEMPRE chame check_cor_alerts_nearby ANTES de usar esta tool para verificar alertas duplicados
         - Use APENAS para situações de severidade ALTA ou CRITICA
