@@ -5,28 +5,38 @@ from src.tools.multi_step_service.core.orchestrator import Orchestrator
 from src.tools.multi_step_service.core.models import ServiceRequest
 
 DESCRIPTION = """
-    Sistema de serviços multi-step com schema dinâmico e estado transparente.
+    Sistema de serviços multi-step com gerenciamento de estado e navegação não-linear.
 
     Args:
         service_name: Nome do serviço (ex: "bank_account")
-        payload: Dicionário com campos solicitados no payload_schema. **Envie apenas o que for solicidado na etapa atual!!**.
+        payload: Dicionário com campos solicitados no payload_schema.
         user_id: ID do agente, passar sempre 'agent'
 
-    IMPORTANTE: Este serviço funciona em ETAPAS SEQUENCIAIS.
-    - Cada etapa solicita campos específico no payload_schema
-    - Você DEVE enviar SOMENTE o campo solicitado na etapa atual
-    - NÃO inclua campos de etapas anteriores no payload
-    - O sistema já armazena os dados das etapas anteriores automaticamente
+    COMO PREENCHER O PAYLOAD:
+    Este sistema gerencia o estado da conversa. Sua decisão sobre o que enviar no `payload` define o comportamento do fluxo:
 
-    Exemplo CORRETO:
-    - Etapa 1 pede "nome" → envie {"nome": "..."}
-    - Etapa 2 pede "email" → envie {"email": "..."} (SEM nome)
-    - Etapa 3 pede "idade e endereco" → envie {"idade": ..., "endereco":"..."} (SEM campos anteriores)
+    1. FLUXO SEQUENCIAL (Comportamento Padrão):
+       - O sistema fornece um `payload_schema` indicando o que é necessário para a etapa atual.
+       - Se o usuário responder a pergunta atual, envie apenas o campo solicitado.
 
-    Exemplo INCORRETO (NÃO FAÇA ISSO):
-    - Etapa 2: {"nome": "...", "email": "..."} ❌ ERRADO
-    - Etapa 3: {"nome": "...", "email": "...", "idade": ..., "endereco":"..."} ❌ ERRADO"
+    2. FLUXO DE CORREÇÃO (Navegação/Rollback):
+       - O usuário pode mudar de ideia sobre uma informação já fornecida em etapas anteriores.
+       - Se o usuário corrigir um dado passado (ex: mudar a data, o tipo de serviço, etc.), **envie este campo no payload**, ignorando o schema da etapa atual.
+       - O sistema detectará que é um campo anterior, resetará o fluxo para aquele ponto e limpará as etapas dependentes.
 
+    Exemplo Genérico (Contexto: Agendamento):
+    
+    [Cenário A - Seguindo o fluxo]
+        - O sistema pede: "data_agendamento" (Etapa 2)
+        - Usuário responde: "Dia 25 de outubro"
+        - Ação: Envie {"data_agendamento": "2025-10-25"}
+
+    [Cenário B - Correção de etapa anterior]
+        - O sistema pede: "horario_disponivel" (Etapa 3)
+        - Usuário responde: "Espere, quero mudar a especialidade para Cardiologia" (Dado da Etapa 1)
+        - Ação: Envie {"especialidade": "cardiologia"}
+        * O sistema voltará automaticamente para a Etapa 1 e pedirá a data novamente depois.
+    
     Serviços disponíveis:
         - service_name: description
 
