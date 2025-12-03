@@ -6,6 +6,9 @@ from src.utils.typesense_api import HubSearchRequest, hub_search
 
 from src.config import env
 
+from src.config import env
+
+
 
 async def get_google_search(query: str):
     """
