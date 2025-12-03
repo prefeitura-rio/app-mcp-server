@@ -44,7 +44,12 @@ class IPTUMessageTemplates:
     @staticmethod
     def nenhuma_guia_encontrada(inscricao: str, exercicio: int) -> str:
         """Mensagem quando nenhuma guia é encontrada para o ano selecionado."""
-        return f"❌ Nenhuma guia de IPTU foi encontrada para o ano {exercicio} da inscrição {inscricao}.\n\n📅 Por favor, escolha outro ano de exercício:"
+        return f"""❌ Não encontrei nenhuma guia do IPTU para a inscrição **{inscricao}** no ano **{exercicio}**.
+
+🔄 **O que você deseja fazer?**
+• Para pesquisar **outro ano**, informe o ano desejado
+• Para consultar **outra inscrição**, informe o novo número
+• Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
     @staticmethod
     def nenhuma_cota_encontrada(guia_escolhida: str) -> str:

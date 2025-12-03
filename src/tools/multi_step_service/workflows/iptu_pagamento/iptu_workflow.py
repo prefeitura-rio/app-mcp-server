@@ -320,6 +320,7 @@ class IPTUWorkflow(BaseWorkflow):
                     )
 
                 # Se não encontrou dívida ativa ou houve erro, retorna mensagem padrão
+                # Remove apenas o ano para permitir nova tentativa
                 state.data.pop("ano_exercicio", None)
                 state.payload.pop(
                     "ano_exercicio", None
@@ -330,7 +331,7 @@ class IPTUWorkflow(BaseWorkflow):
                     description=IPTUMessageTemplates.nenhuma_guia_encontrada(
                         inscricao, exercicio
                     ),
-                    payload_schema=EscolhaAnoPayload.model_json_schema(),
+                    payload_schema=None,  # Sem schema específico - permite ano, inscrição ou outra pergunta
                 )
                 return state
             else:
