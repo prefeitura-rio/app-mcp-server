@@ -414,6 +414,12 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         cdas = debitos_np.get("cdasNaoAjuizadasNaoParceladas", [])
         efs = debitos_np.get("efsNaoParceladas", [])
         guias = registros.get("guiasParceladasComSaldoTotal", {}).get("guiasParceladas", [])
+        naturezas_divida = registros.get("naturezasDivida", [])
+
+        if naturezas_divida:
+            msg.append("\n*Naturezas da Dívida:*")
+            for natureza in naturezas_divida:
+                msg.append(f'- {natureza}')
 
         if cdas:
             msg.append("\n*Certidões de Dívida Ativa não parceladas:*")
