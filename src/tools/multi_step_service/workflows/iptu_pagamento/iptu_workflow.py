@@ -68,6 +68,40 @@ class IPTUWorkflow(BaseWorkflow):
     service_name = "iptu_pagamento"
     description = "Consulta e emissão de guias de IPTU - Prefeitura do Rio de Janeiro."
 
+    # Navegação não-linear: permite usuário "voltar" para steps anteriores
+    automatic_resets = True
+
+    # Define ordem dos steps principais do workflow
+    step_order = [
+        "inscricao_imobiliaria",
+        "ano_exercicio",
+        "guia_escolhida",
+        "cotas_escolhidas",
+    ]
+
+    # Define o que cada campo invalida quando muda
+    # Ex: Se ano_exercicio muda, remove dados_guias, guia_escolhida, etc.
+    step_dependencies = {
+        "inscricao_imobiliaria": [
+            "endereco",
+            "proprietario",
+            "ano_exercicio",
+            "dados_guias",
+            "guia_escolhida",
+            "dados_cotas",
+            "cotas_escolhidas",
+            "divida_ativa_data",
+        ],
+        "ano_exercicio": [
+            "dados_guias",
+            "guia_escolhida",
+            "dados_cotas",
+            "cotas_escolhidas",
+        ],
+        "guia_escolhida": ["dados_cotas", "cotas_escolhidas"],
+        "cotas_escolhidas": [],  # Último step, não invalida nada
+    }
+
     def __init__(self, use_fake_api: bool = False):
         """
         Inicializa o workflow IPTU.
@@ -530,8 +564,7 @@ class IPTUWorkflow(BaseWorkflow):
 
                 # Verifica se há cotas pagas na seleção
                 cotas_pagas_selecionadas = [
-                    cota for cota in cotas_escolhidas
-                    if cotas_map.get(cota, False)
+                    cota for cota in cotas_escolhidas if cotas_map.get(cota, False)
                 ]
 
                 if cotas_pagas_selecionadas:

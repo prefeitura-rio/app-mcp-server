@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, List
 import os
 from functools import wraps
 import traceback
@@ -20,10 +20,20 @@ class BaseWorkflow(ABC):
     - service_name: Nome do serviço
     - description: Descrição do serviço
     - build_graph(): Método que constrói o StateGraph.
+
+    Opcionalmente, pode definir para navegação não-linear:
+    - automatic_resets: bool (default False) - Habilita reset automático
+    - step_order: List[str] - Ordem dos campos principais do workflow
+    - step_dependencies: Dict[str, List[str]] - O que cada campo invalida quando muda
     """
 
     service_name: str = ""
     description: str = ""
+
+    # Navegação não-linear (opt-in)
+    automatic_resets: bool = False
+    step_order: List[str] = []
+    step_dependencies: Dict[str, List[str]] = {}
 
     @abstractmethod
     def build_graph(self) -> StateGraph[ServiceState]:
@@ -41,9 +51,10 @@ class BaseWorkflow(ABC):
 
         Este método orquestra a execução do grafo LangGraph:
         1. Injeta payload no state (fonte única da verdade)
-        2. Compila o grafo.
-        3. Invoca o grafo de forma assíncrona, executando em cascata até pausar ou terminar.
-        4. Retorna o ServiceState atualizado.
+        2. [NOVO] Se automatic_resets=True, detecta e reseta estado para navegação não-linear
+        3. Compila o grafo.
+        4. Invoca o grafo de forma assíncrona, executando em cascata até pausar ou terminar.
+        5. Retorna o ServiceState atualizado.
 
         Benefícios da versão async:
         - Elimina overhead de múltiplos asyncio.run()
@@ -53,6 +64,10 @@ class BaseWorkflow(ABC):
 
         # 1. Injeta payload no state - fonte única da verdade
         state.payload = payload or {}
+
+        # 2. Reset automático para navegação não-linear (se habilitado)
+        if self.automatic_resets and self.step_order and self.step_dependencies:
+            state = self._auto_reset_for_previous_steps(state)
 
         # 2. Compila o grafo definido no workflow específico
         graph = self.build_graph()
@@ -97,6 +112,28 @@ class BaseWorkflow(ABC):
         )
 
         return final_state
+
+    def _auto_reset_for_previous_steps(self, state: ServiceState) -> ServiceState:
+        """
+        Reset automático quando payload contém campos de steps anteriores.
+
+        Usa StepNavigator para detectar e executar reset em cascata.
+        Este método é chamado automaticamente se automatic_resets=True.
+
+        Args:
+            state: Estado do serviço
+
+        Returns:
+            Estado modificado (ou inalterado se não precisa reset)
+        """
+        from src.tools.multi_step_service.core.step_navigator import StepNavigator
+
+        navigator = StepNavigator(
+            step_order=self.step_order,
+            step_dependencies=self.step_dependencies
+        )
+
+        return navigator.auto_reset(state)
 
     def save_graph_image(self) -> str:
         """
