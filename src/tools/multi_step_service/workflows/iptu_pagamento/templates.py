@@ -6,6 +6,9 @@ durante o fluxo de consulta e pagamento de IPTU.
 """
 
 from typing import List, Dict, Any, Optional
+from src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils import (
+    formatar_valor_brl,
+)
 
 
 class IPTUMessageTemplates:
@@ -87,7 +90,7 @@ class IPTUMessageTemplates:
             situacao = guia.get("situacao", "EM ABERTO")
 
             texto += f"""💳 **Guia {numero_guia}** - {tipo_guia}
-• Valor: R$ {valor_original:.2f}
+• Valor: {formatar_valor_brl(valor_original)}
 • Situação: {situacao}
 
 """
@@ -109,15 +112,15 @@ Informe o número da guia ({exemplos_reais})"""
         for cota in cotas:
             numero_cota = cota.get("numero_cota", "?")
             data_vencimento = cota.get("data_vencimento", "N/A")
-            valor_cota = cota.get("valor_cota", "0,00")
+            valor_numerico = cota.get("valor_numerico", 0.0)
             esta_vencida = cota.get("esta_vencida", False)
 
             status_icon = "🟡" if esta_vencida else "🟢"
             status_text = "VENCIDA" if esta_vencida else "EM ABERTO"
 
-            texto += f"• **{numero_cota}ª Cota** - Vencimento: {data_vencimento} - R$ {valor_cota} - {status_icon} {status_text}\n"
+            texto += f"• **{numero_cota}ª Cota** - Vencimento: {data_vencimento} - {formatar_valor_brl(valor_numerico)} - {status_icon} {status_text}\n"
 
-        texto += f"\n• **Todas as cotas** - Total: R$ {valor_total:.2f}\n"
+        texto += f"\n• **Todas as cotas** - Total: {formatar_valor_brl(valor_total)}\n"
         texto += "\n**Quais cotas você deseja pagar?**"
 
         return texto
@@ -191,11 +194,12 @@ Informe o número da guia ({exemplos_reais})"""
         texto = "✅ **Boletos Gerados com Sucesso!**\n\n"
 
         for boleto_num, guia in enumerate(guias_geradas, 1):
+            valor = guia.get('valor', 0.0)
             texto += f"**Boleto {boleto_num}:**\n"
             texto += f"**Inscrição:** {inscricao}\n"
             texto += f"**Guia:** {guia['numero_guia']}\n"
             texto += f"**Cotas:** {guia['cotas']}\n"
-            texto += f"**Valor:** R$ {guia['valor']:.2f}\n"
+            texto += f"**Valor:** {formatar_valor_brl(valor)}\n"
             texto += f"**Vencimento:** {guia['vencimento']}\n"
             texto += f"**Código de Barras:** {guia['codigo_barras']}\n"
             texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
