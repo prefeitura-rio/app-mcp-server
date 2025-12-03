@@ -64,6 +64,18 @@ class IPTUMessageTemplates:
         """Mensagem quando todas as cotas da guia já foram quitadas."""
         return f"✅ Todas as cotas da guia {guia_escolhida} já foram quitadas.\n\n🎯 Por favor, selecione outra guia disponível:"
 
+    @staticmethod
+    def cotas_pagas_selecionadas(cotas_pagas: List[str]) -> str:
+        """Mensagem quando o usuário tenta selecionar cotas que já foram pagas."""
+        cotas_str = ", ".join(cotas_pagas)
+        plural = "s" if len(cotas_pagas) > 1 else ""
+        verbo = "estão" if len(cotas_pagas) > 1 else "está"
+        return f"""❌ A{plural} cota{plural} **{cotas_str}** já {verbo} paga{plural}.
+
+⚠️ **Você só pode selecionar cotas em aberto ou vencidas.**
+
+🎯 Por favor, selecione novamente as cotas que deseja pagar:"""
+
     # --- Exibição de Dados ---
 
     @staticmethod

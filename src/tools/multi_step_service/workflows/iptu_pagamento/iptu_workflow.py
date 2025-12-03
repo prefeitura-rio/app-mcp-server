@@ -518,7 +518,33 @@ class IPTUWorkflow(BaseWorkflow):
         # Processa payload se presente
         if "cotas_escolhidas" in state.payload:
             validated_data = EscolhaCotasParceladasPayload.model_validate(state.payload)
-            state.data["cotas_escolhidas"] = validated_data.cotas_escolhidas
+            cotas_escolhidas = validated_data.cotas_escolhidas
+
+            # Validação: Verifica se alguma cota escolhida está paga
+            dados_cotas_dict = state.data.get("dados_cotas")
+            if dados_cotas_dict:
+                dados_cotas = DadosCotas(**dados_cotas_dict)
+
+                # Cria um mapa de número_cota -> esta_paga
+                cotas_map = {c.numero_cota: c.esta_paga for c in dados_cotas.cotas}
+
+                # Verifica se há cotas pagas na seleção
+                cotas_pagas_selecionadas = [
+                    cota for cota in cotas_escolhidas
+                    if cotas_map.get(cota, False)
+                ]
+
+                if cotas_pagas_selecionadas:
+                    # Usuário tentou selecionar cotas pagas - retorna erro
+                    state.agent_response = AgentResponse(
+                        description=IPTUMessageTemplates.cotas_pagas_selecionadas(
+                            cotas_pagas_selecionadas
+                        ),
+                        payload_schema=EscolhaCotasParceladasPayload.model_json_schema(),
+                    )
+                    return state
+
+            state.data["cotas_escolhidas"] = cotas_escolhidas
             state.agent_response = None
             return state
 
