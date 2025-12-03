@@ -164,8 +164,27 @@ Informe o número da guia ({exemplos_reais})"""
     # --- Geração de Boletos ---
 
     @staticmethod
-    def boletos_gerados(guias_geradas: List[Dict[str, Any]], inscricao: str) -> str:
-        """Formata informações dos boletos gerados."""
+    def erro_gerar_darm(cotas: List[str]) -> str:
+        """Mensagem de erro ao gerar DARM."""
+        return f"❌ Não foi possível gerar o DARM para as cotas {', '.join(cotas)}.\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
+
+    @staticmethod
+    def erro_processar_pagamento(cotas: List[str], erro: str) -> str:
+        """Mensagem de erro ao processar pagamento."""
+        return f"❌ Erro ao processar o pagamento das cotas {', '.join(cotas)}: {erro}\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
+
+    @staticmethod
+    def nenhum_boleto_gerado() -> str:
+        """Mensagem quando nenhum boleto foi gerado com sucesso."""
+        return "❌ Não foi possível gerar nenhum boleto de pagamento.\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
+
+    # --- Finalização ---
+
+    @staticmethod
+    def boletos_gerados_finalizacao(
+        guias_geradas: List[Dict[str, Any]], inscricao: str
+    ) -> str:
+        """Formata informações dos boletos gerados com mensagem de finalização."""
         if not guias_geradas:
             return "❌ Nenhum boleto foi gerado."
 
@@ -182,50 +201,13 @@ Informe o número da guia ({exemplos_reais})"""
             texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
             texto += f"**PDF:** {guia.get('pdf', 'Não disponível')}\n\n"
 
+        texto += """🎉 **Consulta finalizada com sucesso!**
+
+🔄 **O que você deseja fazer agora?**
+• Para consultar **outra inscrição** de IPTU, informe o novo número
+• Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
+
         return texto
-
-    @staticmethod
-    def erro_gerar_darm(cotas: List[str]) -> str:
-        """Mensagem de erro ao gerar DARM."""
-        return f"❌ Não foi possível gerar o DARM para as cotas {', '.join(cotas)}.\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
-
-    @staticmethod
-    def erro_processar_pagamento(cotas: List[str], erro: str) -> str:
-        """Mensagem de erro ao processar pagamento."""
-        return f"❌ Erro ao processar o pagamento das cotas {', '.join(cotas)}: {erro}\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
-
-    @staticmethod
-    def nenhum_boleto_gerado() -> str:
-        """Mensagem quando nenhum boleto foi gerado com sucesso."""
-        return "❌ Não foi possível gerar nenhum boleto de pagamento.\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
-
-    # --- Perguntas de Continuidade ---
-
-    @staticmethod
-    def perguntar_mais_cotas(boletos_gerados: str) -> str:
-        """Pergunta se quer pagar mais cotas da mesma guia."""
-        return boletos_gerados + "\n🔄 **Deseja pagar mais cotas da mesma guia?**"
-
-    @staticmethod
-    def perguntar_outras_guias(boletos_gerados: str) -> str:
-        """Pergunta se quer pagar outras guias do mesmo imóvel."""
-        return boletos_gerados + "\n🔄 **Deseja pagar outras guias do mesmo imóvel?**"
-
-    @staticmethod
-    def perguntar_outro_imovel() -> str:
-        """Pergunta se quer emitir guia para outro imóvel."""
-        return "🏠 Deseja emitir guia para outro imóvel?"
-
-    # --- Finalização ---
-
-    @staticmethod
-    def finalizacao() -> str:
-        """Mensagem de finalização do serviço."""
-        return """✅ **Serviço finalizado com sucesso!**
-
-Obrigado por utilizar o serviço de consulta do IPTU da Prefeitura do Rio de Janeiro.
-
-Para uma nova consulta, informe uma nova inscrição imobiliária."""
 
     # --- Erros Internos ---
 

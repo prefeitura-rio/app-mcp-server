@@ -221,35 +221,11 @@ class DadosDarm(BaseModel):
     pdf_base64: Optional[str] = None
 
 
-class EscolhaMaisCotasPayload(BaseModel):
-    """Payload para pergunta sobre pagar mais cotas da mesma guia."""
-
-    mais_cotas: bool = Field(
-        ..., description="Se deseja pagar mais cotas da mesma guia"
-    )
-
-
-class EscolhaOutrasGuiasPayload(BaseModel):
-    """Payload para pergunta sobre pagar outras guias do mesmo imóvel."""
-
-    outras_guias: bool = Field(
-        ..., description="Se deseja pagar outras guias do mesmo imóvel"
-    )
-
-
 class EscolhaGuiaMesmoImovelPayload(BaseModel):
     """Payload para pergunta sobre gerar mais guias para o mesmo imóvel."""
 
     mesma_guia: bool = Field(
         ..., description="Se deseja emitir mais guias para o mesmo imóvel"
-    )
-
-
-class EscolhaOutroImovelPayload(BaseModel):
-    """Payload para pergunta sobre gerar guias para outro imóvel."""
-
-    outro_imovel: bool = Field(
-        ..., description="Se deseja emitir guias para outro imóvel"
     )
 
 
