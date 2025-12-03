@@ -417,9 +417,8 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         naturezas_divida = registros.get("naturezasDivida", [])
 
         if naturezas_divida:
-            msg.append("\n*Naturezas da Dívida:*")
-            for natureza in naturezas_divida:
-                msg.append(f'- {natureza}')
+            naturezas_divida_txt = (', ').join(naturezas_divida)
+            msg.append("\n*Naturezas da Dívida:* {naturezas_divida_txt}")
 
         if cdas:
             msg.append("\n*Certidões de Dívida Ativa não parceladas:*")
