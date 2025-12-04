@@ -1085,25 +1085,25 @@ Se não for necessário, responda AVANÇAR.""",
             
         return "collect_cpf"
     
+    @handle_errors
+    async def _handle_ticket_error(self, state: ServiceState) -> ServiceState:
+        """Nó para tratar erro na criação do ticket"""
+        state.agent_response = AgentResponse(
+            service_name=self.service_name,
+            error_message="Não foi possível criar o chamado neste momento.",
+            description="Infelizmente houve um erro e a solicitação não pôde ser criada. Por favor, tente novamente mais tarde.",
+            data=state.data
+        )
+        return state
+    
     def _route_after_ticket(self, state: ServiceState) -> str:
         logger.info("[ROTEAMENTO] _route_after_ticket")
         logger.info(f"[STATE.DATA] ticket_created: {state.data.get('ticket_created')}")
         logger.info(f"[STATE.DATA] error: {state.data.get('error')}")
         
-        # Se houve erro na criação do ticket, limpa todos os dados e volta ao início
+        # Se houve erro na criação do ticket, vai para o nó de tratamento de erro
         if state.data.get("error") or not state.data.get("ticket_created"):
-            # Salva apenas a mensagem de erro para mostrar ao usuário
-            error_msg = state.data.get("error_message", "Erro ao criar ticket")
-            
-            # Limpa COMPLETAMENTE todos os dados
-            state.data.clear()
-            
-            # Apenas marca que está recomeçando e salva a mensagem
-            state.data["restarting_after_error"] = True
-            state.data["error_message"] = error_msg
-            
-            # Volta para coletar endereço (início do fluxo)
-            return "collect_address"
+            return "handle_ticket_error"
         
         # Se o ticket foi criado com sucesso, termina
         return END
@@ -1128,6 +1128,7 @@ Se não for necessário, responda AVANÇAR.""",
         graph.add_node("collect_email", self._collect_email)
         graph.add_node("collect_name", self._collect_name)
         graph.add_node("open_ticket", self._open_ticket)
+        graph.add_node("handle_ticket_error", self._handle_ticket_error)
         
         # Define o ponto de entrada - AGORA É ENDEREÇO
         graph.set_entry_point("collect_address")
@@ -1189,9 +1190,12 @@ Se não for necessário, responda AVANÇAR.""",
             "open_ticket",
             self._route_after_ticket,
             {
-                "collect_address": "collect_address",  # Volta ao início após erro
+                "handle_ticket_error": "handle_ticket_error",  # Vai para tratamento de erro
                 END: END
             }
         )
+        
+        # Adiciona edge do handle_ticket_error para END
+        graph.add_edge("handle_ticket_error", END)
         
         return graph

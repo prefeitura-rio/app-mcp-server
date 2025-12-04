@@ -35,6 +35,14 @@ dependencies = [
     "opentelemetry-instrumentation-langchain>=0.45.6",
     "opentelemetry-sdk>=1.36.0",
     "pytest>=9.0.1",
+    "pandas>=2.3.3",
+    "async>=0.6.2",
+    "googlemaps>=4.10.0",
+    "async-googlemaps>=0.0.10",
+    "geopandas>=1.1.1",
+    "jellyfish>=1.2.1",
+    "num2words>=0.5.14",
+    "prefeitura-rio>=1.1.2",
 ]
 
 
