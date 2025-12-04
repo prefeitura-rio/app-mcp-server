@@ -122,6 +122,19 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
         """
         )
 
+    has_cras = any(
+        eq.get("categoria") in social_assistance_categories
+        for eq in equipments_data
+    )
+
+    if has_cras:
+        instructions_parts.append("""- Ao apresentar um CRAS (Centro de Referência de Assistência Social), alerte explicitamente que o atendimento presencial exige agendamento prévio. Para orientar o cidadão, apresente as opções de agendamento de forma listada:
+        Pela internet: Acesse o site http://cadunico.rio
+        Por telefone: Ligue para a Central 1746 ou para (21) 3460-1746.
+        Como confirmar: Após agendar, o cidadão pode confirmar o status acessando http://cadunico.rio e inserindo o CPF.
+        """)
+                                  
+
     # Se houver instruções específicas, retorná-las combinadas
     if instructions_parts:
         return "\n\n".join(instructions_parts)
