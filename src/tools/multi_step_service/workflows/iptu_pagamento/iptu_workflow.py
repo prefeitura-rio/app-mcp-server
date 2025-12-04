@@ -9,8 +9,12 @@ import os
 from langgraph.graph import StateGraph, END
 from loguru import logger
 
-from src.tools.multi_step_service.core.base_workflow import BaseWorkflow, handle_errors
-from src.tools.multi_step_service.core.models import ServiceState, AgentResponse
+from src.tools.multi_step_service.core import (
+    AgentResponse,
+    BaseWorkflow,
+    ServiceState,
+    handle_errors,
+)
 
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     InscricaoImobiliariaPayload,

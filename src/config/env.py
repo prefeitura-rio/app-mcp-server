@@ -11,7 +11,9 @@ if os.path.exists("src/config/.env"):
 VALID_TOKENS = getenv_or_action("VALID_TOKENS")
 IS_LOCAL = getenv_or_action("IS_LOCAL", default="false", action="ignore") == "true"
 GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
-GEMINI_MODEL = getenv_or_action("GEMINI_MODEL", default="gemini-2.5-flash", action="ignore")
+GEMINI_MODEL = getenv_or_action(
+    "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
+)
 
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
 GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
@@ -52,8 +54,14 @@ EQUIPMENTS_VALID_THEMES = getenv_or_action(
 
 # Configuração para excluir ferramentas do servidor MCP
 # Lista de nomes de ferramentas separados por vírgula (ex: "calculator_add,google_search")
-EXCLUDED_TOOLS = getenv_or_action(
-    "EXCLUDED_TOOLS", default="user_feedback", action="ignore"
+EXCLUDED_TOOLS = list(
+    set(
+        tool.strip()
+        for tool in getenv_or_action(
+            "EXCLUDED_TOOLS", default="user_feedback", action="ignore"
+        ).split(",")
+        if tool.strip()
+    )
 )
 
 # PGM API Configuration
@@ -88,11 +96,6 @@ PROXY_URL = getenv_or_action("PROXY_URL")
 
 
 ## eai engine
-MCP_EXCLUDED_TOOLS = (
-    getenv_or_action("MCP_EXCLUDED_TOOLS").split(",")
-    if getenv_or_action("MCP_EXCLUDED_TOOLS", default="")
-    else []
-)
 
 MCP_SERVER_URL = getenv_or_action("MCP_SERVER_URL", action="ignore")
 MCP_API_TOKEN = getenv_or_action("MCP_API_TOKEN", action="ignore")
