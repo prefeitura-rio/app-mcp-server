@@ -47,6 +47,17 @@ spec:
       restartPolicy: Always
 
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mcp-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mcp
+
+---
 # Service
 apiVersion: v1
 kind: Service
