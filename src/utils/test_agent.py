@@ -21,6 +21,19 @@ from mcp.client.stdio import stdio_client
 from src.utils.prompts import SYSTEM_PROMPT_EAI
 
 
+def clean_schema(schema):
+    """Recursively remove additionalProperties from schema."""
+    if isinstance(schema, dict):
+        if "additionalProperties" in schema:
+            del schema["additionalProperties"]
+        for key, value in schema.items():
+            clean_schema(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            clean_schema(item)
+    return schema
+
+
 class MCPToolsManager:
     def __init__(self, server_params: StdioServerParameters):
         """Initialize the MCP client with server parameters"""
@@ -93,6 +106,7 @@ class GeminiService:
                 .replace("array", "ARRAY")
                 .replace("integer", "INTEGER")
             )
+            parsed_parameters = clean_schema(parsed_parameters)
             system_prompt_tools += f"Tool Name: {tool.name}: {tool.description}\n"
             system_prompt_tools += f"Parameters: {json.dumps(parsed_parameters, indent=4, ensure_ascii=False)}\n"
             declaration = FunctionDeclaration(

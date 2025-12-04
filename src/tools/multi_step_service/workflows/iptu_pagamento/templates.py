@@ -6,6 +6,9 @@ durante o fluxo de consulta e pagamento de IPTU.
 """
 
 from typing import List, Dict, Any, Optional
+from src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils import (
+    formatar_valor_brl,
+)
 
 
 class IPTUMessageTemplates:
@@ -44,7 +47,14 @@ class IPTUMessageTemplates:
     @staticmethod
     def nenhuma_guia_encontrada(inscricao: str, exercicio: int) -> str:
         """Mensagem quando nenhuma guia é encontrada para o ano selecionado."""
-        return f"❌ Nenhuma guia de IPTU foi encontrada para o ano {exercicio} da inscrição {inscricao}.\n\n📅 Por favor, escolha outro ano de exercício:"
+        return f"""❌ Não encontrei nenhuma guia do IPTU para a inscrição **{inscricao}** no ano **{exercicio}**.
+
+Para verificar se essa inscrição está isenta de IPTU, se há guias em parcelamento ou guias de depósito pendentes, acesse o site: https://pref.rio/. 
+
+🔄 **O que você deseja fazer?**
+• Para pesquisar **outro ano**, informe o ano desejado
+• Para consultar **outra inscrição**, informe o novo número
+• Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
     @staticmethod
     def nenhuma_cota_encontrada(guia_escolhida: str) -> str:
@@ -55,6 +65,18 @@ class IPTUMessageTemplates:
     def cotas_quitadas(guia_escolhida: str) -> str:
         """Mensagem quando todas as cotas da guia já foram quitadas."""
         return f"✅ Todas as cotas da guia {guia_escolhida} já foram quitadas.\n\n🎯 Por favor, selecione outra guia disponível:"
+
+    @staticmethod
+    def cotas_pagas_selecionadas(cotas_pagas: List[str]) -> str:
+        """Mensagem quando o usuário tenta selecionar cotas que já foram pagas."""
+        cotas_str = ", ".join(cotas_pagas)
+        plural = "s" if len(cotas_pagas) > 1 else ""
+        verbo = "estão" if len(cotas_pagas) > 1 else "está"
+        return f"""❌ A{plural} cota{plural} **{cotas_str}** já {verbo} paga{plural}.
+
+⚠️ **Você só pode selecionar cotas em aberto ou vencidas.**
+
+🎯 Por favor, selecione novamente as cotas que deseja pagar:"""
 
     # --- Exibição de Dados ---
 
@@ -82,7 +104,7 @@ class IPTUMessageTemplates:
             situacao = guia.get("situacao", "EM ABERTO")
 
             texto += f"""💳 **Guia {numero_guia}** - {tipo_guia}
-• Valor: R$ {valor_original:.2f}
+• Valor: {formatar_valor_brl(valor_original)}
 • Situação: {situacao}
 
 """
@@ -104,15 +126,15 @@ Informe o número da guia ({exemplos_reais})"""
         for cota in cotas:
             numero_cota = cota.get("numero_cota", "?")
             data_vencimento = cota.get("data_vencimento", "N/A")
-            valor_cota = cota.get("valor_cota", "0,00")
+            valor_numerico = cota.get("valor_numerico", 0.0)
             esta_vencida = cota.get("esta_vencida", False)
 
             status_icon = "🟡" if esta_vencida else "🟢"
             status_text = "VENCIDA" if esta_vencida else "EM ABERTO"
 
-            texto += f"• **{numero_cota}ª Cota** - Vencimento: {data_vencimento} - R$ {valor_cota} - {status_icon} {status_text}\n"
+            texto += f"• **{numero_cota}ª Cota** - Vencimento: {data_vencimento} - {formatar_valor_brl(valor_numerico)} - {status_icon} {status_text}\n"
 
-        texto += f"\n• **Todas as cotas** - Total: R$ {valor_total:.2f}\n"
+        texto += f"\n• **Todas as cotas** - Total: {formatar_valor_brl(valor_total)}\n"
         texto += "\n**Quais cotas você deseja pagar?**"
 
         return texto
@@ -159,27 +181,6 @@ Informe o número da guia ({exemplos_reais})"""
     # --- Geração de Boletos ---
 
     @staticmethod
-    def boletos_gerados(guias_geradas: List[Dict[str, Any]], inscricao: str) -> str:
-        """Formata informações dos boletos gerados."""
-        if not guias_geradas:
-            return "❌ Nenhum boleto foi gerado."
-
-        texto = "✅ **Boletos Gerados com Sucesso!**\n\n"
-
-        for boleto_num, guia in enumerate(guias_geradas, 1):
-            texto += f"**Boleto {boleto_num}:**\n"
-            texto += f"**Inscrição:** {inscricao}\n"
-            texto += f"**Guia:** {guia['numero_guia']}\n"
-            texto += f"**Cotas:** {guia['cotas']}\n"
-            texto += f"**Valor:** R$ {guia['valor']:.2f}\n"
-            texto += f"**Vencimento:** {guia['vencimento']}\n"
-            texto += f"**Código de Barras:** {guia['codigo_barras']}\n"
-            texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
-            texto += f"**PDF:** {guia.get('pdf', 'Não disponível')}\n\n"
-
-        return texto
-
-    @staticmethod
     def erro_gerar_darm(cotas: List[str]) -> str:
         """Mensagem de erro ao gerar DARM."""
         return f"❌ Não foi possível gerar o DARM para as cotas {', '.join(cotas)}.\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
@@ -194,33 +195,37 @@ Informe o número da guia ({exemplos_reais})"""
         """Mensagem quando nenhum boleto foi gerado com sucesso."""
         return "❌ Não foi possível gerar nenhum boleto de pagamento.\n\n🎯 Por favor, selecione novamente as cotas para pagamento:"
 
-    # --- Perguntas de Continuidade ---
-
-    @staticmethod
-    def perguntar_mais_cotas(boletos_gerados: str) -> str:
-        """Pergunta se quer pagar mais cotas da mesma guia."""
-        return boletos_gerados + "\n🔄 **Deseja pagar mais cotas da mesma guia?**"
-
-    @staticmethod
-    def perguntar_outras_guias(boletos_gerados: str) -> str:
-        """Pergunta se quer pagar outras guias do mesmo imóvel."""
-        return boletos_gerados + "\n🔄 **Deseja pagar outras guias do mesmo imóvel?**"
-
-    @staticmethod
-    def perguntar_outro_imovel() -> str:
-        """Pergunta se quer emitir guia para outro imóvel."""
-        return "🏠 Deseja emitir guia para outro imóvel?"
-
     # --- Finalização ---
 
     @staticmethod
-    def finalizacao() -> str:
-        """Mensagem de finalização do serviço."""
-        return """✅ **Serviço finalizado com sucesso!**
+    def boletos_gerados_finalizacao(
+        guias_geradas: List[Dict[str, Any]], inscricao: str
+    ) -> str:
+        """Formata informações dos boletos gerados com mensagem de finalização."""
+        if not guias_geradas:
+            return "❌ Nenhum boleto foi gerado."
 
-Obrigado por utilizar o serviço de consulta do IPTU da Prefeitura do Rio de Janeiro.
+        texto = "✅ **Boletos Gerados com Sucesso!**\n\n"
 
-Para uma nova consulta, informe uma nova inscrição imobiliária."""
+        for boleto_num, guia in enumerate(guias_geradas, 1):
+            valor = guia.get("valor", 0.0)
+            texto += f"**Boleto {boleto_num}:**\n"
+            texto += f"**Inscrição:** {inscricao}\n"
+            texto += f"**Guia:** {guia['numero_guia']}\n"
+            texto += f"**Cotas:** {guia['cotas']}\n"
+            texto += f"**Valor:** {formatar_valor_brl(valor)}\n"
+            texto += f"**Vencimento:** {guia['vencimento']}\n"
+            texto += f"**Código de Barras:** {guia['codigo_barras']}\n"
+            texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
+            texto += f"**PDF:** {guia.get('pdf', 'Não disponível')}\n\n"
+
+        texto += """🎉 **Consulta finalizada com sucesso!**
+
+🔄 **O que você deseja fazer agora?**
+• Para consultar **outra inscrição** de IPTU, informe o novo número
+• Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
+
+        return texto
 
     # --- Erros Internos ---
 

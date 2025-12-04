@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Any, Dict, Literal, Optional
 from datetime import datetime
 
@@ -61,5 +61,4 @@ class ServiceState(BaseModel):
     )  # Metadados autogeridos
     agent_response: Optional[AgentResponse] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)

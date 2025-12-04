@@ -3,6 +3,7 @@
 test*.py
 test*.ipynb
 test*.md
+test*.json
 
 **/**/test*.py
 **/**/test*.ipynb

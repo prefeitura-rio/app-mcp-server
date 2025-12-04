@@ -17,9 +17,6 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     EscolhaAnoPayload,
     EscolhaGuiasIPTUPayload,
     EscolhaCotasParceladasPayload,
-    EscolhaMaisCotasPayload,
-    EscolhaOutrasGuiasPayload,
-    EscolhaOutroImovelPayload,
     EscolhaFormatoDarmPayload,
     ConfirmacaoDadosPayload,
     DadosCotas,
@@ -45,15 +42,8 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.core.constants import
     ERROR_INSCRICAO_AUSENTE,
     ERROR_ANO_AUSENTE,
     STATE_IS_DATA_CONFIRMED,
-    STATE_WANTS_MORE_QUOTAS,
-    STATE_WANTS_OTHER_GUIAS,
-    STATE_WANTS_OTHER_PROPERTY,
     STATE_HAS_CONSULTED_GUIAS,
     STATE_USE_SEPARATE_DARM,
-    STATE_NEXT_QUESTION_TYPE,
-    QUESTION_TYPE_MORE_QUOTAS,
-    QUESTION_TYPE_OTHER_GUIAS,
-    QUESTION_TYPE_OTHER_PROPERTY,
     STATE_FAILED_ATTEMPTS_PREFIX,
 )
 
@@ -77,6 +67,40 @@ class IPTUWorkflow(BaseWorkflow):
 
     service_name = "iptu_pagamento"
     description = "Consulta e emissão de guias de IPTU - Prefeitura do Rio de Janeiro."
+
+    # Navegação não-linear: permite usuário "voltar" para steps anteriores
+    automatic_resets = True
+
+    # Define ordem dos steps principais do workflow
+    step_order = [
+        "inscricao_imobiliaria",
+        "ano_exercicio",
+        "guia_escolhida",
+        "cotas_escolhidas",
+    ]
+
+    # Define o que cada campo invalida quando muda
+    # Ex: Se ano_exercicio muda, remove dados_guias, guia_escolhida, etc.
+    step_dependencies = {
+        "inscricao_imobiliaria": [
+            "endereco",
+            "proprietario",
+            "ano_exercicio",
+            "dados_guias",
+            "guia_escolhida",
+            "dados_cotas",
+            "cotas_escolhidas",
+            "divida_ativa_data",
+        ],
+        "ano_exercicio": [
+            "dados_guias",
+            "guia_escolhida",
+            "dados_cotas",
+            "cotas_escolhidas",
+        ],
+        "guia_escolhida": ["dados_cotas", "cotas_escolhidas"],
+        "cotas_escolhidas": [],  # Último step, não invalida nada
+    }
 
     def __init__(self, use_fake_api: bool = False):
         """
@@ -320,6 +344,7 @@ class IPTUWorkflow(BaseWorkflow):
                     )
 
                 # Se não encontrou dívida ativa ou houve erro, retorna mensagem padrão
+                # Remove apenas o ano para permitir nova tentativa
                 state.data.pop("ano_exercicio", None)
                 state.payload.pop(
                     "ano_exercicio", None
@@ -330,7 +355,7 @@ class IPTUWorkflow(BaseWorkflow):
                     description=IPTUMessageTemplates.nenhuma_guia_encontrada(
                         inscricao, exercicio
                     ),
-                    payload_schema=EscolhaAnoPayload.model_json_schema(),
+                    payload_schema=None,  # Sem schema específico - permite ano, inscrição ou outra pergunta
                 )
                 return state
             else:
@@ -527,7 +552,32 @@ class IPTUWorkflow(BaseWorkflow):
         # Processa payload se presente
         if "cotas_escolhidas" in state.payload:
             validated_data = EscolhaCotasParceladasPayload.model_validate(state.payload)
-            state.data["cotas_escolhidas"] = validated_data.cotas_escolhidas
+            cotas_escolhidas = validated_data.cotas_escolhidas
+
+            # Validação: Verifica se alguma cota escolhida está paga
+            dados_cotas_dict = state.data.get("dados_cotas")
+            if dados_cotas_dict:
+                dados_cotas = DadosCotas(**dados_cotas_dict)
+
+                # Cria um mapa de número_cota -> esta_paga
+                cotas_map = {c.numero_cota: c.esta_paga for c in dados_cotas.cotas}
+
+                # Verifica se há cotas pagas na seleção
+                cotas_pagas_selecionadas = [
+                    cota for cota in cotas_escolhidas if cotas_map.get(cota, False)
+                ]
+
+                if cotas_pagas_selecionadas:
+                    # Usuário tentou selecionar cotas pagas - retorna erro
+                    state.agent_response = AgentResponse(
+                        description=IPTUMessageTemplates.cotas_pagas_selecionadas(
+                            cotas_pagas_selecionadas
+                        ),
+                        payload_schema=EscolhaCotasParceladasPayload.model_json_schema(),
+                    )
+                    return state
+
+            state.data["cotas_escolhidas"] = cotas_escolhidas
             state.agent_response = None
             return state
 
@@ -776,10 +826,26 @@ class IPTUWorkflow(BaseWorkflow):
             )
             return state
 
-        state.data["guias_geradas"] = guias_geradas
+        # Prepara dados dos boletos para exibição
+        inscricao = state.data.get("inscricao_imobiliaria", "N/A")
+        boletos_formatados = utils.preparar_dados_boletos_para_template(guias_geradas)
 
-        # Não define agent_response aqui, pois o workflow deve continuar para pergunta_mesma_guia
-        # A resposta será definida no método _pergunta_mesma_guia
+        # Mensagem de sucesso com os boletos gerados
+        mensagem_final = IPTUMessageTemplates.boletos_gerados_finalizacao(
+            boletos_formatados, inscricao
+        )
+
+        # Define resposta final
+        state.agent_response = AgentResponse(
+            service_name=self.service_name,
+            description=mensagem_final,
+            payload_schema=None,  # Sem schema - permite qualquer pergunta ou nova inscrição
+            data={"guias_geradas": guias_geradas},
+        )
+
+        # Reset completo do estado para permitir nova consulta
+        state_helpers.reset_completo(state)
+
         return state
 
     def _tem_mais_cotas_disponiveis(self, state: ServiceState) -> bool:
@@ -789,80 +855,6 @@ class IPTUWorkflow(BaseWorkflow):
     def _tem_outras_guias_disponiveis(self, state: ServiceState) -> bool:
         """Verifica se há outras guias disponíveis no imóvel."""
         return utils.tem_outras_guias_disponiveis(state)
-
-    @handle_errors
-    async def _pergunta_mesma_guia(self, state: ServiceState) -> ServiceState:
-        """
-        Roteador condicional inteligente pós-geração de boletos:
-        1. Se há mais cotas disponíveis da mesma guia → redireciona para pergunta_mais_cotas
-        2. Se há outras guias disponíveis no imóvel → redireciona para pergunta_outras_guias
-        3. Caso contrário → redireciona para pergunta_outro_imovel
-        """
-        # Analisa contexto para determinar próxima pergunta
-        tem_mais_cotas = self._tem_mais_cotas_disponiveis(state)
-        tem_outras_guias = self._tem_outras_guias_disponiveis(state)
-
-        # Define o tipo de pergunta baseado no contexto
-        if tem_mais_cotas:
-            state.internal[STATE_NEXT_QUESTION_TYPE] = QUESTION_TYPE_MORE_QUOTAS
-        elif tem_outras_guias:
-            state.internal[STATE_NEXT_QUESTION_TYPE] = QUESTION_TYPE_OTHER_GUIAS
-        else:
-            state.internal[STATE_NEXT_QUESTION_TYPE] = QUESTION_TYPE_OTHER_PROPERTY
-
-        # Clear agent_response to allow proper routing
-        state.agent_response = None
-        return state
-
-    @handle_errors
-    async def _pergunta_mais_cotas(self, state: ServiceState) -> ServiceState:
-        """Pergunta se quer pagar mais cotas da mesma guia."""
-        # Se já foi respondido, não pergunta novamente
-        if STATE_WANTS_MORE_QUOTAS in state.internal:
-            return state
-
-        # Se tem payload com resposta, processa
-        if "mais_cotas" in state.payload:
-            validated_data = EscolhaMaisCotasPayload.model_validate(state.payload)
-            state.internal[STATE_WANTS_MORE_QUOTAS] = validated_data.mais_cotas
-            state.agent_response = None
-            return state
-
-        # Monta descrição com os boletos gerados + pergunta específica
-        description_text = self._gerar_descricao_boletos_gerados(state)
-        description_text = IPTUMessageTemplates.perguntar_mais_cotas(description_text)
-
-        response = AgentResponse(
-            description=description_text,
-            payload_schema=EscolhaMaisCotasPayload.model_json_schema(),
-        )
-        state.agent_response = response
-        return state
-
-    @handle_errors
-    async def _pergunta_outras_guias(self, state: ServiceState) -> ServiceState:
-        """Pergunta se quer pagar outras guias do mesmo imóvel."""
-        # Se já foi respondido, não pergunta novamente
-        if STATE_WANTS_OTHER_GUIAS in state.internal:
-            return state
-
-        # Se tem payload com resposta, processa
-        if "outras_guias" in state.payload:
-            validated_data = EscolhaOutrasGuiasPayload.model_validate(state.payload)
-            state.internal[STATE_WANTS_OTHER_GUIAS] = validated_data.outras_guias
-            state.agent_response = None
-            return state
-
-        # Monta descrição com os boletos gerados + pergunta específica
-        description_text = self._gerar_descricao_boletos_gerados(state)
-        description_text = IPTUMessageTemplates.perguntar_outras_guias(description_text)
-
-        response = AgentResponse(
-            description=description_text,
-            payload_schema=EscolhaOutrasGuiasPayload.model_json_schema(),
-        )
-        state.agent_response = response
-        return state
 
     def _gerar_descricao_boletos_gerados(self, state: ServiceState) -> str:
         """Gera a descrição padrão dos boletos gerados."""
@@ -874,111 +866,6 @@ class IPTUWorkflow(BaseWorkflow):
 
         return IPTUMessageTemplates.boletos_gerados(boletos_formatados, inscricao)
 
-    @handle_errors
-    async def _pergunta_outro_imovel(self, state: ServiceState) -> ServiceState:
-        """Pergunta se quer gerar guia para outro imóvel."""
-        # Se já foi respondido, não pergunta novamente
-        if STATE_WANTS_OTHER_PROPERTY in state.internal:
-            return state
-
-        # Se tem payload com resposta, processa
-        if "outro_imovel" in state.payload:
-            validated_data = EscolhaOutroImovelPayload.model_validate(state.payload)
-            state.internal[STATE_WANTS_OTHER_PROPERTY] = validated_data.outro_imovel
-            state.agent_response = None
-            return state
-
-        response = AgentResponse(
-            description=IPTUMessageTemplates.perguntar_outro_imovel(),
-            payload_schema=EscolhaOutroImovelPayload.model_json_schema(),
-        )
-        state.agent_response = response
-
-        return state
-
-    @handle_errors
-    async def _reset_para_mais_cotas(self, state: ServiceState) -> ServiceState:
-        """Reset seletivo para pagar mais cotas da mesma guia."""
-        # Reset apenas dos campos relacionados à seleção de cotas e posteriores
-        fields_to_reset = {
-            "data": ["cotas_escolhidas", "dados_darm", "guias_geradas"],
-            "internal": [
-                STATE_WANTS_MORE_QUOTAS,
-                STATE_WANTS_OTHER_GUIAS,
-                STATE_WANTS_OTHER_PROPERTY,
-                STATE_NEXT_QUESTION_TYPE,
-            ],
-        }
-
-        state_helpers.reset_completo(
-            state, manter_inscricao=True, fields=fields_to_reset
-        )
-        return state
-
-    @handle_errors
-    async def _reset_para_outras_guias(self, state: ServiceState) -> ServiceState:
-        """Reset seletivo para pagar outras guias do mesmo imóvel."""
-        # Reset dos campos relacionados à seleção de guia e posteriores
-        fields_to_reset = {
-            "data": [
-                "guia_escolhida",
-                "dados_cotas",
-                "cotas_escolhidas",
-                "dados_darm",
-                "guias_geradas",
-            ],
-            "internal": [
-                STATE_WANTS_MORE_QUOTAS,
-                STATE_WANTS_OTHER_GUIAS,
-                STATE_WANTS_OTHER_PROPERTY,
-                STATE_NEXT_QUESTION_TYPE,
-            ],
-        }
-
-        state_helpers.reset_completo(
-            state, manter_inscricao=True, fields=fields_to_reset
-        )
-        return state
-
-    @handle_errors
-    async def _reset_para_mesma_guia(self, state: ServiceState) -> ServiceState:
-        """Reset dados para gerar nova guia do mesmo imóvel."""
-        # Reset completo mantendo inscrição e dados das guias consultadas
-        inscricao = state.data.get("inscricao_imobiliaria")
-        dados_guias = state.data.get("dados_guias")
-
-        state_helpers.reset_completo(state)
-
-        # Restaura apenas inscrição e dados das guias
-        if inscricao:
-            state.data["inscricao_imobiliaria"] = inscricao
-        if dados_guias:
-            state.data["dados_guias"] = dados_guias
-            state.internal[STATE_HAS_CONSULTED_GUIAS] = True
-
-        return state
-
-    @handle_errors
-    async def _reset_para_outro_imovel(self, state: ServiceState) -> ServiceState:
-        """Reset completo para outro imóvel."""
-        # Reset completo de tudo
-        state_helpers.reset_completo(state)
-        return state
-
-    @handle_errors
-    async def _finalizar_interacao(self, state: ServiceState) -> ServiceState:
-        """Finaliza a interação e faz reset automático dos dados."""
-        # Mensagem de finalização
-        response = AgentResponse(
-            description=IPTUMessageTemplates.finalizacao(),
-        )
-        state.agent_response = response
-
-        # Reset automático completo no final da interação
-        state_helpers.reset_completo(state)
-
-        return state
-
     # --- Roteadores Condicionais ---
 
     def _decide_after_data_collection(self, state: ServiceState):
@@ -986,14 +873,6 @@ class IPTUWorkflow(BaseWorkflow):
         if state.agent_response is not None:
             return END
         return "continue"
-
-    def _route_after_inscricao(self, state: ServiceState) -> str:
-        """Roteamento após coleta da inscrição."""
-        # Se tem inscrição, vai para seleção de ano
-        if "inscricao_imobiliaria" in state.data:
-            return "escolher_ano"
-        # Se não tem inscrição, fica aguardando input
-        return "informar_inscricao"
 
     def _route_consulta_guias(self, state: ServiceState) -> str:
         """
@@ -1035,59 +914,6 @@ class IPTUWorkflow(BaseWorkflow):
             return "usuario_escolhe_guias"
         return "usuario_escolhe_cotas"
 
-    def _route_after_mesma_guia(self, state: ServiceState) -> str:
-        """Roteamento após pergunta sobre mesma guia - agora é um roteador condicional."""
-        # Se já determinou o tipo de pergunta, roteia adequadamente
-        tipo_pergunta = state.internal.get(STATE_NEXT_QUESTION_TYPE)
-
-        if tipo_pergunta == QUESTION_TYPE_MORE_QUOTAS:
-            return "pergunta_mais_cotas"
-        elif tipo_pergunta == QUESTION_TYPE_OTHER_GUIAS:
-            return "pergunta_outras_guias"
-        elif tipo_pergunta == QUESTION_TYPE_OTHER_PROPERTY:
-            return "pergunta_outro_imovel"
-
-        # Se não determinou ainda, fica no END (não deveria acontecer)
-        return END
-
-    def _route_after_outro_imovel(self, state: ServiceState) -> str:
-        """Roteamento após pergunta sobre outro imóvel."""
-        # Se ainda não respondeu, fica no nó atual para aguardar resposta
-        if STATE_WANTS_OTHER_PROPERTY not in state.internal:
-            return END
-
-        if state.internal.get(STATE_WANTS_OTHER_PROPERTY, False):
-            return "reset_outro_imovel"
-        return "finalizar_interacao"  # Finaliza com reset automático
-
-    def _route_after_mais_cotas(self, state: ServiceState) -> str:
-        """Roteamento após pergunta sobre mais cotas."""
-        # Se ainda não respondeu, fica no nó atual para aguardar resposta
-        if STATE_WANTS_MORE_QUOTAS not in state.internal:
-            return END
-
-        if state.internal.get(STATE_WANTS_MORE_QUOTAS, False):
-            return "reset_mais_cotas"
-
-        # Se não quer mais cotas, verifica se tem outras guias
-        if self._tem_outras_guias_disponiveis(state):
-            return "pergunta_outras_guias"
-
-        # Se não tem outras guias, vai direto para pergunta sobre outro imóvel
-        return "pergunta_outro_imovel"
-
-    def _route_after_outras_guias(self, state: ServiceState) -> str:
-        """Roteamento após pergunta sobre outras guias."""
-        # Se ainda não respondeu, fica no nó atual para aguardar resposta
-        if STATE_WANTS_OTHER_GUIAS not in state.internal:
-            return END
-
-        if state.internal.get(STATE_WANTS_OTHER_GUIAS, False):
-            return "reset_outras_guias"
-
-        # Se não quer outras guias, vai para pergunta sobre outro imóvel
-        return "pergunta_outro_imovel"
-
     # --- Construção do Grafo ---
 
     def build_graph(self) -> StateGraph[ServiceState]:
@@ -1104,15 +930,6 @@ class IPTUWorkflow(BaseWorkflow):
         graph.add_node("perguntar_formato_darm", self._perguntar_formato_darm)
         graph.add_node("confirmacao_dados", self._confirmacao_dados_pagamento)
         graph.add_node("gerar_darm", self._gerar_darm)
-        graph.add_node("pergunta_mesma_guia", self._pergunta_mesma_guia)
-        graph.add_node("pergunta_mais_cotas", self._pergunta_mais_cotas)
-        graph.add_node("pergunta_outras_guias", self._pergunta_outras_guias)
-        graph.add_node("pergunta_outro_imovel", self._pergunta_outro_imovel)
-        graph.add_node("reset_mesma_guia", self._reset_para_mesma_guia)
-        graph.add_node("reset_mais_cotas", self._reset_para_mais_cotas)
-        graph.add_node("reset_outras_guias", self._reset_para_outras_guias)
-        graph.add_node("reset_outro_imovel", self._reset_para_outro_imovel)
-        graph.add_node("finalizar_interacao", self._finalizar_interacao)
 
         # Define ponto de entrada
         graph.set_entry_point("informar_inscricao")
@@ -1167,71 +984,8 @@ class IPTUWorkflow(BaseWorkflow):
             self._decide_after_data_collection,
             {"continue": "gerar_darm", END: END},
         )
-        graph.add_conditional_edges(
-            "gerar_darm",
-            self._route_gerar_darm,
-            {
-                "pergunta_mesma_guia": "pergunta_mesma_guia",
-                "usuario_escolhe_cotas": "usuario_escolhe_cotas",
-                END: END,
-            },
-        )
 
-        graph.add_conditional_edges(
-            "pergunta_mesma_guia",
-            self._route_after_mesma_guia,
-            {
-                "pergunta_mais_cotas": "pergunta_mais_cotas",
-                "pergunta_outras_guias": "pergunta_outras_guias",
-                "pergunta_outro_imovel": "pergunta_outro_imovel",
-                END: END,
-            },
-        )
-
-        graph.add_conditional_edges(
-            "pergunta_mais_cotas",
-            self._route_after_mais_cotas,
-            {
-                "reset_mais_cotas": "reset_mais_cotas",
-                "pergunta_outras_guias": "pergunta_outras_guias",
-                "pergunta_outro_imovel": "pergunta_outro_imovel",
-                END: END,
-            },
-        )
-        graph.add_edge("reset_mais_cotas", "usuario_escolhe_cotas")
-
-        graph.add_conditional_edges(
-            "pergunta_outras_guias",
-            self._route_after_outras_guias,
-            {
-                "reset_outras_guias": "reset_outras_guias",
-                "pergunta_outro_imovel": "pergunta_outro_imovel",
-                END: END,
-            },
-        )
-        graph.add_edge("reset_outras_guias", "usuario_escolhe_guias")
-
-        graph.add_conditional_edges(
-            "pergunta_outro_imovel",
-            self._route_after_outro_imovel,
-            {
-                "reset_outro_imovel": "reset_outro_imovel",
-                "finalizar_interacao": "finalizar_interacao",
-                END: END,
-            },
-        )
-        graph.add_edge("reset_outro_imovel", "informar_inscricao")
-        graph.add_edge("finalizar_interacao", END)
+        # Após gerar DARM, sempre finaliza (com mensagem de sucesso e reset automático)
+        graph.add_edge("gerar_darm", END)
 
         return graph
-
-    def _route_gerar_darm(self, state: ServiceState) -> str:
-        """Roteamento após geração de DARM."""
-        # Se agent_response foi definido, significa que ocorreu erro/reset e precisa voltar
-        if state.agent_response is not None:
-            return END  # Para e espera nova seleção de cotas
-        # Se tem guias geradas, continua para pergunta_mesma_guia
-        if "guias_geradas" in state.data:
-            return "pergunta_mesma_guia"
-        # Se chegou aqui sem agent_response e sem guias_geradas, há um problema
-        return END

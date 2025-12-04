@@ -29,6 +29,10 @@ NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
 DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
 
+
+TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
+
+
 # OAuth2 Configuration for RMI API
 RMI_API_URL = getenv_or_action("RMI_API_URL", action="ignore")
 RMI_OAUTH_ISSUER = getenv_or_action("RMI_OAUTH_ISSUER", action="ignore")
@@ -44,7 +48,13 @@ LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 EQUIPMENTS_VALID_THEMES = getenv_or_action(
     "EQUIPMENTS_VALID_THEMES",
     default="cultura,saude,educacao,geral,assistencia_social,incidentes_hidricos",
-).split(",")
+)
+
+# Configuração para excluir ferramentas do servidor MCP
+# Lista de nomes de ferramentas separados por vírgula (ex: "calculator_add,google_search")
+EXCLUDED_TOOLS = getenv_or_action(
+    "EXCLUDED_TOOLS", default="user_feedback", action="ignore"
+)
 
 # PGM API Configuration
 CHATBOT_INTEGRATIONS_URL = getenv_or_action("CHATBOT_INTEGRATIONS_URL", action="ignore")
@@ -75,3 +85,49 @@ REDIS_TTL_SECONDS = int(getenv_or_action("REDIS_TTL_SECONDS"))
 
 
 PROXY_URL = getenv_or_action("PROXY_URL")
+
+
+## eai engine
+MCP_EXCLUDED_TOOLS = (
+    getenv_or_action("MCP_EXCLUDED_TOOLS").split(",")
+    if getenv_or_action("MCP_EXCLUDED_TOOLS", default="")
+    else []
+)
+
+MCP_SERVER_URL = getenv_or_action("MCP_SERVER_URL", action="ignore")
+MCP_API_TOKEN = getenv_or_action("MCP_API_TOKEN", action="ignore")
+
+
+EAI_AGENT_URL = getenv_or_action("EAI_AGENT_URL", action="ignore")
+EAI_AGENT_TOKEN = getenv_or_action("EAI_AGENT_TOKEN", action="ignore")
+
+EAI_GATEWAY_API_URL = getenv_or_action("EAI_GATEWAY_API_URL", action="ignore")
+EAI_GATEWAY_API_TOKEN = getenv_or_action("EAI_GATEWAY_API_TOKEN", action="ignore")
+
+PROJECT_ID = getenv_or_action("PROJECT_ID", action="ignore")
+LOCATION = getenv_or_action("LOCATION", action="ignore")
+INSTANCE = getenv_or_action("INSTANCE", action="ignore")
+DATABASE = getenv_or_action("DATABASE", action="ignore")
+DATABASE_USER = getenv_or_action("DATABASE_USER", action="ignore")
+DATABASE_PASSWORD = getenv_or_action("DATABASE_PASSWORD", action="ignore")
+GCS_BUCKET = getenv_or_action("GCS_BUCKET", action="ignore")
+
+PROJECT_NUMBER = getenv_or_action("PROJECT_NUMBER", action="ignore")
+REASONING_ENGINE_ID = getenv_or_action("REASONING_ENGINE_ID", action="ignore")
+
+
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = getenv_or_action(
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", action="ignore"
+)
+OTEL_EXPORTER_OTLP_TRACES_HEADERS = getenv_or_action(
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS", action="ignore"
+)
+
+# Short-term memory limits (kept as strings for deployment)
+SHORT_MEMORY_TIME_LIMIT = getenv_or_action(
+    "SHORT_MEMORY_TIME_LIMIT", default="30"
+)  # in days
+SHORT_MEMORY_TOKEN_LIMIT = getenv_or_action(
+    "SHORT_MEMORY_TOKEN_LIMIT", default="50000"
+)  # in tokens
+##-----------
