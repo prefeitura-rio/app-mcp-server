@@ -108,14 +108,16 @@ class GeminiService:
 
                     logger.info("Resposta recebida do Gemini")
                     candidate = response.candidates[0]
-                    
+
                     # Check if grounding metadata and chunks exist
                     if (
-                        not candidate.grounding_metadata 
+                        not candidate.grounding_metadata
                         or not candidate.grounding_metadata.grounding_chunks
                     ):
                         # No grounding chunks found - likely all sources were filtered or unavailable
-                        logger.warning("Nenhuma fonte confiável encontrada para a consulta")
+                        logger.warning(
+                            "Nenhuma fonte confiável encontrada para a consulta"
+                        )
                         return {
                             "id": request_id,
                             "text": "Desculpe, mas não consegui encontrar informações confiáveis sobre este tópico em fontes oficiais. Esta consulta pode estar fora do escopo do meu conhecimento, que se concentra em serviços municipais do Rio de Janeiro e fontes governamentais oficiais.",
@@ -127,7 +129,7 @@ class GeminiService:
                             "temperature": temperature,
                             "query": query,
                         }
-                    
+
                     logger.info("Resolvendo URLs das fontes...")
                     resolved_urls_map = await resolve_urls(
                         urls_to_resolve=candidate.grounding_metadata.grounding_chunks
@@ -146,8 +148,14 @@ class GeminiService:
                             "id": request_id,
                             "text": "Desculpe, mas as informações encontradas para esta consulta vêm de fontes que estão fora do escopo do meu conhecimento. Eu me concentro em fornecer informações sobre serviços municipais do Rio de Janeiro usando apenas fontes governamentais oficiais e confiáveis.",
                             "sources": [],
-                            "web_search_queries": candidate.grounding_metadata.web_search_queries if candidate.grounding_metadata else [],
-                            "tokens_metadata": self.get_tokens_metadata(response=response),
+                            "web_search_queries": (
+                                candidate.grounding_metadata.web_search_queries
+                                if candidate.grounding_metadata
+                                else []
+                            ),
+                            "tokens_metadata": self.get_tokens_metadata(
+                                response=response
+                            ),
                             "retry_attempts": attempt,
                             "model": model,
                             "temperature": temperature,
@@ -236,7 +244,30 @@ class GeminiService:
         usage_metadata = response.usage_metadata
         tokens_metadata = {}
         if usage_metadata:
-            tokens_metadata["cache_tokens_details"] = (
+            # Helper function to convert ModalityTokenCount to dict
+            def convert_modality_token_count(item):
+                if item is None:
+                    return None
+                if isinstance(item, list):
+                    return [
+                        (
+                            {
+                                "modality": tc.modality.value,
+                                "token_count": tc.token_count,
+                            }
+                            if hasattr(tc, "modality")
+                            else tc
+                        )
+                        for tc in item
+                    ]
+                if hasattr(item, "modality"):
+                    return {
+                        "modality": item.modality.value,
+                        "token_count": item.token_count,
+                    }
+                return item
+
+            tokens_metadata["cache_tokens_details"] = convert_modality_token_count(
                 usage_metadata.cache_tokens_details
             )
             tokens_metadata["cached_content_token_count"] = (
@@ -245,7 +276,7 @@ class GeminiService:
             tokens_metadata["candidates_token_count"] = (
                 usage_metadata.candidates_token_count
             )
-            tokens_metadata["candidates_tokens_details"] = (
+            tokens_metadata["candidates_tokens_details"] = convert_modality_token_count(
                 usage_metadata.candidates_tokens_details
             )
             tokens_metadata["prompt_token_count"] = usage_metadata.prompt_token_count
@@ -256,7 +287,9 @@ class GeminiService:
                 usage_metadata.tool_use_prompt_token_count
             )
             tokens_metadata["tool_use_prompt_tokens_details"] = (
-                usage_metadata.tool_use_prompt_tokens_details
+                convert_modality_token_count(
+                    usage_metadata.tool_use_prompt_tokens_details
+                )
             )
             tokens_metadata["total_token_count"] = usage_metadata.total_token_count
 
@@ -417,25 +450,26 @@ def get_citations(response, resolved_urls_map):
                 try:
                     chunk = candidate.grounding_metadata.grounding_chunks[ind]
                     resolved_url = resolved_urls_map.get(chunk.web.uri, None)
-                    
+
                     # Skip if resolved_url is None or doesn't have the expected structure
                     if not resolved_url or "url" not in resolved_url:
                         continue
-                    
+
                     # Check if the URL's domain is blacklisted
                     from urllib.parse import urlparse
+
                     try:
                         parsed_url = urlparse(resolved_url["url"])
                         domain = parsed_url.netloc.lower()
-                        
+
                         # Get blacklisted domains from environment
                         blacklisted_domains = env.LINK_BLACKLIST
                         is_blacklisted = any(
-                            blacklisted_domain.strip().lower() in domain 
-                            for blacklisted_domain in blacklisted_domains 
+                            blacklisted_domain.strip().lower() in domain
+                            for blacklisted_domain in blacklisted_domains
                             if blacklisted_domain.strip()
                         )
-                        
+
                         # Only add to citations if not blacklisted
                         if not is_blacklisted:
                             citation["segments"].append(
@@ -448,7 +482,7 @@ def get_citations(response, resolved_urls_map):
                                 }
                             )
                     except Exception:
-                        # If there's any error with URL parsing or blacklist checking, 
+                        # If there's any error with URL parsing or blacklist checking,
                         # fall back to the original behavior (include the citation)
                         citation["segments"].append(
                             {
@@ -494,7 +528,7 @@ def format_text_with_citations(text, citations_data):
             # Skip citations with no segments (filtered out by blacklist)
             if not citation["segments"]:
                 continue
-                
+
             url = citation["segments"][0]["url"]
             if url not in source_map:
                 source_map[url] = citation["segments"][0].get(
@@ -564,25 +598,26 @@ def get_sources_list(citations_data, modified_text):
     )
     seen_uris = set()
     sources_gathered = []
-    
+
     # Get blacklisted domains from environment
     blacklisted_domains = env.LINK_BLACKLIST
-    
+
     for source in all_segments:
         if source["uri"] not in seen_uris and source["url"] in modified_text:
             try:
                 # Check if the URL's domain is in the blacklist
                 from urllib.parse import urlparse
+
                 parsed_url = urlparse(source["url"])
                 domain = parsed_url.netloc.lower()
-                
+
                 # Check if any blacklisted domain matches the source domain
                 is_blacklisted = any(
-                    blacklisted_domain.strip().lower() in domain 
-                    for blacklisted_domain in blacklisted_domains 
+                    blacklisted_domain.strip().lower() in domain
+                    for blacklisted_domain in blacklisted_domains
                     if blacklisted_domain.strip()
                 )
-                
+
                 if not is_blacklisted:
                     seen_uris.add(source["uri"])
                     sources_gathered.append(source)
