@@ -49,6 +49,8 @@ class IPTUMessageTemplates:
         """Mensagem quando nenhuma guia é encontrada para o ano selecionado."""
         return f"""❌ Não encontrei nenhuma guia do IPTU para a inscrição **{inscricao}** no ano **{exercicio}**.
 
+Para verificar se essa inscrição está isenta de IPTU, se há guias em parcelamento ou guias de depósito pendentes, acesse o site: https://pref.rio/. 
+
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
 • Para consultar **outra inscrição**, informe o novo número
@@ -206,7 +208,7 @@ Informe o número da guia ({exemplos_reais})"""
         texto = "✅ **Boletos Gerados com Sucesso!**\n\n"
 
         for boleto_num, guia in enumerate(guias_geradas, 1):
-            valor = guia.get('valor', 0.0)
+            valor = guia.get("valor", 0.0)
             texto += f"**Boleto {boleto_num}:**\n"
             texto += f"**Inscrição:** {inscricao}\n"
             texto += f"**Guia:** {guia['numero_guia']}\n"
