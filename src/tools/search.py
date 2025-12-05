@@ -6,8 +6,7 @@ from src.utils.typesense_api import HubSearchRequest, hub_search
 
 from src.config import env
 
-from src.config import env
-
+from src.utils.log import logger
 
 
 async def get_google_search(query: str):
@@ -50,7 +49,7 @@ async def get_google_search(query: str):
         temperature=0.0,
         retry_attempts=1,
     )
-
+    logger.debug(f"Google Search Response:\n{response_google}")
     final_response = {
         "text": response_google.get("text"),
         "sources": response_google.get("sources"),

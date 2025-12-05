@@ -3,6 +3,13 @@ from typing import Any, Dict, Optional
 from src.tools.multi_step_service.core.orchestrator import Orchestrator
 from src.tools.multi_step_service.core.models import ServiceRequest
 from src.tools.multi_step_service.core.state import StateMode
+from src.config import env
+
+if env.IS_LOCAL:
+    BACKEND_MODE = StateMode.JSON
+else:
+    BACKEND_MODE = StateMode.REDIS
+
 
 DESCRIPTION = """
     Sistema de serviços multi-step com gerenciamento de estado e navegação não-linear.
@@ -71,7 +78,7 @@ async def multi_step_service(
     )
 
     # Executa via orquestrador agnóstico (async)
-    orchestrator = Orchestrator(backend_mode=StateMode.REDIS)
+    orchestrator = Orchestrator(backend_mode=BACKEND_MODE)
     response = await orchestrator.execute_workflow(request)
 
     # Retorna resposta já formatada
@@ -85,7 +92,7 @@ def save_workflow_graphs():
     Returns:
         Dicionário com os resultados da operação
     """
-    orchestrator = Orchestrator(backend_mode=StateMode.REDIS)
+    orchestrator = Orchestrator(backend_mode=BACKEND_MODE)
     return orchestrator.save_all_workflow_graphs()
 
 
@@ -99,5 +106,5 @@ def save_single_workflow_graph(service_name: str):
     Returns:
         Caminho para o arquivo de imagem salvo
     """
-    orchestrator = Orchestrator(backend_mode=StateMode.REDIS)
+    orchestrator = Orchestrator(backend_mode=BACKEND_MODE)
     return orchestrator.save_workflow_graph_image(service_name)

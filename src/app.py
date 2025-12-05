@@ -59,11 +59,6 @@ else:
 
 TOOL_VERSION = get_tool_version_from_file()["version"]
 
-# Parse excluded tools list
-EXCLUDED_TOOLS_SET = set(
-    tool.strip() for tool in EXCLUDED_TOOLS.split(",") if tool.strip()
-)
-
 
 def create_app() -> FastMCP:
     """
@@ -82,7 +77,7 @@ def create_app() -> FastMCP:
         """Wrapper to conditionally register tools based on EXCLUDED_TOOLS"""
 
         def decorator(func):
-            if tool_name not in EXCLUDED_TOOLS_SET:
+            if tool_name not in EXCLUDED_TOOLS:
                 return mcp.tool(**kwargs)(func)
             else:
                 logger.info(f"Tool '{tool_name}' excluded from registration")
@@ -99,8 +94,8 @@ def create_app() -> FastMCP:
 
     # Configuração de logging
     logger.info(f"Inicializando {Settings.SERVER_NAME} v{Settings.VERSION}")
-    if EXCLUDED_TOOLS_SET:
-        logger.info(f"Tools excluídas: {', '.join(sorted(EXCLUDED_TOOLS_SET))}")
+    if EXCLUDED_TOOLS:
+        logger.info(f"Tools excluídas: {', '.join(sorted(EXCLUDED_TOOLS))}")
 
     # ===== REGISTRAR TOOLS =====
 

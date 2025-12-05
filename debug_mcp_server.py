@@ -60,4 +60,4 @@ async def get_mcp_tools(
     return filtered_tools
 
 
-mcp_tools = asyncio.run(get_mcp_tools(exclude_tools=env.MCP_EXCLUDED_TOOLS))
+mcp_tools = asyncio.run(get_mcp_tools(exclude_tools=env.EXCLUDED_TOOLS))
