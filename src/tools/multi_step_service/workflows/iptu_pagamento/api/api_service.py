@@ -7,6 +7,7 @@ para consulta de IPTU e geração de guias de pagamento.
 
 import re
 import json
+import traceback as tb
 from typing import List, Optional, Dict, Any
 import httpx
 import base64
@@ -36,6 +37,7 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import
     AuthenticationError,
 )
 from loguru import logger
+from src.utils.error_interceptor import send_api_error
 
 
 class IPTUAPIService:
@@ -49,11 +51,17 @@ class IPTUAPIService:
     - Download PDF do DARM (DownloadPdfDARM)
     """
 
-    def __init__(self):
-        """Inicializa o serviço com configurações da API."""
+    def __init__(self, user_id: str = "unknown"):
+        """
+        Inicializa o serviço com configurações da API.
+
+        Args:
+            user_id: ID do usuário (WhatsApp number) para tracking de erros
+        """
         self.api_base_url = env.IPTU_API_URL
         self.api_token = env.IPTU_API_TOKEN
         self.proxy = env.PROXY_URL
+        self.user_id = user_id
 
         logger.info(f"IPTUAPIService initialized with API URL: {self.api_base_url}")
 
@@ -111,12 +119,39 @@ class IPTUAPIService:
                         return response.text
                 elif response.status_code == 404:
                     logger.warning(f"API endpoint not found: {endpoint}")
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message=f"Endpoint não encontrado: {endpoint}",
+                    )
                     raise DataNotFoundError(f"Endpoint não encontrado: {endpoint}")
                 elif response.status_code == 401:
                     logger.error(f"API authentication failed for {endpoint}")
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message="Falha na autenticação do serviço IPTU",
+                    )
                     raise AuthenticationError(f"Falha na autenticação do serviço IPTU")
                 elif response.status_code in [500, 503]:
                     logger.error(f"API internal error for {endpoint}: {response.text}")
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message=f"Serviço IPTU temporariamente indisponível: {response.text}",
+                    )
                     raise APIUnavailableError(
                         f"Serviço IPTU temporariamente indisponível (HTTP {response.status_code})"
                     )
@@ -124,12 +159,31 @@ class IPTUAPIService:
                     logger.error(
                         f"API error {response.status_code} for {endpoint}: {response.text}"
                     )
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message=f"Erro HTTP {response.status_code}: {response.text}",
+                    )
                     raise APIUnavailableError(
                         f"Erro ao comunicar com serviço IPTU (HTTP {response.status_code})"
                     )
 
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
             logger.error(f"Timeout calling API endpoint {endpoint}")
+            # Reporta erro ao interceptor com traceback
+            await send_api_error(
+                user_id=self.user_id,
+                service_name="iptu_pagamento",
+                api_endpoint=url,
+                request_body=params,
+                status_code=408,  # Request Timeout
+                error_message="Serviço IPTU não respondeu no tempo esperado",
+                traceback=tb.format_exc(),
+            )
             raise APIUnavailableError(
                 "Serviço IPTU não respondeu no tempo esperado. Por favor, tente novamente."
             )
@@ -138,6 +192,16 @@ class IPTUAPIService:
             raise
         except Exception as e:
             logger.error(f"Error calling API endpoint {endpoint}: {str(e)}")
+            # Reporta erro ao interceptor com traceback
+            await send_api_error(
+                user_id=self.user_id,
+                service_name="iptu_pagamento",
+                api_endpoint=url,
+                request_body=params,
+                status_code=0,  # Erro interno
+                error_message=f"Erro ao comunicar com serviço IPTU: {str(e)}",
+                traceback=tb.format_exc(),
+            )
             raise APIUnavailableError(f"Erro ao comunicar com serviço IPTU: {str(e)}")
 
     @staticmethod
