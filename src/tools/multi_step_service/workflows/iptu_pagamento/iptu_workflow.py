@@ -118,11 +118,24 @@ class IPTUWorkflow(BaseWorkflow):
 
         # Verifica variável de ambiente para testes
         force_fake_api = os.getenv(FAKE_API_ENV_VAR, "").lower() == "true"
+        self._use_fake_api = use_fake_api or force_fake_api
 
-        if use_fake_api or force_fake_api:
-            self.api_service = IPTUAPIServiceFake()
-        else:
-            self.api_service = IPTUAPIService()
+        # API service será criado no primeiro acesso via propriedade
+        self._api_service = None
+
+    @property
+    def api_service(self):
+        """
+        Propriedade lazy para criar API service com user_id correto.
+        O user_id é injetado no execute(), então criamos o service apenas quando necessário.
+        """
+        if self._api_service is None:
+            if self._use_fake_api:
+                self._api_service = IPTUAPIServiceFake()
+            else:
+                # Cria API service com user_id do workflow
+                self._api_service = IPTUAPIService(user_id=self._user_id)
+        return self._api_service
 
     # --- Nós do Grafo ---
 

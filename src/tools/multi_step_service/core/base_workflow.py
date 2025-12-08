@@ -35,6 +35,9 @@ class BaseWorkflow(ABC):
     step_order: List[str] = []
     step_dependencies: Dict[str, List[str]] = {}
 
+    # User ID para tracking (será injetado no execute)
+    _user_id: str = "unknown"
+
     @abstractmethod
     def build_graph(self) -> StateGraph[ServiceState]:
         """
@@ -62,6 +65,9 @@ class BaseWorkflow(ABC):
         - Permite paralelização de operações I/O nos nós
         - Nós do workflow podem usar await diretamente
         """
+
+        # 0. Injeta user_id no workflow para tracking
+        self._user_id = state.user_id
 
         # 1. Injeta payload no state - fonte única da verdade
         state.payload = payload or {}

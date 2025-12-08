@@ -34,6 +34,9 @@ DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
 
 TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
 
+# Error Interceptor Configuration
+ERROR_INTERCEPTOR_URL = getenv_or_action("ERROR_INTERCEPTOR_URL")
+ERROR_INTERCEPTOR_TOKEN = getenv_or_action("ERROR_INTERCEPTOR_TOKEN")
 
 # OAuth2 Configuration for RMI API
 RMI_API_URL = getenv_or_action("RMI_API_URL", action="ignore")
