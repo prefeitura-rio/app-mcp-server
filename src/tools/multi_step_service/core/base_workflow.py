@@ -51,10 +51,11 @@ class BaseWorkflow(ABC):
 
         Este método orquestra a execução do grafo LangGraph:
         1. Injeta payload no state (fonte única da verdade)
-        2. [NOVO] Se automatic_resets=True, detecta e reseta estado para navegação não-linear
-        3. Compila o grafo.
-        4. Invoca o grafo de forma assíncrona, executando em cascata até pausar ou terminar.
-        5. Retorna o ServiceState atualizado.
+        2. [NOVO] Se payload vazio, reseta completamente o estado do serviço
+        3. [NOVO] Se automatic_resets=True, detecta e reseta estado para navegação não-linear
+        4. Compila o grafo.
+        5. Invoca o grafo de forma assíncrona, executando em cascata até pausar ou terminar.
+        6. Retorna o ServiceState atualizado.
 
         Benefícios da versão async:
         - Elimina overhead de múltiplos asyncio.run()
@@ -65,8 +66,19 @@ class BaseWorkflow(ABC):
         # 1. Injeta payload no state - fonte única da verdade
         state.payload = payload or {}
 
-        # 2. Reset automático para navegação não-linear (se habilitado)
-        if self.automatic_resets and self.step_order and self.step_dependencies:
+        # 2. Reset completo se payload vazio (comportamento global para todos os workflows)
+        if not payload or (isinstance(payload, dict) and len(payload) == 0):
+            logger.info(
+                f"🔄 Reset completo do serviço '{self.service_name}' - payload vazio detectado"
+            )
+            state.data = {}
+            state.internal = {}
+            state.status = "progress"
+            state.agent_response = None
+            # Não resetamos metadata para preservar histórico de criação
+
+        # 3. Reset automático para navegação não-linear (se habilitado)
+        elif self.automatic_resets and self.step_order and self.step_dependencies:
             state = self._auto_reset_for_previous_steps(state)
 
         # 2. Compila o grafo definido no workflow específico
