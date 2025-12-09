@@ -34,6 +34,7 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.api.api_service_fake 
 from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import (
     APIUnavailableError,
     AuthenticationError,
+    InvalidInscricaoError,
 )
 from src.tools.multi_step_service.workflows.iptu_pagamento.templates import (
     IPTUMessageTemplates,
@@ -159,17 +160,18 @@ class IPTUWorkflow(BaseWorkflow):
                     # Reset automático para nova inscrição
                     state_helpers.reset_completo(state)
 
-                # Salva a nova inscrição
-                state.data["inscricao_imobiliaria"] = nova_inscricao
-                logger.info(f"✅ Inscrição salva: {nova_inscricao}")
-
+                # ANTES de salvar a inscrição, valida consultando dados do imóvel
                 logger.debug(
-                    f"🔍 Buscando dados do imóvel para inscrição: {nova_inscricao}"
+                    f"🔍 Validando inscrição e buscando dados do imóvel: {nova_inscricao}"
                 )
                 try:
                     dados_imovel = await self.api_service.get_imovel_info(
                         inscricao=nova_inscricao
                     )
+                    logger.debug(dados_imovel)
+                    # Validação passou - salva a inscrição
+                    state.data["inscricao_imobiliaria"] = nova_inscricao
+                    logger.info(f"✅ Inscrição salva: {nova_inscricao}")
 
                     if dados_imovel:
                         state.data["endereco"] = dados_imovel["endereco"]
@@ -177,11 +179,28 @@ class IPTUWorkflow(BaseWorkflow):
                         logger.info(
                             f"✅ Dados do imóvel carregados - Proprietário: {dados_imovel['proprietario'][:30]}..."
                         )
+                    else:
+                        # Não encontrou dados mas inscrição é válida
+                        state.data["endereco"] = None
+                        state.data["proprietario"] = None
+
+                except InvalidInscricaoError as e:
+                    # Inscrição inválida (código 033) - NÃO salva no state
+                    logger.warning(f"❌ Inscrição inválida rejeitada: {nova_inscricao}")
+                    response = AgentResponse(
+                        description=IPTUMessageTemplates.solicitar_inscricao(),
+                        payload_schema=InscricaoImobiliariaPayload.model_json_schema(),
+                        error_message=f"Inscrição {nova_inscricao} não foi encontrada. Por favor, verifique se a inscrição está correta.",
+                    )
+                    state.agent_response = response
+                    return state
+
                 except (APIUnavailableError, AuthenticationError) as e:
-                    # Se falhar ao buscar dados do imóvel, continua sem eles
+                    # Se falhar ao buscar dados do imóvel por erro de API, salva a inscrição mas continua sem dados
                     logger.warning(
                         f"Não foi possível carregar dados do imóvel: {str(e)}"
                     )
+                    state.data["inscricao_imobiliaria"] = nova_inscricao
                     state.data["endereco"] = None
                     state.data["proprietario"] = None
 

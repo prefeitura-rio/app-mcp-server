@@ -35,7 +35,9 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import
     APIUnavailableError,
     DataNotFoundError,
     AuthenticationError,
+    InvalidInscricaoError,
 )
+
 from loguru import logger
 from src.utils.error_interceptor import send_api_error
 
@@ -555,7 +557,6 @@ class IPTUAPIService:
             logger.info(f"Imovel info URL: {url}")
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url, headers=headers)
-                logger.debug(f"{response.text}")
             if response.status_code == 200:
                 response_data = response.json()
 
@@ -605,10 +606,23 @@ class IPTUAPIService:
                     f"Imóvel não encontrado para inscrição: {inscricao_clean}"
                 )
                 return None
-            else:
+            elif response.status_code == 400:
                 logger.error(
                     f"Erro ao consultar imóvel. Status: {response.status_code}, Texto: {response.text}"
                 )
+                # Verifica se é erro de inscrição inválida (código 033)
+                error_data = response.json()
+                if error_data.get("codigo") == "033":
+                    # Inscrição inválida - não reporta como erro de API
+                    logger.warning(
+                        f"Inscrição inválida: {inscricao_clean} - Código 033"
+                    )
+                    raise InvalidInscricaoError(
+                        inscricao=inscricao_clean,
+                        message=f"Inscrição imobiliária {inscricao_clean} não encontrada no sistema",
+                    )
+            else:
+                logger.error("Erro ao consultar dados do imóvel")
                 # Reporta erro ao interceptor
                 await send_api_error(
                     user_id=self.user_id,
@@ -637,7 +651,7 @@ class IPTUAPIService:
             raise APIUnavailableError(
                 "Serviço de dados do imóvel não respondeu no tempo esperado"
             )
-        except (APIUnavailableError, AuthenticationError):
+        except (APIUnavailableError, AuthenticationError, InvalidInscricaoError):
             # Re-lança exceções customizadas
             raise
         except Exception as e:
