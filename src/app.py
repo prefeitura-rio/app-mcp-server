@@ -39,7 +39,7 @@ from src.tools.divida_ativa import (
 )
 from src.tools.langgraph_workflows import (
     multi_step_service as mss,
-    _get_workflow_descriptions,
+    tools_description as mss_tools_description,
 )
 
 from src.resources.rio_info import (
@@ -380,9 +380,7 @@ def create_app() -> FastMCP:
         )
         return add_tool_version(response)
 
-    @conditional_mcp_tool(
-        "multi_step_service", description=_get_workflow_descriptions()
-    )
+    @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
     ) -> dict:
