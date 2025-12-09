@@ -544,19 +544,18 @@ class IPTUAPIService:
         logger.info(
             f"Iniciando consulta de imóvel via VPN para inscrição: {inscricao_clean}"
         )
-
+        url = f"{env.WA_IPTU_URL}/{inscricao_clean}"
         try:
             encrypted_token = encrypt_token_rsa(
                 chave_publica_pem=env.WA_IPTU_PUBLIC_KEY, token=env.WA_IPTU_TOKEN
             )
             auth_header = f"Basic {encrypted_token}"
 
-            url = f"{env.WA_IPTU_URL}/{inscricao_clean}"
             headers = {"Authorization": auth_header}
             logger.info(f"Imovel info URL: {url}")
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url, headers=headers)
-
+                logger.debug(f"{response.text}")
             if response.status_code == 200:
                 response_data = response.json()
 
@@ -698,7 +697,9 @@ class IPTUAPIService:
                             user_id=self.user_id,
                             service_name="iptu_pagamento",
                             api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                            request_body={"Consumidor": "consultar-dividas-contribuinte"},
+                            request_body={
+                                "Consumidor": "consultar-dividas-contribuinte"
+                            },
                             status_code=auth_response.status_code,
                             error_message="Falha na autenticação do serviço de Dívida Ativa",
                         )
@@ -714,7 +715,9 @@ class IPTUAPIService:
                             user_id=self.user_id,
                             service_name="iptu_pagamento",
                             api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                            request_body={"Consumidor": "consultar-dividas-contribuinte"},
+                            request_body={
+                                "Consumidor": "consultar-dividas-contribuinte"
+                            },
                             status_code=auth_response.status_code,
                             error_message=f"Serviço de Dívida Ativa temporariamente indisponível (autenticação): {auth_response.text[:500]}",
                         )
@@ -760,7 +763,6 @@ class IPTUAPIService:
                             "inscricaoImobiliaria": inscricao_clean,
                         },
                     )
-
                     if response.status_code == 200:
                         response_data = response.json()
                         logger.info(f"Consulta de dívida ativa realizada com sucesso")

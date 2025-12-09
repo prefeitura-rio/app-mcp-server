@@ -25,11 +25,7 @@ class StepNavigator:
         step_dependencies: Dicionário mapeando campo → lista de campos dependentes
     """
 
-    def __init__(
-        self,
-        step_order: List[str],
-        step_dependencies: Dict[str, List[str]]
-    ):
+    def __init__(self, step_order: List[str], step_dependencies: Dict[str, List[str]]):
         """
         Inicializa o navegador de steps.
 
@@ -67,19 +63,18 @@ class StepNavigator:
         return -1  # Nenhum step iniciado
 
     def detect_previous_step_in_payload(
-        self,
-        state: ServiceState,
-        current_step_index: int
+        self, state: ServiceState, current_step_index: int
     ) -> Optional[str]:
         """
-        Detecta se payload contém algum campo de step anterior ao atual.
+        Detecta se payload contém algum campo de step anterior ao atual,
+        OU se está alterando o valor de um step já preenchido.
 
         Args:
             state: Estado do serviço
             current_step_index: Índice do step atual
 
         Returns:
-            Nome do campo de step anterior encontrado, ou None se não houver
+            Nome do campo de step anterior/alterado encontrado, ou None se não houver
 
         Examples:
             >>> navigator = StepNavigator(['inscricao', 'ano', 'guia'], {})
@@ -91,7 +86,8 @@ class StepNavigator:
         for field in state.payload.keys():
             if field in self.step_order:
                 field_index = self.step_order.index(field)
-                if field_index < current_step_index:
+                # Detecta se é step anterior OU se está alterando valor existente
+                if field_index <= current_step_index:
                     return field
         return None
 
@@ -99,7 +95,7 @@ class StepNavigator:
         self,
         state: ServiceState,
         from_step_field: str,
-        keep_fields: Optional[List[str]] = None
+        keep_fields: Optional[List[str]] = None,
     ) -> ServiceState:
         """
         Reseta campos dependentes de um step específico.
@@ -144,8 +140,7 @@ class StepNavigator:
         # Remove flags internas relacionadas aos campos resetados
         # Por exemplo, se resetou 'dados_guias', remove 'has_consulted_guias'
         internal_keys_to_remove = [
-            k for k in state.internal.keys()
-            if any(f in k for f in fields_to_reset)
+            k for k in state.internal.keys() if any(f in k for f in fields_to_reset)
         ]
         for key in internal_keys_to_remove:
             state.internal.pop(key)

@@ -101,6 +101,7 @@ class IPTUWorkflow(BaseWorkflow):
             "guia_escolhida",
             "dados_cotas",
             "cotas_escolhidas",
+            "divida_ativa_data",
         ],
         "guia_escolhida": ["dados_cotas", "cotas_escolhidas"],
         "cotas_escolhidas": [],  # Último step, não invalida nada
@@ -130,11 +131,11 @@ class IPTUWorkflow(BaseWorkflow):
         O user_id é injetado no execute(), então criamos o service apenas quando necessário.
         """
         if self._api_service is None:
-            if self._use_fake_api:
-                self._api_service = IPTUAPIServiceFake()
-            else:
+            if not self._use_fake_api:
                 # Cria API service com user_id do workflow
                 self._api_service = IPTUAPIService(user_id=self._user_id)
+            else:
+                self._api_service = IPTUAPIServiceFake()
         return self._api_service
 
     # --- Nós do Grafo ---
@@ -181,8 +182,8 @@ class IPTUWorkflow(BaseWorkflow):
                     logger.warning(
                         f"Não foi possível carregar dados do imóvel: {str(e)}"
                     )
-                    state.data["endereco"] = "Não disponível"
-                    state.data["proprietario"] = "Não disponível"
+                    state.data["endereco"] = None
+                    state.data["proprietario"] = None
 
                 state.agent_response = None
 
@@ -881,7 +882,9 @@ class IPTUWorkflow(BaseWorkflow):
         # Prepara dados dos boletos para o template
         boletos_formatados = utils.preparar_dados_boletos_para_template(guias_geradas)
 
-        return IPTUMessageTemplates.boletos_gerados(boletos_formatados, inscricao)
+        return IPTUMessageTemplates.boletos_gerados_finalizacao(
+            boletos_formatados, inscricao
+        )
 
     # --- Roteadores Condicionais ---
 
