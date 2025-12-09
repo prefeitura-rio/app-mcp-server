@@ -9,6 +9,15 @@ from typing import List, Dict, Any, Optional
 from src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils import (
     formatar_valor_brl,
 )
+from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
+    DadosGuias,
+    Guia,
+    Cota,
+    DadosCotas,
+    Darm,
+    DadosDarm,
+    DadosDividaAtiva,
+)
 
 
 class IPTUMessageTemplates:
@@ -22,15 +31,19 @@ class IPTUMessageTemplates:
         return "📋 Para consultar o IPTU, informe a **inscrição imobiliária** do seu imóvel."
 
     @staticmethod
-    def escolher_ano(inscricao: str, endereco: str, proprietario: str) -> str:
+    def escolher_ano(
+        inscricao: str, endereco: Optional[str], proprietario: Optional[str]
+    ) -> str:
         """Mensagem para escolha do ano de exercício."""
-        return f"""🏠 **Dados do Imóvel Encontrado:**
+        msg = f"""🏠 **Dados do Imóvel:**
 🆔 **Inscrição:** {inscricao}
-💼 **Proprietário:** {proprietario}
-📍 **Endereço:** {endereco}
-
-📅 Agora informe o **ano de exercício** para consulta do IPTU (ex: 2024, 2025).
 """
+        if proprietario:
+            msg += f"💼 **Proprietário:** {proprietario}\n"
+        if endereco:
+            msg += f"📍 **Endereço:** {endereco}\n"
+        msg += "📅 Agora informe o **ano de exercício** para consulta do IPTU (ex: 2024, 2025)."
+        return msg
 
     # --- Erros de Consulta ---
 
@@ -45,16 +58,34 @@ class IPTUMessageTemplates:
         return "❌ Inscrição imobiliária não encontrada após múltiplas tentativas. Verifique o número e tente novamente."
 
     @staticmethod
-    def nenhuma_guia_encontrada(inscricao: str, exercicio: int) -> str:
+    def nenhuma_guia_encontrada(
+        inscricao: str,
+        exercicio: int,
+        divida_ativa_info: Optional[DadosDividaAtiva] = None,
+    ) -> str:
         """Mensagem quando nenhuma guia é encontrada para o ano selecionado."""
-        return f"""❌ Não encontrei nenhuma guia do IPTU para a inscrição **{inscricao}** no ano **{exercicio}**.
+        msg = f"""❌ Não encontrei nenhuma guia do IPTU para a inscrição **{inscricao}** no ano **{exercicio}**.
 
 Para verificar se essa inscrição está isenta de IPTU, se há guias em parcelamento ou guias de depósito pendentes, acesse o site: https://pref.rio/. 
-
+__replace_divida_ativa__
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
 • Para consultar **outra inscrição**, informe o novo número
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
+
+        if not divida_ativa_info or divida_ativa_info.tem_divida_ativa is False:
+
+            return msg.replace("__replace_divida_ativa__", "")
+
+        else:
+            # Dívida ativa encontrada
+            msg_divida_ativa = IPTUMessageTemplates.divida_ativa_encontrada(
+                inscricao, exercicio, divida_ativa_info
+            )
+
+            return msg.replace(
+                "__replace_divida_ativa__", f"\n\n{msg_divida_ativa}\n\n"
+            )
 
     @staticmethod
     def nenhuma_cota_encontrada(guia_escolhida: str) -> str:
@@ -87,16 +118,26 @@ Para verificar se essa inscrição está isenta de IPTU, se há guias em parcela
         endereco: str,
         exercicio: str,
         guias: List[Dict[str, Any]],
+        divida_ativa_info: Optional[dict] = None,
     ) -> str:
         """Formata dados do imóvel e guias disponíveis."""
         texto = f"""🏠 **Dados do Imóvel Encontrado:**
 🆔 **Inscrição:** {inscricao}
-💼 **Proprietário:** {proprietario}
-📍 **Endereço:** {endereco}
-
-📋 **Guias Disponíveis para IPTU {exercicio}:**
-
 """
+        if proprietario:
+            texto += f"💼 **Proprietário:** {proprietario}\n"
+        if endereco:
+            texto += f"📍 **Endereço:** {endereco}\n"
+
+        if divida_ativa_info:
+            divita_ativa_info = DadosDividaAtiva(**divida_ativa_info)
+            if divida_ativa_info.get("tem_divida_ativa") is True:
+                msg_divida_ativa = IPTUMessageTemplates.divida_ativa_encontrada(
+                    inscricao, int(exercicio), divita_ativa_info
+                )
+                texto += f"\n{msg_divida_ativa}\n"
+
+        texto += f"""\n📋 **Guias Disponíveis para IPTU {exercicio}:**"""
         for guia in guias:
             numero_guia = guia.get("numero_guia", "N/A")
             tipo_guia = guia.get("tipo", "IPTU").upper()
@@ -109,14 +150,28 @@ Para verificar se essa inscrição está isenta de IPTU, se há guias em parcela
 
 """
 
-        # Lista os números das guias disponíveis
-        numeros_disponiveis = [guia.get("numero_guia", "N/A") for guia in guias]
-        exemplos_reais = ", ".join([f'"{num}"' for num in numeros_disponiveis])
+        guias_em_aberto = [g for g in guias if g.get("esta_em_aberto") == True]
+        from src.utils.log import logger
 
-        texto += f"""🎯 **Para continuar, selecione a guia desejada:**
-Informe o número da guia ({exemplos_reais})"""
+        logger.debug(f"Guias em aberto: {guias_em_aberto}")
+        if len(guias_em_aberto) == 0:
+            texto += "✅ Todas as guias deste imóvel estão quitadas.\n"
+            texto += """
+🔄 **O que você deseja fazer?**
+• Para pesquisar **outro ano**, informe o ano desejado
+• Para consultar **outra inscrição**, informe o novo número
+• Para **outra dúvida** não relacionada ao IPTU, pode me perguntar
+            """
+            return texto
+        else:
+            # Lista os números das guias disponíveis
+            numeros_disponiveis = [guia.get("numero_guia", "N/A") for guia in guias]
+            exemplos_reais = ", ".join([f'"{num}"' for num in numeros_disponiveis])
 
-        return texto
+            texto += f"""🎯 **Para continuar com a **emissao do IPTU {exercicio}**, selecione a guia desejada:**
+    Informe o número da guia ({exemplos_reais})"""
+
+            return texto
 
     @staticmethod
     def selecionar_cotas(cotas: List[Dict[str, Any]], valor_total: float) -> str:
@@ -261,8 +316,6 @@ Informe o número da guia ({exemplos_reais})"""
         """Mensagem quando há erro de autenticação com a API."""
         return "⚠️ **Erro de autenticação com serviço IPTU**\n\nPor favor, entre em contato com o suporte técnico."
 
-    # --- Dívida Ativa ---
-
     @staticmethod
     def divida_ativa_encontrada(
         inscricao: str,
@@ -277,17 +330,8 @@ Informe o número da guia ({exemplos_reais})"""
             ano: Ano do exercício consultado
             divida_info: Objeto DadosDividaAtiva com todos os dados
         """
-        texto = f"""⚠️ **IPTU do ano {ano} inscrito na Dívida Ativa Municipal**
-
-📋 **Inscrição:** {inscricao}
+        texto = f"""⚠️ **IPTU inscrito na Dívida Ativa Municipal**
 """
-        # Endereço completo
-        if divida_info.endereco_imovel:
-            endereco = divida_info.endereco_imovel
-            if divida_info.bairro_imovel:
-                endereco += f", {divida_info.bairro_imovel}"
-            texto += f"📍 **Endereço:** {endereco}\n"
-
         texto += "\n"
         texto += "📄 **Débitos encontrados na Dívida Ativa:**\n\n"
 
@@ -337,10 +381,6 @@ Informe o número da guia ({exemplos_reais})"""
 
         texto += """🔗 **Para emitir guias de pagamento da Dívida Ativa:**
 👉 Acesse: https://daminternet.rio.rj.gov.br/divida
-
-ℹ️ O IPTU deste ano foi inscrito na Dívida Ativa Municipal e deve ser consultado e pago através do sistema específico da Dívida Ativa.
-
-Posso te ajudar a consultar o IPTU de outro ano?
 """
 
         return texto
