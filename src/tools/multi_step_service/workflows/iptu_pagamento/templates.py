@@ -36,10 +36,10 @@ class IPTUMessageTemplates:
     ) -> str:
         """Mensagem para escolha do ano de exercício."""
         msg = f"""🏠 **Dados do Imóvel:**
-🆔 **Inscrição:** {inscricao}
+🆔 **Inscrição Imobiliária:** {inscricao}
 """
         if proprietario:
-            msg += f"💼 **Proprietário:** {proprietario}\n"
+            msg += f"💼 **Contribuinte:** {proprietario}\n"
         if endereco:
             msg += f"📍 **Endereço:** {endereco}\n"
         msg += "📅 Agora informe o **ano de exercício** para consulta do IPTU (ex: 2024, 2025)."
@@ -64,13 +64,13 @@ class IPTUMessageTemplates:
         divida_ativa_info: Optional[DadosDividaAtiva] = None,
     ) -> str:
         """Mensagem quando nenhuma guia é encontrada para o ano selecionado."""
-        msg = f"""❌ Não encontrei nenhuma guia do IPTU para a inscrição **{inscricao}** no ano **{exercicio}**.
+        msg = f"""❌ Não encontrei nenhuma guia do IPTU para a inscrição imobiliária **{inscricao}** no ano **{exercicio}**.
 
-Para verificar se essa inscrição está isenta de IPTU, se há guias em parcelamento ou guias de depósito pendentes, acesse o site: https://pref.rio/. 
+Para verificar se essa inscrição imobiliária está isenta de IPTU, se há guias em parcelamento ou guias de depósito pendentes, acesse o site: https://pref.rio/. 
 __replace_divida_ativa__
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
-• Para consultar **outra inscrição**, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o novo número
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         if not divida_ativa_info or divida_ativa_info.tem_divida_ativa is False:
@@ -122,10 +122,10 @@ __replace_divida_ativa__
     ) -> str:
         """Formata dados do imóvel e guias disponíveis."""
         texto = f"""🏠 **Dados do Imóvel Encontrado:**
-🆔 **Inscrição:** {inscricao}
+🆔 **Inscrição Imobiliária:** {inscricao}
 """
         if proprietario:
-            texto += f"💼 **Proprietário:** {proprietario}\n"
+            texto += f"💼 **Contribuinte:** {proprietario}\n"
         if endereco:
             texto += f"📍 **Endereço:** {endereco}\n"
 
@@ -159,7 +159,7 @@ __replace_divida_ativa__
             texto += """
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
-• Para consultar **outra inscrição**, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o novo número
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar
             """
             return texto
@@ -219,9 +219,9 @@ __replace_divida_ativa__
         """Formata confirmação dos dados antes da geração."""
         return f"""📋 **Confirmação dos Dados**
 
-**Imóvel:** {inscricao}
+**Inscrição Imobiliária:** {inscricao}
 **Endereço:** {endereco}
-**Proprietário:** {proprietario}
+**Contribuinte:** {proprietario}
 **Guia:** {guia_escolhida}
 **Cotas:** {', '.join(cotas_escolhidas)}
 **Boletos a serem gerados:** {num_boletos}
@@ -265,19 +265,19 @@ __replace_divida_ativa__
         for boleto_num, guia in enumerate(guias_geradas, 1):
             valor = guia.get("valor", 0.0)
             texto += f"**Boleto {boleto_num}:**\n"
-            texto += f"**Inscrição:** {inscricao}\n"
+            texto += f"**Inscrição Imobiliária:** {inscricao}\n"
             texto += f"**Guia:** {guia['numero_guia']}\n"
             texto += f"**Cotas:** {guia['cotas']}\n"
             texto += f"**Valor:** {formatar_valor_brl(valor)}\n"
             texto += f"**Vencimento:** {guia['vencimento']}\n"
             texto += f"**Código de Barras:** {guia['codigo_barras']}\n"
-            texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
+            # texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
             texto += f"**PDF:** {guia.get('pdf', 'Não disponível')}\n\n"
 
         texto += """🎉 **Consulta finalizada com sucesso!**
 
 🔄 **O que você deseja fazer agora?**
-• Para consultar **outra inscrição** de IPTU, informe o novo número
+• Para consultar **outra inscrição imobiliária** de IPTU, informe o novo número
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         return texto
