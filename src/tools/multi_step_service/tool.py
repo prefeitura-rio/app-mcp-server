@@ -63,7 +63,7 @@ def _get_workflow_descriptions():
 
 @tool(description=_get_workflow_descriptions())
 async def multi_step_service(
-    service_name: str, user_id: str, payload: Optional[Dict[str, Any]] = None
+    service_name: Optional[str], user_id: str, payload: Optional[Dict[str, Any]] = None
 ) -> dict:
 
     # Cria request agnóstico
