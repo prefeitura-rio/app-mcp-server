@@ -24,9 +24,7 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.models import (
     AddressConfirmationPayload,
     PontoReferenciaPayload,
 )
-from src.tools.multi_step_service.workflows.poda_de_arvore.templates import (
-    IdentificationMessageTemplates
-)
+from src.tools.multi_step_service.workflows.poda_de_arvore.templates import solicitar_cpf
 
 from prefeitura_rio.integrations.sgrc.models import Address, NewTicket, Requester, Phones
 from prefeitura_rio.integrations.sgrc.exceptions import (
@@ -77,16 +75,137 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         logger.info(f"[STATE.DATA] Chaves presentes: {list(state.data.keys())}")
         logger.info(f"[STATE.PAYLOAD] Conteúdo: {state.payload}")
         
+        # Se está aguardando confirmação de usar DADOS PESSOAIS da memória
+        if state.data.get("awaiting_user_memory_confirmation"):
+            # Se o payload tem confirmacao, processa
+            if "confirmacao" in state.payload:
+                try:
+                    validated = AddressConfirmationPayload.model_validate(state.payload)
+                    state.data.pop("awaiting_user_memory_confirmation", None)
+                    
+                    if validated.confirmacao:
+                        logger.info("[MEMÓRIA] Usuário confirmou usar dados pessoais anteriores")
+                        # Mantém os dados e marca como verificado
+                        state.data["cadastro_verificado"] = True
+                        state.agent_response = None
+                        return state
+                    else:
+                        logger.info("[MEMÓRIA] Usuário recusou dados pessoais anteriores. Limpando...")
+                        # Limpa apenas dados pessoais
+                        keys_to_clear = ["cpf", "email", "name", "phone", "cadastro_verificado", 
+                                       "identificacao_pulada", "cpf_attempts", "email_attempts", "name_attempts",
+                                       "awaiting_user_memory_confirmation"]
+                        for key in keys_to_clear:
+                            state.data.pop(key, None)
+                        # Solicita CPF imediatamente após limpar dados
+                        state.agent_response = AgentResponse(
+                            description=solicitar_cpf(),
+                            payload_schema=CPFPayload.model_json_schema(),
+                        )
+                        return state
+                    
+                except Exception as e:
+                    logger.error(f"Erro ao processar confirmação de dados pessoais: {e}")
+                    # Em caso de erro, continua normalmente
+            else:
+                # Verifica se o usuário quer pular/avançar
+                user_input = str(state.payload.get("email", "")).lower() if "email" in state.payload else ""
+                if user_input == "" and "email" in state.payload:
+                    # Usuário enviou email vazio - quer pular
+                    logger.info("[MEMÓRIA] Usuário optou por pular dados pessoais (avançar)")
+                    # Trata como recusa - limpa dados pessoais
+                    state.data.pop("awaiting_user_memory_confirmation", None)
+                    keys_to_clear = ["cpf", "email", "name", "phone", "cadastro_verificado"]
+                    for key in keys_to_clear:
+                        state.data.pop(key, None)
+                    # Continua sem dados pessoais
+                    state.agent_response = None
+                    return state
+                else:
+                    # Usuário perguntou algo ao invés de confirmar - repete a pergunta
+                    logger.info("[MEMÓRIA] Usuário não enviou confirmação - repetindo pergunta")
+                    # Mantém awaiting_user_memory_confirmation=True para continuar aguardando
+                    # A pergunta será refeita no bloco abaixo
+        
+        # Verifica se tem dados pessoais na memória para confirmar
+        # MAS SÓ DEPOIS que o endereço já foi processado
+        # OU se foi marcado que precisa confirmar (novo atendimento)
+        # Ignora se o payload contém apenas ponto_referencia (vindo do passo anterior)
+        payload_is_empty = not state.payload or (len(state.payload) == 1 and "ponto_referencia" in state.payload)
+        
+        # Se está aguardando confirmação OU precisa perguntar pela primeira vez
+        # Também pergunta se tem CPF="skip" mas não tem dados pessoais reais
+        should_ask_about_data = (
+            (state.data.get("address_confirmed") or state.data.get("personal_data_needs_confirmation")) or
+            (state.data.get("cpf") == "skip" and not state.data.get("name") and not state.data.get("email"))
+        )
+        
+        if (((payload_is_empty and not state.data.get("awaiting_user_memory_confirmation")) or 
+            (state.data.get("awaiting_user_memory_confirmation") and "confirmacao" not in state.payload)) and 
+            should_ask_about_data):
+            has_user_data = []
+            
+            if state.data.get("name"):
+                # Mascara o nome - mostra apenas primeiro nome e inicial do último
+                nome_parts = state.data["name"].split()
+                if len(nome_parts) > 1:
+                    nome_mask = f"{nome_parts[0]} {nome_parts[-1][0]}."
+                else:
+                    nome_mask = nome_parts[0]
+                has_user_data.append(f"• Nome: {nome_mask}")
+                
+            if state.data.get("cpf") and state.data["cpf"] != "skip":
+                cpf = state.data["cpf"]
+                if len(cpf) == 11:
+                    # Formato XXX.456.789-XX mostrando apenas o meio do CPF
+                    cpf_mask = f"XXX.{cpf[3:6]}.{cpf[6:9]}-XX"
+                else:
+                    cpf_mask = "X" * 3 + cpf[3:] if len(cpf) > 3 else "XXX"
+                has_user_data.append(f"• CPF: {cpf_mask}")
+                
+            if state.data.get("email"):
+                # Mascara email
+                email_parts = state.data["email"].split("@")
+                if len(email_parts) == 2:
+                    user_part = email_parts[0]
+                    if len(user_part) > 2:
+                        email_mask = f"{user_part[:2]}***@{email_parts[1]}"
+                    else:
+                        email_mask = f"{user_part}***@{email_parts[1]}"
+                else:
+                    email_mask = state.data["email"]
+                has_user_data.append(f"• Email: {email_mask}")
+            
+            if has_user_data:
+                dados_str = "\n".join(has_user_data)
+                
+                # Se já estava aguardando e usuário perguntou algo, adiciona mensagem de segurança e orientação
+                if state.data.get("awaiting_user_memory_confirmation") and state.payload:
+                    message = f"Por questões de segurança, não posso exibir dados sensíveis completos.\n\nVocê tem os seguintes dados salvos:\n\n{dados_str}\n\nPor favor, confirme se deseja usar esses dados ou se prefere fornecer novos dados."
+                else:
+                    message = f"Vi que você tem dados pessoais salvos:\n\n{dados_str}\n\nGostaria de usar esses dados?"
+                
+                state.data["awaiting_user_memory_confirmation"] = True
+                # Remove flag de confirmação pendente
+                state.data.pop("personal_data_needs_confirmation", None)
+                
+                state.agent_response = AgentResponse(
+                    description=message,
+                    payload_schema=AddressConfirmationPayload.model_json_schema()
+                )
+                return state
         
         # Se já verificou cadastro, pula
         if "cpf" in state.payload:
             try:
                 validated_data = CPFPayload.model_validate(state.payload)
-                cpf_antigo = state.data.get("cpf")
                 cpf_novo = validated_data.cpf
-                if cpf_antigo != cpf_novo:
-                    # reset?
-                    pass
+                
+                # TODO: Implementar lógica de reset quando CPF mudar
+                # cpf_antigo = state.data.get("cpf")
+                # if cpf_antigo != cpf_novo:
+                #     # Limpar dados do cadastro anterior
+                #     pass
                 
                 # Verifica se o usuário optou por pular a identificação
                 if not cpf_novo:
@@ -117,10 +236,26 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                             telefone_sgrc = str(user_info["phones"][0]).strip() if user_info["phones"][0] else ""
                             state.data["phone"] = telefone_sgrc
                             state.payload["phone"] = telefone_sgrc
-                                
+                        
+                        # Marca como verificado com sucesso
                         state.data["cadastro_verificado"] = True
-                    except:
-                        logger.error("Erro ao chamar API para obter informações do usuário.")
+                        logger.info(f"Cadastro encontrado para CPF XXX.{cpf_novo[3:6]}.{cpf_novo[6:9]}-XX" if len(cpf_novo) == 11 else f"Cadastro encontrado para CPF {cpf_novo[:3]}XXX")
+                        
+                    except AttributeError as e:
+                        # Erro de estrutura de dados - API retornou formato inesperado
+                        logger.error(f"Erro ao processar resposta da API de cadastro: {str(e)}")
+                        state.data["cadastro_verificado"] = False
+                        
+                    except (ConnectionError, TimeoutError) as e:
+                        # Erro de conexão - API indisponível
+                        logger.error(f"API de cadastro indisponível: {str(e)}")
+                        state.data["cadastro_verificado"] = False
+                        state.data["api_indisponivel"] = True
+                        
+                    except Exception as e:
+                        # Outros erros (ex: usuário não encontrado)
+                        logger.info(f"Usuário não encontrado no cadastro ou erro na consulta: {str(e)}")
+                        state.data["cadastro_verificado"] = False
                 state.agent_response = None
                 return state
             
@@ -142,7 +277,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                     return state  # Retorna para prosseguir sem CPF
                 else:
                     state.agent_response = AgentResponse(
-                        description=f"CPF inválido. Tentativa {cpf_attempts}/3. {IdentificationMessageTemplates.solicitar_cpf()}",
+                        description=f"CPF inválido. Tentativa {cpf_attempts}/3. {solicitar_cpf()}",
                         payload_schema=CPFPayload.model_json_schema(),
                         error_message=f"CPF inválido: {str(e)}"
                     )
@@ -150,9 +285,19 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 # ou terminar o fluxo
 
         # Se já tem CPF processado e não é um novo valor sendo enviado
+        # MAS se CPF é "skip" e acabou de coletar ponto de referência, solicita CPF novamente
         if "cpf" in state.data and "cpf" not in state.payload:
-            logger.info("CPF já existe em state.data, prosseguindo")
-            return state
+            # Se CPF é "skip" e acabou de processar ponto de referência, pergunta CPF
+            if (state.data.get("cpf") == "skip" and 
+                state.data.get("reference_point_collected") and 
+                "ponto_referencia" in state.payload):
+                logger.info("CPF é 'skip' mas acabou de coletar ponto de referência - solicitando CPF")
+                # Limpa o CPF skip para solicitar novamente
+                state.data.pop("cpf", None)
+                state.data.pop("identificacao_pulada", None)
+            else:
+                logger.info("CPF já existe em state.data, prosseguindo")
+                return state
 
         # Se já temos uma resposta de erro (validação falhou), retorna com erro
         if state.agent_response and state.agent_response.error_message:
@@ -161,7 +306,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         # Se chegou aqui e não tem CPF, solicita
         if "cpf" not in state.data:
             state.agent_response = AgentResponse(
-                description=IdentificationMessageTemplates.solicitar_cpf(),
+                description=solicitar_cpf(),
                 payload_schema=CPFPayload.model_json_schema(),
             )
 
@@ -191,11 +336,13 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             # Se forneceu algo, valida
             try:
                 validated_data = EmailPayload.model_validate(state.payload)
-                email_antigo = state.data.get("email")
                 email_novo = validated_data.email
-                if email_antigo != email_novo:
-                    # reset?
-                    pass
+                
+                # TODO: Implementar lógica de reset quando email mudar
+                # email_antigo = state.data.get("email")
+                # if email_antigo != email_novo:
+                #     # Avaliar se precisa atualizar algo
+                #     pass
                 
                 state.data["email"] = email_novo
                 state.data["email_processed"] = True
@@ -269,11 +416,13 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             # Se forneceu algo, valida
             try:
                 validated_data = NomePayload.model_validate(state.payload)
-                nome_antigo = state.data.get("name")
                 nome_novo = validated_data.name
-                if nome_antigo != nome_novo:
-                    # reset?
-                    pass
+                
+                # TODO: Implementar lógica de reset quando nome mudar
+                # nome_antigo = state.data.get("name")
+                # if nome_antigo != nome_novo:
+                #     # Avaliar se precisa atualizar algo
+                #     pass
                 
                 state.data["name"] = nome_novo
                 state.data["name_processed"] = True
@@ -330,42 +479,139 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         logger.info(f"[STATE.DATA] Chaves presentes: {list(state.data.keys())}")
         logger.info(f"[STATE.PAYLOAD] Conteúdo: {state.payload}")
         
-        # IMPORTANTE: Detecta se o payload contém dados de outras etapas
-        # Se recebeu dados específicos de outras etapas quando já processou algumas coisas
-        if state.payload:
-            # Se já tem endereço validado e recebe outros dados, pula direto
-            if state.data.get("address_validated"):
-                if "cpf" in state.payload:
-                    logger.info("[ROTEAMENTO] Payload contém CPF, pulando direto para _collect_cpf")
-                    state.agent_response = None
-                    return state
-                elif "email" in state.payload:
-                    logger.info("[ROTEAMENTO] Payload contém email, continuando fluxo")
-                    state.agent_response = None
-                    return state
-                elif "name" in state.payload:
-                    logger.info("[ROTEAMENTO] Payload contém nome, continuando fluxo")
-                    state.agent_response = None
-                    return state
-                elif "ponto_referencia" in state.payload:
-                    logger.info("[ROTEAMENTO] Payload contém ponto_referencia, continuando fluxo")
-                    state.agent_response = None
-                    return state
-            # Se está esperando confirmação e recebe confirmação, continua processando
-            elif state.data.get("address_needs_confirmation") and "confirmacao" in state.payload:
-                logger.info("[ROTEAMENTO] Recebendo confirmação de endereço, processando...")
-                # Deixa processar normalmente
-            # Se recebe endereço mas não é a primeira execução nem confirmação, processa
-            elif "address" in state.payload:
-                logger.info("[ROTEAMENTO] Recebendo novo endereço, processando...")
-                # Deixa processar normalmente
-        
-        # IMPORTANTE: Se é primeira execução (payload vazio e não está reiniciando após erro),
-        # limpa TODOS os dados anteriores
+        # IMPORTANTE: PRIMEIRO detecta se é novo atendimento (antes de qualquer return!)
+        # Se é primeira execução (payload vazio) e tem qualquer dado anterior
         if not state.payload and not state.data.get("restarting_after_error"):
-            if state.data:  # Se há dados antigos
-                logger.warning("[LIMPEZA] Detectados dados de execução anterior. Limpando state.data...")
-                state.data.clear()  # Limpa TUDO, incluindo contadores
+            # Se tem QUALQUER dado anterior (endereço, CPF, nome, etc)
+            if state.data and len(state.data) > 0:
+                # Se já finalizou um atendimento anterior OU tem confirmações antigas
+                # (awaiting_user_memory_confirmation indica sessão anterior não finalizada)
+                if (state.data.get("ticket_created") or state.data.get("error") or 
+                    state.data.get("awaiting_user_memory_confirmation") or
+                    state.data.get("awaiting_address_memory_confirmation")):
+                    logger.info("[NOVO ATENDIMENTO] Detectado início de nova solicitação após atendimento anterior")
+                    
+                    # Reseta TODOS os flags de confirmação - nova sessão, novas confirmações!
+                    state.data.pop("ticket_created", None)
+                    state.data.pop("error", None)
+                    state.data.pop("address_confirmed", None)
+                    state.data.pop("address_validated", None)
+                    state.data.pop("awaiting_address_memory_confirmation", None)
+                    state.data.pop("awaiting_user_memory_confirmation", None)
+                    state.data.pop("reference_point_collected", None)
+                    state.data.pop("need_reference_point", None)
+                    state.data.pop("ponto_referencia", None)
+                    state.data.pop("cadastro_verificado", None)
+                    state.data.pop("address_needs_confirmation", None)
+                    state.data.pop("address_validation", None)  # IMPORTANTE: reseta contador de tentativas
+                    state.data.pop("address_max_attempts_reached", None)  # IMPORTANTE: reseta flag de tentativas
+                    
+                    # Se tem endereço ou dados pessoais, marca para confirmar
+                    if state.data.get("address") or state.data.get("address_temp"):
+                        # Tem endereço salvo, marca para confirmar dados pessoais depois
+                        if state.data.get("cpf") or state.data.get("email") or state.data.get("name"):
+                            state.data["personal_data_needs_confirmation"] = True
+                        # Continua para perguntar sobre endereço
+                    elif state.data.get("cpf") or state.data.get("email") or state.data.get("name"):
+                        # Tem só dados pessoais, marca para confirmar depois do endereço
+                        state.data["personal_data_needs_confirmation"] = True
+        
+        # Se já coletou endereço validado e confirmado, pula
+        # MAS não pula se houver erro/ticket (novo atendimento) ou confirmações pendentes
+        # TAMBÉM não pula se é o primeiro payload vazio (novo atendimento)
+        if (state.data.get("address_validated") and state.data.get("address_confirmed") 
+            and not state.data.get("ticket_created") and not state.data.get("error")
+            and not state.data.get("awaiting_user_memory_confirmation")
+            and not state.data.get("awaiting_address_memory_confirmation")
+            and state.payload):  # Se tem payload, não é novo atendimento
+            return state
+        
+        # Se endereço está aguardando confirmação, não processa novamente
+        if state.data.get("address_needs_confirmation"):
+            return state
+        
+        # Se está aguardando confirmação de dados PESSOAIS, não processa aqui
+        # (será processado em _collect_cpf)
+        if state.data.get("awaiting_user_memory_confirmation"):
+            return state
+        
+        # Se está aguardando confirmação de usar ENDEREÇO da memória
+        if state.data.get("awaiting_address_memory_confirmation") and "confirmacao" in state.payload:
+            try:
+                validated = AddressConfirmationPayload.model_validate(state.payload)
+                state.data.pop("awaiting_address_memory_confirmation", None)
+                
+                if validated.confirmacao:
+                    logger.info("[MEMÓRIA] Usuário confirmou usar endereço anterior")
+                    # Marca endereço como confirmado
+                    if state.data.get("address"):
+                        state.data["address_confirmed"] = True
+                        state.data["address_validated"] = True
+                        state.data["need_reference_point"] = True  # Precisa pedir ponto de referência
+                    elif state.data.get("address_temp"):
+                        # Move address_temp para address
+                        state.data["address"] = state.data["address_temp"]
+                        state.data["address_confirmed"] = True
+                        state.data["address_validated"] = True
+                        state.data["need_reference_point"] = True  # Precisa pedir ponto de referência
+                        state.data.pop("address_temp", None)
+                else:
+                    logger.info("[MEMÓRIA] Usuário recusou endereço anterior. Limpando endereço...")
+                    # Limpa apenas dados de endereço
+                    keys_to_clear = ["address", "address_temp", "address_validated", "address_confirmed",
+                                   "address_needs_confirmation", "address_validation", "last_address_text"]
+                    for key in keys_to_clear:
+                        state.data.pop(key, None)
+                    
+                # Remove agent_response para continuar fluxo
+                state.agent_response = None
+                return state
+                
+            except Exception as e:
+                logger.error(f"Erro ao processar confirmação de endereço da memória: {e}")
+                # Em caso de erro, limpa endereço e começa novo
+                keys_to_clear = ["address", "address_temp", "address_validated", "address_confirmed",
+                               "address_needs_confirmation", "address_validation", "last_address_text"]
+                for key in keys_to_clear:
+                    state.data.pop(key, None)
+        
+        # Se tem endereço anterior (após processar novo atendimento), confirma ENDEREÇO
+        # MAS só se não está aguardando outra confirmação
+        if (not state.payload and (state.data.get("address") or state.data.get("address_temp"))
+            and not state.data.get("awaiting_user_memory_confirmation")
+            and not state.data.get("awaiting_address_memory_confirmation")):
+                    logger.info("[MEMÓRIA] Detectado endereço de atendimento anterior")
+                    
+                    # Pega o endereço disponível
+                    addr = state.data.get("address") or state.data.get("address_temp")
+                    
+                    # Formata endereço
+                    endereco_parts = []
+                    if addr.get('logradouro_nome_ipp'):
+                        endereco_parts.append(f"• Logradouro: {addr['logradouro_nome_ipp']}")
+                    elif addr.get('logradouro'):
+                        endereco_parts.append(f"• Logradouro: {addr['logradouro']}")
+                    
+                    if addr.get('numero'):
+                        endereco_parts.append(f"• Número: {addr['numero']}")
+                    
+                    if addr.get('bairro_nome_ipp'):
+                        endereco_parts.append(f"• Bairro: {addr['bairro_nome_ipp']}")
+                    elif addr.get('bairro'):
+                        endereco_parts.append(f"• Bairro: {addr['bairro']}")
+                    
+                    endereco_parts.append(f"• Cidade: {addr.get('cidade', 'Rio de Janeiro')}, {addr.get('estado', 'RJ')}")
+                    
+                    endereco_str = "\n".join(endereco_parts)
+                    
+                    # Marca que está aguardando confirmação do endereço da memória
+                    state.data["awaiting_address_memory_confirmation"] = True
+                    
+                    state.agent_response = AgentResponse(
+                        description=f"Vi que você tem um endereço registrado no histórico. Gostaria de solicitar a poda de árvore para o endereço abaixo?\n\n{endereco_str}\n\nEste endereço está correto?",
+                        payload_schema=AddressConfirmationPayload.model_json_schema()
+                    )
+                    return state
         
         # Se está recomeçando após erro de ticket
         if state.data.get("restarting_after_error"):
@@ -380,7 +626,13 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             return state
         
         # Se já coletou endereço validado e confirmado, pula
-        if state.data.get("address_validated") and state.data.get("address_confirmed"):
+        # MAS não pula se houver erro/ticket (novo atendimento) ou confirmações pendentes
+        # TAMBÉM não pula se é o primeiro payload vazio (novo atendimento)
+        if (state.data.get("address_validated") and state.data.get("address_confirmed") 
+            and not state.data.get("ticket_created") and not state.data.get("error")
+            and not state.data.get("awaiting_user_memory_confirmation")
+            and not state.data.get("awaiting_address_memory_confirmation")
+            and state.payload):  # Se tem payload, não é novo atendimento
             return state
             
         # Inicializa estado de validação se não existe
@@ -388,53 +640,6 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             state.data["address_validation"] = AddressValidationState().model_dump()
         
         validation_state = AddressValidationState(**state.data["address_validation"])
-        
-        # Se está recebendo confirmação do endereço
-        if "confirmacao" in state.payload and state.data.get("address_needs_confirmation"):
-            try:
-                validated_data = AddressConfirmationPayload.model_validate(state.payload)
-                
-                if validated_data.confirmacao:
-                    # Confirma e move dados temporários para definitivos
-                    state.data["address"] = state.data["address_temp"]
-                    state.data["address_confirmed"] = True
-                    state.data["address_validated"] = True
-                    state.data["address_needs_confirmation"] = False
-                    state.data["need_reference_point"] = True  # Marca que precisa pedir ponto de referência
-                    logger.info("Endereço confirmado pelo usuário")
-                    state.agent_response = None
-                    return state
-                else:
-                    # Usuário não confirmou, reseta para coletar novo endereço
-                    state.data["address_needs_confirmation"] = False
-                    state.data["address_temp"] = None
-                    logger.info("Endereço não confirmado, solicitando novo endereço")
-                    
-                    # Incrementa contador de tentativas
-                    validation_state.attempts += 1
-                    state.data["address_validation"] = validation_state.model_dump()
-                    
-                    # Verifica se ainda tem tentativas
-                    if validation_state.attempts >= validation_state.max_attempts:
-                        state.agent_response = AgentResponse(
-                            description="Não foi possível validar o endereço após 3 tentativas. Por favor, tente novamente mais tarde ou entre em contato pelo telefone 1746.",
-                            error_message="Máximo de tentativas excedido"
-                        )
-                        state.data["address_max_attempts_reached"] = True
-                    else:
-                        state.agent_response = AgentResponse(
-                            description=f"Por favor, informe novamente o endereço correto (tentativa {validation_state.attempts}/{validation_state.max_attempts}):",
-                            payload_schema=AddressPayload.model_json_schema()
-                        )
-                    return state
-            
-            except Exception as e:
-                state.agent_response = AgentResponse(
-                    description="Por favor, confirme se o endereço está correto respondendo com 'sim' ou 'não'.",
-                    payload_schema=AddressConfirmationPayload.model_json_schema(),
-                    error_message=f"Resposta inválida: {str(e)}"
-                )
-                return state
         
         # Se tem endereço no payload, processa
         if "address" in state.payload:
@@ -450,7 +655,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 state.data["last_address_text"] = address_text
                 
                 # Verifica se excedeu tentativas
-                if validation_state.attempts > validation_state.max_attempts:
+                if validation_state.attempts >= validation_state.max_attempts:
                     state.agent_response = AgentResponse(
                         description="Não foi possível validar o endereço após 3 tentativas. Por favor, tente novamente mais tarde ou entre em contato pelo telefone 1746. Seu atendimento está finalizado.",
                         error_message="Máximo de tentativas excedido"
@@ -557,33 +762,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 validation_state.validated = True
                 state.data["address_validation"] = validation_state.model_dump()
                 
-                logger.info(f"Endereço identificado, pedindo confirmação: {address_text}")
-                
-                # Monta mensagem de confirmação diretamente aqui
-                confirmacao_parts = []
-                
-                if address_data.logradouro_nome_ipp:
-                    confirmacao_parts.append(f"• Logradouro: {address_data.logradouro_nome_ipp}")
-                elif address_data.logradouro:
-                    confirmacao_parts.append(f"• Logradouro: {address_data.logradouro}")
-                
-                if address_data.numero:
-                    confirmacao_parts.append(f"• Número: {address_data.numero}")
-                
-                if address_data.bairro_nome_ipp:
-                    confirmacao_parts.append(f"• Bairro: {address_data.bairro_nome_ipp}")
-                elif address_data.bairro:
-                    confirmacao_parts.append(f"• Bairro: {address_data.bairro}")
-                
-                confirmacao_parts.append(f"• Cidade: {address_data.cidade}, {address_data.estado}")
-                
-                mensagem_confirmacao = "\n".join(confirmacao_parts)
-                
-                state.agent_response = AgentResponse(
-                    description=f"Por favor, confirme se o endereço está correto:\n\n{mensagem_confirmacao}\n\nO endereço está correto?",
-                    payload_schema=AddressConfirmationPayload.model_json_schema()
-                )
-                
+                logger.info(f"Endereço identificado: {address_text}")
+                state.agent_response = None  # Não envia resposta, vai para confirmação
                 return state
                 
             except Exception as e:
@@ -622,18 +802,6 @@ Rua Afonso Cavalcanti, 455, Cidade Nova""",
         
         return state
 
-    @handle_errors
-    async def _format_data(self, state: ServiceState) -> ServiceState:
-        """Formata dados para exibição (CPF com máscara)."""
-        
-        user_info = state.data.get("user_info", {})
-        cpf = user_info.get("cpf", "")
-        
-        # Formata CPF para exibição: XXX.XXX.XXX-XX
-        if cpf and len(cpf) == 11:
-            state.data["cpf_formatted"] = f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}"
-        
-        return state
     
     async def new_ticket(
         self,
@@ -757,8 +925,10 @@ Rua Afonso Cavalcanti, 455, Cidade Nova""",
             logger.exception(exc)
             state.data["ticket_created"] = False
             state.data["error"] = "erro_interno"
-            state.data["error_message"] = "Infelizmente houve um erro e a solicitação não pôde ser criada."
-            # NÃO define agent_response para permitir reinicialização
+            state.agent_response = AgentResponse(
+                description="Infelizmente houve um erro e a solicitação não pôde ser criada.\n\nPor favor, tente novamente em alguns minutos ou entre em contato pelo telefone 1746.",
+                error_message="Erro ao criar solicitação"
+            )
             return state
         except (SGRCDuplicateTicketException, SGRCEquivalentTicketException) as exc:
             logger.exception(exc)
@@ -774,24 +944,23 @@ Rua Afonso Cavalcanti, 455, Cidade Nova""",
             logger.exception(exc)
             state.data["ticket_created"] = False
             state.data["error"] = "erro_sgrc"
-            state.data["error_message"] = "O sistema está indisponível no momento. Por favor, tente novamente."
-            # NÃO define agent_response para permitir reinicialização
+            state.agent_response = AgentResponse(
+                description="O sistema está indisponível no momento.\n\nPor favor, tente novamente em alguns minutos.",
+                error_message="Sistema indisponível"
+            )
             return state
         except Exception as exc:
             logger.exception(exc)
             state.data["ticket_created"] = False
             state.data["error"] = "erro_geral"
-            state.data["error_message"] = "Houve um erro ao abrir o chamado. Por favor, tente novamente."
-            # NÃO define agent_response para permitir reinicialização
+            state.agent_response = AgentResponse(
+                description="Houve um erro ao abrir o chamado.\n\nPor favor, tente novamente mais tarde ou entre em contato pelo telefone 1746.",
+                error_message=f"Erro: {str(exc)}"
+            )
             return state
 
 
     # --- Roteamento Condicional ---
-
-    def _decide_after_data_collection(self, state: ServiceState) -> str:
-        if state.agent_response is not None:
-            return END
-        return "continue"
     
     def _route_after_cpf(self, state: ServiceState) -> str:
         logger.info("[ROTEAMENTO] _route_after_cpf")
@@ -809,7 +978,11 @@ Rua Afonso Cavalcanti, 455, Cidade Nova""",
         if state.agent_response and "cpf" not in state.data:
             return END  # Termina e aguarda novo input do usuário
             
-        # Se há qualquer agent_response E já tem CPF, termina o fluxo
+        # Se está aguardando confirmação de dados pessoais, termina para aguardar resposta
+        if state.data.get("awaiting_user_memory_confirmation"):
+            return END  # Aguarda confirmação do usuário
+            
+        # Se há qualquer agent_response E já tem CPF (mas não é confirmação), termina o fluxo
         if state.agent_response and "cpf" in state.data:
             return END
             
@@ -908,9 +1081,18 @@ Rua Afonso Cavalcanti, 455, Cidade Nova""",
     @handle_errors
     async def _confirm_address(self, state: ServiceState) -> ServiceState:
         """Confirma o endereço identificado com o usuário."""
+        logger.info("[ENTRADA] _confirm_address")
+        logger.info(f"[STATE.DATA] address_needs_confirmation: {state.data.get('address_needs_confirmation')}")
+        logger.info(f"[STATE.DATA] address_confirmed: {state.data.get('address_confirmed')}")
+        logger.info(f"[STATE.PAYLOAD] Conteúdo: {state.payload}")
         
-        # Se já confirmou ou não precisa confirmar
-        if state.data.get("address_confirmed") or not state.data.get("address_needs_confirmation"):
+        # Se já confirmou, pula
+        if state.data.get("address_confirmed"):
+            return state
+        
+        # Se não precisa confirmar, pula
+        if not state.data.get("address_needs_confirmation"):
+            logger.warning("_confirm_address chamado mas não há endereço para confirmar")
             return state
         
         # Se tem resposta de confirmação no payload
@@ -923,20 +1105,20 @@ Rua Afonso Cavalcanti, 455, Cidade Nova""",
                     state.data["address"] = state.data["address_temp"]
                     state.data["address_confirmed"] = True
                     state.data["address_validated"] = True
+                    state.data["address_needs_confirmation"] = False
                     state.data["need_reference_point"] = True  # Marca que precisa pedir ponto de referência
                     logger.info("Endereço confirmado pelo usuário")
                     state.agent_response = None
                     return state
                 else:
-                    # Usuário não confirmou, volta para coletar endereço
+                    # Usuário não confirmou, reseta para coletar novo endereço
                     state.data["address_needs_confirmation"] = False
                     state.data["address_temp"] = None
+                    state.data["address_validated"] = False  # Importante: marca como não validado para voltar a coletar
                     logger.info("Endereço não confirmado, solicitando novo endereço")
                     
-                    # Incrementa contador de tentativas
+                    # NÃO incrementa contador aqui - já foi incrementado em _collect_address
                     validation_state = AddressValidationState(**state.data.get("address_validation", {}))
-                    validation_state.attempts += 1
-                    state.data["address_validation"] = validation_state.model_dump()
                     
                     # Verifica se ainda tem tentativas
                     if validation_state.attempts >= validation_state.max_attempts:
@@ -960,53 +1142,70 @@ Rua Afonso Cavalcanti, 455, Cidade Nova""",
                 )
                 return state
         
-        # Monta mensagem de confirmação
-        address_temp = state.data.get("address_temp", {})
-        
-        # Formata as partes do endereço
-        confirmacao_parts = []
-        
-        if address_temp.get("logradouro_nome_ipp"):
-            confirmacao_parts.append(f"• Logradouro: {address_temp['logradouro_nome_ipp']}")
-        elif address_temp.get("logradouro"):
-            confirmacao_parts.append(f"• Logradouro: {address_temp['logradouro']}")
-        
-        if address_temp.get("numero"):
-            confirmacao_parts.append(f"• Número: {address_temp['numero']}")
-        
-        if address_temp.get("bairro_nome_ipp"):
-            confirmacao_parts.append(f"• Bairro: {address_temp['bairro_nome_ipp']}")
-        elif address_temp.get("bairro"):
-            confirmacao_parts.append(f"• Bairro: {address_temp['bairro']}")
-        
-        confirmacao_parts.append(f"• Cidade: {address_temp.get('cidade', 'Rio de Janeiro')}, {address_temp.get('estado', 'RJ')}")
-        
-        mensagem_confirmacao = "\n".join(confirmacao_parts)
-        
-        state.agent_response = AgentResponse(
-            description=f"Por favor, confirme se o endereço está correto:\n\n{mensagem_confirmacao}\n\nO endereço está correto?",
-            payload_schema=AddressConfirmationPayload.model_json_schema()
-        )
+        # Se chegou aqui, precisa montar mensagem de confirmação pela primeira vez
+        if state.data.get("address_temp"):
+            address_temp = state.data.get("address_temp", {})
+            
+            # Formata as partes do endereço
+            confirmacao_parts = []
+            
+            if address_temp.get("logradouro_nome_ipp"):
+                confirmacao_parts.append(f"• Logradouro: {address_temp['logradouro_nome_ipp']}")
+            elif address_temp.get("logradouro"):
+                confirmacao_parts.append(f"• Logradouro: {address_temp['logradouro']}")
+            
+            if address_temp.get("numero"):
+                confirmacao_parts.append(f"• Número: {address_temp['numero']}")
+            
+            if address_temp.get("bairro_nome_ipp"):
+                confirmacao_parts.append(f"• Bairro: {address_temp['bairro_nome_ipp']}")
+            elif address_temp.get("bairro"):
+                confirmacao_parts.append(f"• Bairro: {address_temp['bairro']}")
+            
+            confirmacao_parts.append(f"• Cidade: {address_temp.get('cidade', 'Rio de Janeiro')}, {address_temp.get('estado', 'RJ')}")
+            
+            mensagem_confirmacao = "\n".join(confirmacao_parts)
+            
+            # Verifica se está retomando uma conversa anterior (tem dados mas payload vazio)
+            if not state.payload and state.data.get("address_temp"):
+                # Mensagem mais contextual para retomada
+                state.agent_response = AgentResponse(
+                    description=f"Vi que você tem um endereço registrado no histórico. Gostaria de solicitar a poda de árvore para o endereço abaixo?\n\n{mensagem_confirmacao}\n\nEste endereço está correto?",
+                    payload_schema=AddressConfirmationPayload.model_json_schema()
+                )
+            else:
+                # Mensagem padrão para primeira confirmação
+                state.agent_response = AgentResponse(
+                    description=f"Por favor, confirme se o endereço está correto:\n\n{mensagem_confirmacao}\n\nO endereço está correto?",
+                    payload_schema=AddressConfirmationPayload.model_json_schema()
+                )
         
         return state
     
     def _route_after_address(self, state: ServiceState) -> str:
         logger.info("[ROTEAMENTO] _route_after_address")
         logger.info(f"[STATE.DATA] address_max_attempts_reached: {state.data.get('address_max_attempts_reached')}")
+        logger.info(f"[STATE.DATA] address_needs_confirmation: {state.data.get('address_needs_confirmation')}")
+        logger.info(f"[STATE.DATA] address_confirmed: {state.data.get('address_confirmed')}")
+        logger.info(f"[STATE.DATA] address_validated: {state.data.get('address_validated')}")
         logger.info(f"[STATE] agent_response: {state.agent_response}")
-        # Se atingiu o máximo de tentativas, sempre termina
-        if state.data.get("address_max_attempts_reached"):
-            return END
-            
-        # Se há qualquer agent_response (erro ou solicitação), termina o fluxo
-        if state.agent_response:
-            return END
         
-        # Se endereço foi validado e confirmado, prossegue
+        # Se há qualquer agent_response (erro ou solicitação), termina o fluxo
+        # EXCETO se o endereço já foi validado e confirmado (pode continuar o fluxo)
+        if state.agent_response:
+            # Se tem endereço confirmado, não termina aqui
+            if not (state.data.get("address_validated") and state.data.get("address_confirmed")):
+                return END
+        
+        # Se endereço foi validado mas precisa confirmação, vai para confirmar
+        if state.data.get("address_needs_confirmation"):
+            return "confirm_address"
+            
+        # Se endereço foi validado e confirmado, prossegue para ponto de referência
         if state.data.get("address_validated") and state.data.get("address_confirmed"):
             return "collect_reference_point"
             
-        # Continua coletando endereço (incluindo confirmação)
+        # Continua coletando endereço
         return "collect_address"
     
     @handle_errors
@@ -1059,6 +1258,11 @@ Se não for necessário, responda AVANÇAR.""",
         return state
     
     def _route_after_confirmation(self, state: ServiceState) -> str:
+        """Roteamento após confirmação de endereço."""
+        logger.info("[ROTEAMENTO] _route_after_confirmation")
+        logger.info(f"[STATE.DATA] address_confirmed: {state.data.get('address_confirmed')}")
+        logger.info(f"[STATE.DATA] address_max_attempts_reached: {state.data.get('address_max_attempts_reached')}")
+        
         # Se atingiu o máximo de tentativas, sempre termina
         if state.data.get("address_max_attempts_reached"):
             return END
@@ -1067,15 +1271,11 @@ Se não for necessário, responda AVANÇAR.""",
         if state.agent_response:
             return END
             
-        # Se confirmou o endereço e precisa pedir ponto de referência
-        if state.data.get("address_confirmed") and state.data.get("need_reference_point"):
+        # Se confirmou o endereço, vai para ponto de referência
+        if state.data.get("address_confirmed"):
             return "collect_reference_point"
         
-        # Se confirmou e já tem ponto de referência (ou não precisa)
-        if state.data.get("address_confirmed"):
-            return "open_ticket"
-        
-        # Se não confirmou, volta para coletar
+        # Se não confirmou, volta para coletar novo endereço
         return "collect_address"
     
     def _route_after_reference(self, state: ServiceState) -> str:
@@ -1085,28 +1285,7 @@ Se não for necessário, responda AVANÇAR.""",
             
         return "collect_cpf"
     
-    @handle_errors
-    async def _handle_ticket_error(self, state: ServiceState) -> ServiceState:
-        """Nó para tratar erro na criação do ticket"""
-        state.agent_response = AgentResponse(
-            service_name=self.service_name,
-            error_message="Não foi possível criar o chamado neste momento.",
-            description="Infelizmente houve um erro e a solicitação não pôde ser criada. Por favor, tente novamente mais tarde.",
-            data=state.data
-        )
-        return state
-    
-    def _route_after_ticket(self, state: ServiceState) -> str:
-        logger.info("[ROTEAMENTO] _route_after_ticket")
-        logger.info(f"[STATE.DATA] ticket_created: {state.data.get('ticket_created')}")
-        logger.info(f"[STATE.DATA] error: {state.data.get('error')}")
-        
-        # Se houve erro na criação do ticket, vai para o nó de tratamento de erro
-        if state.data.get("error") or not state.data.get("ticket_created"):
-            return "handle_ticket_error"
-        
-        # Se o ticket foi criado com sucesso, termina
-        return END
+
     
     def build_graph(self) -> StateGraph[ServiceState]:
         """
@@ -1123,20 +1302,31 @@ Se não for necessário, responda AVANÇAR.""",
         
         # Adiciona os nós
         graph.add_node("collect_address", self._collect_address)
+        graph.add_node("confirm_address", self._confirm_address)
         graph.add_node("collect_reference_point", self._collect_reference_point)
         graph.add_node("collect_cpf", self._collect_cpf)
         graph.add_node("collect_email", self._collect_email)
         graph.add_node("collect_name", self._collect_name)
         graph.add_node("open_ticket", self._open_ticket)
-        graph.add_node("handle_ticket_error", self._handle_ticket_error)
         
-        # Define o ponto de entrada - AGORA É ENDEREÇO
+        # Define o ponto de entrada
         graph.set_entry_point("collect_address")
         
         # Adiciona as rotas condicionais
         graph.add_conditional_edges(
             "collect_address",
             self._route_after_address,
+            {
+                "collect_address": "collect_address",
+                "confirm_address": "confirm_address",
+                "collect_reference_point": "collect_reference_point",
+                END: END
+            }
+        )
+        
+        graph.add_conditional_edges(
+            "confirm_address",
+            self._route_after_confirmation,
             {
                 "collect_address": "collect_address",
                 "collect_reference_point": "collect_reference_point",
@@ -1186,16 +1376,7 @@ Se não for necessário, responda AVANÇAR.""",
             }
         )
         
-        graph.add_conditional_edges(
-            "open_ticket",
-            self._route_after_ticket,
-            {
-                "handle_ticket_error": "handle_ticket_error",  # Vai para tratamento de erro
-                END: END
-            }
-        )
-        
-        # Adiciona edge do handle_ticket_error para END
-        graph.add_edge("handle_ticket_error", END)
+        # Após open_ticket, sempre termina (já tem agent_response definido)
+        graph.add_edge("open_ticket", END)
         
         return graph

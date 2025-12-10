@@ -8,7 +8,6 @@ from loguru import logger
 from async_googlemaps import AsyncClient
 from shapely.geometry import Point
 from shapely.wkt import loads
-import aiohttp
 import geopandas as gpd
 from pathlib import Path
 from pydantic import BaseModel
@@ -32,9 +31,6 @@ class SGRCAPIService:
             base_url = base_url[:-1]
         if endpoint.startswith("/"):
             endpoint = endpoint[1:]
-        logger.info(f"Base URL: {base_url}")
-        logger.info(f"Endpoint: {endpoint}")
-        logger.info(f"URL: {base_url}/{endpoint}")
         return f"{base_url}/{endpoint}"
 
 
@@ -456,7 +452,3 @@ class AddressAPIService:
             return {
                 "error": str(e)
             } 
-
-    
-
-
