@@ -3,7 +3,7 @@ name = "app-mcp-server"
 version = "1.0.0"
 description = "Servidor FastMCP para o Rio de Janeiro"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "mcp[cli]",
     "uvicorn",
@@ -43,6 +43,7 @@ dependencies = [
     "jellyfish>=1.2.1",
     "num2words>=0.5.14",
     "prefeitura-rio>=1.1.2",
+    "pendulum>=2.1.2",
 ]
 
 

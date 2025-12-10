@@ -134,3 +134,12 @@ SHORT_MEMORY_TOKEN_LIMIT = getenv_or_action(
     "SHORT_MEMORY_TOKEN_LIMIT", default="50000"
 )  # in tokens
 ##-----------
+
+CHATBOT_INTEGRATIONS_URL = getenv_or_action("CHATBOT_INTEGRATIONS_URL")
+CHATBOT_INTEGRATIONS_KEY = getenv_or_action("CHATBOT_INTEGRATIONS_KEY")
+
+SGRC_URL = getenv_or_action("SGRC_URL")
+SGRC_AUTHORIZATION_HEADER = getenv_or_action("SGRC_AUTHORIZATION_HEADER")
+SGRC_BODY_TOKEN = getenv_or_action("SGRC_BODY_TOKEN")
+GMAPS_API_TOKEN = getenv_or_action("GMAPS_API_TOKEN")
+DATA_DIR = getenv_or_action("DATA_DIR")
