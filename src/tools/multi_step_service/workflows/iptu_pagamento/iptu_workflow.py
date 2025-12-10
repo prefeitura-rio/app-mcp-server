@@ -520,6 +520,40 @@ class IPTUWorkflow(BaseWorkflow):
                     )
                     return state
 
+                # Validação: Se selecionou apenas 1 cota com vencimento em 2026 ou depois
+                if len(cotas_escolhidas) == 1:
+                    from datetime import datetime
+                    
+                    # Cria um mapa de número_cota -> data_vencimento
+                    cotas_vencimento_map = {c.numero_cota: c.data_vencimento for c in dados_cotas.cotas}
+                    
+                    cota_selecionada = cotas_escolhidas[0]
+                    data_vencimento_str = cotas_vencimento_map.get(cota_selecionada, "")
+                    
+                    if data_vencimento_str:
+                        try:
+                            # Parse da data no formato DD/MM/YYYY
+                            data_vencimento = datetime.strptime(data_vencimento_str, "%d/%m/%Y")
+                            data_limite = datetime(2026, 1, 1)
+                            
+                            if data_vencimento >= data_limite:
+                                # Cota única com vencimento em 2026 ou depois - inválido
+                                state.agent_response = AgentResponse(
+                                    description=(
+                                        "❌ Não é possível selecionar apenas uma cota com vencimento em 2026 ou posterior.\n\n"
+                                        "Por favor:\n"
+                                        "• Selecione mais cotas, ou\n"
+                                        "• Escolha uma cota com vencimento anterior a 2026\n\n"
+                                        "Alternativamente, para gerar cota única de 2026, acesse: https://pref.rio/"
+                                    ),
+                                    payload_schema=EscolhaCotasParceladasPayload.model_json_schema(),
+                                    error_message=f"Cota única com vencimento em {data_vencimento_str} não permitida.",
+                                )
+                                return state
+                        except ValueError:
+                            # Se não conseguir parsear a data, apenas loga e continua
+                            logger.warning(f"Não foi possível parsear data de vencimento: {data_vencimento_str}")
+
             state.data["cotas_escolhidas"] = cotas_escolhidas
             state.agent_response = None
             return state
