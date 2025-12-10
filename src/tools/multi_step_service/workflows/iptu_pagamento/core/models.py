@@ -2,7 +2,7 @@
 Modelos Pydantic para validação do workflow IPTU Ano Vigente
 """
 
-from typing import Literal, Optional, List, Dict, Any
+from typing import Literal, Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
@@ -38,9 +38,18 @@ class InscricaoImobiliariaPayload(BaseModel):
 class EscolhaAnoPayload(BaseModel):
     """Payload para escolha do ano de exercício."""
 
-    ano_exercicio: int = Field(
+    ano_exercicio: Union[int, str] = Field(
         ..., description="Ano de exercício para consulta do IPTU"
     )
+
+    @field_validator("ano_exercicio", mode="before")
+    @classmethod
+    def validate_ano_exercicio(cls, v: Union[int, str]) -> int:
+        """Valida o ano de exercício."""
+        ano_clean = int(v) if isinstance(v, str) else v
+        if ano_clean < 2000 or ano_clean > 2100:
+            raise ValueError("Ano de exercício inválido")
+        return ano_clean
 
 
 class EscolhaGuiasIPTUPayload(BaseModel):

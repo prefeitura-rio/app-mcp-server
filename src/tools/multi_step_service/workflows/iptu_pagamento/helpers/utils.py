@@ -80,13 +80,14 @@ def preparar_dados_guias_para_template(
             guia.get("valor_iptu_original_guia", "0,00")
         )
         situacao = guia.get("situacao", {}).get("descricao", "EM ABERTO")
-
+        esta_em_aberto = guia.get("esta_em_aberto")
         guias_formatadas.append(
             {
                 "numero_guia": guia.get("numero_guia", "N/A"),
                 "tipo": guia.get("tipo", "IPTU").upper(),
                 "valor_original": valor_original,
                 "situacao": situacao,
+                "esta_em_aberto": esta_em_aberto,
             }
         )
 

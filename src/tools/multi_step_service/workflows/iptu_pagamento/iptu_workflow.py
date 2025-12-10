@@ -146,76 +146,52 @@ class IPTUWorkflow(BaseWorkflow):
         self, state: ServiceState
     ) -> ServiceState:
         """Coleta a inscrição imobiliária do usuário."""
-        # Verifica se há uma nova inscrição no payload (diferente da atual)
         if "inscricao_imobiliaria" in state.payload:
+            validated_data = InscricaoImobiliariaPayload.model_validate(state.payload)
+            inscricao_clean = validated_data.inscricao_imobiliaria
+            # ANTES de salvar a inscrição, valida consultando dados do imóvel
+            logger.debug(
+                f"🔍 Validando inscrição e buscando dados do imóvel: {inscricao_clean}"
+            )
             try:
-                validated_data = InscricaoImobiliariaPayload.model_validate(
-                    state.payload
+                dados_imovel = await self.api_service.get_imovel_info(
+                    inscricao=inscricao_clean
                 )
-                nova_inscricao = validated_data.inscricao_imobiliaria
-                inscricao_atual = state.data.get("inscricao_imobiliaria")
+                logger.debug(dados_imovel)
+                # Validação passou - salva a inscrição
+                state.data["inscricao_imobiliaria"] = inscricao_clean
+                logger.info(f"✅ Inscrição salva: {inscricao_clean}")
 
-                # Se é uma nova inscrição diferente da atual, faz reset automático
-                if inscricao_atual and nova_inscricao != inscricao_atual:
-                    # Reset automático para nova inscrição
-                    state_helpers.reset_completo(state)
-
-                # ANTES de salvar a inscrição, valida consultando dados do imóvel
-                logger.debug(
-                    f"🔍 Validando inscrição e buscando dados do imóvel: {nova_inscricao}"
-                )
-                try:
-                    dados_imovel = await self.api_service.get_imovel_info(
-                        inscricao=nova_inscricao
+                if dados_imovel:
+                    state.data["endereco"] = dados_imovel["endereco"]
+                    state.data["proprietario"] = dados_imovel["proprietario"]
+                    logger.info(
+                        f"✅ Dados do imóvel carregados - Proprietário: {dados_imovel['proprietario'][:30]}..."
                     )
-                    logger.debug(dados_imovel)
-                    # Validação passou - salva a inscrição
-                    state.data["inscricao_imobiliaria"] = nova_inscricao
-                    logger.info(f"✅ Inscrição salva: {nova_inscricao}")
-
-                    if dados_imovel:
-                        state.data["endereco"] = dados_imovel["endereco"]
-                        state.data["proprietario"] = dados_imovel["proprietario"]
-                        logger.info(
-                            f"✅ Dados do imóvel carregados - Proprietário: {dados_imovel['proprietario'][:30]}..."
-                        )
-                    else:
-                        # Não encontrou dados mas inscrição é válida
-                        state.data["endereco"] = None
-                        state.data["proprietario"] = None
-
-                except InvalidInscricaoError as e:
-                    # Inscrição inválida (código 033) - NÃO salva no state
-                    logger.warning(f"❌ Inscrição inválida rejeitada: {nova_inscricao}")
-                    response = AgentResponse(
-                        description=IPTUMessageTemplates.solicitar_inscricao(),
-                        payload_schema=InscricaoImobiliariaPayload.model_json_schema(),
-                        error_message=f"Inscrição {nova_inscricao} não foi encontrada. Por favor, verifique se a inscrição está correta.",
-                    )
-                    state.agent_response = response
-                    return state
-
-                except (APIUnavailableError, AuthenticationError) as e:
-                    # Se falhar ao buscar dados do imóvel por erro de API, salva a inscrição mas continua sem dados
-                    logger.warning(
-                        f"Não foi possível carregar dados do imóvel: {str(e)}"
-                    )
-                    state.data["inscricao_imobiliaria"] = nova_inscricao
+                else:
+                    # Não encontrou dados mas inscrição é válida
                     state.data["endereco"] = None
                     state.data["proprietario"] = None
 
-                state.agent_response = None
-
-                return state
-
-            except Exception as e:
+            except InvalidInscricaoError as e:
+                # Inscrição inválida (código 033) - NÃO salva no state
+                logger.warning(f"❌ Inscrição inválida rejeitada: {inscricao_clean}")
                 response = AgentResponse(
                     description=IPTUMessageTemplates.solicitar_inscricao(),
                     payload_schema=InscricaoImobiliariaPayload.model_json_schema(),
-                    error_message=f"Inscrição imobiliária inválida: {str(e)}",
+                    error_message=f"Inscrição {inscricao_clean} não foi encontrada. Por favor, verifique se a inscrição está correta.",
                 )
                 state.agent_response = response
                 return state
+
+            except (APIUnavailableError, AuthenticationError) as e:
+                # Se falhar ao buscar dados do imóvel por erro de API, salva a inscrição mas continua sem dados
+                logger.warning(f"Não foi possível carregar dados do imóvel: {str(e)}")
+                state.data["inscricao_imobiliaria"] = inscricao_clean
+                state.data["endereco"] = None
+                state.data["proprietario"] = None
+
+            state.agent_response = None
 
         # Se já tem inscrição e não foi fornecida nova, continua
         if "inscricao_imobiliaria" in state.data:
@@ -234,26 +210,13 @@ class IPTUWorkflow(BaseWorkflow):
     async def _escolher_ano_exercicio(self, state: ServiceState) -> ServiceState:
         """Coleta o ano de exercício para consulta do IPTU."""
         inscricao = state.data.get("inscricao_imobiliaria", "N/A")
-        endereco = state.data.get("endereco", "N/A")
-        proprietario = state.data.get("proprietario", "N/A")
+        endereco = state.data.get("endereco")
+        proprietario = state.data.get("proprietario")
         if "ano_exercicio" in state.payload:
-            try:
-                validated_data = EscolhaAnoPayload.model_validate(state.payload)
-                state.data["ano_exercicio"] = validated_data.ano_exercicio
-                state.agent_response = None
-                return state
-            except Exception as e:
-                state.agent_response = AgentResponse(
-                    description=IPTUMessageTemplates.escolher_ano(
-                        inscricao=inscricao,
-                        endereco=endereco,
-                        proprietario=proprietario,
-                    ),
-                    payload_schema=EscolhaAnoPayload.model_json_schema(),
-                    error_message=f"Ano inválido: {str(e)}",
-                )
-                return state
-
+            validated_data = EscolhaAnoPayload.model_validate(state.payload)
+            state.data["ano_exercicio"] = validated_data.ano_exercicio
+            state.agent_response = None
+            return state
         # Se já tem ano escolhido, continua
         if "ano_exercicio" in state.data:
             state.agent_response = None
@@ -280,25 +243,32 @@ class IPTUWorkflow(BaseWorkflow):
             state.agent_response = None
             return state
 
-        inscricao = state.data.get("inscricao_imobiliaria")
+        inscricao = state.data.get("inscricao_imobiliaria", "")
+        exercicio = state.data.get("ano_exercicio", "")
+        divida_ativa_info = None
+        try:
+            logger.info(f"Consultando dívida ativa para inscrição {inscricao}")
+            divida_ativa_info = await self.api_service.get_divida_ativa_info(inscricao)
 
-        if not inscricao:
-            state.agent_response = AgentResponse(
-                description="❌ Erro interno: inscrição imobiliária não encontrada.",
-                error_message=ERROR_INSCRICAO_AUSENTE,
+            # Se encontrou dívida ativa, informa ao usuário
+            if divida_ativa_info and divida_ativa_info.tem_divida_ativa:
+                logger.info(
+                    f"Dívida ativa encontrada para inscrição {inscricao}: {len(divida_ativa_info.cdas)} CDAs, {len(divida_ativa_info.efs)} EFs, {len(divida_ativa_info.parcelamentos)} parcelamentos"
+                )
+                # Salva dados da dívida ativa
+                state.data["divida_ativa_data"] = divida_ativa_info.model_dump()
+
+        except (APIUnavailableError, AuthenticationError) as e:
+            # Se falhar a consulta de dívida ativa por erro de API, apenas loga e continua
+            logger.warning(
+                f"Falha ao consultar dívida ativa (API): {str(e)}. Continuando com fluxo normal."
             )
-            return state
-
-        # Obtém exercício (ano) escolhido pelo usuário
-        exercicio = state.data.get("ano_exercicio")
-        if not exercicio:
-            state.agent_response = AgentResponse(
-                description="❌ Erro interno: ano de exercício não foi escolhido.",
-                error_message=ERROR_ANO_AUSENTE,
+        except Exception as e:
+            # Se falhar a consulta de dívida ativa por outro erro, apenas loga e continua
+            logger.warning(
+                f"Falha ao consultar dívida ativa: {str(e)}. Continuando com fluxo normal."
             )
-            return state
 
-        # Consulta guias via API
         try:
             dados_guias = await self.api_service.consultar_guias(inscricao, exercicio)
         except APIUnavailableError as e:
@@ -318,103 +288,57 @@ class IPTUWorkflow(BaseWorkflow):
             return state
 
         if not dados_guias:
-            # Verifica se a inscrição tem formato válido
-            if len(inscricao) >= 8 and inscricao.isdigit():
-                # Rastreia tentativas falhas para esta inscrição
-                key_tentativas = f"{STATE_FAILED_ATTEMPTS_PREFIX}{inscricao}"
-                tentativas = state.internal.get(key_tentativas, 0) + 1
-                state.internal[key_tentativas] = tentativas
+            # Rastreia tentativas falhas para esta inscrição
+            key_tentativas = f"{STATE_FAILED_ATTEMPTS_PREFIX}{inscricao}"
+            tentativas = state.internal.get(key_tentativas, 0) + 1
+            state.internal[key_tentativas] = tentativas
 
-                # Se já tentou MAX_TENTATIVAS_ANO anos diferentes e ainda não encontrou, a inscrição provavelmente não existe
-                if tentativas >= MAX_TENTATIVAS_ANO:
-                    # Remove os rastros das tentativas e reseta para nova inscrição
-                    state.internal.pop(key_tentativas, None)
-                    state.agent_response = AgentResponse(
-                        description=IPTUMessageTemplates.inscricao_nao_encontrada_apos_tentativas(),
-                        payload_schema=InscricaoImobiliariaPayload.model_json_schema(),
-                    )
-                    # Reset completo para permitir nova entrada
-                    state_helpers.reset_completo(state)
-                    return state
-
-                # Ainda dentro do limite de tentativas - antes de retornar erro,
-                # consulta dívida ativa para verificar se o IPTU foi migrado
-                try:
-                    logger.info(
-                        f"Consultando dívida ativa para inscrição {inscricao} (ano {exercicio} sem guias)"
-                    )
-                    divida_ativa_info = await self.api_service.get_divida_ativa_info(
-                        inscricao
-                    )
-
-                    # Se encontrou dívida ativa, informa ao usuário
-                    if divida_ativa_info and divida_ativa_info.tem_divida_ativa:
-                        logger.info(
-                            f"Dívida ativa encontrada para inscrição {inscricao}: {len(divida_ativa_info.cdas)} CDAs, {len(divida_ativa_info.efs)} EFs, {len(divida_ativa_info.parcelamentos)} parcelamentos"
-                        )
-                        # Salva dados da dívida ativa
-                        state.data["divida_ativa_data"] = divida_ativa_info.model_dump()
-
-                        # Remove dados do ano para permitir nova consulta
-                        state.data.pop("ano_exercicio", None)
-                        state.payload.pop("ano_exercicio", None)
-                        state.internal.pop(STATE_HAS_CONSULTED_GUIAS, None)
-
-                        state.agent_response = AgentResponse(
-                            description=IPTUMessageTemplates.divida_ativa_encontrada(
-                                inscricao=inscricao,
-                                ano=exercicio,
-                                divida_info=divida_ativa_info,
-                            ),
-                            payload_schema=EscolhaAnoPayload.model_json_schema(),
-                        )
-                        return state
-                except (APIUnavailableError, AuthenticationError) as e:
-                    # Se falhar a consulta de dívida ativa por erro de API, apenas loga e continua
-                    logger.warning(
-                        f"Falha ao consultar dívida ativa (API): {str(e)}. Continuando com fluxo normal."
-                    )
-                except Exception as e:
-                    # Se falhar a consulta de dívida ativa por outro erro, apenas loga e continua
-                    logger.warning(
-                        f"Falha ao consultar dívida ativa: {str(e)}. Continuando com fluxo normal."
-                    )
-
-                # Se não encontrou dívida ativa ou houve erro, retorna mensagem padrão
-                # Remove apenas o ano para permitir nova tentativa
-                state.data.pop("ano_exercicio", None)
-                state.payload.pop(
-                    "ano_exercicio", None
-                )  # Remove do payload também para evitar loop
-                state.internal.pop(STATE_HAS_CONSULTED_GUIAS, None)
-
+            # Se já tentou MAX_TENTATIVAS_ANO anos diferentes e ainda não encontrou, a inscrição provavelmente não existe
+            if tentativas >= MAX_TENTATIVAS_ANO:
+                # Remove os rastros das tentativas e reseta para nova inscrição
+                state.internal.pop(key_tentativas, None)
                 state.agent_response = AgentResponse(
-                    description=IPTUMessageTemplates.nenhuma_guia_encontrada(
-                        inscricao, exercicio
-                    ),
-                    payload_schema=None,  # Sem schema específico - permite ano, inscrição ou outra pergunta
-                )
-                return state
-            else:
-                # Inscrição com formato inválido - remove e pede nova
-                state.agent_response = AgentResponse(
-                    description=IPTUMessageTemplates.inscricao_nao_encontrada(),
+                    description=IPTUMessageTemplates.inscricao_nao_encontrada_apos_tentativas(),
                     payload_schema=InscricaoImobiliariaPayload.model_json_schema(),
                 )
                 # Reset completo para permitir nova entrada
                 state_helpers.reset_completo(state)
                 return state
 
-        # Se chegou aqui, encontrou guias - limpa contador de tentativas falhas
-        inscricao_clean = inscricao.replace(" ", "").replace("-", "").replace(".", "")
-        key_tentativas = f"{STATE_FAILED_ATTEMPTS_PREFIX}{inscricao_clean}"
-        state.internal.pop(key_tentativas, None)
+            # Se não encontrou dívida ativa ou houve erro, retorna mensagem padrão
+            # Remove apenas o ano para permitir nova tentativa
+            state.data.pop("ano_exercicio", None)
+            state.payload.pop(
+                "ano_exercicio", None
+            )  # Remove do payload também para evitar loop
+            state.internal.pop(STATE_HAS_CONSULTED_GUIAS, None)
 
-        # Salva dados das guias real
+            state.agent_response = AgentResponse(
+                description=IPTUMessageTemplates.nenhuma_guia_encontrada(
+                    inscricao=inscricao,
+                    exercicio=exercicio,
+                    divida_ativa_info=divida_ativa_info,
+                ),
+            )
+            return state
+
+        # Se chegou aqui, encontrou guias
         state.data["dados_guias"] = dados_guias.model_dump()
         state.internal[STATE_HAS_CONSULTED_GUIAS] = True
-        # Não para o fluxo aqui - continua para mostrar as guias
-        state.agent_response = None
+
+        # Remove rastros de tentativas
+        key_tentativas = f"{STATE_FAILED_ATTEMPTS_PREFIX}{inscricao}"
+        state.internal.pop(key_tentativas, None)
+
+        guias_em_aberto = [g for g in dados_guias.guias if g.esta_em_aberto]
+        if len(guias_em_aberto) == 0:
+            logger.debug(f"Guias em aberto encontradas: {guias_em_aberto}")
+            guias_info = self._buscar_guias_detalhadas(state)
+
+            state.agent_response = AgentResponse(
+                description=guias_info,
+            )
+            return state
 
         return state
 
@@ -428,21 +352,12 @@ class IPTUWorkflow(BaseWorkflow):
                 state.agent_response = None
                 return state
             except Exception as e:
-                try:
-                    guias_info = self._buscar_guias_detalhadas(state)
-                    state.agent_response = AgentResponse(
-                        description=guias_info,
-                        payload_schema=EscolhaGuiasIPTUPayload.model_json_schema(),
-                        error_message=f"Seleção inválida: {str(e)}",
-                    )
-                except ValueError as ve:
-                    # Se erro ao buscar guias, retorna erro apropriado
-                    state.agent_response = AgentResponse(
-                        description=IPTUMessageTemplates.erro_dados_guias_invalidos(),
-                        payload_schema=InscricaoImobiliariaPayload.model_json_schema(),
-                        error_message=str(ve),
-                    )
-                    state_helpers.reset_completo(state)
+                guias_info = self._buscar_guias_detalhadas(state)
+                state.agent_response = AgentResponse(
+                    description=guias_info,
+                    payload_schema=EscolhaGuiasIPTUPayload.model_json_schema(),
+                    error_message=f"Seleção inválida: {str(e)}",
+                )
                 return state
 
         # Se já tem guia escolhida, continua
@@ -474,16 +389,6 @@ class IPTUWorkflow(BaseWorkflow):
         endereco = state.data.get("endereco", "N/A")
         proprietario = state.data.get("proprietario", "N/A")
 
-        # Validação: Se não temos dados de guias válidos, retorna erro
-        if not dados_guias or "guias" not in dados_guias:
-            raise ValueError("Dados das guias não encontrados ou inválidos")
-
-        guias_disponiveis = dados_guias.get("guias", [])
-
-        # Validação: Se não há guias disponíveis, retorna erro
-        if not guias_disponiveis or len(guias_disponiveis) == 0:
-            raise ValueError("Nenhuma guia disponível encontrada")
-
         # Prepara dados para o template
         guias_formatadas = utils.preparar_dados_guias_para_template(
             dados_guias, self.api_service
@@ -495,6 +400,7 @@ class IPTUWorkflow(BaseWorkflow):
             endereco=endereco,
             exercicio=dados_guias.get("exercicio", ""),
             guias=guias_formatadas,
+            divida_ativa_info=state.data.get("divida_ativa_data", None),
         )
 
     @handle_errors
@@ -885,14 +791,6 @@ class IPTUWorkflow(BaseWorkflow):
 
         return state
 
-    def _tem_mais_cotas_disponiveis(self, state: ServiceState) -> bool:
-        """Verifica se há mais cotas disponíveis da guia atual para pagar."""
-        return utils.tem_mais_cotas_disponiveis(state)
-
-    def _tem_outras_guias_disponiveis(self, state: ServiceState) -> bool:
-        """Verifica se há outras guias disponíveis no imóvel."""
-        return utils.tem_outras_guias_disponiveis(state)
-
     def _gerar_descricao_boletos_gerados(self, state: ServiceState) -> str:
         """Gera a descrição padrão dos boletos gerados."""
         guias_geradas = state.data.get("guias_geradas", [])
@@ -926,6 +824,8 @@ class IPTUWorkflow(BaseWorkflow):
         A verificação de agent_response é crítica para evitar sobrescrever mensagens
         de erro específicas (ex: "nenhuma guia encontrada para o ano X").
         """
+        if state.agent_response is not None:
+            return END
         # Se não tem dados de guias, significa que a consulta falhou
         if "dados_guias" not in state.data:
             # Se já tem uma mensagem de erro definida, para o fluxo (END)

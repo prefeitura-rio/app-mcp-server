@@ -301,23 +301,22 @@ class IPTUAPIService:
                 logger.warning(f"Failed to parse guia data: {guia_data}, error: {e}")
                 continue
 
-        # Filtra apenas as guias em aberto para retorno
-        guias_em_aberto = [g for g in guias if g.esta_em_aberto]
-
-        if not guias_em_aberto:
-            logger.info(f"No open guides found for inscricao {inscricao_clean}")
+        # Retorna TODAS as guias (pagas e em aberto)
+        # O workflow decidirá se há guias pagáveis ou não
+        if not guias:
+            logger.info(f"No guides found for inscricao {inscricao_clean}")
             return None
 
         # Cria objeto de dados das guias usando a estrutura simplificada
         dados_guias = DadosGuias(
             inscricao_imobiliaria=inscricao_clean,
             exercicio=str(exercicio),
-            guias=guias_em_aberto,
-            total_guias=len(guias_em_aberto),
+            guias=guias,  # Retorna todas, não só as em aberto
+            total_guias=len(guias),
         )
 
         logger.info(
-            f"IPTU data retrieved for inscricao with {len(guias)} guides available"
+            f"IPTU data retrieved for inscricao with {len(guias)} guides (all statuses)"
         )
         return dados_guias
 
