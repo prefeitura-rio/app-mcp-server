@@ -544,7 +544,7 @@ class IPTUWorkflow(BaseWorkflow):
                                         "Por favor:\n"
                                         "• Selecione mais cotas, ou\n"
                                         "• Escolha uma cota com vencimento anterior a 2026\n\n"
-                                        "Alternativamente, para gerar cota única de 2026, acesse: https://pref.rio/"
+                                        "Alternativamente, para gerar uma única cota com vencimento em 2026, acesse: https://pref.rio/"
                                     ),
                                     payload_schema=EscolhaCotasParceladasPayload.model_json_schema(),
                                     error_message=f"Cota única com vencimento em {data_vencimento_str} não permitida.",
