@@ -34,6 +34,9 @@ DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
 
 TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
 
+# Error Interceptor Configuration
+ERROR_INTERCEPTOR_URL = getenv_or_action("ERROR_INTERCEPTOR_URL")
+ERROR_INTERCEPTOR_TOKEN = getenv_or_action("ERROR_INTERCEPTOR_TOKEN")
 
 # OAuth2 Configuration for RMI API
 RMI_API_URL = getenv_or_action("RMI_API_URL", action="ignore")
@@ -125,6 +128,9 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = getenv_or_action(
 OTEL_EXPORTER_OTLP_TRACES_HEADERS = getenv_or_action(
     "OTEL_EXPORTER_OTLP_TRACES_HEADERS", action="ignore"
 )
+
+ERROR_INTERCEPTOR_URL = getenv_or_action("ERROR_INTERCEPTOR_URL", action="ignore")
+ERROR_INTERCEPTOR_TOKEN = getenv_or_action("ERROR_INTERCEPTOR_TOKEN", action="ignore")
 
 # Short-term memory limits (kept as strings for deployment)
 SHORT_MEMORY_TIME_LIMIT = getenv_or_action(

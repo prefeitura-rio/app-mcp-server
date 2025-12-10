@@ -37,6 +37,7 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
             results_clean.append(
                 {
                     "title": doc.get("title", ""),
+                    "id": doc.get("id", ""),
                     "description": doc.get("description", ""),
                     "category": doc.get("category", ""),
                     "hint": agents.get("tool_hint", ""),

@@ -8,7 +8,7 @@ class ServiceRequest(BaseModel):
     Estrutura da requisição para um serviço.
     """
 
-    service_name: str
+    service_name: Optional[str]
     user_id: str
     payload: Dict[str, Any] = {}
 

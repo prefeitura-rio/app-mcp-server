@@ -7,6 +7,7 @@ para consulta de IPTU e geração de guias de pagamento.
 
 import re
 import json
+import traceback as tb
 from typing import List, Optional, Dict, Any
 import httpx
 import base64
@@ -34,8 +35,11 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import
     APIUnavailableError,
     DataNotFoundError,
     AuthenticationError,
+    InvalidInscricaoError,
 )
+
 from loguru import logger
+from src.utils.error_interceptor import send_api_error
 
 
 class IPTUAPIService:
@@ -49,11 +53,17 @@ class IPTUAPIService:
     - Download PDF do DARM (DownloadPdfDARM)
     """
 
-    def __init__(self):
-        """Inicializa o serviço com configurações da API."""
+    def __init__(self, user_id: str = "unknown"):
+        """
+        Inicializa o serviço com configurações da API.
+
+        Args:
+            user_id: ID do usuário (WhatsApp number) para tracking de erros
+        """
         self.api_base_url = env.IPTU_API_URL
         self.api_token = env.IPTU_API_TOKEN
         self.proxy = env.PROXY_URL
+        self.user_id = user_id
 
         logger.info(f"IPTUAPIService initialized with API URL: {self.api_base_url}")
 
@@ -111,12 +121,39 @@ class IPTUAPIService:
                         return response.text
                 elif response.status_code == 404:
                     logger.warning(f"API endpoint not found: {endpoint}")
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message=f"Endpoint não encontrado: {endpoint}",
+                    )
                     raise DataNotFoundError(f"Endpoint não encontrado: {endpoint}")
                 elif response.status_code == 401:
                     logger.error(f"API authentication failed for {endpoint}")
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message="Falha na autenticação do serviço IPTU",
+                    )
                     raise AuthenticationError(f"Falha na autenticação do serviço IPTU")
                 elif response.status_code in [500, 503]:
                     logger.error(f"API internal error for {endpoint}: {response.text}")
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message=f"Serviço IPTU temporariamente indisponível: {response.text}",
+                    )
                     raise APIUnavailableError(
                         f"Serviço IPTU temporariamente indisponível (HTTP {response.status_code})"
                     )
@@ -124,12 +161,31 @@ class IPTUAPIService:
                     logger.error(
                         f"API error {response.status_code} for {endpoint}: {response.text}"
                     )
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=url,
+                        request_body=params,
+                        status_code=response.status_code,
+                        error_message=f"Erro HTTP {response.status_code}: {response.text}",
+                    )
                     raise APIUnavailableError(
                         f"Erro ao comunicar com serviço IPTU (HTTP {response.status_code})"
                     )
 
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
             logger.error(f"Timeout calling API endpoint {endpoint}")
+            # Reporta erro ao interceptor com traceback
+            await send_api_error(
+                user_id=self.user_id,
+                service_name="iptu_pagamento",
+                api_endpoint=url,
+                request_body=params,
+                status_code=408,  # Request Timeout
+                error_message="Serviço IPTU não respondeu no tempo esperado",
+                traceback=tb.format_exc(),
+            )
             raise APIUnavailableError(
                 "Serviço IPTU não respondeu no tempo esperado. Por favor, tente novamente."
             )
@@ -138,6 +194,16 @@ class IPTUAPIService:
             raise
         except Exception as e:
             logger.error(f"Error calling API endpoint {endpoint}: {str(e)}")
+            # Reporta erro ao interceptor com traceback
+            await send_api_error(
+                user_id=self.user_id,
+                service_name="iptu_pagamento",
+                api_endpoint=url,
+                request_body=params,
+                status_code=0,  # Erro interno
+                error_message=f"Erro ao comunicar com serviço IPTU: {str(e)}",
+                traceback=tb.format_exc(),
+            )
             raise APIUnavailableError(f"Erro ao comunicar com serviço IPTU: {str(e)}")
 
     @staticmethod
@@ -235,23 +301,22 @@ class IPTUAPIService:
                 logger.warning(f"Failed to parse guia data: {guia_data}, error: {e}")
                 continue
 
-        # Filtra apenas as guias em aberto para retorno
-        guias_em_aberto = [g for g in guias if g.esta_em_aberto]
-
-        if not guias_em_aberto:
-            logger.info(f"No open guides found for inscricao {inscricao_clean}")
+        # Retorna TODAS as guias (pagas e em aberto)
+        # O workflow decidirá se há guias pagáveis ou não
+        if not guias:
+            logger.info(f"No guides found for inscricao {inscricao_clean}")
             return None
 
         # Cria objeto de dados das guias usando a estrutura simplificada
         dados_guias = DadosGuias(
             inscricao_imobiliaria=inscricao_clean,
             exercicio=str(exercicio),
-            guias=guias_em_aberto,
-            total_guias=len(guias_em_aberto),
+            guias=guias,  # Retorna todas, não só as em aberto
+            total_guias=len(guias),
         )
 
         logger.info(
-            f"IPTU data retrieved for inscricao with {len(guias)} guides available"
+            f"IPTU data retrieved for inscricao with {len(guias)} guides (all statuses)"
         )
         return dados_guias
 
@@ -480,19 +545,17 @@ class IPTUAPIService:
         logger.info(
             f"Iniciando consulta de imóvel via VPN para inscrição: {inscricao_clean}"
         )
-
+        url = f"{env.WA_IPTU_URL}/{inscricao_clean}"
         try:
             encrypted_token = encrypt_token_rsa(
                 chave_publica_pem=env.WA_IPTU_PUBLIC_KEY, token=env.WA_IPTU_TOKEN
             )
             auth_header = f"Basic {encrypted_token}"
 
-            url = f"{env.WA_IPTU_URL}/{inscricao_clean}"
             headers = {"Authorization": auth_header}
             logger.info(f"Imovel info URL: {url}")
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(url, headers=headers)
-
             if response.status_code == 200:
                 response_data = response.json()
 
@@ -508,12 +571,30 @@ class IPTUAPIService:
                 logger.error(
                     f"Erro de autenticação ao consultar imóvel. Status: {response.status_code}"
                 )
+                # Reporta erro ao interceptor
+                await send_api_error(
+                    user_id=self.user_id,
+                    service_name="iptu_pagamento",
+                    api_endpoint=url,
+                    request_body={"inscricao": inscricao_clean},
+                    status_code=response.status_code,
+                    error_message="Falha na autenticação do serviço de dados do imóvel",
+                )
                 raise AuthenticationError(
                     "Falha na autenticação do serviço de dados do imóvel"
                 )
             elif response.status_code in [500, 503]:
                 logger.error(
                     f"Erro de servidor ao consultar imóvel. Status: {response.status_code}, Texto: {response.text}"
+                )
+                # Reporta erro ao interceptor
+                await send_api_error(
+                    user_id=self.user_id,
+                    service_name="iptu_pagamento",
+                    api_endpoint=url,
+                    request_body={"inscricao": inscricao_clean},
+                    status_code=response.status_code,
+                    error_message=f"Serviço de dados do imóvel temporariamente indisponível: {response.text[:500]}",
                 )
                 raise APIUnavailableError(
                     f"Serviço de dados do imóvel temporariamente indisponível (HTTP {response.status_code})"
@@ -524,9 +605,31 @@ class IPTUAPIService:
                     f"Imóvel não encontrado para inscrição: {inscricao_clean}"
                 )
                 return None
-            else:
+            elif response.status_code == 400:
                 logger.error(
                     f"Erro ao consultar imóvel. Status: {response.status_code}, Texto: {response.text}"
+                )
+                # Verifica se é erro de inscrição inválida (código 033)
+                error_data = response.json()
+                if error_data.get("codigo") == "033":
+                    # Inscrição inválida - não reporta como erro de API
+                    logger.warning(
+                        f"Inscrição inválida: {inscricao_clean} - Código 033"
+                    )
+                    raise InvalidInscricaoError(
+                        inscricao=inscricao_clean,
+                        message=f"Inscrição imobiliária {inscricao_clean} não encontrada no sistema",
+                    )
+            else:
+                logger.error("Erro ao consultar dados do imóvel")
+                # Reporta erro ao interceptor
+                await send_api_error(
+                    user_id=self.user_id,
+                    service_name="iptu_pagamento",
+                    api_endpoint=url,
+                    request_body={"inscricao": inscricao_clean},
+                    status_code=response.status_code,
+                    error_message=f"Erro HTTP {response.status_code}: {response.text[:500]}",
                 )
                 raise APIUnavailableError(
                     f"Erro ao comunicar com serviço de dados do imóvel (HTTP {response.status_code})"
@@ -534,14 +637,34 @@ class IPTUAPIService:
 
         except httpx.TimeoutException:
             logger.error("Timeout ao consultar dados do imóvel")
+            # Reporta erro ao interceptor com traceback
+            await send_api_error(
+                user_id=self.user_id,
+                service_name="iptu_pagamento",
+                api_endpoint=url,
+                request_body={"inscricao": inscricao_clean},
+                status_code=408,
+                error_message="Serviço de dados do imóvel não respondeu no tempo esperado",
+                traceback=tb.format_exc(),
+            )
             raise APIUnavailableError(
                 "Serviço de dados do imóvel não respondeu no tempo esperado"
             )
-        except (APIUnavailableError, AuthenticationError):
+        except (APIUnavailableError, AuthenticationError, InvalidInscricaoError):
             # Re-lança exceções customizadas
             raise
         except Exception as e:
             logger.error(f"Erro ao consultar dados do imóvel: {str(e)}")
+            # Reporta erro ao interceptor com traceback
+            await send_api_error(
+                user_id=self.user_id,
+                service_name="iptu_pagamento",
+                api_endpoint=url,
+                request_body={"inscricao": inscricao_clean},
+                status_code=0,
+                error_message=f"Erro ao comunicar com serviço de dados do imóvel: {str(e)}",
+                traceback=tb.format_exc(),
+            )
             raise APIUnavailableError(
                 f"Erro ao comunicar com serviço de dados do imóvel: {str(e)}"
             )
@@ -582,12 +705,34 @@ class IPTUAPIService:
 
                     if auth_response.status_code == 401:
                         logger.error("Falha na autenticação da Dívida Ativa")
+                        # Reporta erro ao interceptor
+                        await send_api_error(
+                            user_id=self.user_id,
+                            service_name="iptu_pagamento",
+                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
+                            request_body={
+                                "Consumidor": "consultar-dividas-contribuinte"
+                            },
+                            status_code=auth_response.status_code,
+                            error_message="Falha na autenticação do serviço de Dívida Ativa",
+                        )
                         raise AuthenticationError(
                             "Falha na autenticação do serviço de Dívida Ativa"
                         )
                     elif auth_response.status_code in [500, 503]:
                         logger.error(
                             f"Erro de servidor na autenticação da Dívida Ativa: {auth_response.status_code}"
+                        )
+                        # Reporta erro ao interceptor
+                        await send_api_error(
+                            user_id=self.user_id,
+                            service_name="iptu_pagamento",
+                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
+                            request_body={
+                                "Consumidor": "consultar-dividas-contribuinte"
+                            },
+                            status_code=auth_response.status_code,
+                            error_message=f"Serviço de Dívida Ativa temporariamente indisponível (autenticação): {auth_response.text[:500]}",
                         )
                         raise APIUnavailableError(
                             f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {auth_response.status_code})"
@@ -607,6 +752,16 @@ class IPTUAPIService:
 
                 except httpx.TimeoutException:
                     logger.error("Timeout ao autenticar na Dívida Ativa")
+                    # Reporta erro ao interceptor com traceback
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
+                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
+                        status_code=408,
+                        error_message="Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)",
+                        traceback=tb.format_exc(),
+                    )
                     raise APIUnavailableError(
                         "Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)"
                     )
@@ -621,7 +776,6 @@ class IPTUAPIService:
                             "inscricaoImobiliaria": inscricao_clean,
                         },
                     )
-
                     if response.status_code == 200:
                         response_data = response.json()
                         logger.info(f"Consulta de dívida ativa realizada com sucesso")
@@ -635,12 +789,30 @@ class IPTUAPIService:
                         return None
                     elif response.status_code == 401:
                         logger.error("Erro de autenticação ao consultar dívidas")
+                        # Reporta erro ao interceptor
+                        await send_api_error(
+                            user_id=self.user_id,
+                            service_name="iptu_pagamento",
+                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                            request_body={"inscricaoImobiliaria": inscricao_clean},
+                            status_code=response.status_code,
+                            error_message="Falha na autenticação ao consultar dívidas",
+                        )
                         raise AuthenticationError(
                             "Falha na autenticação ao consultar dívidas"
                         )
                     elif response.status_code in [500, 503]:
                         logger.error(
                             f"Erro de servidor ao consultar dívidas. Status: {response.status_code}"
+                        )
+                        # Reporta erro ao interceptor
+                        await send_api_error(
+                            user_id=self.user_id,
+                            service_name="iptu_pagamento",
+                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                            request_body={"inscricaoImobiliaria": inscricao_clean},
+                            status_code=response.status_code,
+                            error_message=f"Serviço de Dívida Ativa temporariamente indisponível: {response.text[:500]}",
                         )
                         raise APIUnavailableError(
                             f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {response.status_code})"
@@ -649,12 +821,31 @@ class IPTUAPIService:
                         logger.error(
                             f"Erro ao consultar dívida ativa. Status: {response.status_code}, Texto: {response.text}"
                         )
+                        # Reporta erro ao interceptor
+                        await send_api_error(
+                            user_id=self.user_id,
+                            service_name="iptu_pagamento",
+                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                            request_body={"inscricaoImobiliaria": inscricao_clean},
+                            status_code=response.status_code,
+                            error_message=f"Erro HTTP {response.status_code}: {response.text[:500]}",
+                        )
                         raise APIUnavailableError(
                             f"Erro ao comunicar com serviço de Dívida Ativa (HTTP {response.status_code})"
                         )
 
                 except httpx.TimeoutException:
                     logger.error("Timeout ao consultar dívidas")
+                    # Reporta erro ao interceptor com traceback
+                    await send_api_error(
+                        user_id=self.user_id,
+                        service_name="iptu_pagamento",
+                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                        request_body={"inscricaoImobiliaria": inscricao_clean},
+                        status_code=408,
+                        error_message="Serviço de Dívida Ativa não respondeu no tempo esperado",
+                        traceback=tb.format_exc(),
+                    )
                     raise APIUnavailableError(
                         "Serviço de Dívida Ativa não respondeu no tempo esperado"
                     )
@@ -664,6 +855,16 @@ class IPTUAPIService:
             raise
         except Exception as e:
             logger.error(f"Erro ao consultar dívida ativa: {str(e)}")
+            # Reporta erro ao interceptor com traceback
+            await send_api_error(
+                user_id=self.user_id,
+                service_name="iptu_pagamento",
+                api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                request_body={"inscricaoImobiliaria": inscricao_clean},
+                status_code=0,
+                error_message=f"Erro ao comunicar com serviço de Dívida Ativa: {str(e)}",
+                traceback=tb.format_exc(),
+            )
             raise APIUnavailableError(
                 f"Erro ao comunicar com serviço de Dívida Ativa: {str(e)}"
             )
@@ -730,8 +931,46 @@ class IPTUAPIService:
                 data = response.json()
                 logger.info(f"URL shortened successfully: {data}")
                 return f"{env.SHORT_API_URL}/link/{data['short_path']}"
+            except httpx.HTTPStatusError as e:
+                # Erro HTTP da API de short URL
+                logger.error(f"Erro HTTP ao encurtar URL: {e.response.status_code}")
+                # Reporta erro ao interceptor
+                await send_api_error(
+                    user_id=self.user_id,
+                    service_name="iptu_pagamento",
+                    api_endpoint=api_url,
+                    request_body=payload,
+                    status_code=e.response.status_code,
+                    error_message=f"Erro ao encurtar URL: {e.response.text[:500]}",
+                )
+                return None
+            except httpx.TimeoutException as e:
+                # Timeout
+                logger.error(f"Timeout ao encurtar URL")
+                # Reporta erro ao interceptor
+                await send_api_error(
+                    user_id=self.user_id,
+                    service_name="iptu_pagamento",
+                    api_endpoint=api_url,
+                    request_body=payload,
+                    status_code=408,
+                    error_message="Timeout ao encurtar URL",
+                    traceback=tb.format_exc(),
+                )
+                return None
             except httpx.RequestError as e:
-                logger.error(f"Erro ao encurtar a URL: {e}")
+                # Outros erros de requisição (conexão, etc)
+                logger.error(f"Erro de conexão ao encurtar URL: {e}")
+                # Reporta erro ao interceptor
+                await send_api_error(
+                    user_id=self.user_id,
+                    service_name="iptu_pagamento",
+                    api_endpoint=api_url,
+                    request_body=payload,
+                    status_code=0,
+                    error_message=f"Erro de conexão ao encurtar URL: {str(e)}",
+                    traceback=tb.format_exc(),
+                )
                 return None
 
 
