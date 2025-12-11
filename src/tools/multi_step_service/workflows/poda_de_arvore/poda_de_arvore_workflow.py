@@ -43,18 +43,36 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
     Workflow de Poda de Árvore.
     
     Fluxo completo:
-    1. Coleta CPF
-    2. Coleta email
-    2. Verifica cadastro na API
-    3. Se cadastrado: recupera nome e pede confirmação
-    4. Se não cadastrado: solicita nome
-    5. Coleta endereço
-    6. Confirmação do endereco
-    7. Abre chamado na API do SGRC
+    1. Coleta endereço
+    2. Confirmação do endereco
+    3. Coleta ponto de referência
+    4. Coleta CPF
+    5. Verifica cadastro na API
+    6. Coleta email
+    7. Coleta nome
+    8. Abre chamado na API do SGRC
     """
     
     service_name = "poda_de_arvore"
     description = "Solicitação de poda de árvore com verificação de cadastro."
+
+    automatic_resets = True
+
+    steps_order = [
+        "_collect_address",
+        "_collect_cpf",
+        "_collect_email",
+        "_collect_name",
+        "_create_ticket",
+    ]
+
+    step_dependencies = {
+        "_collect_address": [],
+        "_collect_cpf": ["_collect_email", "_collect_name"],
+        "_collect_email": [],
+        "_collect_name": [],
+        "_create_ticket": [],
+    }
 
     def __init__(self, use_fake_api: bool = False):
         super().__init__()
@@ -791,9 +809,9 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         state.agent_response = AgentResponse(
             description="""Informe o endereço para atendimento contendo o seguinte:
 
-• Nome da rua, avenida, praça, estrada etc
-• Número mais próximo, sempre que possível
-• Bairro
+- Nome da rua, avenida, praça, estrada etc
+- Número mais próximo, sempre que possível
+- Bairro
 
 Exemplo:
 Rua Afonso Cavalcanti, 455, Cidade Nova""",
