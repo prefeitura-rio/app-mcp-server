@@ -121,4 +121,4 @@ SGRC_BODY_TOKEN = getenv_or_action("SGRC_BODY_TOKEN")
 GMAPS_API_TOKEN = getenv_or_action("GMAPS_API_TOKEN")
 DATA_DIR = getenv_or_action("DATA_DIR")
 
-TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", default="false", action="ignore")
+TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", action="ignore")
