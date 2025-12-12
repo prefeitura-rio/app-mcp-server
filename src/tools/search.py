@@ -16,6 +16,11 @@ async def get_google_search(query: str):
     final_response = {}
     bq_response = {}
 
+    logger.debug(f"The value of Typesense Active: {env.TYPESENSE_ACTIVE}")
+    logger.debug(f"The type of Typesense Active: {type(env.TYPESENSE_ACTIVE)}")
+    logger.debug(f"The value of the statement env.TYPESENSE_ACTIVE == 'true': {env.TYPESENSE_ACTIVE == 'true'}")
+    logger.debug(f"The value of Typesense Hub Search URL: {env.TYPESENSE_HUB_SEARCH_URL}")
+
     if env.TYPESENSE_ACTIVE == "true" and env.TYPESENSE_HUB_SEARCH_URL:
         logger.debug("Using Typesense Hub Search")
 
