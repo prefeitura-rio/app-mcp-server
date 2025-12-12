@@ -16,33 +16,57 @@ async def get_google_search(query: str):
     final_response = {}
     bq_response = {}
 
-    hub_request = HubSearchRequest(
-        q=query,
-        type="hybrid",
-        threshold_semantic=0.7,
-        # threshold_keyword=1,
-        threshold_hybrid=0.7,
-        # threshold_ai=0.85,
-        page=1,
-        per_page=5,
-        alpha=0.7,
-    )
+    logger.debug(f"The value of Typesense Active: {env.TYPESENSE_ACTIVE}")
+    logger.debug(f"The type of Typesense Active: {type(env.TYPESENSE_ACTIVE)}")
+    logger.debug(f"The value of the statement env.TYPESENSE_ACTIVE == 'true': {env.TYPESENSE_ACTIVE == 'true'}")
+    logger.debug(f"The value of Typesense Hub Search URL: {env.TYPESENSE_HUB_SEARCH_URL}")
 
-    if hub_request.type == "ai":
-        hub_request.generate_scores = True
+    if env.TYPESENSE_ACTIVE == "true" and env.TYPESENSE_HUB_SEARCH_URL:
+        logger.debug("Using Typesense Hub Search")
 
-    response_typesense = await hub_search(request=hub_request)
+        hub_request = HubSearchRequest(
+            q=query,
+            type="semantic",
+            threshold_semantic=0.7,
+            # threshold_keyword=1,
+            threshold_hybrid=0.7,
+            # threshold_ai=0.85,
+            page=1,
+            per_page=5,
+            # alpha=0.7,
+        )
 
-    if (
-        response_typesense
-        and response_typesense.get("results")
-        and len(response_typesense["results"]) > 0
-    ):
-        final_response = {
-            "response": response_typesense.get("results_clean"),
-        }
-        bq_response = {"source": "typesense", "response": response_typesense}
+        if hub_request.type == "ai":
+            hub_request.generate_scores = True
+
+        response_typesense = await hub_search(request=hub_request)
+
+        if (
+            response_typesense
+            and response_typesense.get("results")
+            and len(response_typesense["results"]) > 0
+        ):
+            final_response = {
+                "response": response_typesense.get("results_clean"),
+            }
+            bq_response = {"source": "typesense", "response": response_typesense}
+        else:
+            response_google = await gemini_service.google_search(
+                query=query,
+                model=env.GEMINI_MODEL,
+                temperature=0.0,
+                retry_attempts=1,
+            )
+            logger.debug(f"Google Search Response:\n{response_google}")
+            final_response = {
+                "text": response_google.get("text"),
+                "sources": response_google.get("sources"),
+                "web_search_queries": response_google.get("web_search_queries"),
+                "id": response_google.get("id"),
+            }
+            bq_response = {"source": "google", "response": response_google}
     else:
+        logger.debug("Using Google Search via Gemini Service")
         response_google = await gemini_service.google_search(
             query=query,
             model=env.GEMINI_MODEL,
