@@ -17,7 +17,7 @@ from src.tools.multi_step_service.workflows.equipments.equipments_workflow impor
 from src.tools.multi_step_service.workflows.equipments.equipments_workflow import (
     EquipmentsWorkflow,
 )
-from src.tools.multi_step_service.workflows.poda_de_arvore.poda_de_arvore_workflow import (
+from src.tools.multi_step_service.workflows.poda_de_arvore.workflow import (
     PodaDeArvoreWorkflow,
 )
 

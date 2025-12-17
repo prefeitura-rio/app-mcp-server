@@ -122,3 +122,5 @@ GMAPS_API_TOKEN = getenv_or_action("GMAPS_API_TOKEN")
 DATA_DIR = getenv_or_action("DATA_DIR")
 
 TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", default="true", action="warn")
+
+PODA_SERVICE_ID = getenv_or_action("PODA_SERVICE_ID", action="ignore")
