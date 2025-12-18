@@ -3,7 +3,7 @@ name = "app-mcp-server"
 version = "1.0.0"
 description = "Servidor FastMCP para o Rio de Janeiro"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "mcp[cli]",
     "uvicorn",
@@ -35,6 +35,15 @@ dependencies = [
     "opentelemetry-instrumentation-langchain>=0.45.6",
     "opentelemetry-sdk>=1.36.0",
     "pytest>=9.0.1",
+    "pandas>=2.3.3",
+    "async>=0.6.2",
+    "googlemaps>=4.10.0",
+    "async-googlemaps>=0.0.10",
+    "geopandas>=1.1.1",
+    "jellyfish>=1.2.1",
+    "num2words>=0.5.14",
+    "prefeitura-rio>=1.1.2",
+    "pendulum>=2.1.2",
 ]
 
 

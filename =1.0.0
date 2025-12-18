@@ -1,0 +1,296 @@
+Requirement already satisfied: cloudpickle in /home/gabs/anaconda3/lib/python3.11/site-packages (2.2.1)
+Requirement already satisfied: httpx in /home/gabs/anaconda3/lib/python3.11/site-packages (0.28.1)
+Requirement already satisfied: langchain==0.3.27 in /home/gabs/anaconda3/lib/python3.11/site-packages (0.3.27)
+Collecting langchain-core==0.3.74
+  Downloading langchain_core-0.3.74-py3-none-any.whl.metadata (5.8 kB)
+Requirement already satisfied: langchain-google-cloud-sql-pg==0.14.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (0.14.1)
+Requirement already satisfied: langchain-google-genai in /home/gabs/anaconda3/lib/python3.11/site-packages (2.0.8)
+Requirement already satisfied: langchain-google-vertexai in /home/gabs/anaconda3/lib/python3.11/site-packages (3.2.0)
+Collecting langchain-mcp-adapters
+  Using cached langchain_mcp_adapters-0.2.1-py3-none-any.whl.metadata (10 kB)
+Collecting langgraph==0.6.4
+  Using cached langgraph-0.6.4-py3-none-any.whl.metadata (6.8 kB)
+Requirement already satisfied: loguru in /home/gabs/anaconda3/lib/python3.11/site-packages (0.7.2)
+Requirement already satisfied: opentelemetry-exporter-otlp-proto-http in /home/gabs/anaconda3/lib/python3.11/site-packages (1.30.0)
+Requirement already satisfied: opentelemetry-instrumentation-langchain in /home/gabs/anaconda3/lib/python3.11/site-packages (0.38.6)
+Requirement already satisfied: opentelemetry-sdk in /home/gabs/anaconda3/lib/python3.11/site-packages (1.30.0)
+Requirement already satisfied: pydantic in /home/gabs/anaconda3/lib/python3.11/site-packages (2.12.5)
+Requirement already satisfied: python-dotenv in /home/gabs/anaconda3/lib/python3.11/site-packages (1.2.1)
+Requirement already satisfied: google-cloud-aiplatform[agent-engines] in /home/gabs/anaconda3/lib/python3.11/site-packages (1.129.0)
+Requirement already satisfied: langchain-text-splitters<1.0.0,>=0.3.9 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain==0.3.27) (0.3.11)
+Requirement already satisfied: langsmith>=0.1.17 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain==0.3.27) (0.4.42)
+Requirement already satisfied: SQLAlchemy<3,>=1.4 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain==0.3.27) (2.0.25)
+Requirement already satisfied: requests<3,>=2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain==0.3.27) (2.32.3)
+Requirement already satisfied: PyYAML>=5.3 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain==0.3.27) (6.0.1)
+Requirement already satisfied: tenacity!=8.4.0,<10.0.0,>=8.1.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-core==0.3.74) (9.1.2)
+Requirement already satisfied: jsonpatch<2.0,>=1.33 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-core==0.3.74) (1.33)
+Requirement already satisfied: typing-extensions>=4.7 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-core==0.3.74) (4.15.0)
+Requirement already satisfied: packaging>=23.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-core==0.3.74) (24.2)
+Requirement already satisfied: cloud-sql-python-connector<2.0.0,>=1.10.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (1.19.0)
+Requirement already satisfied: numpy<3.0.0,>=1.24.4 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-cloud-sql-pg==0.14.1) (1.26.4)
+Requirement already satisfied: pgvector<1.0.0,>=0.2.5 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-cloud-sql-pg==0.14.1) (0.4.2)
+Collecting langgraph-checkpoint<3.0.0,>=2.1.0 (from langgraph==0.6.4)
+  Downloading langgraph_checkpoint-2.1.2-py3-none-any.whl.metadata (4.2 kB)
+Collecting langgraph-prebuilt<0.7.0,>=0.6.0 (from langgraph==0.6.4)
+  Downloading langgraph_prebuilt-0.6.5-py3-none-any.whl.metadata (4.5 kB)
+Requirement already satisfied: langgraph-sdk<0.3.0,>=0.2.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langgraph==0.6.4) (0.2.9)
+Requirement already satisfied: xxhash>=3.5.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langgraph==0.6.4) (3.6.0)
+Requirement already satisfied: google-api-core!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,<3.0.0,>=1.34.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,<3.0.0,>=1.34.1->google-cloud-aiplatform[agent-engines]) (2.28.1)
+Requirement already satisfied: google-auth<3.0.0,>=2.14.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (2.38.0)
+Requirement already satisfied: proto-plus<2.0.0,>=1.22.3 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (1.26.0)
+Requirement already satisfied: protobuf!=4.21.0,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<7.0.0,>=3.20.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (5.29.3)
+Requirement already satisfied: google-cloud-storage<4.0.0,>=1.32.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (3.5.0)
+Requirement already satisfied: google-cloud-bigquery!=3.20.0,<4.0.0,>=1.15.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (3.38.0)
+Requirement already satisfied: google-cloud-resource-manager<3.0.0,>=1.3.3 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (1.15.0)
+Requirement already satisfied: shapely<3.0.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (2.1.2)
+Requirement already satisfied: google-genai<2.0.0,>=1.37.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (1.53.0)
+Requirement already satisfied: docstring_parser<1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-aiplatform[agent-engines]) (0.17.0)
+Collecting cloudpickle
+  Downloading cloudpickle-3.1.2-py3-none-any.whl.metadata (7.1 kB)
+Collecting google-cloud-trace<2 (from google-cloud-aiplatform[agent-engines])
+  Downloading google_cloud_trace-1.17.0-py3-none-any.whl.metadata (9.8 kB)
+Collecting google-cloud-logging<4 (from google-cloud-aiplatform[agent-engines])
+  Downloading google_cloud_logging-3.12.1-py2.py3-none-any.whl.metadata (5.0 kB)
+Collecting opentelemetry-exporter-gcp-logging<2.0.0,>=1.11.0a0 (from google-cloud-aiplatform[agent-engines])
+  Downloading opentelemetry_exporter_gcp_logging-1.11.0a0-py3-none-any.whl.metadata (4.8 kB)
+Collecting opentelemetry-exporter-gcp-trace<2 (from google-cloud-aiplatform[agent-engines])
+  Downloading opentelemetry_exporter_gcp_trace-1.11.0-py3-none-any.whl.metadata (3.3 kB)
+Requirement already satisfied: anyio in /home/gabs/anaconda3/lib/python3.11/site-packages (from httpx) (4.12.0)
+Requirement already satisfied: certifi in /home/gabs/anaconda3/lib/python3.11/site-packages (from httpx) (2024.2.2)
+Requirement already satisfied: httpcore==1.* in /home/gabs/anaconda3/lib/python3.11/site-packages (from httpx) (1.0.7)
+Requirement already satisfied: idna in /home/gabs/anaconda3/lib/python3.11/site-packages (from httpx) (3.4)
+Requirement already satisfied: h11<0.15,>=0.13 in /home/gabs/anaconda3/lib/python3.11/site-packages (from httpcore==1.*->httpx) (0.14.0)
+Requirement already satisfied: filetype<2.0.0,>=1.2.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-genai) (1.2.0)
+Requirement already satisfied: google-generativeai<0.9.0,>=0.8.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-genai) (0.8.4)
+Requirement already satisfied: bottleneck<2.0.0,>=1.4.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-vertexai) (1.6.0)
+Requirement already satisfied: httpx-sse<1.0.0,>=0.4.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-vertexai) (0.4.0)
+INFO: pip is looking at multiple versions of langchain-google-vertexai to determine which version is compatible with other requirements. This could take a while.
+Collecting langchain-google-vertexai
+  Downloading langchain_google_vertexai-3.1.1-py3-none-any.whl.metadata (3.2 kB)
+  Downloading langchain_google_vertexai-3.1.0-py3-none-any.whl.metadata (3.2 kB)
+  Downloading langchain_google_vertexai-3.0.3-py3-none-any.whl.metadata (3.2 kB)
+  Downloading langchain_google_vertexai-3.0.2-py3-none-any.whl.metadata (5.2 kB)
+  Downloading langchain_google_vertexai-3.0.1-py3-none-any.whl.metadata (5.2 kB)
+  Downloading langchain_google_vertexai-3.0.0-py3-none-any.whl.metadata (5.2 kB)
+  Using cached langchain_google_vertexai-2.1.2-py3-none-any.whl.metadata (4.9 kB)
+INFO: pip is still looking at multiple versions of langchain-google-vertexai to determine which version is compatible with other requirements. This could take a while.
+  Downloading langchain_google_vertexai-2.1.1-py3-none-any.whl.metadata (4.9 kB)
+  Downloading langchain_google_vertexai-2.1.0-py3-none-any.whl.metadata (4.9 kB)
+  Downloading langchain_google_vertexai-2.0.28-py3-none-any.whl.metadata (5.3 kB)
+Collecting google-cloud-storage<4.0.0,>=1.32.0 (from google-cloud-aiplatform[agent-engines])
+  Using cached google_cloud_storage-2.19.0-py2.py3-none-any.whl.metadata (9.1 kB)
+Requirement already satisfied: numexpr<3.0.0,>=2.8.6 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-vertexai) (2.8.7)
+Collecting pyarrow<20.0.0,>=19.0.1 (from langchain-google-vertexai)
+  Downloading pyarrow-19.0.1-cp311-cp311-manylinux_2_28_x86_64.whl.metadata (3.3 kB)
+Requirement already satisfied: validators<1,>=0.22.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-google-vertexai) (0.35.0)
+INFO: pip is looking at multiple versions of langchain-mcp-adapters to determine which version is compatible with other requirements. This could take a while.
+Collecting langchain-mcp-adapters
+  Downloading langchain_mcp_adapters-0.2.0-py3-none-any.whl.metadata (10 kB)
+Requirement already satisfied: mcp>=1.9.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langchain-mcp-adapters) (1.22.0)
+Requirement already satisfied: deprecated>=1.2.6 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-exporter-otlp-proto-http) (1.2.18)
+Requirement already satisfied: googleapis-common-protos~=1.52 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-exporter-otlp-proto-http) (1.67.0)
+Requirement already satisfied: opentelemetry-api~=1.15 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-exporter-otlp-proto-http) (1.30.0)
+Requirement already satisfied: opentelemetry-exporter-otlp-proto-common==1.30.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-exporter-otlp-proto-http) (1.30.0)
+Requirement already satisfied: opentelemetry-proto==1.30.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-exporter-otlp-proto-http) (1.30.0)
+Requirement already satisfied: opentelemetry-instrumentation>=0.50b0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-instrumentation-langchain) (0.51b0)
+Requirement already satisfied: opentelemetry-semantic-conventions>=0.50b0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-instrumentation-langchain) (0.51b0)
+Requirement already satisfied: opentelemetry-semantic-conventions-ai==0.4.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-instrumentation-langchain) (0.4.2)
+Requirement already satisfied: importlib-metadata<=8.5.0,>=6.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from opentelemetry-api~=1.15->opentelemetry-exporter-otlp-proto-http) (7.0.1)
+Requirement already satisfied: annotated-types>=0.6.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from pydantic) (0.7.0)
+Requirement already satisfied: pydantic-core==2.41.5 in /home/gabs/anaconda3/lib/python3.11/site-packages (from pydantic) (2.41.5)
+Requirement already satisfied: typing-inspection>=0.4.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from pydantic) (0.4.2)
+Requirement already satisfied: aiofiles in /home/gabs/anaconda3/lib/python3.11/site-packages (from cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (25.1.0)
+Requirement already satisfied: aiohttp in /home/gabs/anaconda3/lib/python3.11/site-packages (from cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (3.9.3)
+Requirement already satisfied: cryptography>=42.0.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (42.0.2)
+Requirement already satisfied: dnspython>=2.0.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (2.8.0)
+Requirement already satisfied: asyncpg>=0.30.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (0.31.0)
+Requirement already satisfied: wrapt<2,>=1.10 in /home/gabs/anaconda3/lib/python3.11/site-packages (from deprecated>=1.2.6->opentelemetry-exporter-otlp-proto-http) (1.14.1)
+Requirement already satisfied: grpcio<2.0.0,>=1.33.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,<3.0.0,>=1.34.1->google-cloud-aiplatform[agent-engines]) (1.67.1)
+Requirement already satisfied: grpcio-status<2.0.0,>=1.33.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,<3.0.0,>=1.34.1->google-cloud-aiplatform[agent-engines]) (1.67.1)
+Requirement already satisfied: cachetools<6.0,>=2.0.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-auth<3.0.0,>=2.14.1->google-cloud-aiplatform[agent-engines]) (5.5.2)
+Requirement already satisfied: pyasn1-modules>=0.2.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-auth<3.0.0,>=2.14.1->google-cloud-aiplatform[agent-engines]) (0.2.8)
+Requirement already satisfied: rsa<5,>=3.1.4 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-auth<3.0.0,>=2.14.1->google-cloud-aiplatform[agent-engines]) (4.9)
+Requirement already satisfied: google-cloud-core<3.0.0,>=2.4.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-bigquery!=3.20.0,<4.0.0,>=1.15.0->google-cloud-aiplatform[agent-engines]) (2.5.0)
+Requirement already satisfied: google-resumable-media<3.0.0,>=2.0.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-bigquery!=3.20.0,<4.0.0,>=1.15.0->google-cloud-aiplatform[agent-engines]) (2.7.2)
+Requirement already satisfied: python-dateutil<3.0.0,>=2.8.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-bigquery!=3.20.0,<4.0.0,>=1.15.0->google-cloud-aiplatform[agent-engines]) (2.9.0.post0)
+Collecting google-cloud-appengine-logging<2.0.0,>=0.1.3 (from google-cloud-logging<4->google-cloud-aiplatform[agent-engines])
+  Downloading google_cloud_appengine_logging-1.7.0-py3-none-any.whl.metadata (10 kB)
+Collecting google-cloud-audit-log<1.0.0,>=0.3.1 (from google-cloud-logging<4->google-cloud-aiplatform[agent-engines])
+  Downloading google_cloud_audit_log-0.4.0-py3-none-any.whl.metadata (9.3 kB)
+Requirement already satisfied: grpc-google-iam-v1<1.0.0,>=0.12.4 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-logging<4->google-cloud-aiplatform[agent-engines]) (0.14.3)
+Requirement already satisfied: google-crc32c<2.0dev,>=1.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-cloud-storage<4.0.0,>=1.32.0->google-cloud-aiplatform[agent-engines]) (1.7.1)
+Requirement already satisfied: websockets<15.1.0,>=13.0.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-genai<2.0.0,>=1.37.0->google-cloud-aiplatform[agent-engines]) (15.0.1)
+Requirement already satisfied: google-ai-generativelanguage==0.6.15 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-generativeai<0.9.0,>=0.8.0->langchain-google-genai) (0.6.15)
+Requirement already satisfied: google-api-python-client in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-generativeai<0.9.0,>=0.8.0->langchain-google-genai) (2.161.0)
+Requirement already satisfied: tqdm in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-generativeai<0.9.0,>=0.8.0->langchain-google-genai) (4.65.0)
+Requirement already satisfied: jsonpointer>=1.9 in /home/gabs/anaconda3/lib/python3.11/site-packages (from jsonpatch<2.0,>=1.33->langchain-core==0.3.74) (2.1)
+INFO: pip is looking at multiple versions of langchain-text-splitters to determine which version is compatible with other requirements. This could take a while.
+Collecting langchain-text-splitters<1.0.0,>=0.3.9 (from langchain==0.3.27)
+  Downloading langchain_text_splitters-0.3.10-py3-none-any.whl.metadata (1.9 kB)
+  Downloading langchain_text_splitters-0.3.9-py3-none-any.whl.metadata (1.9 kB)
+Requirement already satisfied: ormsgpack>=1.10.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langgraph-checkpoint<3.0.0,>=2.1.0->langgraph==0.6.4) (1.12.0)
+Requirement already satisfied: orjson>=3.10.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langgraph-sdk<0.3.0,>=0.2.0->langgraph==0.6.4) (3.10.15)
+Requirement already satisfied: requests-toolbelt>=1.0.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langsmith>=0.1.17->langchain==0.3.27) (1.0.0)
+Requirement already satisfied: zstandard>=0.23.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from langsmith>=0.1.17->langchain==0.3.27) (0.25.0)
+Requirement already satisfied: jsonschema>=4.20.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from mcp>=1.9.2->langchain-mcp-adapters) (4.25.1)
+Requirement already satisfied: pydantic-settings>=2.5.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from mcp>=1.9.2->langchain-mcp-adapters) (2.12.0)
+Requirement already satisfied: pyjwt>=2.10.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from pyjwt[crypto]>=2.10.1->mcp>=1.9.2->langchain-mcp-adapters) (2.10.1)
+Requirement already satisfied: python-multipart>=0.0.9 in /home/gabs/anaconda3/lib/python3.11/site-packages (from mcp>=1.9.2->langchain-mcp-adapters) (0.0.20)
+Requirement already satisfied: sse-starlette>=1.6.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from mcp>=1.9.2->langchain-mcp-adapters) (3.0.3)
+Requirement already satisfied: starlette>=0.27 in /home/gabs/anaconda3/lib/python3.11/site-packages (from mcp>=1.9.2->langchain-mcp-adapters) (0.50.0)
+Requirement already satisfied: uvicorn>=0.31.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from mcp>=1.9.2->langchain-mcp-adapters) (0.38.0)
+INFO: pip is looking at multiple versions of opentelemetry-exporter-gcp-logging to determine which version is compatible with other requirements. This could take a while.
+Collecting opentelemetry-exporter-otlp-proto-http
+  Using cached opentelemetry_exporter_otlp_proto_http-1.39.0-py3-none-any.whl.metadata (2.4 kB)
+Collecting opentelemetry-exporter-otlp-proto-common==1.39.0 (from opentelemetry-exporter-otlp-proto-http)
+  Downloading opentelemetry_exporter_otlp_proto_common-1.39.0-py3-none-any.whl.metadata (1.8 kB)
+Collecting opentelemetry-proto==1.39.0 (from opentelemetry-exporter-otlp-proto-http)
+  Downloading opentelemetry_proto-1.39.0-py3-none-any.whl.metadata (2.3 kB)
+Collecting opentelemetry-sdk
+  Using cached opentelemetry_sdk-1.39.0-py3-none-any.whl.metadata (1.5 kB)
+Collecting opentelemetry-api~=1.15 (from opentelemetry-exporter-otlp-proto-http)
+  Downloading opentelemetry_api-1.39.0-py3-none-any.whl.metadata (1.5 kB)
+Collecting opentelemetry-semantic-conventions==0.60b0 (from opentelemetry-sdk)
+  Downloading opentelemetry_semantic_conventions-0.60b0-py3-none-any.whl.metadata (2.4 kB)
+Collecting opentelemetry-exporter-otlp-proto-http
+  Downloading opentelemetry_exporter_otlp_proto_http-1.38.0-py3-none-any.whl.metadata (2.3 kB)
+Collecting opentelemetry-exporter-otlp-proto-common==1.38.0 (from opentelemetry-exporter-otlp-proto-http)
+  Downloading opentelemetry_exporter_otlp_proto_common-1.38.0-py3-none-any.whl.metadata (1.8 kB)
+Collecting opentelemetry-proto==1.38.0 (from opentelemetry-exporter-otlp-proto-http)
+  Downloading opentelemetry_proto-1.38.0-py3-none-any.whl.metadata (2.3 kB)
+Collecting opentelemetry-sdk
+  Downloading opentelemetry_sdk-1.38.0-py3-none-any.whl.metadata (1.5 kB)
+Collecting opentelemetry-api~=1.15 (from opentelemetry-exporter-otlp-proto-http)
+  Downloading opentelemetry_api-1.38.0-py3-none-any.whl.metadata (1.5 kB)
+Collecting opentelemetry-semantic-conventions==0.59b0 (from opentelemetry-sdk)
+  Downloading opentelemetry_semantic_conventions-0.59b0-py3-none-any.whl.metadata (2.4 kB)
+Collecting opentelemetry-resourcedetector-gcp==1.*,>=1.5.0dev0 (from opentelemetry-exporter-gcp-logging<2.0.0,>=1.11.0a0->google-cloud-aiplatform[agent-engines])
+  Downloading opentelemetry_resourcedetector_gcp-1.11.0a0-py3-none-any.whl.metadata (3.2 kB)
+INFO: pip is looking at multiple versions of opentelemetry-instrumentation to determine which version is compatible with other requirements. This could take a while.
+Collecting opentelemetry-instrumentation>=0.50b0 (from opentelemetry-instrumentation-langchain)
+  Downloading opentelemetry_instrumentation-0.60b0-py3-none-any.whl.metadata (7.2 kB)
+  Downloading opentelemetry_instrumentation-0.59b0-py3-none-any.whl.metadata (7.1 kB)
+Requirement already satisfied: charset-normalizer<4,>=2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from requests<3,>=2->langchain==0.3.27) (3.4.1)
+Requirement already satisfied: urllib3<3,>=1.21.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from requests<3,>=2->langchain==0.3.27) (2.0.7)
+Requirement already satisfied: greenlet!=0.4.17 in /home/gabs/anaconda3/lib/python3.11/site-packages (from SQLAlchemy<3,>=1.4->langchain==0.3.27) (3.1.1)
+Requirement already satisfied: cffi>=1.12 in /home/gabs/anaconda3/lib/python3.11/site-packages (from cryptography>=42.0.0->cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (1.16.0)
+Requirement already satisfied: zipp>=0.5 in /home/gabs/anaconda3/lib/python3.11/site-packages (from importlib-metadata<=8.5.0,>=6.0->opentelemetry-api~=1.15->opentelemetry-exporter-otlp-proto-http) (3.17.0)
+Requirement already satisfied: attrs>=22.2.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from jsonschema>=4.20.0->mcp>=1.9.2->langchain-mcp-adapters) (23.1.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /home/gabs/anaconda3/lib/python3.11/site-packages (from jsonschema>=4.20.0->mcp>=1.9.2->langchain-mcp-adapters) (2023.7.1)
+Requirement already satisfied: referencing>=0.28.4 in /home/gabs/anaconda3/lib/python3.11/site-packages (from jsonschema>=4.20.0->mcp>=1.9.2->langchain-mcp-adapters) (0.30.2)
+Requirement already satisfied: rpds-py>=0.7.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from jsonschema>=4.20.0->mcp>=1.9.2->langchain-mcp-adapters) (0.10.6)
+Requirement already satisfied: pyasn1<0.5.0,>=0.4.6 in /home/gabs/anaconda3/lib/python3.11/site-packages (from pyasn1-modules>=0.2.1->google-auth<3.0.0,>=2.14.1->google-cloud-aiplatform[agent-engines]) (0.4.8)
+Requirement already satisfied: six>=1.5 in /home/gabs/anaconda3/lib/python3.11/site-packages (from python-dateutil<3.0.0,>=2.8.2->google-cloud-bigquery!=3.20.0,<4.0.0,>=1.15.0->google-cloud-aiplatform[agent-engines]) (1.16.0)
+Requirement already satisfied: click>=7.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from uvicorn>=0.31.1->mcp>=1.9.2->langchain-mcp-adapters) (8.1.7)
+Requirement already satisfied: aiosignal>=1.1.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from aiohttp->cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (1.2.0)
+Requirement already satisfied: frozenlist>=1.1.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from aiohttp->cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (1.4.0)
+Requirement already satisfied: multidict<7.0,>=4.5 in /home/gabs/anaconda3/lib/python3.11/site-packages (from aiohttp->cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (6.0.4)
+Requirement already satisfied: yarl<2.0,>=1.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from aiohttp->cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (1.9.3)
+Requirement already satisfied: httplib2<1.dev0,>=0.19.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-api-python-client->google-generativeai<0.9.0,>=0.8.0->langchain-google-genai) (0.22.0)
+Requirement already satisfied: google-auth-httplib2<1.0.0,>=0.2.0 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-api-python-client->google-generativeai<0.9.0,>=0.8.0->langchain-google-genai) (0.2.0)
+Requirement already satisfied: uritemplate<5,>=3.0.1 in /home/gabs/anaconda3/lib/python3.11/site-packages (from google-api-python-client->google-generativeai<0.9.0,>=0.8.0->langchain-google-genai) (4.1.1)
+Requirement already satisfied: pycparser in /home/gabs/anaconda3/lib/python3.11/site-packages (from cffi>=1.12->cryptography>=42.0.0->cloud-sql-python-connector<2.0.0,>=1.10.0->cloud-sql-python-connector[asyncpg]<2.0.0,>=1.10.0->langchain-google-cloud-sql-pg==0.14.1) (2.21)
+Requirement already satisfied: pyparsing!=3.0.0,!=3.0.1,!=3.0.2,!=3.0.3,<4,>=2.4.2 in /home/gabs/anaconda3/lib/python3.11/site-packages (from httplib2<1.dev0,>=0.19.0->google-api-python-client->google-generativeai<0.9.0,>=0.8.0->langchain-google-genai) (3.0.9)
+Downloading langchain_core-0.3.74-py3-none-any.whl (443 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 443.5/443.5 kB 2.4 MB/s eta 0:00:00
+Downloading langgraph-0.6.4-py3-none-any.whl (153 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 153.2/153.2 kB 16.8 MB/s eta 0:00:00
+Downloading cloudpickle-3.1.2-py3-none-any.whl (22 kB)
+Downloading langchain_google_vertexai-2.0.28-py3-none-any.whl (103 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 104.0/104.0 kB 13.0 MB/s eta 0:00:00
+Downloading langchain_mcp_adapters-0.2.0-py3-none-any.whl (22 kB)
+Downloading opentelemetry_exporter_otlp_proto_http-1.38.0-py3-none-any.whl (19 kB)
+Downloading opentelemetry_exporter_otlp_proto_common-1.38.0-py3-none-any.whl (18 kB)
+Downloading opentelemetry_proto-1.38.0-py3-none-any.whl (72 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 72.5/72.5 kB 6.9 MB/s eta 0:00:00
+Downloading opentelemetry_sdk-1.38.0-py3-none-any.whl (132 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 132.3/132.3 kB 12.2 MB/s eta 0:00:00
+Downloading opentelemetry_api-1.38.0-py3-none-any.whl (65 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 65.9/65.9 kB 8.0 MB/s eta 0:00:00
+Downloading opentelemetry_semantic_conventions-0.59b0-py3-none-any.whl (207 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 208.0/208.0 kB 12.2 MB/s eta 0:00:00
+Downloading opentelemetry_exporter_gcp_logging-1.11.0a0-py3-none-any.whl (14 kB)
+Downloading opentelemetry_resourcedetector_gcp-1.11.0a0-py3-none-any.whl (18 kB)
+Downloading google_cloud_logging-3.12.1-py2.py3-none-any.whl (229 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 229.5/229.5 kB 11.8 MB/s eta 0:00:00
+Downloading google_cloud_storage-2.19.0-py2.py3-none-any.whl (131 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 131.8/131.8 kB 9.3 MB/s eta 0:00:00
+Downloading google_cloud_trace-1.17.0-py3-none-any.whl (104 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 104.1/104.1 kB 9.4 MB/s eta 0:00:00
+Downloading langchain_text_splitters-0.3.9-py3-none-any.whl (33 kB)
+Downloading langgraph_checkpoint-2.1.2-py3-none-any.whl (45 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 45.8/45.8 kB 7.9 MB/s eta 0:00:00
+Downloading langgraph_prebuilt-0.6.5-py3-none-any.whl (28 kB)
+Downloading opentelemetry_exporter_gcp_trace-1.11.0-py3-none-any.whl (14 kB)
+Downloading opentelemetry_instrumentation-0.59b0-py3-none-any.whl (33 kB)
+Downloading pyarrow-19.0.1-cp311-cp311-manylinux_2_28_x86_64.whl (42.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42.1/42.1 MB 18.1 MB/s eta 0:00:00
+Downloading google_cloud_appengine_logging-1.7.0-py3-none-any.whl (16 kB)
+Downloading google_cloud_audit_log-0.4.0-py3-none-any.whl (44 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 44.9/44.9 kB 9.8 MB/s eta 0:00:00
+Installing collected packages: pyarrow, opentelemetry-proto, cloudpickle, opentelemetry-exporter-otlp-proto-common, opentelemetry-api, google-cloud-audit-log, opentelemetry-semantic-conventions, opentelemetry-sdk, opentelemetry-instrumentation, langchain-core, opentelemetry-resourcedetector-gcp, opentelemetry-exporter-otlp-proto-http, langgraph-checkpoint, langchain-text-splitters, langchain-mcp-adapters, google-cloud-trace, google-cloud-storage, google-cloud-appengine-logging, opentelemetry-exporter-gcp-trace, langgraph-prebuilt, google-cloud-logging, opentelemetry-exporter-gcp-logging, langgraph, langchain-google-vertexai
+  Attempting uninstall: pyarrow
+    Found existing installation: pyarrow 22.0.0
+    Uninstalling pyarrow-22.0.0:
+      Successfully uninstalled pyarrow-22.0.0
+  Attempting uninstall: opentelemetry-proto
+    Found existing installation: opentelemetry-proto 1.30.0
+    Uninstalling opentelemetry-proto-1.30.0:
+      Successfully uninstalled opentelemetry-proto-1.30.0
+  Attempting uninstall: cloudpickle
+    Found existing installation: cloudpickle 2.2.1
+    Uninstalling cloudpickle-2.2.1:
+      Successfully uninstalled cloudpickle-2.2.1
+  Attempting uninstall: opentelemetry-exporter-otlp-proto-common
+    Found existing installation: opentelemetry-exporter-otlp-proto-common 1.30.0
+    Uninstalling opentelemetry-exporter-otlp-proto-common-1.30.0:
+      Successfully uninstalled opentelemetry-exporter-otlp-proto-common-1.30.0
+  Attempting uninstall: opentelemetry-api
+    Found existing installation: opentelemetry-api 1.30.0
+    Uninstalling opentelemetry-api-1.30.0:
+      Successfully uninstalled opentelemetry-api-1.30.0
+  Attempting uninstall: opentelemetry-semantic-conventions
+    Found existing installation: opentelemetry-semantic-conventions 0.51b0
+    Uninstalling opentelemetry-semantic-conventions-0.51b0:
+      Successfully uninstalled opentelemetry-semantic-conventions-0.51b0
+  Attempting uninstall: opentelemetry-sdk
+    Found existing installation: opentelemetry-sdk 1.30.0
+    Uninstalling opentelemetry-sdk-1.30.0:
+      Successfully uninstalled opentelemetry-sdk-1.30.0
+  Attempting uninstall: opentelemetry-instrumentation
+    Found existing installation: opentelemetry-instrumentation 0.51b0
+    Uninstalling opentelemetry-instrumentation-0.51b0:
+      Successfully uninstalled opentelemetry-instrumentation-0.51b0
+  Attempting uninstall: langchain-core
+    Found existing installation: langchain-core 0.3.76
+    Uninstalling langchain-core-0.3.76:
+      Successfully uninstalled langchain-core-0.3.76
+  Attempting uninstall: opentelemetry-exporter-otlp-proto-http
+    Found existing installation: opentelemetry-exporter-otlp-proto-http 1.30.0
+    Uninstalling opentelemetry-exporter-otlp-proto-http-1.30.0:
+      Successfully uninstalled opentelemetry-exporter-otlp-proto-http-1.30.0
+  Attempting uninstall: langgraph-checkpoint
+    Found existing installation: langgraph-checkpoint 3.0.1
+    Uninstalling langgraph-checkpoint-3.0.1:
+      Successfully uninstalled langgraph-checkpoint-3.0.1
+  Attempting uninstall: langchain-text-splitters
+    Found existing installation: langchain-text-splitters 0.3.11
+    Uninstalling langchain-text-splitters-0.3.11:
+      Successfully uninstalled langchain-text-splitters-0.3.11
+  Attempting uninstall: google-cloud-storage
+    Found existing installation: google-cloud-storage 3.5.0
+    Uninstalling google-cloud-storage-3.5.0:
+      Successfully uninstalled google-cloud-storage-3.5.0
+  Attempting uninstall: langgraph-prebuilt
+    Found existing installation: langgraph-prebuilt 1.0.2
+    Uninstalling langgraph-prebuilt-1.0.2:
+      Successfully uninstalled langgraph-prebuilt-1.0.2
+  Attempting uninstall: langgraph
+    Found existing installation: langgraph 1.0.3
+    Uninstalling langgraph-1.0.3:
+      Successfully uninstalled langgraph-1.0.3
+  Attempting uninstall: langchain-google-vertexai
+    Found existing installation: langchain-google-vertexai 3.2.0
+    Uninstalling langchain-google-vertexai-3.2.0:
+      Successfully uninstalled langchain-google-vertexai-3.2.0
+Successfully installed cloudpickle-3.1.2 google-cloud-appengine-logging-1.7.0 google-cloud-audit-log-0.4.0 google-cloud-logging-3.12.1 google-cloud-storage-2.19.0 google-cloud-trace-1.17.0 langchain-core-0.3.74 langchain-google-vertexai-2.0.28 langchain-mcp-adapters-0.2.0 langchain-text-splitters-0.3.9 langgraph-0.6.4 langgraph-checkpoint-2.1.2 langgraph-prebuilt-0.6.5 opentelemetry-api-1.38.0 opentelemetry-exporter-gcp-logging-1.11.0a0 opentelemetry-exporter-gcp-trace-1.11.0 opentelemetry-exporter-otlp-proto-common-1.38.0 opentelemetry-exporter-otlp-proto-http-1.38.0 opentelemetry-instrumentation-0.59b0 opentelemetry-proto-1.38.0 opentelemetry-resourcedetector-gcp-1.11.0a0 opentelemetry-sdk-1.38.0 opentelemetry-semantic-conventions-0.59b0 pyarrow-19.0.1

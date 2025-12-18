@@ -17,12 +17,16 @@ from src.tools.multi_step_service.workflows.equipments.equipments_workflow impor
 from src.tools.multi_step_service.workflows.equipments.equipments_workflow import (
     EquipmentsWorkflow,
 )
+from src.tools.multi_step_service.workflows.poda_de_arvore.workflow import (
+    PodaDeArvoreWorkflow,
+)
 
 # Lista central de workflows (classes)
 workflows = [
     # BankAccountWorkflow,
     IPTUWorkflow,
     # EquipmentsWorkflow,
+    PodaDeArvoreWorkflow,
 ]
 
 # Lista de workflows disponíveis para import fácil
