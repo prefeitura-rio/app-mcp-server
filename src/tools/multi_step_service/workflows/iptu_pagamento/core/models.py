@@ -13,6 +13,8 @@ class InscricaoImobiliariaPayload(BaseModel):
     inscricao_imobiliaria: str = Field(
         ...,
         description="Inscrição imobiliária do imóvel",
+        min_length=1,
+        max_length=15,
     )
 
     @field_validator("inscricao_imobiliaria", mode="before")
