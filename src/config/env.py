@@ -16,7 +16,9 @@ WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT"
 WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")
 
 GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
-GEMINI_MODEL = getenv_or_action("GEMINI_MODEL", default="gemini-2.5-flash", action="ignore")
+GEMINI_MODEL = getenv_or_action(
+    "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
+)
 
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
 GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
@@ -24,8 +26,12 @@ GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
 SHORT_API_URL = getenv_or_action("SHORT_API_URL")
 SHORT_API_TOKEN = getenv_or_action("SHORT_API_TOKEN")
 
-GCP_SERVICE_ACCOUNT_CREDENTIALS = getenv_or_action("GCP_SERVICE_ACCOUNT_CREDENTIALS", action="raise")
-GOOGLE_BIGQUERY_PAGE_SIZE = int(getenv_or_action("GOOGLE_BIGQUERY_PAGE_SIZE", default="100"))
+GCP_SERVICE_ACCOUNT_CREDENTIALS = getenv_or_action(
+    "GCP_SERVICE_ACCOUNT_CREDENTIALS", action="raise"
+)
+GOOGLE_BIGQUERY_PAGE_SIZE = int(
+    getenv_or_action("GOOGLE_BIGQUERY_PAGE_SIZE", default="100")
+)
 NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 
 SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
@@ -42,7 +48,9 @@ RMI_API_URL = getenv_or_action("RMI_API_URL", action="ignore")
 RMI_OAUTH_ISSUER = getenv_or_action("RMI_OAUTH_ISSUER", action="ignore")
 RMI_OAUTH_CLIENT_ID = getenv_or_action("RMI_OAUTH_CLIENT_ID", action="ignore")
 RMI_OAUTH_CLIENT_SECRET = getenv_or_action("RMI_OAUTH_CLIENT_SECRET", action="ignore")
-RMI_OAUTH_SCOPES = getenv_or_action("RMI_OAUTH_SCOPES", default="profile email", action="ignore")
+RMI_OAUTH_SCOPES = getenv_or_action(
+    "RMI_OAUTH_SCOPES", default="profile email", action="ignore"
+)
 
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
@@ -107,12 +115,20 @@ GCS_BUCKET = getenv_or_action("GCS_BUCKET", action="ignore")
 PROJECT_NUMBER = getenv_or_action("PROJECT_NUMBER", action="ignore")
 REASONING_ENGINE_ID = getenv_or_action("REASONING_ENGINE_ID", action="ignore")
 
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = getenv_or_action("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", action="ignore")
-OTEL_EXPORTER_OTLP_TRACES_HEADERS = getenv_or_action("OTEL_EXPORTER_OTLP_TRACES_HEADERS", action="ignore")
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = getenv_or_action(
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", action="ignore"
+)
+OTEL_EXPORTER_OTLP_TRACES_HEADERS = getenv_or_action(
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS", action="ignore"
+)
 
 # Short-term memory limits (kept as strings for deployment)
-SHORT_MEMORY_TIME_LIMIT = getenv_or_action("SHORT_MEMORY_TIME_LIMIT", default="30")  # in days
-SHORT_MEMORY_TOKEN_LIMIT = getenv_or_action("SHORT_MEMORY_TOKEN_LIMIT", default="50000")  # in tokens
+SHORT_MEMORY_TIME_LIMIT = getenv_or_action(
+    "SHORT_MEMORY_TIME_LIMIT", default="30"
+)  # in days
+SHORT_MEMORY_TOKEN_LIMIT = getenv_or_action(
+    "SHORT_MEMORY_TOKEN_LIMIT", default="50000"
+)  # in tokens
 
 # SGRC Configuration
 SGRC_URL = getenv_or_action("SGRC_URL")
@@ -122,5 +138,5 @@ GMAPS_API_TOKEN = getenv_or_action("GMAPS_API_TOKEN")
 DATA_DIR = getenv_or_action("DATA_DIR")
 
 TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", default="false", action="warn")
-
+TYPESENSE_PARAMETERS = getenv_or_action("TYPESENSE_PARAMETERS")
 PODA_SERVICE_ID = getenv_or_action("PODA_SERVICE_ID", action="ignore")

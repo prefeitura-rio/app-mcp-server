@@ -76,6 +76,7 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
     else:
         return None
 
+
 async def hub_search_by_id(request: HubSearchRequest) -> Optional[dict]:
     header = {"Authorization": "Bearer"}
     url = f"{TYPESENSE_HUB_SEARCH_URL}/{request.id}"
@@ -86,17 +87,17 @@ async def hub_search_by_id(request: HubSearchRequest) -> Optional[dict]:
 
     if doc and "id" in doc:
         result = {
-                "id": doc.get("id", ""),
-                "title": doc.get("nome_servico", ""),
-                "resumo": doc.get("resumo", ""),
-                "tempo_atendimento": doc.get("tempo_atendimento", ""),
-                "custo_servico": doc.get("custo_servico", ""),
-                "resultado_solicitacao": doc.get("resultado_solicitacao", ""),
-                "descricao": doc.get("descricao_completa", ""),
-                "documentos_necessarios": doc.get("documentos_necessarios", []),
-                "instrucoes": doc.get("instrucoes_solicitante", ""),
-                "servico_nao_cobre": doc.get("servico_nao_cobre", ""),
-                "publico_especifico": doc.get("publico_especifico", []),
+            "id": doc.get("id", ""),
+            "title": doc.get("nome_servico", ""),
+            "resumo": doc.get("resumo", ""),
+            "tempo_atendimento": doc.get("tempo_atendimento", ""),
+            "custo_servico": doc.get("custo_servico", ""),
+            "resultado_solicitacao": doc.get("resultado_solicitacao", ""),
+            "descricao": doc.get("descricao_completa", ""),
+            "documentos_necessarios": doc.get("documentos_necessarios", []),
+            "instrucoes": doc.get("instrucoes_solicitante", ""),
+            "servico_nao_cobre": doc.get("servico_nao_cobre", ""),
+            "publico_especifico": doc.get("publico_especifico", []),
         }
         return result
     else:
