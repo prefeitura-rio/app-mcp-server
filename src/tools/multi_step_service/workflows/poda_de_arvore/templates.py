@@ -179,3 +179,37 @@ def reiniciar_apos_erro(error_msg: str) -> str:
         "Vamos tentar novamente.\n\n"
         "📍 Por favor, informe novamente o endereço completo de onde está a árvore:"
     )
+
+
+# ========== CONFIRMAÇÃO DE DADOS DO TICKET ==========
+
+def confirmar_dados_ticket(dados_formatados: str) -> str:
+    """Mensagem pedindo confirmação final dos dados antes de criar o ticket."""
+    return (
+        "Por favor, confirme os dados da sua solicitação:\n\n"
+        f"{dados_formatados}\n\n"
+        "Os dados estão corretos? Posso criar a solicitação?"
+    )
+
+
+def solicitar_correcao_dados() -> str:
+    """Mensagem solicitando que o usuário informe o que precisa ser corrigido."""
+    return (
+        "Por favor, me informe o que precisa ser corrigido nos dados.\n\n"
+        "Você pode dizer algo como:\n"
+        "- 'O endereço está errado, é Rua X número Y'\n"
+        "- 'Meu nome está incorreto, é João Silva'\n"
+        "- 'O email deveria ser outro@exemplo.com'\n\n"
+        "O que você gostaria de corrigir?"
+    )
+
+def dados_corrigidos_solicitar_campo(campo: str) -> str:
+    """Mensagem solicitando o novo valor para um campo específico."""
+    mensagens = {
+        "endereco": "Por favor, informe o endereço correto:",
+        "nome": "Por favor, informe seu nome completo correto:",
+        "cpf": "Por favor, informe o CPF correto (ou deixe vazio para pular):",
+        "email": "Por favor, informe o email correto (ou deixe vazio para pular):",
+        "ponto_referencia": "Por favor, informe o ponto de referência correto (ou deixe vazio para remover):"
+    }
+    return mensagens.get(campo, f"Por favor, informe o valor correto para {campo}:")

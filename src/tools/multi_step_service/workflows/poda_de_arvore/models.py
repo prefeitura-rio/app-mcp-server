@@ -206,3 +206,24 @@ class PontoReferenciaPayload(BaseModel):
         None,
         description="Ponto de referência próximo ao local (opcional - deixe vazio se não quiser informar)"
     )
+
+
+class TicketDataConfirmationPayload(BaseModel):
+    """Payload para confirmação ou correção dos dados do ticket."""
+    confirmacao: Optional[bool] = Field(
+        None, 
+        description="True se os dados estão corretos, False se precisam de correção"
+    )
+    correcao: Optional[str] = Field(
+        None,
+        description="Descrição do que precisa ser corrigido (quando confirmacao=False)"
+    )
+    
+    @field_validator('correcao', mode='after')
+    @classmethod
+    def validate_correcao(cls, v: Optional[str], info) -> Optional[str]:
+        """Valida que há uma correção quando confirmacao é False."""
+        values = info.data
+        if values.get('confirmacao') is False and not v:
+            raise ValueError("Por favor, informe o que precisa ser corrigido")
+        return v

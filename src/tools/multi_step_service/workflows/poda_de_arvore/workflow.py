@@ -27,6 +27,7 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.models import (
     AddressValidationState,
     AddressConfirmationPayload,
     PontoReferenciaPayload,
+    TicketDataConfirmationPayload,
 )
 from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service import SGRCAPIService, AddressAPIService
 
@@ -56,7 +57,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
     5. Verifica cadastro na API
     6. Coleta email
     7. Coleta nome
-    8. Abre chamado na API do SGRC
+    8. Confirma todos os dados com o usuário
+    9. Abre chamado na API do SGRC
     """
     
     service_name = "poda_de_arvore"
@@ -70,7 +72,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         "_collect_cpf",
         "_collect_email",
         "_collect_name",
-        "_create_ticket",
+        "_confirm_ticket_data",
+        "_open_ticket",
     ]
 
     step_dependencies = {
@@ -80,7 +83,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         "_collect_cpf": ["_collect_email", "_collect_name"],
         "_collect_email": [],
         "_collect_name": [],
-        "_create_ticket": [],
+        "_confirm_ticket_data": [],
+        "_open_ticket": [],
     }
 
     def __init__(self, use_fake_api: bool = False):
@@ -859,13 +863,163 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
 
     @handle_errors
+    async def _confirm_ticket_data(self, state: ServiceState) -> ServiceState:
+        """Solicita confirmação dos dados antes de abrir o ticket."""
+        logger.info("[ENTRADA] _confirm_ticket_data")
+        
+        # Se já confirmou, segue adiante
+        if state.data.get("ticket_data_confirmed") is True:
+            return state
+        
+        # Se tem payload com confirmação ou correção
+        if "confirmacao" in state.payload or "correcao" in state.payload:
+            try:
+                validated = TicketDataConfirmationPayload.model_validate(state.payload)
+                
+                if validated.confirmacao is True:
+                    state.data["ticket_data_confirmed"] = True
+                    logger.info("Dados do ticket confirmados pelo usuário")
+                    state.agent_response = None
+                    return state
+                    
+                elif validated.confirmacao is False or validated.correcao:
+                    # Usuário quer corrigir algo
+                    correcao_text = validated.correcao or ""
+                    logger.info(f"Usuário solicitou correção: {correcao_text}")
+                    
+                    # Analisa o que o usuário quer corrigir
+                    correcao_lower = correcao_text.lower()
+                    
+                    # Identifica qual campo precisa ser corrigido
+                    if any(word in correcao_lower for word in ["endereço", "endereco", "rua", "avenida", "praça", "local"]):
+                        # Volta para coletar endereço novamente
+                        state.data["correction_requested"] = "address"
+                        state.data.pop("address_confirmed", None)
+                        state.data.pop("address_validated", None)
+                        state.data.pop("address", None)
+                        state.data.pop("ticket_data_confirmed", None)
+                        # Reseta o contador de tentativas de endereço quando vem de correção
+                        state.data.pop("address_validation", None)
+                        state.agent_response = AgentResponse(
+                            description=tpl.dados_corrigidos_solicitar_campo("endereco"),
+                            payload_schema=AddressPayload.model_json_schema()
+                        )
+                        return state
+                        
+                    elif "nome" in correcao_lower:
+                        # Volta para coletar nome
+                        state.data["correction_requested"] = "name"
+                        state.data.pop("name", None)
+                        state.data.pop("name_processed", None)
+                        state.data.pop("ticket_data_confirmed", None)
+                        state.agent_response = AgentResponse(
+                            description=tpl.dados_corrigidos_solicitar_campo("nome"),
+                            payload_schema=NomePayload.model_json_schema()
+                        )
+                        return state
+                        
+                    elif "cpf" in correcao_lower:
+                        # Volta para coletar CPF
+                        state.data["correction_requested"] = "cpf"
+                        state.data.pop("cpf", None)
+                        state.data.pop("cadastro_verificado", None)
+                        state.data.pop("ticket_data_confirmed", None)
+                        state.agent_response = AgentResponse(
+                            description=tpl.dados_corrigidos_solicitar_campo("cpf"),
+                            payload_schema=CPFPayload.model_json_schema()
+                        )
+                        return state
+                        
+                    elif "email" in correcao_lower or "e-mail" in correcao_lower:
+                        # Volta para coletar email
+                        state.data["correction_requested"] = "email"
+                        state.data.pop("email", None)
+                        state.data.pop("email_processed", None)
+                        state.data.pop("ticket_data_confirmed", None)
+                        state.agent_response = AgentResponse(
+                            description=tpl.dados_corrigidos_solicitar_campo("email"),
+                            payload_schema=EmailPayload.model_json_schema()
+                        )
+                        return state
+                        
+                    elif any(word in correcao_lower for word in ["ponto", "referência", "referencia"]):
+                        # Volta para coletar ponto de referência
+                        state.data["correction_requested"] = "reference_point"
+                        state.data.pop("ponto_referencia", None)
+                        state.data.pop("reference_point_collected", None)
+                        state.data.pop("ticket_data_confirmed", None)
+                        state.agent_response = AgentResponse(
+                            description=tpl.dados_corrigidos_solicitar_campo("ponto_referencia"),
+                            payload_schema=PontoReferenciaPayload.model_json_schema()
+                        )
+                        return state
+                    else:
+                        # Não conseguiu identificar o que corrigir, pede mais detalhes
+                        state.agent_response = AgentResponse(
+                            description=tpl.solicitar_correcao_dados(),
+                            payload_schema=TicketDataConfirmationPayload.model_json_schema()
+                        )
+                        return state
+                    
+            except Exception as e:
+                logger.error(f"Erro ao processar confirmação de dados do ticket: {e}")
+                state.agent_response = AgentResponse(
+                    description=tpl.confirmar_resposta_invalida(),
+                    payload_schema=TicketDataConfirmationPayload.model_json_schema(),
+                    error_message=f"Resposta inválida: {str(e)}"
+                )
+                return state
+        
+        # Formata os dados para confirmação
+        dados = []
+        
+        # Endereço
+        if state.data.get("address"):
+            address = state.data["address"]
+            dados.append("📍 **ENDEREÇO:**")
+            dados.append(self.format_address_confirmation(address))
+        
+        # Ponto de referência
+        if state.data.get("ponto_referencia"):
+            dados.append(f"\n📌 **PONTO DE REFERÊNCIA:**\n{state.data['ponto_referencia']}")
+        
+        # Dados pessoais
+        dados_pessoais = []
+        if state.data.get("name"):
+            dados_pessoais.append(f"- Nome: {state.data['name']}")
+        if state.data.get("cpf") and state.data["cpf"] != "skip":
+            cpf = state.data["cpf"]
+            cpf_formatado = f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}" if len(cpf) == 11 else cpf
+            dados_pessoais.append(f"- CPF: {cpf_formatado}")
+        if state.data.get("email"):
+            dados_pessoais.append(f"- Email: {state.data['email']}")
+        if state.data.get("phone"):
+            dados_pessoais.append(f"- Telefone: {state.data['phone']}")
+        
+        if dados_pessoais:
+            dados.append("\n👤 **DADOS DO SOLICITANTE:**")
+            dados.extend(dados_pessoais)
+        
+        # Tipo de serviço
+        dados.append("\n🌳 **SERVIÇO:** Poda de Árvore")
+        
+        dados_formatados = "\n".join(dados)
+        
+        state.agent_response = AgentResponse(
+            description=tpl.confirmar_dados_ticket(dados_formatados),
+            payload_schema=TicketDataConfirmationPayload.model_json_schema()
+        )
+        
+        return state
+
+    @handle_errors
     async def _open_ticket(self, state: ServiceState) -> ServiceState:
         """Abre um ticket no SGRC com os dados coletados."""
         logger.info("[ENTRADA] _open_ticket")
         
         if self.use_fake_api:
             protocol = f"FAKE-{int(time.time())}"
-            logger.info(f"Ticket fake criado: {state.data['protocol_id']}")
+            logger.info(f"Ticket fake criado: {protocol}")
             
             return ticket_opened(
                 state,
@@ -1025,6 +1179,12 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             return "confirm_address"
             
         if state.data.get("address_validated") and state.data.get("address_confirmed"):
+            # Se voltou de uma correção e já tem todos os outros dados, vai para confirmação
+            if (state.data.get("reference_point_collected") and 
+                state.data.get("cpf") and 
+                state.data.get("email_processed") and 
+                state.data.get("name_processed")):
+                return "confirm_ticket_data"
             return "collect_reference_point"
             
         return "collect_address"
@@ -1040,6 +1200,12 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             return END
             
         if state.data.get("address_confirmed"):
+            # Se voltou de uma correção e já tem todos os outros dados, vai para confirmação
+            if (state.data.get("reference_point_collected") and 
+                state.data.get("cpf") and 
+                state.data.get("email_processed") and 
+                state.data.get("name_processed")):
+                return "confirm_ticket_data"
             return "collect_reference_point"
         
         return "collect_address"
@@ -1049,6 +1215,10 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
         if state.agent_response:
             return END
+        
+        # Se voltou de uma correção, vai direto para confirmação
+        if state.data.get("reference_point_collected") and state.data.get("cpf"):
+            return "confirm_ticket_data"
             
         return "collect_cpf"
     
@@ -1071,15 +1241,19 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         if "cpf" not in state.data:
             return END
         
+        # Se voltou de uma correção e já tem outros dados, vai direto para confirmação
+        if state.data.get("email_processed") and state.data.get("name_processed"):
+            return "confirm_ticket_data"
+        
         if state.data.get("identificacao_pulada"):
-            return "open_ticket"
+            return "confirm_ticket_data"
             
         if state.data.get("cadastro_verificado"):
             if not state.data.get("email"):
                 return "collect_email"
             if not state.data.get("name"):
                 return "collect_name"
-            return "open_ticket"
+            return "confirm_ticket_data"
             
         return "collect_email"
     
@@ -1098,8 +1272,9 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         if not state.data.get("email_processed"):
             return END
         
+        # Se voltou de uma correção e já tem nome, vai direto para confirmação
         if state.data.get("name") or state.data.get("name_processed"):
-            return "open_ticket"
+            return "confirm_ticket_data"
 
         return "collect_name"
     
@@ -1108,14 +1283,41 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
         if state.data.get("name_max_attempts_reached"):
             state.agent_response = None
-            return "open_ticket"
+            return "confirm_ticket_data"
         
         if state.agent_response:
             return END
         
         if state.data.get("name_processed"):
+            return "confirm_ticket_data"
+        
+        return END
+    
+    def _route_after_ticket_confirmation(self, state: ServiceState) -> str:
+        """Roteamento após confirmação dos dados do ticket."""
+        logger.info("[ROTEAMENTO] _route_after_ticket_confirmation")
+        
+        if state.data.get("ticket_data_confirmed") is True:
+            # Usuário confirmou, criar o ticket
             return "open_ticket"
         
+        # Se tem correção solicitada, roteia para o campo apropriado
+        correction = state.data.get("correction_requested")
+        if correction:
+            state.data.pop("correction_requested", None)  # Limpa flag de correção
+            
+            if correction == "address":
+                return "collect_address"
+            elif correction == "name":
+                return "collect_name"
+            elif correction == "cpf":
+                return "collect_cpf"
+            elif correction == "email":
+                return "collect_email"
+            elif correction == "reference_point":
+                return "collect_reference_point"
+        
+        # Aguardando confirmação ou correção
         return END
 
     
@@ -1128,7 +1330,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         2. Coleta ponto de referência (opcional)
         3. Coleta CPF (opcional) e verifica cadastro
         4. Se não cadastrado ou faltando dados: coleta email e nome (opcionais)
-        5. Abre chamado no SGRC
+        5. Confirma todos os dados com o usuário
+        6. Abre chamado no SGRC
         """
         graph = StateGraph(ServiceState)
         
@@ -1140,6 +1343,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         graph.add_node("collect_cpf", self._collect_cpf)
         graph.add_node("collect_email", self._collect_email)
         graph.add_node("collect_name", self._collect_name)
+        graph.add_node("confirm_ticket_data", self._confirm_ticket_data)
         graph.add_node("open_ticket", self._open_ticket)
         
         # Define o ponto de entrada
@@ -1186,6 +1390,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             self._route_after_reference,
             {
                 "collect_cpf": "collect_cpf",
+                "confirm_ticket_data": "confirm_ticket_data",
                 END: END
             }
         )
@@ -1197,7 +1402,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 "collect_cpf": "collect_cpf",
                 "collect_email": "collect_email",
                 "collect_name": "collect_name",
-                "open_ticket": "open_ticket",
+                "confirm_ticket_data": "confirm_ticket_data",
                 END: END
             }
         )
@@ -1208,7 +1413,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             {
                 "collect_email": "collect_email",
                 "collect_name": "collect_name",
-                "open_ticket": "open_ticket",
+                "confirm_ticket_data": "confirm_ticket_data",
                 END: END
             }
         )
@@ -1217,6 +1422,21 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             "collect_name",
             self._route_after_name,
             {
+                "collect_name": "collect_name",
+                "confirm_ticket_data": "confirm_ticket_data",
+                END: END
+            }
+        )
+        
+        # Adiciona roteamento após confirmação de dados do ticket
+        graph.add_conditional_edges(
+            "confirm_ticket_data",
+            self._route_after_ticket_confirmation,
+            {
+                "collect_address": "collect_address",
+                "collect_reference_point": "collect_reference_point",
+                "collect_cpf": "collect_cpf",
+                "collect_email": "collect_email",
                 "collect_name": "collect_name",
                 "open_ticket": "open_ticket",
                 END: END
