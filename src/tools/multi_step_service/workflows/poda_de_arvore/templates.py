@@ -22,8 +22,14 @@ def solicitar_endereco() -> str:
 def endereco_nao_localizado(tentativa: int, max_tentativas: int) -> str:
     """Mensagem quando endereço não foi localizado."""
     return (
-        f"Não consegui localizar o endereço informado. "
-        f"Por favor, verifique e informe novamente (tentativa {tentativa}/{max_tentativas})."
+        f"❌ **Endereço incorreto ou não encontrado.**\n\n"
+        f"O endereço informado não foi localizado na base de dados da Prefeitura do Rio de Janeiro. "
+        f"Isso pode acontecer quando:\n"
+        f"• O bairro informado não corresponde ao endereço\n"
+        f"• O nome da rua está incorreto ou incompleto\n"
+        f"• Há erro de digitação\n\n"
+        f"Por favor, verifique e informe o endereço correto (tentativa {tentativa}/{max_tentativas}).\n\n"
+        f"**Exemplo:** Rua Afonso Cavalcanti, 455, Cidade Nova"
     )
 
 
@@ -61,7 +67,14 @@ def confirmar_resposta_invalida() -> str:
 
 def solicitar_novo_endereco(tentativa: int, max_tentativas: int) -> str:
     """Mensagem solicitando novo endereço após recusa."""
-    return f"Por favor, informe novamente o endereço correto (tentativa {tentativa}/{max_tentativas})."
+    return (
+        f"Por favor, informe novamente o endereço correto (tentativa {tentativa}/{max_tentativas}).\n\n"
+        f"**Lembre-se de incluir:**\n"
+        f"• Nome da rua/avenida\n"
+        f"• Número (se souber)\n"
+        f"• Bairro correto\n\n"
+        f"**Exemplo:** Rua Afonso Cavalcanti, 455, Cidade Nova"
+    )
 
 
 # ========== PONTO DE REFERÊNCIA ==========
