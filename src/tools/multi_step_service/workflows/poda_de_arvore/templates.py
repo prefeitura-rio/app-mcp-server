@@ -11,11 +11,13 @@ durante o fluxo de solicitação de poda de árvore.
 def solicitar_endereco() -> str:
     """Mensagem solicitando endereço."""
     return (
-        "Informe o endereço para atendimento contendo:\n\n"
-        "- Rua, avenida, praça, estrada etc\n"
-        "- Número (se possível)\n"
-        "- Bairro\n\n"
-        "Exemplo:\nRua Afonso Cavalcanti, 455, Cidade Nova"
+        "🌳 **Informe o endereço onde está localizada a árvore que precisa de poda:**\n\n"
+        "Por favor, inclua:\n"
+        "• Nome da rua, avenida, praça ou estrada\n"
+        "• Número (se souber)\n"
+        "• Bairro\n\n"
+        "⚠️ **Atenção:** Este deve ser o endereço da árvore, não o seu endereço residencial.\n\n"
+        "**Exemplo:** Rua Afonso Cavalcanti, 455, Cidade Nova"
     )
 
 
