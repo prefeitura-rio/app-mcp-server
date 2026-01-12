@@ -98,7 +98,7 @@ def maximo_tentativas_excedido() -> str:
 
 def solicitar_email() -> str:
     """Mensagem solicitando email."""
-    return "Por favor, informe seu email (opcional)."
+    return "Por favor, informe seu email. Caso não queira enviar, digite 'avançar' para prosseguir sem email."
 
 
 def email_invalido(tentativa: int, max_tentativas: int=3) -> str:
@@ -115,7 +115,7 @@ def email_maximo_tentativas() -> str:
 
 def solicitar_nome() -> str:
     """Mensagem solicitando nome."""
-    return "Por favor, informe seu nome completo (opcional)."
+    return "Por favor, informe seu nome completo. Caso não queira enviar, digite 'avançar' para prosseguir sem nome."
 
 
 def nome_invalido(tentativa: int, max_tentativas: int = 3) -> str:
