@@ -314,6 +314,7 @@ async def process_link(session, link: dict):
             return link
 
 
+@interceptor(source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"})
 async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     """
     Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
