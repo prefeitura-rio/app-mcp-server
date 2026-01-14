@@ -20,6 +20,7 @@ from datetime import datetime
 import httpx
 
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
 
 
 class GeminiService:
@@ -32,44 +33,7 @@ class GeminiService:
         """Retorna a instância do cliente Gemini."""
         return self.client
 
-    import os
-
-
-from typing import Dict, Any, List, Optional, Union
-import asyncio
-import random
-from pathlib import Path
-from google import genai
-from google.api_core import exceptions as google_exceptions
-from google.genai.types import (
-    Tool,
-    UrlContext,
-    ThinkingConfig,
-    GenerateContentConfig,
-    GoogleSearch,
-    Content,
-    Part,
-    GenerateContentResponse,
-)
-import src.config.env as env
-from uuid import uuid4
-
-from datetime import datetime
-import httpx
-
-from src.utils.log import logger
-
-
-class GeminiService:
-    def __init__(self):
-        """Inicializa o cliente Gemini com as configurações do ambiente."""
-        self.api_key = env.GEMINI_API_KEY
-        self.client = genai.Client(api_key=self.api_key)
-
-    def get_client(self):
-        """Retorna a instância do cliente Gemini."""
-        return self.client
-
+    @interceptor(source={"source": "mcp", "tool": "gemini"})
     async def google_search(
         self,
         query: str,

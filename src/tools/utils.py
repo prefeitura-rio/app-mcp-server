@@ -1,6 +1,7 @@
 import json
 from src.config import env
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
 import aiohttp
 
 def get_integrations_url(endpoint: str) -> str:
@@ -18,6 +19,7 @@ def get_integrations_url(endpoint: str) -> str:
     return f"{base_url}/{endpoint}"
 
 
+@interceptor(source={"source": "mcp", "tool": "internal_request"})
 async def internal_request(
     url: str,
     method: str = "GET",

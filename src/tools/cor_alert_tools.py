@@ -14,6 +14,7 @@ from src.config.env import (
     GOOGLE_MAPS_API_KEY,
 )
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
 
 
 # Valid alert types and severities
@@ -21,6 +22,7 @@ VALID_ALERT_TYPES = ["alagamento", "enchente", "dano_chuva"]
 VALID_SEVERITIES = ["alta", "critica"]
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def get_coordinates_nominatim(address: str) -> dict:
     """
     Get coordinates from Nominatim API.
@@ -59,6 +61,7 @@ def get_coordinates_nominatim(address: str) -> dict:
     return {}
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def get_coordinates_google(address: str) -> dict:
     """
     Get coordinates from Google Maps API.
@@ -91,6 +94,7 @@ def get_coordinates_google(address: str) -> dict:
     return {}
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def geocode_address(address: str) -> dict:
     """
     Geocode an address using Nominatim with Google Maps fallback.
@@ -111,6 +115,10 @@ def geocode_address(address: str) -> dict:
     return coords
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "cor_alert"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 async def create_cor_alert(
     user_id: str,
     alert_type: str,
@@ -209,6 +217,7 @@ async def create_cor_alert(
     }
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 async def check_nearby_alerts(address: str) -> dict:
     """
     Check for existing alerts within 3km radius in the last 12 hours.

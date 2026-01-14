@@ -9,6 +9,7 @@ from urllib.parse import urldefrag, urlparse
 from xml.etree import ElementTree
 import requests
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 
 
@@ -22,6 +23,7 @@ def is_txt(url: str) -> bool:
     return url.endswith(".txt")
 
 
+@interceptor(source={"source": "mcp", "tool": "crawl_pages"})
 def parse_sitemap(sitemap_url: str) -> List[str]:
     """
     Parses a sitemap.xml file and extracts all URLs.
@@ -46,6 +48,7 @@ def parse_sitemap(sitemap_url: str) -> List[str]:
     return []
 
 
+@interceptor(source={"source": "mcp", "tool": "crawl_pages"})
 async def crawl_batch(
     crawler: AsyncWebCrawler, urls: List[str], config: CrawlerRunConfig
 ) -> List[Dict[str, Any]]:
@@ -81,6 +84,7 @@ async def crawl_batch(
     return results_list
 
 
+@interceptor(source={"source": "mcp", "tool": "crawl_pages"})
 async def crawl_recursive(
     crawler: AsyncWebCrawler,
     start_urls: List[str],

@@ -8,6 +8,7 @@ from src.tools.equipments.utils import (
 )
 from src.config import env as config
 from src.utils.bigquery import get_bigquery_client
+from src.utils.error_interceptor import interceptor
 
 # from src.utils.log import logger
 
@@ -28,6 +29,7 @@ def get_bigquery_result(query: str):
     return json.loads(data_str)
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_pluscode_coords_equipments(
     address, categories: Optional[List[str]] = []
 ) -> dict:
@@ -185,6 +187,7 @@ async def get_pluscode_coords_equipments(
         }
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_category_equipments() -> dict:
     query = f"""
         with
@@ -220,6 +223,7 @@ async def get_category_equipments() -> dict:
     return categories
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_tematic_instructions_for_equipments(tema: str = "geral") -> List[dict]:
     where_clause = f"WHERE tema = '{tema}'" if tema != "geral" else ""
     query = f"""

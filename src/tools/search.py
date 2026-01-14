@@ -4,12 +4,14 @@ import json
 from src.tools.google_search.gemini_service import gemini_service
 from src.utils.bigquery import save_response_in_bq_background
 from src.utils.typesense_api import HubSearchRequest, hub_search
+from src.utils.error_interceptor import interceptor
 
 from src.config import env
 
 from src.utils.log import logger
 
 
+@interceptor(source={"source": "mcp", "tool": "search"})
 async def get_google_search(query: str):
     """
     Obtém resultados de busca via Typesense (se ativo) ou Google Search como fallback.
@@ -59,6 +61,12 @@ async def get_google_search(query: str):
             response_data = typesense_res
             final_response = {"response": typesense_res.get("results_clean")}
             response_data.pop("results_clean")
+            # logger.debug(
+            #     f"Typesense Response: {json.dumps(response_data, indent=2, ensure_ascii=False)} "
+            # )
+            # logger.debug(
+            #     f"Typesense Response: {json.dumps(typesense_res, indent=2, ensure_ascii=False)} "
+            # )
     # 3. Fallback ou Execução Principal: Google Search
     # Executa se o Typesense estiver desativado OU se o Typesense não retornou resultados
     if not response_data:
@@ -96,12 +104,12 @@ def _get_typesense_params():
     defaults = {
         "type": "semantic",
         "threshold_semantic": 0.7,
-        "threshold_hybrid": 0.7,
-        "alpha": 0.7,
+        "threshold_hybrid": 0,
+        "alpha": 0,
         "page": 1,
         "per_page": 5,
-        "threshold_ai": 0.85,
-        "threshold_keyword": 1,
+        "threshold_ai": 0,
+        "threshold_keyword": 0,
     }
 
     raw_params = env.TYPESENSE_PARAMETERS

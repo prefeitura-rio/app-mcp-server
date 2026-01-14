@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 
 from src.config.env import RMI_API_URL
 from src.utils.rmi_oauth2 import get_authorization_header, is_oauth2_configured
+from src.utils.error_interceptor import interceptor
 
 
 class MemoryType(Enum):
@@ -29,6 +30,10 @@ class MemoryBank(BaseModel):
     value: str
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "memory"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 async def get_memories(
     user_id: str, memory_name: Optional[str] = None
 ) -> Union[dict, List[dict]]:
@@ -67,6 +72,10 @@ async def get_memories(
             return await response.json()
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "memory"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 async def upsert_memory(
     user_id: str,
     memory_bank: dict,
