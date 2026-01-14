@@ -45,7 +45,7 @@ class TestInterceptorDecoratorAsync:
 
     @pytest.mark.asyncio
     async def test_interceptor_extracts_user_id_from_kwargs(self):
-        """Verifica extração de user_id dos kwargs."""
+        """Verifica extração de user_id dos kwargs e input_body."""
 
         @interceptor(
             source={"source": "mcp", "tool": "test_tool"},
@@ -64,6 +64,8 @@ class TestInterceptorDecoratorAsync:
 
             call_kwargs = mock_send.call_args[1]
             assert call_kwargs["user_id"] == "5521999999999"
+            # Verifica que input_body contém os parâmetros da função
+            assert call_kwargs["input_body"]["user_id"] == "5521999999999"
 
     @pytest.mark.asyncio
     async def test_interceptor_extracts_user_id_from_args(self):

@@ -383,7 +383,11 @@ def interceptor(
                     loop.create_task(_handle_error(func, args, kwargs, e))
                 except RuntimeError:
                     # Não há event loop rodando, tenta criar um
-                    asyncio.run(_handle_error(func, args, kwargs, e))
+                    try:
+                        asyncio.run(_handle_error(func, args, kwargs, e))
+                    except Exception as send_error:
+                        # Log silencioso se falhar ao enviar erro
+                        logger.warning(f"Falha ao enviar erro para interceptor: {send_error}")
                 raise
 
         async def _handle_error(func, args, kwargs, e):
