@@ -8,22 +8,25 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class NomePayload(BaseModel):
-    name: str = Field(
-        ..., 
+    name: Optional[str] = Field(
+        None, 
         min_length=3, 
         max_length=100,
-        description="Nome e sobrenome do usuário"
+        description="Nome e sobrenome do usuário (opcional)"
     )
     
     @field_validator('name', mode='before')
     @classmethod
-    def validate_name(cls, v: str) -> str:
+    def validate_name(cls, v: Optional[str]) -> Optional[str]:
         """
         Valida e formata o nome do usuário.
         - Remove espaços extras
         - Verifica nome e sobrenome
         - Aceita apenas letras e acentos
         """
+        if not v or not v.strip():
+            return None
+            
         # Remove espaços extras
         v = ' '.join(v.split())
         
@@ -44,17 +47,20 @@ class NomePayload(BaseModel):
         return v
 
 class EmailPayload(BaseModel):
-    email: str = Field(
-        ...,
-        description="Email válido do usuário"
+    email: Optional[str] = Field(
+        None,
+        description="Email válido do usuário (opcional)"
     )
     
     @field_validator('email', mode='before')
     @classmethod
-    def validate_email(cls, v: str) -> str:
+    def validate_email(cls, v: Optional[str]) -> Optional[str]:
         """
         Valida e normaliza email.
         """
+        if not v or not v.strip():
+            return None
+            
         v = v.strip().lower()
         
         # Validação de formato de email
@@ -224,6 +230,4 @@ class TicketDataConfirmationPayload(BaseModel):
     def validate_correcao(cls, v: Optional[str], info) -> Optional[str]:
         """Valida que há uma correção quando confirmacao é False."""
         values = info.data
-        if values.get('confirmacao') is False and not v:
-            raise ValueError("Por favor, informe o que precisa ser corrigido")
         return v

@@ -66,25 +66,25 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
     automatic_resets = True
 
     steps_order = [
-        "_initialize_workflow",
-        "_collect_address",
-        "_collect_reference_point",
-        "_collect_cpf",
-        "_collect_email",
-        "_collect_name",
-        "_confirm_ticket_data",
-        "_open_ticket",
+        "initialize",
+        "collect_address",
+        "collect_reference_point",
+        "collect_cpf",
+        "collect_email",
+        "collect_name",
+        "confirm_ticket_data",
+        "open_ticket",
     ]
 
     step_dependencies = {
-        "_initialize_workflow": [],
-        "_collect_address": [],
-        "_collect_reference_point": ["_collect_address"],
-        "_collect_cpf": ["_collect_email", "_collect_name"],
-        "_collect_email": [],
-        "_collect_name": [],
-        "_confirm_ticket_data": [],
-        "_open_ticket": [],
+        "initialize": [],
+        "collect_address": [],
+        "collect_reference_point": ["collect_address"],
+        "collect_cpf": ["collect_email", "collect_name"],
+        "collect_email": [],
+        "collect_name": [],
+        "confirm_ticket_data": ["collect_address"],
+        "open_ticket": ["collect_address", "confirm_ticket_data"],
     }
 
     def __init__(self, use_fake_api: bool = False):
@@ -456,16 +456,34 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         """Coleta ponto de referência opcional."""
         logger.info("[ENTRADA] _collect_reference_point")
         
+        if state.payload and "correcao" in state.payload:
+            return state
+        
+        # Se veio de correção de ponto de referência, limpa a flag
+        if state.data.get("correction_requested") == "reference_point":
+            state.data.pop("correction_requested", None)
+        # Se está em processo de correção de outro campo, não processa aqui
+        elif state.data.get("correction_requested"):
+            return state
+        
         if state.data.get("reference_point_collected") or not state.data.get("need_reference_point"):
             return state
         
-        if "ponto_referencia" in state.payload:
+        if state.payload and "ponto_referencia" not in state.payload and state.agent_response is None:
+            state.agent_response = AgentResponse(
+                description=tpl.solicitar_ponto_referencia(),
+                payload_schema=PontoReferenciaPayload.model_json_schema(),
+            )
+            return state
+        
+        if state.payload and "ponto_referencia" in state.payload:
             try:
                 validated = PontoReferenciaPayload.model_validate(state.payload)
                 
-                if validated.ponto_referencia:
-                    state.data["ponto_referencia"] = validated.ponto_referencia
-                    logger.info(f"Ponto de referência coletado: {validated.ponto_referencia}")
+                ponto_ref = validated.ponto_referencia
+                if ponto_ref and isinstance(ponto_ref, str) and ponto_ref.strip():
+                    state.data["ponto_referencia"] = ponto_ref
+                    logger.info(f"Ponto de referência coletado: {ponto_ref}")
                 else:
                     state.data["ponto_referencia"] = None
                     logger.info("Usuário optou por não informar ponto de referência")
@@ -504,6 +522,15 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         state: ServiceState
     ) -> ServiceState:
         logger.info("[ENTRADA] _collect_cpf")
+        
+        if state.data.get("correction_requested") == "cpf":
+            state.data.pop("cpf", None)
+            state.data.pop("identificacao_pulada", None)
+            state.data.pop("correction_requested", None)
+            logger.info("[CPF] Correção solicitada - reprocessando...")
+        elif state.data.get("cpf") or state.data.get("identificacao_pulada"):
+            logger.info("[CPF] Já processado, pulando...")
+            return state
         
         if state.data.get("awaiting_user_memory_confirmation"):
             if "confirmacao" in state.payload:
@@ -607,7 +634,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 )
                 return state
         
-        if "cpf" in state.payload:
+        if state.payload and "cpf" in state.payload:
             try:
                 validated = CPFPayload.model_validate(state.payload)
                 cpf_novo = validated.cpf
@@ -702,11 +729,16 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         """Coleta email do usuário (opcional)."""
         logger.info("[ENTRADA] _collect_email")
         
-        if state.data.get("email_processed"):
+        # Se veio de correção, limpa a flag
+        if state.data.get("correction_requested") == "email":
+            state.data.pop("correction_requested", None)
+        # Se já processou email, retorna sem fazer nada
+        elif state.data.get("email_processed"):
             return state
         
-        if "email" in state.payload:
-            if state.payload.get("email", "").strip() == "":
+        if state.payload and "email" in state.payload:
+            email_value = state.payload.get("email")
+            if not email_value or (isinstance(email_value, str) and email_value.strip() == ""):
                 state.data["email_skipped"] = True
                 state.data["email_processed"] = True
                 logger.info("Usuário optou por não informar email")
@@ -767,11 +799,16 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         """Coleta nome do usuário (opcional)."""
         logger.info("[ENTRADA] _collect_name")
 
-        if state.data.get("name_processed"):
+        # Se veio de correção, limpa a flag
+        if state.data.get("correction_requested") == "name":
+            state.data.pop("correction_requested", None)
+        elif state.data.get("name_processed"):
             return state
         
-        if "name" in state.payload:
-            if state.payload.get("name", "").strip() == "":
+        # Só processa se o payload tiver o campo esperado
+        if state.payload and "name" in state.payload:
+            name_value = state.payload.get("name")
+            if not name_value or (isinstance(name_value, str) and name_value.strip() == ""):
                 state.data["name_skipped"] = True
                 state.data["name_processed"] = True
                 logger.info("Usuário optou por não informar nome")
@@ -887,6 +924,14 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                     correcao_text = validated.correcao or ""
                     logger.info(f"Usuário solicitou correção: {correcao_text}")
                     
+                    if not correcao_text:
+                        logger.info("Usuário disse 'não' sem especificar o que corrigir")
+                        state.agent_response = AgentResponse(
+                            description=tpl.solicitar_correcao_dados(),
+                            payload_schema=TicketDataConfirmationPayload.model_json_schema()
+                        )
+                        return state
+                    
                     # Analisa o que o usuário quer corrigir
                     correcao_lower = correcao_text.lower()
                     
@@ -923,7 +968,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                         state.data["correction_requested"] = "cpf"
                         state.data.pop("cpf", None)
                         state.data.pop("cadastro_verificado", None)
-                        state.data.pop("ticket_data_confirmed", None)
+                        state.data["ticket_data_confirmed"] = False  # Marca que veio de correção
                         state.agent_response = AgentResponse(
                             description=tpl.dados_corrigidos_solicitar_campo("cpf"),
                             payload_schema=CPFPayload.model_json_schema()
@@ -1200,6 +1245,10 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             return END
             
         if state.data.get("address_confirmed"):
+            # Se voltou de uma correção de endereço, volta para confirmação de dados
+            if state.data.get("correction_requested") == "address":
+                state.data.pop("correction_requested", None)
+                return "confirm_ticket_data"
             # Se voltou de uma correção e já tem todos os outros dados, vai para confirmação
             if (state.data.get("reference_point_collected") and 
                 state.data.get("cpf") and 
@@ -1216,10 +1265,6 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         if state.agent_response:
             return END
         
-        # Se voltou de uma correção, vai direto para confirmação
-        if state.data.get("reference_point_collected") and state.data.get("cpf"):
-            return "confirm_ticket_data"
-            
         return "collect_cpf"
     
     def _route_after_cpf(self, state: ServiceState) -> str:
@@ -1238,9 +1283,6 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         if state.data.get("awaiting_user_memory_confirmation"):
             return END
         
-        if "cpf" not in state.data:
-            return END
-        
         # Se voltou de uma correção e já tem outros dados, vai direto para confirmação
         if state.data.get("email_processed") and state.data.get("name_processed"):
             return "confirm_ticket_data"
@@ -1254,8 +1296,16 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             if not state.data.get("name"):
                 return "collect_name"
             return "confirm_ticket_data"
+        
+        if state.data.get("ticket_data_confirmed") is False:
+            return "confirm_ticket_data"
+        
+        if not state.data.get("email_processed"):
+            return "collect_email"
+        if not state.data.get("name_processed"):
+            return "collect_name"
             
-        return "collect_email"
+        return "confirm_ticket_data"
     
     def _route_after_email(self, state: ServiceState) -> str:
         logger.info("[ROTEAMENTO] _route_after_email")
@@ -1371,6 +1421,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 "collect_address": "collect_address",
                 "confirm_address": "confirm_address",
                 "collect_reference_point": "collect_reference_point",
+                "confirm_ticket_data": "confirm_ticket_data",
                 END: END
             }
         )
@@ -1381,6 +1432,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             {
                 "collect_address": "collect_address",
                 "collect_reference_point": "collect_reference_point",
+                "confirm_ticket_data": "confirm_ticket_data",
                 END: END
             }
         )

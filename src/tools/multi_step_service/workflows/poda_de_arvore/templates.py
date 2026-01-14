@@ -203,19 +203,21 @@ def confirmar_dados_ticket(dados_formatados: str) -> str:
     return (
         "Por favor, confirme os dados da sua solicitação:\n\n"
         f"{dados_formatados}\n\n"
-        "Os dados estão corretos? Posso criar a solicitação?"
+        "Os dados estão corretos? Responda com SIM ou NÃO."
     )
 
 
 def solicitar_correcao_dados() -> str:
     """Mensagem solicitando que o usuário informe o que precisa ser corrigido."""
     return (
-        "Por favor, me informe o que precisa ser corrigido nos dados.\n\n"
-        "Você pode dizer algo como:\n"
-        "- 'O endereço está errado, é Rua X número Y'\n"
-        "- 'Meu nome está incorreto, é João Silva'\n"
-        "- 'O email deveria ser outro@exemplo.com'\n\n"
-        "O que você gostaria de corrigir?"
+        "Entendi que há algo incorreto nos dados.\n\n"
+        "Por favor, me diga o que precisa ser corrigido. Por exemplo:\n"
+        "- 'O endereço está errado'\n"
+        "- 'Quero mudar meu nome'\n"
+        "- 'O email está incorreto'\n"
+        "- 'Quero adicionar ponto de referência'\n\n"
+        "Ou se você não deseja mais criar a solicitação, diga 'cancelar'.\n\n"
+        "O que você gostaria de fazer?"
     )
 
 def dados_corrigidos_solicitar_campo(campo: str) -> str:
