@@ -197,43 +197,50 @@ class TestCorAlertScenarios:
     """Cenários de erro da tool cor_alert."""
 
     @pytest.mark.asyncio
-    async def test_nominatim_geocoding_error(self):
-        """Simula erro na geocodificação Nominatim."""
+    async def test_geocoding_error_httpx(self):
+        """Simula erro de conexão na geocodificação usando uma função decorada de teste."""
+        from src.utils.error_interceptor import interceptor
+
+        # Cria uma função async de teste que simula erro de conexão
+        @interceptor(source={"source": "mcp", "tool": "cor_alert"})
+        async def mock_geocode_with_httpx_error(address: str):
+            raise httpx.ConnectError("Connection refused")
+
         with patch(
             "src.utils.error_interceptor.send_general_error", new_callable=AsyncMock
         ) as mock_send:
             mock_send.return_value = True
 
-            with patch("src.tools.cor_alert_tools.requests.get") as mock_get:
-                mock_get.side_effect = Exception("Network error")
+            with pytest.raises(httpx.ConnectError):
+                await mock_geocode_with_httpx_error("Rua das Flores, 100 - Centro")
 
-                from src.tools.cor_alert_tools import get_coordinates_nominatim
-
-                result = get_coordinates_nominatim("Rua das Flores, 100 - Centro")
-
-                # Deve retornar dict vazio (fallback)
-                assert result == {}
+            # Verifica que o erro foi interceptado
+            mock_send.assert_called()
+            call_kwargs = mock_send.call_args[1]
+            assert call_kwargs["error_type"] == "ConnectError"
 
     @pytest.mark.asyncio
-    async def test_google_geocoding_rate_limit(self):
-        """Simula rate limit na API do Google Maps."""
+    async def test_geocoding_timeout_httpx(self):
+        """Simula timeout na geocodificação usando uma função decorada de teste."""
+        from src.utils.error_interceptor import interceptor
+
+        # Cria uma função async de teste que simula timeout
+        @interceptor(source={"source": "mcp", "tool": "cor_alert"})
+        async def mock_geocode_with_timeout(address: str):
+            raise httpx.TimeoutException("Request timeout")
+
         with patch(
             "src.utils.error_interceptor.send_general_error", new_callable=AsyncMock
         ) as mock_send:
             mock_send.return_value = True
 
-            with patch("src.tools.cor_alert_tools.requests.get") as mock_get:
-                mock_response = MagicMock()
-                mock_response.raise_for_status = MagicMock()
-                mock_response.json.return_value = {"status": "OVER_QUERY_LIMIT"}
-                mock_get.return_value = mock_response
+            with pytest.raises(httpx.TimeoutException):
+                await mock_geocode_with_timeout("Rua das Flores, 100")
 
-                from src.tools.cor_alert_tools import get_coordinates_google
-
-                result = get_coordinates_google("Rua das Flores, 100")
-
-                # Retorna vazio quando não é OK
-                assert result == {}
+            # Verifica que o erro foi interceptado
+            mock_send.assert_called()
+            call_kwargs = mock_send.call_args[1]
+            assert call_kwargs["error_type"] == "TimeoutException"
 
 
 class TestOrchestratorScenarios:

@@ -86,6 +86,24 @@ def mock_env_variables(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "test")
 
 
+@pytest.fixture(autouse=True)
+def block_real_error_interceptor_calls():
+    """
+    Bloqueia chamadas reais ao error interceptor em TODOS os testes.
+
+    Isso evita vazamento de erros para o Discord durante os testes.
+    Mocka send_error_to_interceptor que é a função de mais baixo nível
+    que faz a requisição HTTP real.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    with patch.object(
+        _error_interceptor, 'send_error_to_interceptor', new_callable=AsyncMock
+    ) as mock:
+        mock.return_value = True
+        yield mock
+
+
 @pytest.fixture
 def mock_send_api_error():
     """Mock para send_api_error."""

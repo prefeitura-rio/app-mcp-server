@@ -18,9 +18,12 @@ from uuid import uuid4
 
 from datetime import datetime
 import httpx
+import random
 
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
+from google.api_core import exceptions as google_exceptions
 
 
 class GeminiService:
@@ -325,8 +328,13 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
     }
 
-    async with httpx.AsyncClient(
-        follow_redirects=True, timeout=30, verify=False, headers=headers
+    async with InterceptedHTTPClient(
+        user_id="unknown",
+        source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
+        timeout=30.0,
+        follow_redirects=True,
+        verify=False,
+        headers=headers
     ) as session:
         # Limita concorrência para evitar sobrecarga
         semaphore = asyncio.Semaphore(20)

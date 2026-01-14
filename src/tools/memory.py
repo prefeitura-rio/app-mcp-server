@@ -3,12 +3,13 @@
 from enum import Enum
 from typing import List, Optional, Union
 
-import aiohttp
+import httpx
 from pydantic import BaseModel, ValidationError
 
 from src.config.env import RMI_API_URL
 from src.utils.rmi_oauth2 import get_authorization_header, is_oauth2_configured
 from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
 
 
 class MemoryType(Enum):
@@ -64,12 +65,14 @@ async def get_memories(
 
     headers = {"Authorization": await get_authorization_header()}
 
-    timeout = aiohttp.ClientTimeout(total=120)
-
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url, headers=headers) as response:
-            response.raise_for_status()
-            return await response.json()
+    async with InterceptedHTTPClient(
+        user_id=user_id,
+        source={"source": "mcp", "tool": "memory"},
+        timeout=120.0
+    ) as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
 
 @interceptor(
@@ -106,24 +109,21 @@ async def upsert_memory(
 
     headers = {"Authorization": await get_authorization_header()}
 
-    timeout = aiohttp.ClientTimeout(total=120)
-
     # Tries to update the memory bank
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.request(
-                "PUT", url, headers=headers, json=validated_memory_bank
-            ) as response:
+    async with InterceptedHTTPClient(
+        user_id=user_id,
+        source={"source": "mcp", "tool": "memory"},
+        timeout=120.0
+    ) as client:
+        try:
+            response = await client.put(url, headers=headers, json=validated_memory_bank)
+            response.raise_for_status()
+            return response.json()
+        # If the memory bank does not exist, creates it
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                response = await client.post(url, headers=headers, json=validated_memory_bank)
                 response.raise_for_status()
-                return await response.json()
-    # If the memory bank does not exists, creates it
-    except aiohttp.ClientResponseError as e:
-        if e.status == 404:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.request(
-                    "POST", url, headers=headers, json=validated_memory_bank
-                ) as response:
-                    response.raise_for_status()
-                    return await response.json()
-        else:
-            raise
+                return response.json()
+            else:
+                raise
