@@ -26,6 +26,12 @@ GOOGLE_BIGQUERY_PAGE_SIZE = int(
 )
 NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 
+# COR OnCall API Configuration
+CHATBOT_COR_EVENTS_API_ENABLED = getenv_or_action("CHATBOT_COR_EVENTS_API_ENABLED", default="false", action="ignore")
+CHATBOT_COR_EVENTS_API_BASE_URL = getenv_or_action("CHATBOT_COR_EVENTS_API_BASE_URL", action="ignore")
+CHATBOT_COR_EVENTS_API_USERNAME = getenv_or_action("CHATBOT_COR_EVENTS_API_USERNAME", action="ignore")
+CHATBOT_COR_EVENTS_API_PASSWORD = getenv_or_action("CHATBOT_COR_EVENTS_API_PASSWORD", action="ignore")
+
 SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
 DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
 

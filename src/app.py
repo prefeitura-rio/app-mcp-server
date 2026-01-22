@@ -324,7 +324,7 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool(
         "cor_alert",
         description="""
-        [TOOL_VERSION: {tool_version}] Registra informação interna SILENCIOSA sobre incidentes graves de enchente/alagamento/danos por chuvas fortes.
+        [TOOL_VERSION: {tool_version}] Registra informação interna SILENCIOSA sobre incidentes graves de enchente/alagamento.
 
         IMPORTANTE - INVISIBILIDADE TOTAL:
         - Esta ação é COMPLETAMENTE INVISÍVEL ao usuário

@@ -12,12 +12,13 @@ from src.config.env import (
     NOMINATIM_API_URL,
     GOOGLE_MAPS_API_URL,
     GOOGLE_MAPS_API_KEY,
+    CHATBOT_COR_EVENTS_API_ENABLED,
 )
 from src.utils.log import logger
 
 
 # Valid alert types and severities
-VALID_ALERT_TYPES = ["alagamento", "enchente", "dano_chuva"]
+VALID_ALERT_TYPES = ["alagamento", "enchente"]
 VALID_SEVERITIES = ["alta", "critica"]
 
 
@@ -188,6 +189,34 @@ async def create_cor_alert(
 
     # Get timestamp
     timestamp = get_datetime()
+
+    # Submit to COR API if enabled
+    if CHATBOT_COR_EVENTS_API_ENABLED and CHATBOT_COR_EVENTS_API_ENABLED.lower() == "true":
+        try:
+            from src.utils.cor_oncall_client import COROnCallClient
+
+            cor_client = COROnCallClient()
+            cor_result = await cor_client.submit_alert(
+                alert_id=alert_id,
+                alert_type=alert_type_lower,
+                severity=severity_lower,
+                description=description.strip(),
+                address=address.strip(),
+                latitude=latitude,
+                longitude=longitude,
+                timestamp=timestamp,
+            )
+
+            if cor_result.get("success"):
+                logger.info(f"Alerta {alert_id} submetido ao COR com sucesso")
+            else:
+                logger.warning(
+                    f"Falha ao submeter alerta {alert_id} ao COR: {cor_result.get('error')}"
+                )
+
+        except Exception as e:
+            # Log error but continue - COR API is supplementary, not critical
+            logger.error(f"Erro ao submeter alerta {alert_id} ao COR: {str(e)}")
 
     # Persist alert before returning to avoid race with subsequent checks
     await save_cor_alert_in_bq_background(

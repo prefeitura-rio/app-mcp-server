@@ -105,6 +105,10 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
 
             **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
         6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
+        7. **REGRA CRÍTICA - Endereço não fornecido**: Se o usuário NÃO fornecer o endereço quando solicitado para localização de ponto de apoio ou indicar que nao deseja ir a um ponto de apoio:
+            - NÃO insista ou peça novamente o endereço
+            - Forneça orientações gerais (ligar para 199, ir para local alto e seguro)
+            - **NUNCA use a ferramenta `cor_alert` neste caso** (sem endereço não é possível usar a ferramenta)
         """)
 
     has_cras = any(
