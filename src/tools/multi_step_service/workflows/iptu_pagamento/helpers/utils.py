@@ -10,6 +10,39 @@ from src.tools.multi_step_service.core.models import ServiceState
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import DadosCotas
 
 
+def formatar_valor_brl(valor: Optional[float]) -> str:
+    """
+    Formata valor numérico para formato brasileiro (R$ 1.234,56).
+
+    Args:
+        valor: Valor numérico a ser formatado
+
+    Returns:
+        String formatada no padrão brasileiro
+
+    Examples:
+        >>> formatar_valor_brl(1234.56)
+        'R$ 1.234,56'
+        >>> formatar_valor_brl(0)
+        'R$ 0,00'
+        >>> formatar_valor_brl(None)
+        'R$ 0,00'
+        >>> formatar_valor_brl(1000000.50)
+        'R$ 1.000.000,50'
+    """
+    if valor is None or valor == 0:
+        return "R$ 0,00"
+
+    # Formata com separador de milhares e 2 casas decimais
+    valor_str = f"{valor:,.2f}"
+
+    # Substitui vírgula por ponto (milhares) e ponto por vírgula (decimais)
+    # Formato americano: 1,234.56 -> Formato brasileiro: 1.234,56
+    valor_str = valor_str.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    return f"R$ {valor_str}"
+
+
 class IPTUAPIProtocol(Protocol):
     """Protocol para tipo do serviço de API IPTU."""
 
@@ -47,13 +80,14 @@ def preparar_dados_guias_para_template(
             guia.get("valor_iptu_original_guia", "0,00")
         )
         situacao = guia.get("situacao", {}).get("descricao", "EM ABERTO")
-
+        esta_em_aberto = guia.get("esta_em_aberto")
         guias_formatadas.append(
             {
                 "numero_guia": guia.get("numero_guia", "N/A"),
                 "tipo": guia.get("tipo", "IPTU").upper(),
                 "valor_original": valor_original,
                 "situacao": situacao,
+                "esta_em_aberto": esta_em_aberto,
             }
         )
 

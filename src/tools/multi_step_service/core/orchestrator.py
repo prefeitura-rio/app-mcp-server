@@ -124,14 +124,13 @@ class Orchestrator:
         Raises:
             ValueError: Se workflow não for encontrado
         """
-
         # Verifica se workflow existe
-        if request.service_name not in self.workflows:
+        if (not request.service_name) or (request.service_name not in self.workflows):
             available = ", ".join(self.list_workflows())
             return AgentResponse(
                 service_name=request.service_name,
-                error_message=f"Serviço '{request.service_name}' não encontrado. Disponíveis: {available}",
-                description="Erro: Serviço não encontrado",
+                error_message=f"Serviço '{request.service_name}' não encontrado. **Serviços Disponíveis:**\n\n{available}",
+                description="",
                 payload_schema=None,
                 data={},
             )

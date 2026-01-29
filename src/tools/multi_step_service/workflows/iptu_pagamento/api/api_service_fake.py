@@ -42,8 +42,14 @@ class IPTUAPIServiceFake:
     - 99999999990002: Simula erro 503 na geração de DARM
     """
 
-    def __init__(self):
-        """Inicializa o serviço fake."""
+    def __init__(self, user_id: str = "unknown"):
+        """
+        Inicializa o serviço fake.
+
+        Args:
+            user_id: ID do usuário (para compatibilidade com API real)
+        """
+        self.user_id = user_id
         logger.info("IPTUAPIServiceFake initialized - MOCK DATA MODE")
 
     @staticmethod

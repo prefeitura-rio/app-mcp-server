@@ -9,9 +9,6 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     EscolhaAnoPayload,
     EscolhaGuiasIPTUPayload,
     EscolhaCotasParceladasPayload,
-    EscolhaMaisCotasPayload,
-    EscolhaOutrasGuiasPayload,
-    EscolhaOutroImovelPayload,
     EscolhaFormatoDarmPayload,
     ConfirmacaoDadosPayload,
     DadosGuias,
@@ -31,10 +28,6 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.core.constants import
     MAX_TENTATIVAS_ANO,
     STATE_FAILED_ATTEMPTS_PREFIX,
     STATE_HAS_CONSULTED_GUIAS,
-    STATE_NEXT_QUESTION_TYPE,
-    QUESTION_TYPE_MORE_QUOTAS,
-    QUESTION_TYPE_OTHER_GUIAS,
-    QUESTION_TYPE_OTHER_PROPERTY,
     FAKE_API_ENV_VAR,
 )
 
@@ -44,9 +37,6 @@ __all__ = [
     "EscolhaAnoPayload",
     "EscolhaGuiasIPTUPayload",
     "EscolhaCotasParceladasPayload",
-    "EscolhaMaisCotasPayload",
-    "EscolhaOutrasGuiasPayload",
-    "EscolhaOutroImovelPayload",
     "EscolhaFormatoDarmPayload",
     "ConfirmacaoDadosPayload",
     # Models - Data
@@ -65,9 +55,5 @@ __all__ = [
     "MAX_TENTATIVAS_ANO",
     "STATE_FAILED_ATTEMPTS_PREFIX",
     "STATE_HAS_CONSULTED_GUIAS",
-    "STATE_NEXT_QUESTION_TYPE",
-    "QUESTION_TYPE_MORE_QUOTAS",
-    "QUESTION_TYPE_OTHER_GUIAS",
-    "QUESTION_TYPE_OTHER_PROPERTY",
     "FAKE_API_ENV_VAR",
 ]
