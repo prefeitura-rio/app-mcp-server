@@ -40,18 +40,10 @@ FAKE_API_ENV_VAR = "IPTU_USE_FAKE_API"
 # State Internal Keys (padronizados)
 # Flags de estado
 STATE_IS_DATA_CONFIRMED = "is_data_confirmed"
-STATE_WANTS_MORE_QUOTAS = "wants_more_quotas"
-STATE_WANTS_OTHER_GUIAS = "wants_other_guias"
-STATE_WANTS_OTHER_PROPERTY = "wants_other_property"
 STATE_HAS_CONSULTED_GUIAS = "has_consulted_guias"
 STATE_USE_SEPARATE_DARM = "use_separate_darm"
 STATE_IS_SINGLE_QUOTA_FLOW = "is_single_quota_flow"
 
-# Tipos de pergunta seguinte
-STATE_NEXT_QUESTION_TYPE = "next_question_type"
-QUESTION_TYPE_MORE_QUOTAS = "more_quotas"
-QUESTION_TYPE_OTHER_GUIAS = "other_guias"
-QUESTION_TYPE_OTHER_PROPERTY = "other_property"
 
 # Prefixos para chaves dinâmicas
 STATE_FAILED_ATTEMPTS_PREFIX = "failed_attempts_"
