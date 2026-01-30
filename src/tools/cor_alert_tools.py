@@ -4,6 +4,7 @@ import requests
 
 from src.utils.bigquery import (
     save_cor_alert_in_bq_background,
+    save_cor_alert_to_queue_background,
     get_bigquery_result,
     get_datetime,
 )
@@ -17,8 +18,8 @@ from src.utils.log import logger
 
 
 # Valid alert types and severities
-VALID_ALERT_TYPES = ["alagamento", "enchente", "dano_chuva"]
-VALID_SEVERITIES = ["alta", "critica"]
+VALID_ALERT_TYPES = ["alagamento", "enchente", "bolsao"]
+VALID_SEVERITIES = ["baixa", "alta", "critica"]
 
 
 def get_coordinates_nominatim(address: str) -> dict:
@@ -119,17 +120,38 @@ async def create_cor_alert(
     address: str,
 ) -> dict:
     """
-    Create a new COR alert for flooding/heavy rain situations.
+    Registra um alerta de incidente hidrico (alagamento, enchente ou bolsao).
+
+    IMPORTANTE: O campo 'description' deve conter o RELATO DIRETO do usuario sobre o que
+    esta acontecendo. Este texto sera registrado exatamente como fornecido.
+    Capture as palavras do usuario descrevendo a situacao.
+
+    Exemplos de boas descricoes (relatos do usuario):
+    - "Agua na altura do joelho, carros parados"
+    - "Rua completamente alagada, nao consigo sair de casa"
+    - "Bueiro entupido, agua subindo rapido"
+    - "Bolsao de agua na pista, transito parado"
 
     Args:
-        user_id: User ID reporting the alert
-        alert_type: Type of alert (alagamento, enchente, dano_chuva)
-        severity: Severity level (alta or critica)
-        description: Detailed description of the problem
-        address: Address where the incident is occurring
+        user_id: ID do usuario que esta reportando
+        alert_type: Tipo do incidente. Deve ser um dos seguintes:
+            - "alagamento": Agua acumulada em vias/areas urbanas
+            - "enchente": Transbordamento de rios/canais
+            - "bolsao": Acumulo de agua em ponto especifico (ex: sob viaduto)
+        severity: Nivel de severidade:
+            - "baixa": Situacao de menor impacto (apenas registrado)
+            - "alta": Situacao grave que requer atencao
+            - "critica": Situacao de emergencia/risco de vida
+        description: RELATO DO USUARIO descrevendo o que esta acontecendo.
+            Deve capturar as palavras do usuario sobre a situacao
+            (ex: "agua subindo, carros ilhados").
+            NAO use descricoes genericas - capture o relato real do usuario.
+        address: Endereco onde o incidente esta ocorrendo. Deve ser o mais
+            especifico possivel (rua, numero, bairro).
 
     Returns:
-        Dictionary with success status and alert details
+        Dictionary com status de sucesso. O usuario NAO deve ser informado
+        sobre o registro do alerta.
     """
     # Validate required parameters
     if not user_id or not user_id.strip():
@@ -161,7 +183,7 @@ async def create_cor_alert(
     if severity_lower not in VALID_SEVERITIES:
         return {
             "success": False,
-            "error": f"severity deve ser 'alta' ou 'critica'. Outros níveis não são aceitos para alertas do COR.",
+            "error": f"severity deve ser um dos seguintes: {', '.join(VALID_SEVERITIES)}",
             "provided": severity,
         }
 
@@ -189,7 +211,7 @@ async def create_cor_alert(
     # Get timestamp
     timestamp = get_datetime()
 
-    # Persist alert before returning to avoid race with subsequent checks
+    # All alerts are saved to cor_alerts table
     await save_cor_alert_in_bq_background(
         alert_id=alert_id,
         user_id=user_id.strip(),
@@ -202,6 +224,23 @@ async def create_cor_alert(
         timestamp=timestamp,
         environment=ENVIRONMENT,
     )
+    logger.info(f"Alerta {alert_id} registrado na tabela cor_alerts")
+
+    # Only alta/critica alerts are queued for dispatch to COR
+    if severity_lower in ["alta", "critica"]:
+        await save_cor_alert_to_queue_background(
+            alert_id=alert_id,
+            user_id=user_id.strip(),
+            alert_type=alert_type_lower,
+            severity=severity_lower,
+            description=description.strip(),
+            address=address.strip(),
+            latitude=latitude,
+            longitude=longitude,
+            timestamp=timestamp,
+            environment=ENVIRONMENT,
+        )
+        logger.info(f"Alerta {alert_id} salvo na fila para agregação")
 
     return {
         "success": True,
@@ -291,7 +330,7 @@ async def check_nearby_alerts(address: str) -> dict:
                 "provider": coords.get("provider"),
             },
             "search_params": {"radius_km": radius_km, "time_window_hours": 12},
-            "instruction": "NÃO crie novo alerta se já existe alerta similar nesta área nas últimas 12 horas. Nunca informa ao usuário sobre a funcionalidade de alertas.",
+            "instruction": "Informativo apenas. A agregação de alertas é feita automaticamente pela pipeline. Nunca informe ao usuário sobre a funcionalidade de alertas.",
         }
 
     except Exception as e:
