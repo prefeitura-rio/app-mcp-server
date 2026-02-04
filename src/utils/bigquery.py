@@ -353,6 +353,151 @@ async def save_cor_alert_in_bq_background(
         )
 
 
+def save_cor_alert_to_queue(
+    alert_id: str,
+    user_id: str,
+    alert_type: str,
+    severity: str,
+    description: str,
+    address: str,
+    latitude: float,
+    longitude: float,
+    timestamp: str,
+    environment: str,
+    dataset_id: str = "brutos_eai_logs",
+    table_id: str = "cor_alerts_queue",
+    project_id: str = "rj-iplanrio",
+):
+    """
+    Saves COR alert to queue table for aggregation processing by Prefect pipeline.
+
+    The alert is saved with status='pending' and will be processed by the
+    rj_iplanrio__cor_alerts_aggregator pipeline which runs every 2 minutes.
+
+    Aggregation rules:
+    - Alerts are grouped by type (enchente, alagamento, bolsao) within 500m radius
+    - 5+ alerts in cluster: dispatch immediately
+    - 1-4 alerts + 7 min window expired: dispatch
+    - 1-4 alerts + window active: wait for more
+
+    Args:
+        alert_id: Unique alert identifier (UUID)
+        user_id: User identifier
+        alert_type: Type of alert ("alagamento", "enchente", "bolsao")
+        severity: Alert severity ("alta" or "critica")
+        description: Detailed description of the problem
+        address: Address provided by user
+        latitude: Geocoded latitude (nullable)
+        longitude: Geocoded longitude (nullable)
+        timestamp: Timestamp when alert was created
+        environment: Environment (staging, prod)
+        dataset_id: BigQuery dataset ID
+        table_id: BigQuery table ID
+        project_id: GCP project ID
+    """
+    table_full_name = f"{project_id}.{dataset_id}.{table_id}"
+    logger.info(f"Salvando alerta COR na fila: {table_full_name}")
+
+    schema = [
+        bigquery.SchemaField("alert_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alert_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("severity", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("description", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("address", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
+        bigquery.SchemaField("created_at", "DATETIME", mode="REQUIRED"),
+        bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("aggregation_group_id", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("sent_at", "DATETIME", mode="NULLABLE"),
+        bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
+    ]
+
+    job_config = bigquery.LoadJobConfig(
+        schema=schema,
+        write_disposition="WRITE_APPEND",
+        create_disposition="CREATE_IF_NEEDED",
+        time_partitioning=bigquery.TimePartitioning(
+            type_=bigquery.TimePartitioningType.DAY,
+            field="data_particao",
+        ),
+    )
+
+    data_to_save = {
+        "alert_id": alert_id,
+        "user_id": user_id,
+        "alert_type": alert_type,
+        "severity": severity,
+        "description": description,
+        "address": address,
+        "latitude": latitude,
+        "longitude": longitude,
+        "created_at": timestamp,
+        "status": "pending",
+        "aggregation_group_id": None,
+        "sent_at": None,
+        "environment": environment,
+        "data_particao": timestamp.split("T")[0],
+    }
+
+    json_data = json.loads(json.dumps([data_to_save]))
+    client = get_bigquery_client()
+
+    try:
+        job = client.load_table_from_json(
+            json_data, table_full_name, job_config=job_config
+        )
+        job.result()
+        logger.info(f"Alerta COR salvo na fila: {alert_id}")
+    except Exception as e:
+        logger.error(f"Erro ao salvar alerta COR na fila: {str(e)}")
+        raise Exception(f"Failed to save COR alert to queue: {str(e)}")
+
+
+async def save_cor_alert_to_queue_background(
+    alert_id: str,
+    user_id: str,
+    alert_type: str,
+    severity: str,
+    description: str,
+    address: str,
+    latitude: float,
+    longitude: float,
+    timestamp: str,
+    environment: str,
+    dataset_id: str = "brutos_eai_logs",
+    table_id: str = "cor_alerts_queue",
+):
+    """
+    Asynchronous wrapper for saving COR alert to queue in BigQuery.
+    Catches and logs exceptions to prevent crashing background tasks.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            save_cor_alert_to_queue,
+            alert_id,
+            user_id,
+            alert_type,
+            severity,
+            description,
+            address,
+            latitude,
+            longitude,
+            timestamp,
+            environment,
+            dataset_id,
+            table_id,
+        )
+    except Exception:
+        logger.exception(
+            f"Failed to save COR alert to queue in background for alert_id: {alert_id}"
+        )
+
+
 def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
     """
     Executes a BigQuery query and returns results as a list of dictionaries.

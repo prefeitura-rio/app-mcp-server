@@ -8,8 +8,13 @@ if os.path.exists("src/config/.env"):
     dotenv.load_dotenv(dotenv_path="src/config/.env")
 
 
+ENVIRONMENT = getenv_or_action("ENVIRONMENT", default="staging", action="ignore")
 VALID_TOKENS = getenv_or_action("VALID_TOKENS")
 IS_LOCAL = getenv_or_action("IS_LOCAL", default="false", action="ignore") == "true"
+
+WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT")
+WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")
+
 GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
 GEMINI_MODEL = getenv_or_action(
     "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
@@ -18,7 +23,8 @@ GEMINI_MODEL = getenv_or_action(
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
 GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
 
-ENVIRONMENT = getenv_or_action("ENVIRONMENT", default="staging", action="ignore")
+SHORT_API_URL = getenv_or_action("SHORT_API_URL")
+SHORT_API_TOKEN = getenv_or_action("SHORT_API_TOKEN")
 
 GCP_SERVICE_ACCOUNT_CREDENTIALS = getenv_or_action(
     "GCP_SERVICE_ACCOUNT_CREDENTIALS", action="raise"
@@ -30,7 +36,6 @@ NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 
 SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
 DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
-
 
 TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
 
@@ -73,36 +78,25 @@ CHATBOT_INTEGRATIONS_KEY = getenv_or_action("CHATBOT_INTEGRATIONS_KEY", action="
 CHATBOT_PGM_API_URL = getenv_or_action("CHATBOT_PGM_API_URL", action="ignore")
 CHATBOT_PGM_ACCESS_KEY = getenv_or_action("CHATBOT_PGM_ACCESS_KEY", action="ignore")
 
-
 # IPTU API Configuration
 IPTU_API_URL = getenv_or_action("IPTU_API_URL")
 IPTU_API_TOKEN = getenv_or_action("IPTU_API_TOKEN")
-
-SHORT_API_URL = getenv_or_action("SHORT_API_URL")
-SHORT_API_TOKEN = getenv_or_action("SHORT_API_TOKEN")
-
 WA_IPTU_URL = getenv_or_action("WA_IPTU_URL")
 WA_IPTU_TOKEN = getenv_or_action("WA_IPTU_TOKEN")
 WA_IPTU_PUBLIC_KEY = getenv_or_action("WA_IPTU_PUBLIC_KEY")
 
-WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT")
-WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")
-
-
+# Dívida Ativa API Configuration
 DIVIDA_ATIVA_API_URL = getenv_or_action("DIVIDA_ATIVA_API_URL")
 DIVIDA_ATIVA_ACCESS_KEY = getenv_or_action("DIVIDA_ATIVA_ACCESS_KEY")
+
 REDIS_URL = getenv_or_action("REDIS_URL")
 REDIS_TTL_SECONDS = int(getenv_or_action("REDIS_TTL_SECONDS"))
 
-
 PROXY_URL = getenv_or_action("PROXY_URL")
 
-
-## eai engine
-
+## EAI-Engine
 MCP_SERVER_URL = getenv_or_action("MCP_SERVER_URL", action="ignore")
 MCP_API_TOKEN = getenv_or_action("MCP_API_TOKEN", action="ignore")
-
 
 EAI_AGENT_URL = getenv_or_action("EAI_AGENT_URL", action="ignore")
 EAI_AGENT_TOKEN = getenv_or_action("EAI_AGENT_TOKEN", action="ignore")
@@ -121,7 +115,6 @@ GCS_BUCKET = getenv_or_action("GCS_BUCKET", action="ignore")
 PROJECT_NUMBER = getenv_or_action("PROJECT_NUMBER", action="ignore")
 REASONING_ENGINE_ID = getenv_or_action("REASONING_ENGINE_ID", action="ignore")
 
-
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = getenv_or_action(
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", action="ignore"
 )
@@ -136,4 +129,14 @@ SHORT_MEMORY_TIME_LIMIT = getenv_or_action(
 SHORT_MEMORY_TOKEN_LIMIT = getenv_or_action(
     "SHORT_MEMORY_TOKEN_LIMIT", default="50000"
 )  # in tokens
-##-----------
+
+# SGRC Configuration
+SGRC_URL = getenv_or_action("SGRC_URL")
+SGRC_AUTHORIZATION_HEADER = getenv_or_action("SGRC_AUTHORIZATION_HEADER")
+SGRC_BODY_TOKEN = getenv_or_action("SGRC_BODY_TOKEN")
+GMAPS_API_TOKEN = getenv_or_action("GMAPS_API_TOKEN")
+DATA_DIR = getenv_or_action("DATA_DIR")
+
+TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", default="false", action="warn")
+TYPESENSE_PARAMETERS = getenv_or_action("TYPESENSE_PARAMETERS")
+PODA_SERVICE_ID = getenv_or_action("PODA_SERVICE_ID", action="ignore")

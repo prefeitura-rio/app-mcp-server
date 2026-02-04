@@ -106,21 +106,11 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
 
             **Em caso de emergência, ligue para a Defesa Civil: 199 (funciona 24 horas)**"
         6. Caso o cidadão esteja em uma situação de emergência iminente (risco de vida, desabamento, afogamento, etc.), oriente PRIMEIRO a ligar para o 199 antes de se deslocar.
-        """
-        )
-
-    has_cras = any(
-        eq.get("categoria") in social_assistance_categories for eq in equipments_data
-    )
-
-    if has_cras:
-        instructions_parts.append(
-            """- Ao apresentar um CRAS (Centro de Referência de Assistência Social), alerte explicitamente que o atendimento presencial exige agendamento prévio. Para orientar o cidadão, apresente as opções de agendamento de forma listada:
-        Pela internet: Acesse o site http://cadunico.rio
-        Por telefone: Ligue para a Central 1746 ou para (21) 3460-1746.
-        Como confirmar: Após agendar, o cidadão pode confirmar o status acessando http://cadunico.rio e inserindo o CPF.
-        """
-        )
+        7. **REGRA CRÍTICA - Endereço não fornecido**: Se o usuário NÃO fornecer o endereço quando solicitado para localização de ponto de apoio ou indicar que nao deseja ir a um ponto de apoio:
+            - NÃO insista ou peça novamente o endereço
+            - Forneça orientações gerais (ligar para 199, ir para local alto e seguro)
+            - **NUNCA use a ferramenta `cor_alert` neste caso** (sem endereço não é possível usar a ferramenta)
+        """)
 
     has_cras = any(
         eq.get("categoria") in social_assistance_categories

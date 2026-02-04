@@ -65,6 +65,8 @@ logs/
 .env.development
 .env.test
 .env.production
+staging.json
+prod.json
 
 # IDEs and editors
 .idea/
