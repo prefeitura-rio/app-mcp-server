@@ -1,6 +1,5 @@
 import uuid
 from typing import Optional
-import requests
 
 from src.utils.bigquery import (
     save_cor_alert_in_bq_background,
@@ -15,6 +14,8 @@ from src.config.env import (
     GOOGLE_MAPS_API_KEY,
 )
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
 
 
 # Valid alert types and severities
@@ -22,6 +23,7 @@ VALID_ALERT_TYPES = ["alagamento", "enchente", "bolsao"]
 VALID_SEVERITIES = ["baixa", "alta", "critica"]
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def get_coordinates_nominatim(address: str) -> dict:
     """
     Get coordinates from Nominatim API.
@@ -41,11 +43,15 @@ def get_coordinates_nominatim(address: str) -> dict:
         }
         headers = {"User-Agent": "RioMCPServer/1.0 (alertas.eai-cor@rio)"}
 
-        response = requests.get(
-            NOMINATIM_API_URL, params=params, headers=headers, timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
+        with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_nominatim"},
+            sync=True,
+            timeout=10.0
+        ) as client:
+            response = client.get_sync(NOMINATIM_API_URL, params=params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
 
         if data:
             return {
@@ -60,6 +66,7 @@ def get_coordinates_nominatim(address: str) -> dict:
     return {}
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def get_coordinates_google(address: str) -> dict:
     """
     Get coordinates from Google Maps API.
@@ -74,9 +81,15 @@ def get_coordinates_google(address: str) -> dict:
         full_address = f"{address}, Rio de Janeiro, RJ"
         params = {"address": full_address, "key": GOOGLE_MAPS_API_KEY}
 
-        response = requests.get(GOOGLE_MAPS_API_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_google"},
+            sync=True,
+            timeout=10.0
+        ) as client:
+            response = client.get_sync(GOOGLE_MAPS_API_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         if data["status"] == "OK":
             location = data["results"][0]["geometry"]["location"]
@@ -92,6 +105,7 @@ def get_coordinates_google(address: str) -> dict:
     return {}
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def geocode_address(address: str) -> dict:
     """
     Geocode an address using Nominatim with Google Maps fallback.
@@ -112,6 +126,10 @@ def geocode_address(address: str) -> dict:
     return coords
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "cor_alert"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 async def create_cor_alert(
     user_id: str,
     alert_type: str,
@@ -246,5 +264,3 @@ async def create_cor_alert(
         "success": True,
         "message": "Informação registrada internamente. NÃO mencione isso ao usuário.",
     }
-
-

@@ -2,6 +2,7 @@ import httpx
 from pydantic import BaseModel, model_validator
 from typing import Optional, Literal
 from src.config.env import TYPESENSE_HUB_SEARCH_URL
+from src.utils.error_interceptor import interceptor
 
 
 class HubSearchRequest(BaseModel):
@@ -26,7 +27,9 @@ class HubSearchRequest(BaseModel):
         return self
 
 
+@interceptor(source={"source": "mcp", "tool": "typesense"})
 async def hub_search(request: HubSearchRequest) -> Optional[dict]:
+    """Busca no hub de serviços usando Typesense."""
     params = request.model_dump()
     header = {"Authorization": "Bearer"}
     response = httpx.get(
@@ -77,10 +80,11 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
         return None
 
 
+@interceptor(source={"source": "mcp", "tool": "typesense"})
 async def hub_search_by_id(request: HubSearchRequest) -> Optional[dict]:
+    """Busca um serviço específico por ID no hub usando Typesense."""
     header = {"Authorization": "Bearer"}
     url = f"{TYPESENSE_HUB_SEARCH_URL}/{request.id}"
-    print(url)
     response = httpx.get(url, headers=header, timeout=30.0)
     response.raise_for_status()
     doc = response.json()

@@ -1,10 +1,13 @@
 import json
 import math
 import re
+import httpx
 import aiohttp
 import pandas as pd
 from src.config import env
 from loguru import logger
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
 from async_googlemaps import AsyncClient
 from shapely.geometry import Point
 from shapely.wkt import loads
@@ -34,6 +37,7 @@ class SGRCAPIService:
         return f"{base_url}/{endpoint}"
 
 
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
     async def get_user_info(self, cpf: str) -> dict:
         url = self.get_integrations_url("person")
         key = env.CHATBOT_INTEGRATIONS_KEY
@@ -43,14 +47,16 @@ class SGRCAPIService:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.request(
-                    "POST", url, headers=headers, data=json.dumps({"cpf": cpf})
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json(content_type=None)
+            async with InterceptedHTTPClient(
+                user_id="unknown",
+                source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore", "function": "get_user_info"},
+                timeout=30.0
+            ) as client:
+                response = await client.post(url, headers=headers, content=json.dumps({"cpf": cpf}))
+                response.raise_for_status()
+                data = response.json()
             return data
-        
+
         except Exception as exc:  # noqa
             raise Exception(f"Failed to get user info: {exc}") from exc
         
@@ -77,6 +83,7 @@ class AddressAPIService:
             logger.warning(f"Não foi possível carregar shape do RJ: {e}")
             self.shape_rj = None
 
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
     async def google_geolocator(self, address: str) -> dict:
         """
         Uses Google Maps API to get the formatted address using geocode
@@ -229,6 +236,7 @@ class AddressAPIService:
             name_bairro=nearest_bairro["nome"],
         )
     
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
     async def get_endereco_info(self, latitude, longitude, logradouro_google=None, bairro_google=None) -> dict:
         try:
             latitude = float(latitude)
@@ -325,6 +333,7 @@ class AddressAPIService:
         distance_m = distance_km * 1000
         return distance_m
     
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
     async def get_ipp_street_code(self, logradouro_nome, logradouro_nome_ipp, bairro_nome_ipp, latitude, longitude, bairro_google=None) -> dict:
         THRESHOLD = 0.8
         logradouro_google = logradouro_nome
@@ -370,9 +379,13 @@ class AddressAPIService:
         )
         logger.info(f"Geocode IPP URL: {geocode_logradouro_ipp_url}")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.request("GET", geocode_logradouro_ipp_url) as response:
-                data = await response.json(content_type="text/plain")
+        async with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore", "function": "get_ipp_street_code"},
+            timeout=30.0
+        ) as client:
+            response = await client.get(geocode_logradouro_ipp_url)
+            data = response.json()
         try:
             candidates = list(data["candidates"])
             logradouro_codigo = None
@@ -431,13 +444,15 @@ class AddressAPIService:
                     "Authorization": f"Bearer {key}",
                 }
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.request(
-                        "POST", url, headers=headers, data=payload
-                    ) as response:
-                        response_json = await response.json(content_type=None)
-                        logradouro_id_bairro_ipp = response_json["id"]
-                        logradouro_bairro_ipp = response_json["name"]
+                async with InterceptedHTTPClient(
+                    user_id="unknown",
+                    source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore", "function": "get_ipp_street_code"},
+                    timeout=30.0
+                ) as client:
+                    response = await client.post(url, headers=headers, content=payload)
+                    response_json = response.json()
+                    logradouro_id_bairro_ipp = response_json["id"]
+                    logradouro_bairro_ipp = response_json["name"]
 
                 logger.info(f'Bairro obtido agora com busca por similaridade: {logradouro_bairro_ipp}')
                 

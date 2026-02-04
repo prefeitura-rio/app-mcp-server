@@ -3,7 +3,7 @@
 import asyncio
 import time
 from typing import Optional, Dict, Any
-import aiohttp
+import httpx
 from loguru import logger
 
 from src.config.env import (
@@ -12,6 +12,8 @@ from src.config.env import (
     RMI_OAUTH_CLIENT_SECRET,
     RMI_OAUTH_SCOPES,
 )
+from src.utils.http_client import InterceptedHTTPClient
+from src.utils.error_interceptor import interceptor
 
 
 class OAuth2TokenManager:
@@ -36,6 +38,7 @@ class OAuth2TokenManager:
             self._token_expiry = time.time() + token_data["expires_in"] - 300
             return self._access_token
     
+    @interceptor(source={"source": "mcp", "tool": "oauth2"})
     async def _request_token(self) -> Dict[str, Any]:
         """Request a new access token using Client Credentials flow"""
         if not all([RMI_OAUTH_ISSUER, RMI_OAUTH_CLIENT_ID, RMI_OAUTH_CLIENT_SECRET]):
@@ -43,40 +46,42 @@ class OAuth2TokenManager:
                 "OAuth2 configuration incomplete. "
                 "Please set RMI_OAUTH_ISSUER, RMI_OAUTH_CLIENT_ID, and RMI_OAUTH_CLIENT_SECRET environment variables."
             )
-        
+
         token_url = f"{RMI_OAUTH_ISSUER}/protocol/openid-connect/token"
-        
+
         data = {
             "grant_type": "client_credentials",
             "client_id": RMI_OAUTH_CLIENT_ID,
             "client_secret": RMI_OAUTH_CLIENT_SECRET,
             "scope": RMI_OAUTH_SCOPES,
         }
-        
-        timeout = aiohttp.ClientTimeout(total=30)
-        
+
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
+            async with InterceptedHTTPClient(
+                user_id="system",
+                source={"source": "mcp", "tool": "oauth2"},
+                timeout=30.0
+            ) as client:
+                response = await client.post(
                     token_url,
                     data=data,
                     headers={"Content-Type": "application/x-www-form-urlencoded"}
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"OAuth2 token request failed: {response.status} - {error_text}")
-                        raise Exception(f"OAuth2 token request failed: {response.status} - {error_text}")
-                    
-                    token_data = await response.json()
-                    
-                    if "access_token" not in token_data:
-                        logger.error(f"OAuth2 response missing access_token: {token_data}")
-                        raise Exception("OAuth2 response missing access_token")
-                    
-                    logger.info("Successfully obtained OAuth2 access token")
-                    return token_data
-                    
-        except aiohttp.ClientError as e:
+                )
+                if response.status_code != 200:
+                    error_text = response.text
+                    logger.error(f"OAuth2 token request failed: {response.status_code} - {error_text}")
+                    raise Exception(f"OAuth2 token request failed: {response.status_code} - {error_text}")
+
+                token_data = response.json()
+
+                if "access_token" not in token_data:
+                    logger.error(f"OAuth2 response missing access_token: {token_data}")
+                    raise Exception("OAuth2 response missing access_token")
+
+                logger.info("Successfully obtained OAuth2 access token")
+                return token_data
+
+        except httpx.RequestError as e:
             logger.error(f"OAuth2 token request failed: {e}")
             raise Exception(f"OAuth2 token request failed: {e}")
 

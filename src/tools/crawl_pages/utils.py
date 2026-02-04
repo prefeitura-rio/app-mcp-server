@@ -7,8 +7,10 @@ This file contains helpers for parsing sitemaps and executing different crawl st
 from typing import Any, Dict, List
 from urllib.parse import urldefrag, urlparse
 from xml.etree import ElementTree
-import requests
+import httpx
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 
 
@@ -22,6 +24,7 @@ def is_txt(url: str) -> bool:
     return url.endswith(".txt")
 
 
+@interceptor(source={"source": "mcp", "tool": "crawl_pages"})
 def parse_sitemap(sitemap_url: str) -> List[str]:
     """
     Parses a sitemap.xml file and extracts all URLs.
@@ -33,19 +36,26 @@ def parse_sitemap(sitemap_url: str) -> List[str]:
         A list of URLs found in the sitemap.
     """
     try:
-        resp = requests.get(sitemap_url, timeout=10)
-        resp.raise_for_status()
-        tree = ElementTree.fromstring(resp.content)
+        with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "crawl_pages", "function": "parse_sitemap"},
+            sync=True,
+            timeout=10.0
+        ) as client:
+            resp = client.get_sync(sitemap_url)
+            resp.raise_for_status()
+            tree = ElementTree.fromstring(resp.content)
         urls = [loc.text for loc in tree.findall(".//{*}loc") if loc.text]
         logger.info(f"Parsed {len(urls)} URLs from sitemap: {sitemap_url}")
         return urls
-    except requests.RequestException as e:
+    except httpx.RequestError as e:
         logger.error(f"Failed to fetch sitemap {sitemap_url}: {e}")
     except ElementTree.ParseError as e:
         logger.error(f"Failed to parse sitemap XML from {sitemap_url}: {e}")
     return []
 
 
+@interceptor(source={"source": "mcp", "tool": "crawl_pages"})
 async def crawl_batch(
     crawler: AsyncWebCrawler, urls: List[str], config: CrawlerRunConfig
 ) -> List[Dict[str, Any]]:
@@ -81,6 +91,7 @@ async def crawl_batch(
     return results_list
 
 
+@interceptor(source={"source": "mcp", "tool": "crawl_pages"})
 async def crawl_recursive(
     crawler: AsyncWebCrawler,
     start_urls: List[str],

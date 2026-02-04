@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 
 from src.tools.utils import internal_request
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
 from src.config import env
 
 
@@ -69,6 +70,7 @@ def log_execution_time(func):
     return wrapper
 
 
+@interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> dict:
     """
     Makes authenticated requests to PGM API.
@@ -282,6 +284,7 @@ async def processar_registros(
     return message
 
 
+@interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 @log_execution_time
 async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -310,6 +313,7 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
             "api_descricao_erro": f"Erro ao emitir guia de regularização: {str(e)}",
         }
 
+@interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 @log_execution_time
 async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -340,6 +344,7 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+@interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 @log_execution_time
 async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
     try:

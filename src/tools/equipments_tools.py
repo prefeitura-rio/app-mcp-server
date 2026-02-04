@@ -7,6 +7,7 @@ from src.tools.equipments.pluscode_service import (
     get_pluscode_coords_equipments,
 )
 from src.utils.bigquery import save_response_in_bq_background
+from src.utils.error_interceptor import interceptor
 from src.config.env import EQUIPMENTS_VALID_THEMES
 
 
@@ -133,6 +134,7 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
     return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_with_instructions(
     address: str, categories: Optional[List[str]] = []
 ) -> dict:
@@ -166,6 +168,7 @@ async def get_equipments_with_instructions(
     }
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_categories() -> dict:
     response = await get_category_equipments()
     asyncio.create_task(
@@ -179,6 +182,7 @@ async def get_equipments_categories() -> dict:
     return response
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments(
     address: str, categories: Optional[List[str]] = []
 ) -> List[dict]:
@@ -226,6 +230,7 @@ async def get_equipments(
         ]
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_instructions(tema: str = "geral") -> List[dict]:
     # Validar se o tema é válido
     if tema not in EQUIPMENTS_VALID_THEMES:

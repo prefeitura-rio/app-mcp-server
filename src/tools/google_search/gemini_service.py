@@ -18,46 +18,12 @@ from uuid import uuid4
 
 from datetime import datetime
 import httpx
-
-from src.utils.log import logger
-
-
-class GeminiService:
-    def __init__(self):
-        """Inicializa o cliente Gemini com as configurações do ambiente."""
-        self.api_key = env.GEMINI_API_KEY
-        self.client = genai.Client(api_key=self.api_key)
-
-    def get_client(self):
-        """Retorna a instância do cliente Gemini."""
-        return self.client
-
-    import os
-
-
-from typing import Dict, Any, List, Optional, Union
-import asyncio
 import random
-from pathlib import Path
-from google import genai
-from google.api_core import exceptions as google_exceptions
-from google.genai.types import (
-    Tool,
-    UrlContext,
-    ThinkingConfig,
-    GenerateContentConfig,
-    GoogleSearch,
-    Content,
-    Part,
-    GenerateContentResponse,
-)
-import src.config.env as env
-from uuid import uuid4
-
-from datetime import datetime
-import httpx
 
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
+from google.api_core import exceptions as google_exceptions
 
 
 class GeminiService:
@@ -70,6 +36,7 @@ class GeminiService:
         """Retorna a instância do cliente Gemini."""
         return self.client
 
+    @interceptor(source={"source": "mcp", "tool": "gemini"})
     async def google_search(
         self,
         query: str,
@@ -347,6 +314,7 @@ async def process_link(session, link: dict):
             return link
 
 
+@interceptor(source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"})
 async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     """
     Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
@@ -361,8 +329,13 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
     }
 
-    async with httpx.AsyncClient(
-        follow_redirects=True, timeout=30, verify=False, headers=headers
+    async with InterceptedHTTPClient(
+        user_id="unknown",
+        source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
+        timeout=30.0,
+        follow_redirects=True,
+        verify=False,
+        headers=headers
     ) as session:
         # Limita concorrência para evitar sobrecarga
         semaphore = asyncio.Semaphore(20)

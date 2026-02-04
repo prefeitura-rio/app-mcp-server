@@ -9,6 +9,7 @@ import src.config.env as env
 from datetime import datetime, date
 import pytz
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
 
 
 def get_bigquery_client() -> bigquery.Client:
@@ -47,6 +48,7 @@ def get_datetime() -> str:
     return timestamp.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
+@interceptor(source={"source": "mcp", "tool": "bigquery"})
 def save_response_in_bq(
     data: dict,
     endpoint: str,
@@ -129,6 +131,10 @@ async def save_response_in_bq_background(
         )
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "bigquery"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 def save_feedback_in_bq(
     user_id: str,
     feedback: str,
@@ -223,6 +229,10 @@ async def save_feedback_in_bq_background(
         )
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "bigquery"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[1] if len(args) > 1 else "unknown"),
+)
 def save_cor_alert_in_bq(
     alert_id: str,
     user_id: str,
@@ -498,6 +508,7 @@ async def save_cor_alert_to_queue_background(
         )
 
 
+@interceptor(source={"source": "mcp", "tool": "bigquery"})
 def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
     """
     Executes a BigQuery query and returns results as a list of dictionaries.
