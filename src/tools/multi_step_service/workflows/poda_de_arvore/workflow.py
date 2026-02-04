@@ -578,7 +578,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             state.data.get("address_confirmed") 
             or state.data.get("personal_data_needs_confirmation")
             or (
-                state.data.get("cpf") == "skip"
+                state.data.get("identificacao_pulada")  # Verifica a flag ao invés do valor do CPF
                 and not state.data.get("name")
                 and not state.data.get("email")
             )
@@ -598,7 +598,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 
                 masked_data.append(f"- Nome: {nome_mask}")
                 
-            if state.data.get("cpf") and state.data["cpf"] != "skip":
+            if state.data.get("cpf"):  # Se CPF não está vazio
                 cpf = state.data["cpf"]
                 cpf_mask = (
                     f"XXX.{cpf[3:6]}.{cpf[6:9]}-XX"
@@ -640,7 +640,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 cpf_novo = validated.cpf
                 
                 if not cpf_novo:
-                    state.data["cpf"] = "skip" 
+                    state.data["cpf"] = ""  # Deixa vazio ao invés de "skip"
                     state.data["identificacao_pulada"] = True
                     logger.info("Usuário optou por não se identificar")
                     state.agent_response = None
@@ -685,7 +685,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 attempts = self.increment_attempts(state, "cpf_attempts")
                 
                 if attempts >= 3:
-                    state.data["cpf"] = "skip"
+                    state.data["cpf"] = ""  # Deixa vazio ao invés de "skip"
                     state.data["identificacao_pulada"] = True
                     state.data["cpf_max_attempts_reached"] = True
 
@@ -703,7 +703,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
         if "cpf" in state.data and "cpf" not in state.payload:
             if (
-                state.data.get("cpf") == "skip"
+                state.data.get("identificacao_pulada")  # Verifica a flag ao invés do valor
                 and state.data.get("reference_point_collected")
                 and "ponto_referencia" in state.payload
             ):
@@ -1032,7 +1032,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         dados_pessoais = []
         if state.data.get("name"):
             dados_pessoais.append(f"- Nome: {state.data['name']}")
-        if state.data.get("cpf") and state.data["cpf"] != "skip":
+        if state.data.get("cpf"):  # Se CPF não está vazio
             cpf = state.data["cpf"]
             cpf_formatado = f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}" if len(cpf) == 11 else cpf
             dados_pessoais.append(f"- CPF: {cpf_formatado}")
