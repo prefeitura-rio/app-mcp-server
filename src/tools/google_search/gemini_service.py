@@ -74,6 +74,11 @@ class GeminiService:
                     )
 
                     logger.info("Resposta recebida do Gemini")
+                    
+                    if not response.candidates or len(response.candidates) == 0:
+                        logger.warning("Resposta sem candidatos válidos do Gemini")
+                        continue
+                    
                     candidate = response.candidates[0]
 
                     # Check if grounding metadata and chunks exist
