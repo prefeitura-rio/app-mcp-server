@@ -77,6 +77,18 @@ class GeminiService:
                     
                     if not response.candidates or len(response.candidates) == 0:
                         logger.warning("Resposta sem candidatos válidos do Gemini")
+                        if attempt >= retry_attempts - 1:
+                            return {
+                                "id": request_id,
+                                "text": "Não foi possível obter uma resposta válida para esta consulta. Por favor, tente reformular sua pergunta ou tente novamente mais tarde.",
+                                "sources": [],
+                                "web_search_queries": [],
+                                "tokens_metadata": {},
+                                "retry_attempts": attempt + 1,
+                                "model": model,
+                                "temperature": temperature,
+                                "query": query,
+                            }
                         continue
                     
                     candidate = response.candidates[0]
