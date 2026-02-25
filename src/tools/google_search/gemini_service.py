@@ -289,16 +289,25 @@ async def process_link(session, link: dict):
         link["url"] = str(response.url)
         link["error"] = None
         return link
+    except httpx.HTTPStatusError as e:
+        # HEAD falhou com erro HTTP - propagar com mensagem limpa
+        clean_message = f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
+        raise Exception(clean_message) from e
     except Exception as e:
         try:
             # Se HEAD falhar, tenta GET request
             response = await session.get(
                 uri, follow_redirects=True, timeout=link_timeout
             )
-            response.raise_for_status()
-            link["url"] = str(response.url)
-            link["error"] = None
-            return link
+            try:
+                response.raise_for_status()
+                link["url"] = str(response.url)
+                link["error"] = None
+                return link
+            except httpx.HTTPStatusError as e2:
+                # GET falhou com erro HTTP - propagar com mensagem limpa
+                clean_message = f"HTTP {e2.response.status_code}: {e2.response.reason_phrase}"
+                raise Exception(clean_message) from e2
 
         except Exception as e2:
             error_msg = str(e2)
