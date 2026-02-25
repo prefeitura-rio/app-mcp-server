@@ -23,7 +23,7 @@ import random
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
-from google.api_core import exceptions as google_exceptions
+from google.genai import errors as genai_errors
 
 
 class GeminiService:
@@ -172,25 +172,17 @@ class GeminiService:
                         "query": query,
                     }
 
-            except (
-                google_exceptions.PermissionDenied,
-                google_exceptions.InvalidArgument,
-            ) as e:
-                logger.error(
-                    f"Erro não recuperável na API Google: {e}. Não haverá nova tentativa."
-                )
+            except genai_errors.ClientError as e:
                 last_exception = e
-                break  # Interrompe em erros de cliente (4xx)
+                logger.error(
+                    f"Erro não recuperável na API Google (4xx): {e}. Não haverá nova tentativa."
+                )
+                break
 
-            except (
-                asyncio.TimeoutError,
-                google_exceptions.InternalServerError,
-                google_exceptions.ServiceUnavailable,
-                google_exceptions.ResourceExhausted,
-            ) as e:
+            except (genai_errors.ServerError, asyncio.TimeoutError) as e:
                 last_exception = e
                 logger.warning(
-                    f"Erro transiente na API Google: {e}. Tentando novamente..."
+                    f"Erro transiente na API Google (5xx/timeout): {e}. Tentando novamente..."
                 )
 
             except Exception as e:
