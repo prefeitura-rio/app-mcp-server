@@ -69,7 +69,7 @@ async def send_error_to_interceptor(
     if isinstance(input_body, (dict, list)):
         input_body_str = json.dumps(input_body, ensure_ascii=False)
     elif input_body is None:
-        input_body_str = ""
+        input_body_str = "None"
     else:
         input_body_str = str(input_body)
 
@@ -452,7 +452,7 @@ def interceptor(
                 error_type=type(e).__name__,
                 error_message=str(e),
                 traceback=error_traceback,
-                input_body=input_body,
+                input_body=input_body if input_body is not None else source,
             )
 
         # Retorna o wrapper apropriado baseado no tipo da função
