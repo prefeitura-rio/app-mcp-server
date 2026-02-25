@@ -195,6 +195,7 @@ class GeminiService:
 
             except Exception as e:
                 last_exception = e
+                logger.error(f"Tipo da exceção: {type(e)}")
                 logger.error(f"Erro inesperado durante a pesquisa Google: {e}")
 
             # Se não for a última tentativa, espera antes de tentar novamente
