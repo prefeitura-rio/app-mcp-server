@@ -74,10 +74,9 @@ async def send_error_to_interceptor(
         input_body_str = str(input_body)
 
     # Prepara error_response como JSON string contendo error_message e traceback
-    error_response_data = {
-        "error_message": error_message,
-        "traceback": traceback or ""
-    }
+    error_response_data = {"error_message": error_message}
+    if traceback:
+        error_response_data["traceback"] = traceback
     error_response_str = json.dumps(error_response_data, ensure_ascii=False)
 
     # Serializa source como JSON string se for dicionário

@@ -291,7 +291,7 @@ async def process_link(session, link: dict):
         return link
     except httpx.HTTPStatusError as e:
         # HEAD falhou com erro HTTP - propagar com mensagem limpa
-        clean_message = f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
+        clean_message = f"HTTP {e.response.status_code}: {e.response.reason_phrase or 'Empty Reason Phrase'}"
         raise Exception(clean_message) from e
     except Exception as e:
         try:
@@ -306,7 +306,7 @@ async def process_link(session, link: dict):
                 return link
             except httpx.HTTPStatusError as e2:
                 # GET falhou com erro HTTP - propagar com mensagem limpa
-                clean_message = f"HTTP {e2.response.status_code}: {e2.response.reason_phrase}"
+                clean_message = f"HTTP {e2.response.status_code}: {e2.response.reason_phrase or 'Empty Reason Phrase'}"
                 raise Exception(clean_message) from e2
 
         except Exception as e2:
