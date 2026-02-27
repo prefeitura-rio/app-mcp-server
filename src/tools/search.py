@@ -76,7 +76,7 @@ async def get_google_search(query: str):
             query=query,
             model=env.GEMINI_MODEL,
             temperature=0.0,
-            retry_attempts=1,
+            retry_attempts=2,
         )
         response_data = response_google
         final_response = {
