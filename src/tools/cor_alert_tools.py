@@ -3,8 +3,6 @@ from typing import Optional
 
 from src.utils.bigquery import (
     save_cor_alert_in_bq_background,
-    save_cor_alert_to_queue_background,
-    get_bigquery_result,
     get_datetime,
 )
 from src.config.env import (

@@ -110,7 +110,7 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
         7. **REGRA CRÍTICA - Endereço não fornecido**: Se o usuário NÃO fornecer o endereço quando solicitado para localização de ponto de apoio ou indicar que nao deseja ir a um ponto de apoio:
             - NÃO insista ou peça novamente o endereço
             - Forneça orientações gerais (ligar para 199, ir para local alto e seguro)
-            - **NUNCA use a ferramenta `cor_alert` neste caso** (sem endereço não é possível usar a ferramenta)
+            - **NUNCA use a ferramenta `report_incident` neste caso** (sem endereço não é possível usar a ferramenta)
         """)
 
     has_cras = any(
