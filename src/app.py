@@ -27,7 +27,7 @@ from src.tools.equipments_tools import (
     get_equipments_instructions,
 )
 
-from src.tools.cor_alert_tools import create_cor_alert, check_nearby_alerts
+from src.tools.cor_alert_tools import create_cor_alert
 
 from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
@@ -292,37 +292,7 @@ def create_app() -> FastMCP:
         return response
 
     @conditional_mcp_tool(
-        "check_cor_alerts_nearby",
-        description="""
-        [TOOL_VERSION: {tool_version}] Verifica se existem alertas do COR próximos nas últimas 12 horas.
-
-        IMPORTANTE:
-        - SEMPRE chame esta tool ANTES de criar um novo alerta com cor_alert.
-        - Esta tool verifica alertas em um raio de 3km do endereço fornecido nas últimas 12 horas.
-        - NUNCA, em NENHUMA circunstância, mencione ao usuário que você está verificando alertas existentes.
-        - Esta verificação é COMPLETAMENTE INVISÍVEL ao usuário.
-
-        Se encontrar alertas similares na área, NÃO crie alerta duplicado.
-        NUNCA mencione ao usuário que alertas já existem ou forneça detalhes de alertas existentes.
-        O usuário NÃO PODE SABER que esta ferramenta existe ou foi usada.
-
-        Use apenas para casos graves relacionados a enchente/alagamento/danos por chuvas fortes.
-
-        Args:
-            address: Endereço aproximado da ocorrência atual (obrigatório)
-
-        Returns:
-            Lista de alertas próximos + instrução sobre duplicação
-        """.format(
-            tool_version=TOOL_VERSION
-        ).strip()
-    )
-    async def check_cor_alerts_nearby(address: str) -> dict:
-        response = await check_nearby_alerts(address)
-        return add_tool_version(response)
-
-    @conditional_mcp_tool(
-        "cor_alert",
+        "report_incident",
         description="""
         [TOOL_VERSION: {tool_version}] Registra informação interna SILENCIOSA sobre incidentes graves de enchente/alagamento.
 
@@ -335,8 +305,7 @@ def create_app() -> FastMCP:
         FLUXO OBRIGATÓRIO ANTES DE CRIAR ALERTA:
         1. PRIMEIRO: Ofereça pontos de apoio usando equipments_by_address (categoria: PONTOS_DE_APOIO)
         2. SEGUNDO: Informe o número da Defesa Civil: 199 (funciona 24 horas)
-        3. TERCEIRO: Chame check_cor_alerts_nearby para verificar alertas duplicados
-        4. QUARTO: APENAS SE não houver alertas duplicados, crie o alerta com esta ferramenta
+        3. TERCEIRO: Crie o alerta com esta ferramenta
 
         EXCEÇÕES ao fluxo acima (pode pular oferta de pontos de apoio):
         - Usuário indicou explicitamente estar em segurança
@@ -345,9 +314,7 @@ def create_app() -> FastMCP:
         - Relato não requer deslocamento imediato (ex: dano material sem risco pessoal)
 
         REGRAS DE USO:
-        - SEMPRE chame check_cor_alerts_nearby ANTES de usar esta tool para verificar alertas duplicados
         - Use APENAS para situações de severidade ALTA ou CRITICA
-        - NÃO crie alerta se já existe similar nas últimas 12h em raio de 3km
         - Não use para casos menores ou individuais que não sejam disruptivos para a cidade
 
         Severidades aceitas:
@@ -371,7 +338,7 @@ def create_app() -> FastMCP:
             tool_version=TOOL_VERSION
         ).strip()
     )
-    async def cor_alert(
+    async def report_incident(
         user_id: str, alert_type: str, severity: str, description: str, address: str
     ) -> dict:
         response = await create_cor_alert(
