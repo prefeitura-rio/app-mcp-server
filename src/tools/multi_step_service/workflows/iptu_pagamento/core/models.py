@@ -2,8 +2,8 @@
 Modelos Pydantic para validação do workflow IPTU Ano Vigente
 """
 
-from typing import Literal, Optional, List, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from typing import Literal, Optional, List, Dict, Any, Union
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
 
@@ -12,10 +12,15 @@ class InscricaoImobiliariaPayload(BaseModel):
 
     inscricao_imobiliaria: str = Field(
         ...,
-        description="Inscrição imobiliária do imóvel",
+        description="Inscrição imobiliária do imóvel.",
+        min_length=1,
+        max_length=15,
     )
 
-    @field_validator("inscricao_imobiliaria", mode="before")
+    @field_validator(
+        "inscricao_imobiliaria",
+        mode="before",
+    )
     @classmethod
     def validate_inscricao(cls, v: str) -> str:
         """
@@ -38,9 +43,18 @@ class InscricaoImobiliariaPayload(BaseModel):
 class EscolhaAnoPayload(BaseModel):
     """Payload para escolha do ano de exercício."""
 
-    ano_exercicio: int = Field(
+    ano_exercicio: Union[int, str] = Field(
         ..., description="Ano de exercício para consulta do IPTU"
     )
+
+    @field_validator("ano_exercicio", mode="before")
+    @classmethod
+    def validate_ano_exercicio(cls, v: Union[int, str]) -> int:
+        """Valida o ano de exercício."""
+        ano_clean = int(v) if isinstance(v, str) else v
+        if ano_clean < 2000 or ano_clean > 2100:
+            raise ValueError("Ano de exercício inválido")
+        return ano_clean
 
 
 class EscolhaGuiasIPTUPayload(BaseModel):
@@ -110,8 +124,7 @@ class Guia(BaseModel):
     esta_quitada: Optional[bool] = None
     esta_em_aberto: Optional[bool] = None
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class DadosGuias(BaseModel):
@@ -147,8 +160,7 @@ class Cota(BaseModel):
     linha_digitavel: Optional[str] = None
     darf_data: Optional[dict] = None
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class DadosCotas(BaseModel):
@@ -169,8 +181,7 @@ class CotaDarm(BaseModel):
     ncota: str = Field(alias="ncota")
     valor: str = Field(alias="valor")  # Formato brasileiro "89,44"
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class Darm(BaseModel):
@@ -210,8 +221,7 @@ class Darm(BaseModel):
     valor_numerico: Optional[float] = None
     codigo_barras: Optional[str] = None  # Derivado da sequencia_numerica
 
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class DadosDarm(BaseModel):
@@ -225,35 +235,11 @@ class DadosDarm(BaseModel):
     pdf_base64: Optional[str] = None
 
 
-class EscolhaMaisCotasPayload(BaseModel):
-    """Payload para pergunta sobre pagar mais cotas da mesma guia."""
-
-    mais_cotas: bool = Field(
-        ..., description="Se deseja pagar mais cotas da mesma guia"
-    )
-
-
-class EscolhaOutrasGuiasPayload(BaseModel):
-    """Payload para pergunta sobre pagar outras guias do mesmo imóvel."""
-
-    outras_guias: bool = Field(
-        ..., description="Se deseja pagar outras guias do mesmo imóvel"
-    )
-
-
 class EscolhaGuiaMesmoImovelPayload(BaseModel):
     """Payload para pergunta sobre gerar mais guias para o mesmo imóvel."""
 
     mesma_guia: bool = Field(
         ..., description="Se deseja emitir mais guias para o mesmo imóvel"
-    )
-
-
-class EscolhaOutroImovelPayload(BaseModel):
-    """Payload para pergunta sobre gerar guias para outro imóvel."""
-
-    outro_imovel: bool = Field(
-        ..., description="Se deseja emitir guias para outro imóvel"
     )
 
 

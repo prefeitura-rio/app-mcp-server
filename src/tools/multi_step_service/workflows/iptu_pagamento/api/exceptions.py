@@ -45,3 +45,19 @@ class AuthenticationError(IPTUAPIException):
     - Token inválido ou expirado
     """
     pass
+
+
+class InvalidInscricaoError(IPTUAPIException):
+    """
+    Erro quando a inscrição imobiliária é inválida.
+
+    Casos:
+    - Código 033: Inscrição imobiliária inválida
+    - Inscrição não existe no sistema
+    - Formato de inscrição incorreto
+    """
+
+    def __init__(self, inscricao: str, message: str = None):
+        self.inscricao = inscricao
+        self.message = message or f"Inscrição imobiliária '{inscricao}' não encontrada ou inválida"
+        super().__init__(self.message)

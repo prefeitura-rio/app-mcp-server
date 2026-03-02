@@ -7,8 +7,13 @@ from typing import Dict, Any
 from src.utils.bigquery import save_feedback_in_bq_background, get_datetime
 from src.utils.log import logger
 from src.config.env import ENVIRONMENT
+from src.utils.error_interceptor import interceptor
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "feedback"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
     """
     Armazena feedback do usuário no BigQuery.

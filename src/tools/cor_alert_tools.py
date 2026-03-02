@@ -1,6 +1,5 @@
 import uuid
 from typing import Optional
-import requests
 
 from src.utils.bigquery import (
     save_cor_alert_in_bq_background,
@@ -11,16 +10,18 @@ from src.config.env import (
     NOMINATIM_API_URL,
     GOOGLE_MAPS_API_URL,
     GOOGLE_MAPS_API_KEY,
-    CHATBOT_COR_EVENTS_API_ENABLED,
 )
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
 
 
 # Valid alert types and severities
-VALID_ALERT_TYPES = ["alagamento", "enchente"]
-VALID_SEVERITIES = ["alta", "critica"]
+VALID_ALERT_TYPES = ["alagamento", "enchente", "bolsao"]
+VALID_SEVERITIES = ["baixa", "alta", "critica"]
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def get_coordinates_nominatim(address: str) -> dict:
     """
     Get coordinates from Nominatim API.
@@ -40,11 +41,15 @@ def get_coordinates_nominatim(address: str) -> dict:
         }
         headers = {"User-Agent": "RioMCPServer/1.0 (alertas.eai-cor@rio)"}
 
-        response = requests.get(
-            NOMINATIM_API_URL, params=params, headers=headers, timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
+        with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_nominatim"},
+            sync=True,
+            timeout=10.0
+        ) as client:
+            response = client.get_sync(NOMINATIM_API_URL, params=params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
 
         if data:
             return {
@@ -59,6 +64,7 @@ def get_coordinates_nominatim(address: str) -> dict:
     return {}
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def get_coordinates_google(address: str) -> dict:
     """
     Get coordinates from Google Maps API.
@@ -73,9 +79,15 @@ def get_coordinates_google(address: str) -> dict:
         full_address = f"{address}, Rio de Janeiro, RJ"
         params = {"address": full_address, "key": GOOGLE_MAPS_API_KEY}
 
-        response = requests.get(GOOGLE_MAPS_API_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_google"},
+            sync=True,
+            timeout=10.0
+        ) as client:
+            response = client.get_sync(GOOGLE_MAPS_API_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         if data["status"] == "OK":
             location = data["results"][0]["geometry"]["location"]
@@ -91,6 +103,7 @@ def get_coordinates_google(address: str) -> dict:
     return {}
 
 
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
 def geocode_address(address: str) -> dict:
     """
     Geocode an address using Nominatim with Google Maps fallback.
@@ -111,6 +124,10 @@ def geocode_address(address: str) -> dict:
     return coords
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "cor_alert"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 async def create_cor_alert(
     user_id: str,
     alert_type: str,
@@ -119,17 +136,38 @@ async def create_cor_alert(
     address: str,
 ) -> dict:
     """
-    Create a new COR alert for flooding/heavy rain situations.
+    Registra um alerta de incidente hidrico (alagamento, enchente ou bolsao).
+
+    IMPORTANTE: O campo 'description' deve conter o RELATO DIRETO do usuario sobre o que
+    esta acontecendo. Este texto sera registrado exatamente como fornecido.
+    Capture as palavras do usuario descrevendo a situacao.
+
+    Exemplos de boas descricoes (relatos do usuario):
+    - "Agua na altura do joelho, carros parados"
+    - "Rua completamente alagada, nao consigo sair de casa"
+    - "Bueiro entupido, agua subindo rapido"
+    - "Bolsao de agua na pista, transito parado"
 
     Args:
-        user_id: User ID reporting the alert
-        alert_type: Type of alert (alagamento, enchente, dano_chuva)
-        severity: Severity level (alta or critica)
-        description: Detailed description of the problem
-        address: Address where the incident is occurring
+        user_id: ID do usuario que esta reportando
+        alert_type: Tipo do incidente. Deve ser um dos seguintes:
+            - "alagamento": Agua acumulada em vias/areas urbanas
+            - "enchente": Transbordamento de rios/canais
+            - "bolsao": Acumulo de agua em ponto especifico (ex: sob viaduto)
+        severity: Nivel de severidade:
+            - "baixa": Situacao de menor impacto (apenas registrado)
+            - "alta": Situacao grave que requer atencao
+            - "critica": Situacao de emergencia/risco de vida
+        description: RELATO DO USUARIO descrevendo o que esta acontecendo.
+            Deve capturar as palavras do usuario sobre a situacao
+            (ex: "agua subindo, carros ilhados").
+            NAO use descricoes genericas - capture o relato real do usuario.
+        address: Endereco onde o incidente esta ocorrendo. Deve ser o mais
+            especifico possivel (rua, numero, bairro).
 
     Returns:
-        Dictionary with success status and alert details
+        Dictionary com status de sucesso. O usuario NAO deve ser informado
+        sobre o registro do alerta.
     """
     # Validate required parameters
     if not user_id or not user_id.strip():
@@ -161,7 +199,7 @@ async def create_cor_alert(
     if severity_lower not in VALID_SEVERITIES:
         return {
             "success": False,
-            "error": f"severity deve ser 'alta' ou 'critica'. Outros níveis não são aceitos para alertas do COR.",
+            "error": f"severity deve ser um dos seguintes: {', '.join(VALID_SEVERITIES)}",
             "provided": severity,
         }
 
@@ -189,35 +227,7 @@ async def create_cor_alert(
     # Get timestamp
     timestamp = get_datetime()
 
-    # Submit to COR API if enabled
-    if CHATBOT_COR_EVENTS_API_ENABLED and CHATBOT_COR_EVENTS_API_ENABLED.lower() == "true":
-        try:
-            from src.utils.cor_oncall_client import COROnCallClient
-
-            cor_client = COROnCallClient()
-            cor_result = await cor_client.submit_alert(
-                alert_id=alert_id,
-                alert_type=alert_type_lower,
-                severity=severity_lower,
-                description=description.strip(),
-                address=address.strip(),
-                latitude=latitude,
-                longitude=longitude,
-                timestamp=timestamp,
-            )
-
-            if cor_result.get("success"):
-                logger.info(f"Alerta {alert_id} submetido ao COR com sucesso")
-            else:
-                logger.warning(
-                    f"Falha ao submeter alerta {alert_id} ao COR: {cor_result.get('error')}"
-                )
-
-        except Exception as e:
-            # Log error but continue - COR API is supplementary, not critical
-            logger.error(f"Erro ao submeter alerta {alert_id} ao COR: {str(e)}")
-
-    # Persist alert before returning to avoid race with subsequent checks
+    # All alerts are saved to cor_alerts table
     await save_cor_alert_in_bq_background(
         alert_id=alert_id,
         user_id=user_id.strip(),
@@ -230,6 +240,23 @@ async def create_cor_alert(
         timestamp=timestamp,
         environment=ENVIRONMENT,
     )
+    logger.info(f"Alerta {alert_id} registrado na tabela cor_alerts")
+
+    # Only alta/critica alerts are queued for dispatch to COR
+    if severity_lower in ["alta", "critica"]:
+        await save_cor_alert_to_queue_background(
+            alert_id=alert_id,
+            user_id=user_id.strip(),
+            alert_type=alert_type_lower,
+            severity=severity_lower,
+            description=description.strip(),
+            address=address.strip(),
+            latitude=latitude,
+            longitude=longitude,
+            timestamp=timestamp,
+            environment=ENVIRONMENT,
+        )
+        logger.info(f"Alerta {alert_id} salvo na fila para agregação")
 
     return {
         "success": True,

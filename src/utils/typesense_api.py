@@ -1,11 +1,13 @@
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional, Literal
 from src.config.env import TYPESENSE_HUB_SEARCH_URL
+from src.utils.error_interceptor import interceptor
 
 
 class HubSearchRequest(BaseModel):
-    q: str
+    q: Optional[str] = ""
+    id: Optional[str] = ""
     type: Optional[Literal["keyword", "semantic", "hybrid", "ai"]] = "hybrid"
     page: Optional[int] = 1
     per_page: Optional[int] = 10
@@ -18,8 +20,16 @@ class HubSearchRequest(BaseModel):
     include_inactive: Optional[bool] = True
     exclude_agent_exclusive: Optional[bool] = False
 
+    @model_validator(mode="after")
+    def validate_q_or_id(self):
+        if not self.q and not self.id:
+            raise ValueError("Either 'q' or 'id' must be provided.")
+        return self
 
+
+@interceptor(source={"source": "mcp", "tool": "typesense"})
 async def hub_search(request: HubSearchRequest) -> Optional[dict]:
+    """Busca no hub de serviços usando Typesense."""
     params = request.model_dump()
     header = {"Authorization": "Bearer"}
     response = httpx.get(
@@ -37,6 +47,7 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
             results_clean.append(
                 {
                     "title": doc.get("title", ""),
+                    "id": doc.get("id", ""),
                     "description": doc.get("description", ""),
                     "category": doc.get("category", ""),
                     "hint": agents.get("tool_hint", ""),
@@ -65,5 +76,33 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
 
         r["results_clean"] = results_clean
         return r
+    else:
+        return None
+
+
+@interceptor(source={"source": "mcp", "tool": "typesense"})
+async def hub_search_by_id(request: HubSearchRequest) -> Optional[dict]:
+    """Busca um serviço específico por ID no hub usando Typesense."""
+    header = {"Authorization": "Bearer"}
+    url = f"{TYPESENSE_HUB_SEARCH_URL}/{request.id}"
+    response = httpx.get(url, headers=header, timeout=30.0)
+    response.raise_for_status()
+    doc = response.json()
+
+    if doc and "id" in doc:
+        result = {
+            "id": doc.get("id", ""),
+            "title": doc.get("nome_servico", ""),
+            "resumo": doc.get("resumo", ""),
+            "tempo_atendimento": doc.get("tempo_atendimento", ""),
+            "custo_servico": doc.get("custo_servico", ""),
+            "resultado_solicitacao": doc.get("resultado_solicitacao", ""),
+            "descricao": doc.get("descricao_completa", ""),
+            "documentos_necessarios": doc.get("documentos_necessarios", []),
+            "instrucoes": doc.get("instrucoes_solicitante", ""),
+            "servico_nao_cobre": doc.get("servico_nao_cobre", ""),
+            "publico_especifico": doc.get("publico_especifico", []),
+        }
+        return result
     else:
         return None

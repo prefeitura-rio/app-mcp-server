@@ -18,46 +18,12 @@ from uuid import uuid4
 
 from datetime import datetime
 import httpx
-
-from src.utils.log import logger
-
-
-class GeminiService:
-    def __init__(self):
-        """Inicializa o cliente Gemini com as configurações do ambiente."""
-        self.api_key = env.GEMINI_API_KEY
-        self.client = genai.Client(api_key=self.api_key)
-
-    def get_client(self):
-        """Retorna a instância do cliente Gemini."""
-        return self.client
-
-    import os
-
-
-from typing import Dict, Any, List, Optional, Union
-import asyncio
 import random
-from pathlib import Path
-from google import genai
-from google.api_core import exceptions as google_exceptions
-from google.genai.types import (
-    Tool,
-    UrlContext,
-    ThinkingConfig,
-    GenerateContentConfig,
-    GoogleSearch,
-    Content,
-    Part,
-    GenerateContentResponse,
-)
-import src.config.env as env
-from uuid import uuid4
-
-from datetime import datetime
-import httpx
 
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
+from google.genai import errors as genai_errors
 
 
 class GeminiService:
@@ -70,6 +36,7 @@ class GeminiService:
         """Retorna a instância do cliente Gemini."""
         return self.client
 
+    @interceptor(source={"source": "mcp", "tool": "gemini"})
     async def google_search(
         self,
         query: str,
@@ -107,15 +74,34 @@ class GeminiService:
                     )
 
                     logger.info("Resposta recebida do Gemini")
-                    candidate = response.candidates[0]
                     
+                    if not response.candidates or len(response.candidates) == 0:
+                        logger.warning("Resposta sem candidatos válidos do Gemini")
+                        if attempt >= retry_attempts - 1:
+                            return {
+                                "id": request_id,
+                                "text": "Não foi possível obter uma resposta válida para esta consulta. Por favor, tente reformular sua pergunta ou tente novamente mais tarde.",
+                                "sources": [],
+                                "web_search_queries": [],
+                                "tokens_metadata": {},
+                                "retry_attempts": attempt + 1,
+                                "model": model,
+                                "temperature": temperature,
+                                "query": query,
+                            }
+                        continue
+                    
+                    candidate = response.candidates[0]
+
                     # Check if grounding metadata and chunks exist
                     if (
-                        not candidate.grounding_metadata 
+                        not candidate.grounding_metadata
                         or not candidate.grounding_metadata.grounding_chunks
                     ):
                         # No grounding chunks found - likely all sources were filtered or unavailable
-                        logger.warning("Nenhuma fonte confiável encontrada para a consulta")
+                        logger.warning(
+                            "Nenhuma fonte confiável encontrada para a consulta"
+                        )
                         return {
                             "id": request_id,
                             "text": "Desculpe, mas não consegui encontrar informações confiáveis sobre este tópico em fontes oficiais. Esta consulta pode estar fora do escopo do meu conhecimento, que se concentra em serviços municipais do Rio de Janeiro e fontes governamentais oficiais.",
@@ -127,7 +113,7 @@ class GeminiService:
                             "temperature": temperature,
                             "query": query,
                         }
-                    
+
                     logger.info("Resolvendo URLs das fontes...")
                     resolved_urls_map = await resolve_urls(
                         urls_to_resolve=candidate.grounding_metadata.grounding_chunks
@@ -146,8 +132,14 @@ class GeminiService:
                             "id": request_id,
                             "text": "Desculpe, mas as informações encontradas para esta consulta vêm de fontes que estão fora do escopo do meu conhecimento. Eu me concentro em fornecer informações sobre serviços municipais do Rio de Janeiro usando apenas fontes governamentais oficiais e confiáveis.",
                             "sources": [],
-                            "web_search_queries": candidate.grounding_metadata.web_search_queries if candidate.grounding_metadata else [],
-                            "tokens_metadata": self.get_tokens_metadata(response=response),
+                            "web_search_queries": (
+                                candidate.grounding_metadata.web_search_queries
+                                if candidate.grounding_metadata
+                                else []
+                            ),
+                            "tokens_metadata": self.get_tokens_metadata(
+                                response=response
+                            ),
                             "retry_attempts": attempt,
                             "model": model,
                             "temperature": temperature,
@@ -180,29 +172,22 @@ class GeminiService:
                         "query": query,
                     }
 
-            except (
-                google_exceptions.PermissionDenied,
-                google_exceptions.InvalidArgument,
-            ) as e:
-                logger.error(
-                    f"Erro não recuperável na API Google: {e}. Não haverá nova tentativa."
-                )
+            except genai_errors.ClientError as e:
                 last_exception = e
-                break  # Interrompe em erros de cliente (4xx)
+                logger.error(
+                    f"Erro não recuperável na API Google (4xx): {e}. Não haverá nova tentativa."
+                )
+                break
 
-            except (
-                asyncio.TimeoutError,
-                google_exceptions.InternalServerError,
-                google_exceptions.ServiceUnavailable,
-                google_exceptions.ResourceExhausted,
-            ) as e:
+            except (genai_errors.ServerError, asyncio.TimeoutError) as e:
                 last_exception = e
                 logger.warning(
-                    f"Erro transiente na API Google: {e}. Tentando novamente..."
+                    f"Erro transiente na API Google (5xx/timeout): {e}. Tentando novamente..."
                 )
 
             except Exception as e:
                 last_exception = e
+                logger.error(f"Tipo da exceção: {type(e)}")
                 logger.error(f"Erro inesperado durante a pesquisa Google: {e}")
 
             # Se não for a última tentativa, espera antes de tentar novamente
@@ -236,7 +221,30 @@ class GeminiService:
         usage_metadata = response.usage_metadata
         tokens_metadata = {}
         if usage_metadata:
-            tokens_metadata["cache_tokens_details"] = (
+            # Helper function to convert ModalityTokenCount to dict
+            def convert_modality_token_count(item):
+                if item is None:
+                    return None
+                if isinstance(item, list):
+                    return [
+                        (
+                            {
+                                "modality": tc.modality.value,
+                                "token_count": tc.token_count,
+                            }
+                            if hasattr(tc, "modality")
+                            else tc
+                        )
+                        for tc in item
+                    ]
+                if hasattr(item, "modality"):
+                    return {
+                        "modality": item.modality.value,
+                        "token_count": item.token_count,
+                    }
+                return item
+
+            tokens_metadata["cache_tokens_details"] = convert_modality_token_count(
                 usage_metadata.cache_tokens_details
             )
             tokens_metadata["cached_content_token_count"] = (
@@ -245,7 +253,7 @@ class GeminiService:
             tokens_metadata["candidates_token_count"] = (
                 usage_metadata.candidates_token_count
             )
-            tokens_metadata["candidates_tokens_details"] = (
+            tokens_metadata["candidates_tokens_details"] = convert_modality_token_count(
                 usage_metadata.candidates_tokens_details
             )
             tokens_metadata["prompt_token_count"] = usage_metadata.prompt_token_count
@@ -256,7 +264,9 @@ class GeminiService:
                 usage_metadata.tool_use_prompt_token_count
             )
             tokens_metadata["tool_use_prompt_tokens_details"] = (
-                usage_metadata.tool_use_prompt_tokens_details
+                convert_modality_token_count(
+                    usage_metadata.tool_use_prompt_tokens_details
+                )
             )
             tokens_metadata["total_token_count"] = usage_metadata.total_token_count
 
@@ -279,16 +289,25 @@ async def process_link(session, link: dict):
         link["url"] = str(response.url)
         link["error"] = None
         return link
+    except httpx.HTTPStatusError as e:
+        # HEAD falhou com erro HTTP - propagar com mensagem limpa
+        clean_message = f"HTTP {e.response.status_code}: {e.response.reason_phrase or 'Empty Reason Phrase'}"
+        raise Exception(clean_message) from e
     except Exception as e:
         try:
             # Se HEAD falhar, tenta GET request
             response = await session.get(
                 uri, follow_redirects=True, timeout=link_timeout
             )
-            response.raise_for_status()
-            link["url"] = str(response.url)
-            link["error"] = None
-            return link
+            try:
+                response.raise_for_status()
+                link["url"] = str(response.url)
+                link["error"] = None
+                return link
+            except httpx.HTTPStatusError as e2:
+                # GET falhou com erro HTTP - propagar com mensagem limpa
+                clean_message = f"HTTP {e2.response.status_code}: {e2.response.reason_phrase or 'Empty Reason Phrase'}"
+                raise Exception(clean_message) from e2
 
         except Exception as e2:
             error_msg = str(e2)
@@ -314,6 +333,7 @@ async def process_link(session, link: dict):
             return link
 
 
+@interceptor(source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"})
 async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     """
     Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
@@ -328,8 +348,13 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
     }
 
-    async with httpx.AsyncClient(
-        follow_redirects=True, timeout=30, verify=False, headers=headers
+    async with InterceptedHTTPClient(
+        user_id="unknown",
+        source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
+        timeout=30.0,
+        follow_redirects=True,
+        verify=False,
+        headers=headers
     ) as session:
         # Limita concorrência para evitar sobrecarga
         semaphore = asyncio.Semaphore(20)
@@ -417,25 +442,26 @@ def get_citations(response, resolved_urls_map):
                 try:
                     chunk = candidate.grounding_metadata.grounding_chunks[ind]
                     resolved_url = resolved_urls_map.get(chunk.web.uri, None)
-                    
+
                     # Skip if resolved_url is None or doesn't have the expected structure
                     if not resolved_url or "url" not in resolved_url:
                         continue
-                    
+
                     # Check if the URL's domain is blacklisted
                     from urllib.parse import urlparse
+
                     try:
                         parsed_url = urlparse(resolved_url["url"])
                         domain = parsed_url.netloc.lower()
-                        
+
                         # Get blacklisted domains from environment
                         blacklisted_domains = env.LINK_BLACKLIST
                         is_blacklisted = any(
-                            blacklisted_domain.strip().lower() in domain 
-                            for blacklisted_domain in blacklisted_domains 
+                            blacklisted_domain.strip().lower() in domain
+                            for blacklisted_domain in blacklisted_domains
                             if blacklisted_domain.strip()
                         )
-                        
+
                         # Only add to citations if not blacklisted
                         if not is_blacklisted:
                             citation["segments"].append(
@@ -448,7 +474,7 @@ def get_citations(response, resolved_urls_map):
                                 }
                             )
                     except Exception:
-                        # If there's any error with URL parsing or blacklist checking, 
+                        # If there's any error with URL parsing or blacklist checking,
                         # fall back to the original behavior (include the citation)
                         citation["segments"].append(
                             {
@@ -494,7 +520,7 @@ def format_text_with_citations(text, citations_data):
             # Skip citations with no segments (filtered out by blacklist)
             if not citation["segments"]:
                 continue
-                
+
             url = citation["segments"][0]["url"]
             if url not in source_map:
                 source_map[url] = citation["segments"][0].get(
@@ -564,25 +590,26 @@ def get_sources_list(citations_data, modified_text):
     )
     seen_uris = set()
     sources_gathered = []
-    
+
     # Get blacklisted domains from environment
     blacklisted_domains = env.LINK_BLACKLIST
-    
+
     for source in all_segments:
         if source["uri"] not in seen_uris and source["url"] in modified_text:
             try:
                 # Check if the URL's domain is in the blacklist
                 from urllib.parse import urlparse
+
                 parsed_url = urlparse(source["url"])
                 domain = parsed_url.netloc.lower()
-                
+
                 # Check if any blacklisted domain matches the source domain
                 is_blacklisted = any(
-                    blacklisted_domain.strip().lower() in domain 
-                    for blacklisted_domain in blacklisted_domains 
+                    blacklisted_domain.strip().lower() in domain
+                    for blacklisted_domain in blacklisted_domains
                     if blacklisted_domain.strip()
                 )
-                
+
                 if not is_blacklisted:
                     seen_uris.add(source["uri"])
                     sources_gathered.append(source)
