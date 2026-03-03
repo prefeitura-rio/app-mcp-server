@@ -284,7 +284,12 @@ async def process_link(session, link: dict):
 
     try:
         # Primeiro tenta HEAD request (mais rápido)
-        response = await session.head(uri, follow_redirects=True, timeout=link_timeout)
+        response = await session.head(
+            uri,
+            follow_redirects=True,
+            timeout=link_timeout,
+            error_status_codes={500, 502, 503, 504},
+        )
         response.raise_for_status()
         link["url"] = str(response.url)
         link["error"] = None
@@ -297,7 +302,10 @@ async def process_link(session, link: dict):
         try:
             # Se HEAD falhar, tenta GET request
             response = await session.get(
-                uri, follow_redirects=True, timeout=link_timeout
+                uri,
+                follow_redirects=True,
+                timeout=link_timeout,
+                error_status_codes={500, 502, 503, 504},
             )
             try:
                 response.raise_for_status()
