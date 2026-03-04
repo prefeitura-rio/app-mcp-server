@@ -182,179 +182,172 @@ class DividaAtivaAPIService:
             f"Iniciando consulta de dívida ativa - Tipo: {tipo_entrada}, Valor: {valor_limpo}"
         )
 
-        try:
-            async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                # Autenticação
-                try:
-                    auth_response = await client.post(
-                        f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        data={
-                            "verify": False,
-                            "grant_type": "password",
-                            "Consumidor": "consultar-dividas-contribuinte",
-                            "ChaveAcesso": env.DIVIDA_ATIVA_ACCESS_KEY,
-                        },
-                    )
+        async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+            # Autenticação
+            try:
+                auth_response = await client.post(
+                    f"{env.DIVIDA_ATIVA_API_URL}/security/token",
+                    data={
+                        "verify": False,
+                        "grant_type": "password",
+                        "Consumidor": "consultar-dividas-contribuinte",
+                        "ChaveAcesso": env.DIVIDA_ATIVA_ACCESS_KEY,
+                    },
+                )
 
-                    if auth_response.status_code == 401:
-                        logger.error("Falha na autenticação da Dívida Ativa")
-                        # Reporta erro ao interceptor
-                        await send_api_error(
-                            user_id=self.user_id,
-                            source=self.ERROR_SOURCE,
-                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                            request_body={
-                                "Consumidor": "consultar-dividas-contribuinte"
-                            },
-                            status_code=auth_response.status_code,
-                            error_message="Falha na autenticação do serviço de Dívida Ativa",
-                        )
-                        raise Exception(
-                            "Falha na autenticação do serviço de Dívida Ativa"
-                        )
-                    elif auth_response.status_code in [500, 503]:
-                        logger.error(
-                            f"Erro de servidor na autenticação da Dívida Ativa: {auth_response.status_code}"
-                        )
-                        # Reporta erro ao interceptor
-                        await send_api_error(
-                            user_id=self.user_id,
-                            source=self.ERROR_SOURCE,
-                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                            request_body={
-                                "Consumidor": "consultar-dividas-contribuinte"
-                            },
-                            status_code=auth_response.status_code,
-                            error_message=f"Serviço de Dívida Ativa temporariamente indisponível (autenticação): {auth_response.text[:500]}",
-                        )
-                        raise Exception(
-                            f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {auth_response.status_code})"
-                        )
-
-                    auth_response_json = auth_response.json()
-                    if "access_token" not in auth_response_json:
-                        logger.error(
-                            f"Token não encontrado na resposta de autenticação: {auth_response.status_code} - {auth_response.text}"
-                        )
-                        raise Exception(
-                            "Falha ao obter token de autenticação da Dívida Ativa"
-                        )
-
-                    token = f'Bearer {auth_response_json["access_token"]}'
-                    logger.info("Token de autenticação obtido com sucesso")
-
-                except httpx.TimeoutException:
-                    logger.error("Timeout ao autenticar na Dívida Ativa")
-                    # Reporta erro ao interceptor com traceback
+                if auth_response.status_code == 401:
+                    logger.error("Falha na autenticação da Dívida Ativa")
+                    # Reporta erro ao interceptor
                     await send_api_error(
                         user_id=self.user_id,
                         source=self.ERROR_SOURCE,
                         api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
-                        status_code=408,
-                        error_message="Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)",
-                        traceback=tb.format_exc(),
+                        request_body={
+                            "Consumidor": "consultar-dividas-contribuinte"
+                        },
+                        status_code=auth_response.status_code,
+                        error_message="Falha na autenticação do serviço de Dívida Ativa",
                     )
                     raise Exception(
-                        "Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)"
+                        "Falha na autenticação do serviço de Dívida Ativa"
+                    )
+                elif auth_response.status_code in [500, 503]:
+                    logger.error(
+                        f"Erro de servidor na autenticação da Dívida Ativa: {auth_response.status_code}"
+                    )
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        source=self.ERROR_SOURCE,
+                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
+                        request_body={
+                            "Consumidor": "consultar-dividas-contribuinte"
+                        },
+                        status_code=auth_response.status_code,
+                        error_message=f"Serviço de Dívida Ativa temporariamente indisponível (autenticação): {auth_response.text[:500]}",
+                    )
+                    raise Exception(
+                        f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {auth_response.status_code})"
                     )
 
-                # Consulta de dívidas
-                try:
-                    # Prepara o payload de acordo com o tipo de entrada
-                    payload = self._preparar_payload(tipo_entrada, valor_limpo)
-                    
-                    response = await client.post(
-                        f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                        headers={"Authorization": token},
-                        data=payload,
+                auth_response_json = auth_response.json()
+                if "access_token" not in auth_response_json:
+                    logger.error(
+                        f"Token não encontrado na resposta de autenticação: {auth_response.status_code} - {auth_response.text}"
                     )
-                    if response.status_code == 200:
-                        response_data = response.json()
-                        logger.info(f"Consulta de dívida ativa realizada com sucesso")
-                        # Usa o método from_api_response do modelo para processar os dados
-                        return DadosDividaAtiva.from_api_response(response_data)
-                    elif response.status_code == 404:
-                        # Não encontrou débitos - retorna None
-                        logger.info(
-                            f"Nenhuma dívida ativa encontrada para {tipo_entrada}: {valor_limpo}"
-                        )
-                        return None
-                    elif response.status_code == 401:
-                        logger.error("Erro de autenticação ao consultar dívidas")
-                        # Reporta erro ao interceptor
-                        await send_api_error(
-                            user_id=self.user_id,
-                            source=self.ERROR_SOURCE,
-                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                            request_body=payload,
-                            status_code=response.status_code,
-                            error_message="Falha na autenticação ao consultar dívidas",
-                        )
-                        raise Exception(
-                            "Falha na autenticação ao consultar dívidas"
-                        )
-                    elif response.status_code in [500, 503]:
-                        logger.error(
-                            f"Erro de servidor ao consultar dívidas. Status: {response.status_code}"
-                        )
-                        # Reporta erro ao interceptor
-                        await send_api_error(
-                            user_id=self.user_id,
-                            source=self.ERROR_SOURCE,
-                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                            request_body=payload,
-                            status_code=response.status_code,
-                            error_message=f"Serviço de Dívida Ativa temporariamente indisponível: {response.text[:500]}",
-                        )
-                        raise Exception(
-                            f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {response.status_code})"
-                        )
-                    else:
-                        logger.error(
-                            f"Erro ao consultar dívida ativa. Status: {response.status_code}, Texto: {response.text}"
-                        )
-                        # Reporta erro ao interceptor
-                        await send_api_error(
-                            user_id=self.user_id,
-                            source=self.ERROR_SOURCE,
-                            api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                            request_body=payload,
-                            status_code=response.status_code,
-                            error_message=f"Erro HTTP {response.status_code}: {response.text[:500]}",
-                        )
-                        raise Exception(
-                            f"Erro ao comunicar com serviço de Dívida Ativa (HTTP {response.status_code})"
-                        )
+                    await send_api_error(
+                        user_id=self.user_id,
+                        source=self.ERROR_SOURCE,
+                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
+                        request_body={
+                            "Consumidor": "consultar-dividas-contribuinte"
+                        },
+                        status_code=auth_response.status_code,
+                        error_message="Token de acesso não encontrado na resposta de autenticação",
+                    )
+                    raise Exception(
+                        "Falha ao obter token de autenticação da Dívida Ativa"
+                    )
 
-                except httpx.TimeoutException:
-                    logger.error("Timeout ao consultar dívidas")
-                    # Reporta erro ao interceptor com traceback
+                token = f'Bearer {auth_response_json["access_token"]}'
+                logger.info("Token de autenticação obtido com sucesso")
+
+            except httpx.TimeoutException:
+                logger.error("Timeout ao autenticar na Dívida Ativa")
+                # Reporta erro ao interceptor com traceback
+                await send_api_error(
+                    user_id=self.user_id,
+                    source=self.ERROR_SOURCE,
+                    api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
+                    request_body={"Consumidor": "consultar-dividas-contribuinte"},
+                    status_code=408,
+                    error_message="Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)",
+                    traceback=tb.format_exc(),
+                )
+                raise Exception(
+                    "Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)"
+                )
+
+            # Consulta de dívidas
+            try:
+                # Prepara o payload de acordo com o tipo de entrada
+                payload = self._preparar_payload(tipo_entrada, valor_limpo)
+                
+                response = await client.post(
+                    f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                    headers={"Authorization": token},
+                    data=payload,
+                )
+                if response.status_code == 200:
+                    response_data = response.json()
+                    logger.info(f"Consulta de dívida ativa realizada com sucesso")
+                    # Usa o método from_api_response do modelo para processar os dados
+                    return DadosDividaAtiva.from_api_response(response_data)
+                elif response.status_code == 404:
+                    # Não encontrou débitos - retorna None
+                    logger.info(
+                        f"Nenhuma dívida ativa encontrada para {tipo_entrada}: {valor_limpo}"
+                    )
+                    return None
+                elif response.status_code == 401:
+                    logger.error("Erro de autenticação ao consultar dívidas")
+                    # Reporta erro ao interceptor
                     await send_api_error(
                         user_id=self.user_id,
                         source=self.ERROR_SOURCE,
                         api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
                         request_body=payload,
-                        status_code=408,
-                        error_message="Serviço de Dívida Ativa não respondeu no tempo esperado",
-                        traceback=tb.format_exc(),
+                        status_code=response.status_code,
+                        error_message="Falha na autenticação ao consultar dívidas",
                     )
                     raise Exception(
-                        "Serviço de Dívida Ativa não respondeu no tempo esperado"
+                        "Falha na autenticação ao consultar dívidas"
+                    )
+                elif response.status_code in [500, 503]:
+                    logger.error(
+                        f"Erro de servidor ao consultar dívidas. Status: {response.status_code}"
+                    )
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        source=self.ERROR_SOURCE,
+                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                        request_body=payload,
+                        status_code=response.status_code,
+                        error_message=f"Serviço de Dívida Ativa temporariamente indisponível: {response.text[:500]}",
+                    )
+                    raise Exception(
+                        f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {response.status_code})"
+                    )
+                else:
+                    logger.error(
+                        f"Erro ao consultar dívida ativa. Status: {response.status_code}, Texto: {response.text}"
+                    )
+                    # Reporta erro ao interceptor
+                    await send_api_error(
+                        user_id=self.user_id,
+                        source=self.ERROR_SOURCE,
+                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                        request_body=payload,
+                        status_code=response.status_code,
+                        error_message=f"Erro HTTP {response.status_code}: {response.text[:500]}",
+                    )
+                    raise Exception(
+                        f"Erro ao comunicar com serviço de Dívida Ativa (HTTP {response.status_code})"
                     )
 
-        except Exception as e:
-            logger.error(f"Erro ao consultar dívida ativa: {str(e)}")
-            # Reporta erro ao interceptor com traceback
-            await send_api_error(
-                user_id=self.user_id,
-                source=self.ERROR_SOURCE,
-                api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                request_body=self._preparar_payload(tipo_entrada, valor_limpo),
-                status_code=0,
-                error_message=f"Erro ao comunicar com serviço de Dívida Ativa: {str(e)}",
-                traceback=tb.format_exc(),
-            )
-            raise Exception(
-                f"Erro ao comunicar com serviço de Dívida Ativa: {str(e)}"
-            )
+            except httpx.TimeoutException:
+                logger.error("Timeout ao consultar dívidas")
+                # Reporta erro ao interceptor com traceback
+                await send_api_error(
+                    user_id=self.user_id,
+                    source=self.ERROR_SOURCE,
+                    api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
+                    request_body=payload,
+                    status_code=408,
+                    error_message="Serviço de Dívida Ativa não respondeu no tempo esperado",
+                    traceback=tb.format_exc(),
+                )
+                raise Exception(
+                    "Serviço de Dívida Ativa não respondeu no tempo esperado"
+                )
