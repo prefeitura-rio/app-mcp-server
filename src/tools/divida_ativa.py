@@ -71,7 +71,7 @@ def log_execution_time(func):
 
 
 @interceptor(source={"source": "mcp", "tool": "divida_ativa"})
-async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> dict:
+async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict | None = None) -> dict:
     """
     Makes authenticated requests to PGM API.
     
@@ -86,6 +86,8 @@ async def pgm_api(endpoint: str = "", consumidor: str = "", data: dict = {}) -> 
     Raises:
         Exception: If authentication or API request fails
     """
+    if data is None:
+        data = {}
     try:
         auth_response = await internal_request(
             url=f"{env.CHATBOT_PGM_API_URL}/security/token",
