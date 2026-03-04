@@ -48,7 +48,7 @@ def parse_sitemap(sitemap_url: str) -> List[str]:
         urls = [loc.text for loc in tree.findall(".//{*}loc") if loc.text]
         logger.info(f"Parsed {len(urls)} URLs from sitemap: {sitemap_url}")
         return urls
-    except httpx.RequestError as e:
+    except httpx.HTTPError as e:
         logger.error(f"Failed to fetch sitemap {sitemap_url}: {e}")
     except ElementTree.ParseError as e:
         logger.error(f"Failed to parse sitemap XML from {sitemap_url}: {e}")
