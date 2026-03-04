@@ -32,9 +32,10 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
     """Busca no hub de serviços usando Typesense."""
     params = request.model_dump()
     header = {"Authorization": "Bearer"}
-    response = httpx.get(
-        TYPESENSE_HUB_SEARCH_URL, params=params, headers=header, timeout=30.0
-    )
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(
+            TYPESENSE_HUB_SEARCH_URL, params=params, headers=header
+        )
     response.raise_for_status()
     r = response.json()
 
@@ -85,7 +86,8 @@ async def hub_search_by_id(request: HubSearchRequest) -> Optional[dict]:
     """Busca um serviço específico por ID no hub usando Typesense."""
     header = {"Authorization": "Bearer"}
     url = f"{TYPESENSE_HUB_SEARCH_URL}/{request.id}"
-    response = httpx.get(url, headers=header, timeout=30.0)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, headers=header)
     response.raise_for_status()
     doc = response.json()
 
