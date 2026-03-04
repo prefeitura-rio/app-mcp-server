@@ -31,9 +31,10 @@ def get_bigquery_result(query: str):
 
 @interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_pluscode_coords_equipments(
-    address, categories: Optional[List[str]] = []
+    address, categories: Optional[List[str]] = None
 ) -> dict:
 
+    categories = categories or []
     plus8, coords = get_plus8_coords_from_address(address=address)
     if not coords:
         raise Exception("No coords found")

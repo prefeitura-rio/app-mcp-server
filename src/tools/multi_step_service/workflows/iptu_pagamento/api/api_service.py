@@ -111,6 +111,7 @@ class IPTUAPIService:
                 source={"source": "mcp", "tool": "multi_step_service", "workflow": "iptu_pagamento"},
                 proxy=self.proxy,
                 timeout=30.0,
+                error_status_codes=list(range(400, 600)),
             ) as client:
                 # Erros de status code são automaticamente interceptados
                 response = await client.get(url, params=params)
