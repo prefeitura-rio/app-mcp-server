@@ -23,7 +23,7 @@ def get_integrations_url(endpoint: str) -> str:
 async def internal_request(
     url: str,
     method: str = "GET",
-    request_kwargs: dict = {},
+    request_kwargs: dict | None = None,
 ) -> dict | None:
     """
     Uses chatbot-integrations for making requests through the internal network.
@@ -31,11 +31,12 @@ async def internal_request(
     Args:
         url (str): The URL to be requested.
         method (str, optional): The HTTP method. Defaults to "GET".
-        request_kwargs (dict, optional): The request kwargs. Defaults to {}.
+        request_kwargs (dict, optional): The request kwargs. Defaults to None.
 
     Returns:
         dict: The response JSON.
     """
+    request_kwargs = request_kwargs or {}
     integrations_url = get_integrations_url("request")
     payload = json.dumps(
         {
