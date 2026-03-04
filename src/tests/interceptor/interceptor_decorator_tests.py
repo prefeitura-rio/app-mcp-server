@@ -298,24 +298,23 @@ class TestInterceptorWithHttpErrors:
             assert "KeyError" in call_kwargs["traceback"]
 
 
-class TestFlownameJsonFormat:
-    """Testes para o formato JSON do flowname."""
+class TestSerializeSource:
+    """Testes para a função serialize_source usada para gerar flownames."""
 
-    def test_flowname_is_valid_json(self):
-        """Verifica que flowname é um JSON válido."""
-        import json
+    def test_serialize_source_simple(self):
+        """Verifica serialização de source simples."""
+        from src.utils.error_interceptor import serialize_source
 
         source = {"source": "mcp", "tool": "search"}
-        flowname = json.dumps(source, indent=2, ensure_ascii=False)
+        flowname = serialize_source(source)
 
-        # Deve ser um JSON válido que pode ser parseado de volta
-        parsed = json.loads(flowname)
-        assert parsed["source"] == "mcp"
-        assert parsed["tool"] == "search"
+        assert "source=mcp" in flowname
+        assert "tool=search" in flowname
+        assert "|" in flowname
 
-    def test_flowname_with_workflow(self):
-        """Verifica que flowname com workflow é formatado corretamente."""
-        import json
+    def test_serialize_source_with_workflow(self):
+        """Verifica serialização de source com workflow."""
+        from src.utils.error_interceptor import serialize_source
 
         source = {
             "source": "mcp",
@@ -323,22 +322,66 @@ class TestFlownameJsonFormat:
             "workflow": "iptu_pagamento",
             "step": "consultar_guias",
         }
-        flowname = json.dumps(source, indent=2, ensure_ascii=False)
+        flowname = serialize_source(source)
 
-        parsed = json.loads(flowname)
-        assert parsed["source"] == "mcp"
-        assert parsed["tool"] == "multi_step_service"
-        assert parsed["workflow"] == "iptu_pagamento"
-        assert parsed["step"] == "consultar_guias"
+        assert "source=mcp" in flowname
+        assert "tool=multi_step_service" in flowname
+        assert "workflow=iptu_pagamento" in flowname
+        assert "step=consultar_guias" in flowname
 
-    def test_flowname_with_unicode(self):
-        """Verifica que flowname preserva caracteres unicode."""
-        import json
+    def test_serialize_source_with_unicode(self):
+        """Verifica que serialize_source preserva caracteres unicode."""
+        from src.utils.error_interceptor import serialize_source
 
         source = {"source": "mcp", "tool": "search", "query": "São Paulo"}
-        flowname = json.dumps(source, indent=2, ensure_ascii=False)
+        flowname = serialize_source(source)
 
-        # Deve conter o caractere ã sem escape
         assert "São Paulo" in flowname
-        parsed = json.loads(flowname)
-        assert parsed["query"] == "São Paulo"
+
+    def test_send_api_error_uses_serialize_source(self):
+        """Verifica que send_api_error chama serialize_source para gerar o flowname."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch, call
+
+        source = {"source": "mcp", "tool": "search"}
+
+        with patch.object(
+            error_interceptor, "serialize_source", wraps=error_interceptor.serialize_source
+        ) as mock_serialize, patch.object(
+            error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
+        ) as mock_send:
+            mock_send.return_value = True
+
+            asyncio.run(error_interceptor.send_api_error(
+                user_id="test_user",
+                source=source,
+                api_endpoint="https://api.example.com/test",
+                request_body={},
+                status_code=500,
+                error_message="Error",
+            ))
+
+            mock_serialize.assert_called_once_with(source)
+
+    def test_send_general_error_uses_serialize_source(self):
+        """Verifica que send_general_error chama serialize_source para gerar o flowname."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        source = {"source": "mcp", "tool": "search"}
+
+        with patch.object(
+            error_interceptor, "serialize_source", wraps=error_interceptor.serialize_source
+        ) as mock_serialize, patch.object(
+            error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
+        ) as mock_send:
+            mock_send.return_value = True
+
+            asyncio.run(error_interceptor.send_general_error(
+                user_id="test_user",
+                source=source,
+                error_type="ValueError",
+                error_message="Test error",
+            ))
+
+            mock_serialize.assert_called_once_with(source)

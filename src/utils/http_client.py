@@ -168,19 +168,27 @@ class InterceptedHTTPClient:
     ) -> httpx.Response:
         """
         Faz uma requisição HTTP async com interceptação automática de erros.
+
+        HTTP status errors (4xx/5xx) are only intercepted when error_status_codes is
+        explicitly provided. By default, status codes are not intercepted so that
+        the @interceptor decorator (via raise_for_status()) is the single source of
+        truth for reporting HTTP errors and avoiding duplicate alerts.
         """
         if self.sync:
             raise RuntimeError("Use request_sync() para modo sync")
 
-        if error_status_codes is None:
-            error_status_codes = DEFAULT_ERROR_STATUS_CODES
+        if not isinstance(self._client, httpx.AsyncClient):
+            raise RuntimeError(
+                "InterceptedHTTPClient não foi inicializado via context manager. "
+                "Use 'async with InterceptedHTTPClient(...) as client:' para modo async."
+            )
 
         request_body = kwargs.get("json") or kwargs.get("data") or kwargs.get("params")
 
         try:
             response = await self._client.request(method, url, **kwargs)
 
-            if intercept_errors and response.status_code in error_status_codes:
+            if intercept_errors and error_status_codes and response.status_code in error_status_codes:
                 try:
                     response_text = response.text[:500] if response.text else ""
                 except Exception:
@@ -239,19 +247,27 @@ class InterceptedHTTPClient:
     ) -> httpx.Response:
         """
         Faz uma requisição HTTP sync com interceptação automática de erros.
+
+        HTTP status errors (4xx/5xx) are only intercepted when error_status_codes is
+        explicitly provided. By default, status codes are not intercepted so that
+        the @interceptor decorator (via raise_for_status()) is the single source of
+        truth for reporting HTTP errors and avoiding duplicate alerts.
         """
         if not self.sync:
             raise RuntimeError("Use request() para modo async")
 
-        if error_status_codes is None:
-            error_status_codes = DEFAULT_ERROR_STATUS_CODES
+        if not isinstance(self._client, httpx.Client):
+            raise RuntimeError(
+                "InterceptedHTTPClient não foi inicializado via context manager. "
+                "Use 'with InterceptedHTTPClient(..., sync=True) as client:' para modo sync."
+            )
 
         request_body = kwargs.get("json") or kwargs.get("data") or kwargs.get("params")
 
         try:
             response = self._client.request(method, url, **kwargs)
 
-            if intercept_errors and response.status_code in error_status_codes:
+            if intercept_errors and error_status_codes and response.status_code in error_status_codes:
                 try:
                     response_text = response.text[:500] if response.text else ""
                 except Exception:

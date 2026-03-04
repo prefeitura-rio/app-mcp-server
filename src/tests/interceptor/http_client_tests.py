@@ -19,8 +19,30 @@ class TestInterceptedHTTPClient:
     """Testes para o wrapper httpx."""
 
     @pytest.mark.asyncio
-    async def test_intercepts_500_error(self):
-        """Verifica interceptação de erro 500."""
+    async def test_does_not_intercept_500_by_default(self):
+        """Verifica que erros 500 NÃO são interceptados por padrão (evita duplicidade com @interceptor)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+
+        with patch(
+            "src.utils.http_client.send_api_error", new_callable=AsyncMock
+        ) as mock_send:
+            async with InterceptedHTTPClient(
+                user_id="5521999999999",
+                source={"source": "mcp", "tool": "test"},
+            ) as client:
+                client._client = AsyncMock()
+                client._client.request = AsyncMock(return_value=mock_response)
+
+                response = await client.get("https://api.example.com/test")
+
+                assert response.status_code == 500
+                mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_intercepts_500_when_explicitly_configured(self):
+        """Verifica que erros 500 SÃO interceptados quando error_status_codes é passado explicitamente."""
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
@@ -34,11 +56,13 @@ class TestInterceptedHTTPClient:
                 user_id="5521999999999",
                 source={"source": "mcp", "tool": "test"},
             ) as client:
-                # Mock the internal client request
                 client._client = AsyncMock()
                 client._client.request = AsyncMock(return_value=mock_response)
 
-                response = await client.get("https://api.example.com/test")
+                response = await client.get(
+                    "https://api.example.com/test",
+                    error_status_codes={500},
+                )
 
                 assert response.status_code == 500
                 mock_send.assert_called_once()
@@ -51,8 +75,8 @@ class TestInterceptedHTTPClient:
                 assert "https://api.example.com/test" in call_kwargs["api_endpoint"]
 
     @pytest.mark.asyncio
-    async def test_intercepts_404_error(self):
-        """Verifica interceptação de erro 404."""
+    async def test_does_not_intercept_404_by_default(self):
+        """Verifica que erros 404 NÃO são interceptados por padrão."""
         mock_response = MagicMock()
         mock_response.status_code = 404
         mock_response.text = "Not Found"
@@ -60,8 +84,6 @@ class TestInterceptedHTTPClient:
         with patch(
             "src.utils.http_client.send_api_error", new_callable=AsyncMock
         ) as mock_send:
-            mock_send.return_value = True
-
             async with InterceptedHTTPClient(
                 user_id="5521888888888",
                 source={"source": "mcp", "tool": "test"},
@@ -72,7 +94,7 @@ class TestInterceptedHTTPClient:
                 response = await client.get("https://api.example.com/iptu/123")
 
                 assert response.status_code == 404
-                mock_send.assert_called_once()
+                mock_send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_intercepts_timeout(self):
@@ -150,11 +172,7 @@ class TestInterceptedHTTPClient:
 
     @pytest.mark.asyncio
     async def test_disable_interception(self):
-        """Verifica que interceptação pode ser desabilitada."""
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Error"
-
+        """Verifica que interceptação de erros de rede pode ser desabilitada."""
         with patch(
             "src.utils.http_client.send_api_error", new_callable=AsyncMock
         ) as mock_send:
@@ -163,20 +181,22 @@ class TestInterceptedHTTPClient:
                 source={"source": "mcp", "tool": "test"},
             ) as client:
                 client._client = AsyncMock()
-                client._client.request = AsyncMock(return_value=mock_response)
-
-                response = await client.get(
-                    "https://api.example.com/error", intercept_errors=False
+                client._client.request = AsyncMock(
+                    side_effect=httpx.TimeoutException("Timeout")
                 )
 
-                assert response.status_code == 500
+                with pytest.raises(httpx.TimeoutException):
+                    await client.get(
+                        "https://api.example.com/slow", intercept_errors=False
+                    )
+
                 mock_send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_custom_error_status_codes(self):
-        """Verifica que custom error status codes funcionam."""
+        """Verifica que custom error status codes funcionam quando passados explicitamente."""
         mock_response = MagicMock()
-        mock_response.status_code = 429  # Too Many Requests (não está no default)
+        mock_response.status_code = 429  # Too Many Requests
         mock_response.text = "Rate limited"
 
         with patch(
@@ -191,7 +211,7 @@ class TestInterceptedHTTPClient:
                 client._client = AsyncMock()
                 client._client.request = AsyncMock(return_value=mock_response)
 
-                # Sem custom codes, 429 não seria interceptado
+                # Por padrão, nenhum status code é interceptado
                 response = await client.get("https://api.example.com/limited")
                 mock_send.assert_not_called()
 
@@ -202,8 +222,8 @@ class TestInterceptedHTTPClient:
                 mock_send.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_all_http_methods(self):
-        """Verifica que todos os métodos HTTP funcionam."""
+    async def test_all_http_methods_do_not_intercept_by_default(self):
+        """Verifica que nenhum método HTTP intercepta status codes por padrão."""
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.text = "Error"
@@ -213,8 +233,6 @@ class TestInterceptedHTTPClient:
         with patch(
             "src.utils.http_client.send_api_error", new_callable=AsyncMock
         ) as mock_send:
-            mock_send.return_value = True
-
             async with InterceptedHTTPClient(
                 user_id="5521222222222",
                 source={"source": "mcp", "tool": "test"},
@@ -227,15 +245,33 @@ class TestInterceptedHTTPClient:
                     response = await method_func("https://api.example.com/test")
                     assert response.status_code == 500
 
-                assert mock_send.call_count == len(methods_to_test)
+                mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_runtime_error_when_client_not_initialized(self):
+        """Verifica que RuntimeError é lançado com mensagem clara quando _client não foi inicializado."""
+        client = InterceptedHTTPClient(
+            user_id="test",
+            source={"source": "mcp", "tool": "test"},
+        )
+        # _client is None, not initialized via context manager
+        with pytest.raises(RuntimeError, match="context manager"):
+            await client.request("GET", "https://api.example.com/test")
+
+    def test_raises_runtime_error_sync_when_client_not_initialized(self):
+        """Verifica que RuntimeError é lançado com mensagem clara quando _client não foi inicializado (sync)."""
+        client = InterceptedHTTPClient(
+            user_id="test",
+            source={"source": "mcp", "tool": "test"},
+            sync=True,
+        )
+        # _client is None, not initialized via context manager
+        with pytest.raises(RuntimeError, match="context manager"):
+            client.request_sync("GET", "https://api.example.com/test")
 
     @pytest.mark.asyncio
     async def test_workflow_source(self):
-        """Verifica que source com workflow é passado corretamente."""
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-
+        """Verifica que source com workflow é passado corretamente ao interceptar erros de rede."""
         with patch(
             "src.utils.http_client.send_api_error", new_callable=AsyncMock
         ) as mock_send:
@@ -251,9 +287,12 @@ class TestInterceptedHTTPClient:
                 },
             ) as client:
                 client._client = AsyncMock()
-                client._client.request = AsyncMock(return_value=mock_response)
+                client._client.request = AsyncMock(
+                    side_effect=httpx.ConnectError("Connection refused")
+                )
 
-                await client.get("https://api.example.com/iptu")
+                with pytest.raises(httpx.ConnectError):
+                    await client.get("https://api.example.com/iptu")
 
                 call_kwargs = mock_send.call_args[1]
                 assert call_kwargs["source"]["source"] == "mcp"
@@ -271,8 +310,8 @@ class TestDefaultErrorStatusCodes:
         assert DEFAULT_ERROR_STATUS_CODES == expected
 
     @pytest.mark.asyncio
-    async def test_all_default_codes_intercepted(self):
-        """Verifica que todos os códigos padrão são interceptados."""
+    async def test_default_codes_not_intercepted_by_default(self):
+        """Verifica que os códigos padrão NÃO são interceptados sem error_status_codes explícito."""
         with patch(
             "src.utils.http_client.send_api_error", new_callable=AsyncMock
         ) as mock_send:
@@ -292,15 +331,63 @@ class TestDefaultErrorStatusCodes:
 
                     await client.get("https://api.example.com/test")
 
-            # Deve ter sido chamado uma vez para cada status code
+            mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_codes_intercepted_when_passed_explicitly(self):
+        """Verifica que os códigos padrão SÃO interceptados quando passados explicitamente."""
+        with patch(
+            "src.utils.http_client.send_api_error", new_callable=AsyncMock
+        ) as mock_send:
+            mock_send.return_value = True
+
+            for status_code in DEFAULT_ERROR_STATUS_CODES:
+                mock_response = MagicMock()
+                mock_response.status_code = status_code
+                mock_response.text = f"Error {status_code}"
+
+                async with InterceptedHTTPClient(
+                    user_id="test_user",
+                    source={"source": "mcp", "tool": "test"},
+                ) as client:
+                    client._client = AsyncMock()
+                    client._client.request = AsyncMock(return_value=mock_response)
+
+                    await client.get(
+                        "https://api.example.com/test",
+                        error_status_codes=DEFAULT_ERROR_STATUS_CODES,
+                    )
+
             assert mock_send.call_count == len(DEFAULT_ERROR_STATUS_CODES)
 
 
 class TestInterceptedHTTPClientSync:
     """Testes para o modo sync do InterceptedHTTPClient."""
 
-    def test_intercepts_500_error_sync(self):
-        """Verifica interceptação de erro 500 em modo sync."""
+    def test_does_not_intercept_500_by_default_sync(self):
+        """Verifica que erro 500 NÃO é interceptado por padrão em modo sync."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+
+        with patch(
+            "src.utils.http_client.send_api_error", new_callable=AsyncMock
+        ) as mock_send:
+            with InterceptedHTTPClient(
+                user_id="5521111111111",
+                source={"source": "mcp", "tool": "test"},
+                sync=True,
+            ) as client:
+                client._client = MagicMock()
+                client._client.request = MagicMock(return_value=mock_response)
+
+                response = client.get_sync("https://api.example.com/test")
+
+                assert response.status_code == 500
+                mock_send.assert_not_called()
+
+    def test_intercepts_500_when_explicitly_configured_sync(self):
+        """Verifica que erro 500 É interceptado quando error_status_codes é passado em modo sync."""
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
@@ -318,7 +405,10 @@ class TestInterceptedHTTPClientSync:
                 client._client = MagicMock()
                 client._client.request = MagicMock(return_value=mock_response)
 
-                response = client.get_sync("https://api.example.com/test")
+                response = client.get_sync(
+                    "https://api.example.com/test",
+                    error_status_codes={500},
+                )
 
                 assert response.status_code == 500
 
@@ -365,11 +455,7 @@ class TestInterceptedHTTPClientSync:
                 mock_send.assert_not_called()
 
     def test_workflow_source_sync(self):
-        """Verifica que source com workflow é passado corretamente em modo sync."""
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-
+        """Verifica que source com workflow é passado corretamente ao interceptar erros de rede em modo sync."""
         with patch(
             "src.utils.http_client.send_api_error", new_callable=AsyncMock
         ) as mock_send:
@@ -385,12 +471,12 @@ class TestInterceptedHTTPClientSync:
                 sync=True,
             ) as client:
                 client._client = MagicMock()
-                client._client.request = MagicMock(return_value=mock_response)
+                client._client.request = MagicMock(
+                    side_effect=httpx.ConnectError("Connection refused")
+                )
 
-                client.get_sync("https://api.example.com/poda")
-
-                # Verifica que foi chamado (pode ser async task)
-                # Apenas verificamos que a resposta foi processada
+                with pytest.raises(httpx.ConnectError):
+                    client.get_sync("https://api.example.com/poda")
 
     def test_raises_error_when_using_async_with_sync_mode(self):
         """Verifica que usar 'async with' em modo sync levanta erro."""

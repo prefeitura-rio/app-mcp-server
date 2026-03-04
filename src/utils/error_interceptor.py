@@ -213,7 +213,7 @@ async def send_api_error(
         ...     status_code=503,
         ...     error_message="Service Unavailable",
         ... )
-        # Flowname será enviado como JSON formatado do dicionário source
+        # Flowname será gerado via serialize_source(source)
 
     Example - Tool simples:
         >>> await send_api_error(
@@ -226,12 +226,7 @@ async def send_api_error(
         ... )
     """
 
-    # Cria flowname simples a partir do source
-    flowname = source.get("tool", "unknown")
-    if "workflow" in source:
-        flowname = f"{flowname}({source['workflow']})"
-    if "function" in source:
-        flowname = f"{flowname}.{source['function']}"
+    flowname = serialize_source(source)
 
     return await send_error_to_interceptor(
         customer_whatsapp_number=user_id,
@@ -276,7 +271,7 @@ async def send_general_error(
         ...     error_type="TimeoutError",
         ...     error_message="Busca demorou demais",
         ... )
-        # Flowname será enviado como JSON formatado do dicionário source
+        # Flowname será gerado via serialize_source(source)
 
     Example - Workflow:
         >>> await send_general_error(
@@ -292,12 +287,7 @@ async def send_general_error(
         ... )
     """
 
-    # Cria flowname simples a partir do source
-    flowname = source.get("tool", "unknown")
-    if "workflow" in source:
-        flowname = f"{flowname}({source['workflow']})"
-    if "function" in source:
-        flowname = f"{flowname}.{source['function']}"
+    flowname = serialize_source(source)
 
     return await send_error_to_interceptor(
         customer_whatsapp_number=user_id,
