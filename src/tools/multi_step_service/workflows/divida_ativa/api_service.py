@@ -11,6 +11,8 @@ from src.utils.error_interceptor import send_api_error
 
 
 class DividaAtivaAPIService:
+    ERROR_SOURCE = {"source": "mcp", "tool": "multi_step_service", "workflow": "divida_ativa"}
+
     def __init__(self, user_id: str = "unknown"):
         self.api_base_url = env.IPTU_API_URL
         self.api_token = env.IPTU_API_TOKEN
@@ -199,7 +201,7 @@ class DividaAtivaAPIService:
                         # Reporta erro ao interceptor
                         await send_api_error(
                             user_id=self.user_id,
-                            service_name="iptu_pagamento",
+                            source=self.ERROR_SOURCE,
                             api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
                             request_body={
                                 "Consumidor": "consultar-dividas-contribuinte"
@@ -217,7 +219,7 @@ class DividaAtivaAPIService:
                         # Reporta erro ao interceptor
                         await send_api_error(
                             user_id=self.user_id,
-                            service_name="iptu_pagamento",
+                            source=self.ERROR_SOURCE,
                             api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
                             request_body={
                                 "Consumidor": "consultar-dividas-contribuinte"
@@ -246,7 +248,7 @@ class DividaAtivaAPIService:
                     # Reporta erro ao interceptor com traceback
                     await send_api_error(
                         user_id=self.user_id,
-                        service_name="iptu_pagamento",
+                        source=self.ERROR_SOURCE,
                         api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
                         request_body={"Consumidor": "consultar-dividas-contribuinte"},
                         status_code=408,
@@ -283,7 +285,7 @@ class DividaAtivaAPIService:
                         # Reporta erro ao interceptor
                         await send_api_error(
                             user_id=self.user_id,
-                            service_name="iptu_pagamento",
+                            source=self.ERROR_SOURCE,
                             api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
                             request_body=payload,
                             status_code=response.status_code,
@@ -299,7 +301,7 @@ class DividaAtivaAPIService:
                         # Reporta erro ao interceptor
                         await send_api_error(
                             user_id=self.user_id,
-                            service_name="iptu_pagamento",
+                            source=self.ERROR_SOURCE,
                             api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
                             request_body=payload,
                             status_code=response.status_code,
@@ -315,7 +317,7 @@ class DividaAtivaAPIService:
                         # Reporta erro ao interceptor
                         await send_api_error(
                             user_id=self.user_id,
-                            service_name="iptu_pagamento",
+                            source=self.ERROR_SOURCE,
                             api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
                             request_body=payload,
                             status_code=response.status_code,
@@ -330,7 +332,7 @@ class DividaAtivaAPIService:
                     # Reporta erro ao interceptor com traceback
                     await send_api_error(
                         user_id=self.user_id,
-                        service_name="iptu_pagamento",
+                        source=self.ERROR_SOURCE,
                         api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
                         request_body=payload,
                         status_code=408,
@@ -346,7 +348,7 @@ class DividaAtivaAPIService:
             # Reporta erro ao interceptor com traceback
             await send_api_error(
                 user_id=self.user_id,
-                service_name="iptu_pagamento",
+                source=self.ERROR_SOURCE,
                 api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
                 request_body=self._preparar_payload(tipo_entrada, valor_limpo),
                 status_code=0,
