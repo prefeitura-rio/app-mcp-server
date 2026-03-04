@@ -361,7 +361,6 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
         source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
         timeout=30.0,
         follow_redirects=True,
-        verify=False,
         headers=headers
     ) as session:
         # Limita concorrência para evitar sobrecarga
