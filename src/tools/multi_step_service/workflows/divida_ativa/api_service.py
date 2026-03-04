@@ -341,9 +341,6 @@ class DividaAtivaAPIService:
                         "Serviço de Dívida Ativa não respondeu no tempo esperado"
                     )
 
-        except Exception:
-            # Re-lança exceções customizadas
-            raise
         except Exception as e:
             logger.error(f"Erro ao consultar dívida ativa: {str(e)}")
             # Reporta erro ao interceptor com traceback
