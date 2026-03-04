@@ -23,7 +23,7 @@ VALID_SEVERITIES = ["baixa", "alta", "critica"]
 
 
 @interceptor(source={"source": "mcp", "tool": "cor_alert"})
-def get_coordinates_nominatim(address: str) -> dict:
+async def get_coordinates_nominatim(address: str) -> dict:
     """
     Get coordinates from Nominatim API.
 
@@ -42,13 +42,12 @@ def get_coordinates_nominatim(address: str) -> dict:
         }
         headers = {"User-Agent": "RioMCPServer/1.0 (alertas.eai-cor@rio)"}
 
-        with InterceptedHTTPClient(
+        async with InterceptedHTTPClient(
             user_id="unknown",
             source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_nominatim"},
-            sync=True,
             timeout=10.0
         ) as client:
-            response = client.get_sync(NOMINATIM_API_URL, params=params, headers=headers)
+            response = await client.get(NOMINATIM_API_URL, params=params, headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -66,7 +65,7 @@ def get_coordinates_nominatim(address: str) -> dict:
 
 
 @interceptor(source={"source": "mcp", "tool": "cor_alert"})
-def get_coordinates_google(address: str) -> dict:
+async def get_coordinates_google(address: str) -> dict:
     """
     Get coordinates from Google Maps API.
 
@@ -80,13 +79,12 @@ def get_coordinates_google(address: str) -> dict:
         full_address = f"{address}, Rio de Janeiro, RJ"
         params = {"address": full_address, "key": GOOGLE_MAPS_API_KEY}
 
-        with InterceptedHTTPClient(
+        async with InterceptedHTTPClient(
             user_id="unknown",
             source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_google"},
-            sync=True,
             timeout=10.0
         ) as client:
-            response = client.get_sync(GOOGLE_MAPS_API_URL, params=params)
+            response = await client.get(GOOGLE_MAPS_API_URL, params=params)
             response.raise_for_status()
             data = response.json()
 
@@ -105,7 +103,7 @@ def get_coordinates_google(address: str) -> dict:
 
 
 @interceptor(source={"source": "mcp", "tool": "cor_alert"})
-def geocode_address(address: str) -> dict:
+async def geocode_address(address: str) -> dict:
     """
     Geocode an address using Nominatim with Google Maps fallback.
 
@@ -116,11 +114,11 @@ def geocode_address(address: str) -> dict:
         Dictionary with lat, lng, address, provider, or empty dict if both failed
     """
     # Try Nominatim first
-    coords = get_coordinates_nominatim(address)
+    coords = await get_coordinates_nominatim(address)
 
     # Fallback to Google Maps if Nominatim failed
     if not coords:
-        coords = get_coordinates_google(address)
+        coords = await get_coordinates_google(address)
 
     return coords
 
@@ -209,7 +207,7 @@ async def create_cor_alert(
 
     # Geocode address
     logger.info(f"Geolocalizando endereço: {address}")
-    coords = geocode_address(address.strip())
+    coords = await geocode_address(address.strip())
 
     latitude = None
     longitude = None
