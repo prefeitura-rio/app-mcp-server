@@ -1,7 +1,6 @@
 import json
 import math
 import re
-import httpx
 import aiohttp
 import pandas as pd
 from src.config import env
