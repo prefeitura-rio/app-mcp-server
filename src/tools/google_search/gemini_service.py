@@ -295,50 +295,54 @@ async def process_link(session, link: dict):
         link["error"] = None
         return link
     except httpx.HTTPStatusError as e:
-        # HEAD falhou com erro HTTP - propagar com mensagem limpa
-        clean_message = f"HTTP {e.response.status_code}: {e.response.reason_phrase or 'Empty Reason Phrase'}"
-        raise Exception(clean_message) from e
-    except Exception as e:
-        try:
-            # Se HEAD falhar, tenta GET request
-            response = await session.get(
-                uri,
-                follow_redirects=True,
-                timeout=link_timeout,
-                error_status_codes={500, 502, 503, 504},
-            )
-            try:
-                response.raise_for_status()
-                link["url"] = str(response.url)
-                link["error"] = None
-                return link
-            except httpx.HTTPStatusError as e2:
-                # GET falhou com erro HTTP - propagar com mensagem limpa
-                clean_message = f"HTTP {e2.response.status_code}: {e2.response.reason_phrase or 'Empty Reason Phrase'}"
-                raise Exception(clean_message) from e2
+        if e.response.status_code not in (403, 405):
+            # HEAD falhou com erro HTTP fatal - propagar com mensagem limpa
+            clean_message = f"HTTP {e.response.status_code}: {e.response.reason_phrase or 'Empty Reason Phrase'}"
+            raise Exception(clean_message) from e
+        # 403/405 indicam que HEAD não é suportado - tentar GET abaixo
+    except Exception:
+        pass  # HEAD falhou por outro motivo - tentar GET abaixo
 
-        except Exception as e2:
-            error_msg = str(e2)
-            # Trata erro específico do Mozilla
-            mozilla_suffix = (
-                "For more information check: https://developer.mozilla.org/"
-            )
-            if mozilla_suffix in error_msg:
-                try:
-                    msg = error_msg.replace(mozilla_suffix, "")
-                    msg = msg.split("http")[1]
-                    msg = msg.split("'\n")[0]
-                    msg = "http" + msg
-                    link["url"] = msg
-                    link["error"] = None
-                except:
-                    # Se parsing falhar, usa URI original
-                    link["url"] = uri
-                    link["error"] = f"Timeout ou erro de conexão: {error_msg}"
-            else:
-                link["url"] = uri
-                link["error"] = f"Erro ao resolver URL: {error_msg}"
+    try:
+        # Se HEAD falhar, tenta GET request
+        response = await session.get(
+            uri,
+            follow_redirects=True,
+            timeout=link_timeout,
+            error_status_codes={500, 502, 503, 504},
+        )
+        try:
+            response.raise_for_status()
+            link["url"] = str(response.url)
+            link["error"] = None
             return link
+        except httpx.HTTPStatusError as e2:
+            # GET falhou com erro HTTP - propagar com mensagem limpa
+            clean_message = f"HTTP {e2.response.status_code}: {e2.response.reason_phrase or 'Empty Reason Phrase'}"
+            raise Exception(clean_message) from e2
+
+    except Exception as e2:
+        error_msg = str(e2)
+        # Trata erro específico do Mozilla
+        mozilla_suffix = (
+            "For more information check: https://developer.mozilla.org/"
+        )
+        if mozilla_suffix in error_msg:
+            try:
+                msg = error_msg.replace(mozilla_suffix, "")
+                msg = msg.split("http")[1]
+                msg = msg.split("'\n")[0]
+                msg = "http" + msg
+                link["url"] = msg
+                link["error"] = None
+            except Exception:
+                # Se parsing falhar, usa URI original
+                link["url"] = uri
+                link["error"] = f"Timeout ou erro de conexão: {error_msg}"
+        else:
+            link["url"] = uri
+            link["error"] = f"Erro ao resolver URL: {error_msg}"
+        return link
 
 
 @interceptor(source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"})
