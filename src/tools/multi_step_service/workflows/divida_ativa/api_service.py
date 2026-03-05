@@ -14,8 +14,6 @@ class DividaAtivaAPIService:
     ERROR_SOURCE = {"source": "mcp", "tool": "multi_step_service", "workflow": "divida_ativa"}
 
     def __init__(self, user_id: str = "unknown"):
-        self.api_base_url = env.IPTU_API_URL
-        self.api_token = env.IPTU_API_TOKEN
         self.proxy = env.PROXY_URL
         self.user_id = user_id
 
