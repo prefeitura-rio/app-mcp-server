@@ -21,7 +21,7 @@ import httpx
 import random
 
 from src.utils.log import logger
-from src.utils.error_interceptor import interceptor
+from src.utils.error_interceptor import interceptor, send_api_error
 from src.utils.http_client import InterceptedHTTPClient
 from google.genai import errors as genai_errors
 
@@ -281,48 +281,21 @@ async def process_link(session, link: dict):
 
     # Timeout específico por requisição (menor que o timeout geral)
     link_timeout = 5
+    max_retries = 3
+    retryable_status_codes = {500, 502, 503, 504}
+    base_backoff_seconds = 0.5
 
-    try:
-        # Primeiro tenta HEAD request (mais rápido)
-        response = await session.head(
-            uri,
-            follow_redirects=True,
-            timeout=link_timeout,
-            error_status_codes={500, 502, 503, 504},
+    async def report_final_error(status_code: int, error_message: str):
+        await send_api_error(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
+            api_endpoint=uri,
+            request_body=None,
+            status_code=status_code,
+            error_message=error_message,
         )
-        response.raise_for_status()
-        link["url"] = str(response.url)
-        link["error"] = None
-        return link
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code not in (403, 405):
-            # HEAD falhou com erro HTTP fatal - propagar com mensagem limpa
-            clean_message = f"HTTP {e.response.status_code}: {e.response.reason_phrase or 'Empty Reason Phrase'}"
-            raise Exception(clean_message) from e
-        # 403/405 indicam que HEAD não é suportado - tentar GET abaixo
-    except Exception:
-        pass  # HEAD falhou por outro motivo - tentar GET abaixo
 
-    try:
-        # Se HEAD falhar, tenta GET request
-        response = await session.get(
-            uri,
-            follow_redirects=True,
-            timeout=link_timeout,
-            error_status_codes={500, 502, 503, 504},
-        )
-        try:
-            response.raise_for_status()
-            link["url"] = str(response.url)
-            link["error"] = None
-            return link
-        except httpx.HTTPStatusError as e2:
-            # GET falhou com erro HTTP - propagar com mensagem limpa
-            clean_message = f"HTTP {e2.response.status_code}: {e2.response.reason_phrase or 'Empty Reason Phrase'}"
-            raise Exception(clean_message) from e2
-
-    except Exception as e2:
-        error_msg = str(e2)
+    def set_fallback_error(error_msg: str):
         # Trata erro específico do Mozilla
         mozilla_suffix = (
             "For more information check: https://developer.mozilla.org/"
@@ -335,14 +308,88 @@ async def process_link(session, link: dict):
                 msg = "http" + msg
                 link["url"] = msg
                 link["error"] = None
+                return
             except Exception:
-                # Se parsing falhar, usa URI original
-                link["url"] = uri
-                link["error"] = f"Timeout ou erro de conexão: {error_msg}"
-        else:
-            link["url"] = uri
-            link["error"] = f"Erro ao resolver URL: {error_msg}"
-        return link
+                pass
+
+        link["url"] = uri
+        link["error"] = f"Erro ao resolver URL: {error_msg}"
+
+    for attempt in range(max_retries):
+        is_last_attempt = attempt == max_retries - 1
+        try:
+            # Primeiro tenta HEAD request (mais rápido)
+            response = await session.head(
+                uri,
+                follow_redirects=True,
+                timeout=link_timeout,
+                intercept_errors=False,
+            )
+            response.raise_for_status()
+            link["url"] = str(response.url)
+            link["error"] = None
+            return link
+        except httpx.HTTPStatusError as e:
+            # 403/405 indicam que HEAD não é suportado - tentar GET abaixo
+            if e.response.status_code not in (403, 405):
+                if e.response.status_code not in retryable_status_codes or is_last_attempt:
+                    clean_message = (
+                        f"HTTP {e.response.status_code}: "
+                        f"{e.response.reason_phrase or 'Empty Reason Phrase'}"
+                    )
+                    await report_final_error(e.response.status_code, clean_message)
+                    set_fallback_error(clean_message)
+                    return link
+        except Exception as e:
+            if is_last_attempt:
+                error_msg = f"Erro no HEAD: {str(e)}"
+                await report_final_error(0, error_msg)
+                set_fallback_error(error_msg)
+                return link
+
+        try:
+            # Se HEAD falhar, tenta GET request
+            response = await session.get(
+                uri,
+                follow_redirects=True,
+                timeout=link_timeout,
+                intercept_errors=False,
+            )
+            response.raise_for_status()
+            link["url"] = str(response.url)
+            link["error"] = None
+            return link
+        except httpx.HTTPStatusError as e2:
+            status_code = e2.response.status_code
+            clean_message = (
+                f"HTTP {status_code}: "
+                f"{e2.response.reason_phrase or 'Empty Reason Phrase'}"
+            )
+
+            if status_code in retryable_status_codes and not is_last_attempt:
+                wait_time = base_backoff_seconds * (2**attempt)
+                await asyncio.sleep(wait_time)
+                continue
+
+            await report_final_error(status_code, clean_message)
+            set_fallback_error(clean_message)
+            return link
+        except Exception as e2:
+            error_msg = str(e2)
+
+            if not is_last_attempt:
+                wait_time = base_backoff_seconds * (2**attempt)
+                await asyncio.sleep(wait_time)
+                continue
+
+            await report_final_error(0, error_msg)
+            set_fallback_error(error_msg)
+            return link
+
+    # Fallback defensivo (não deve ser alcançado)
+    link["url"] = uri
+    link["error"] = "Erro ao resolver URL: retries esgotados"
+    return link
 
 
 @interceptor(source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"})
