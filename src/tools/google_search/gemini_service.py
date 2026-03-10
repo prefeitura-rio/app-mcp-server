@@ -295,6 +295,28 @@ async def process_link(session, link: dict):
             error_message=error_message,
         )
 
+    def should_report_resolution_error(status_code: int, error_message: str) -> bool:
+        """
+        Vertex grounding redirect URLs frequently reject HEAD/GET requests with
+        anti-bot responses or TLS issues. Those failures are noisy but usually do
+        not indicate an application regression, so they should not hit the
+        interceptor.
+        """
+        normalized_error = (error_message or "").lower()
+
+        if status_code in (401, 403, 405):
+            return False
+
+        expected_transport_errors = (
+            "certificate_verify_failed",
+            "unable to get local issuer certificate",
+            "server disconnected without sending a response",
+            "remoteprotocolerror",
+            "tlsv",
+            "ssl:",
+        )
+        return not any(token in normalized_error for token in expected_transport_errors)
+
     def set_fallback_error(error_msg: str):
         # Trata erro específico do Mozilla
         mozilla_suffix = (
@@ -337,13 +359,17 @@ async def process_link(session, link: dict):
                         f"HTTP {e.response.status_code}: "
                         f"{e.response.reason_phrase or 'Empty Reason Phrase'}"
                     )
-                    await report_final_error(e.response.status_code, clean_message)
+                    if should_report_resolution_error(
+                        e.response.status_code, clean_message
+                    ):
+                        await report_final_error(e.response.status_code, clean_message)
                     set_fallback_error(clean_message)
                     return link
         except Exception as e:
             if is_last_attempt:
                 error_msg = f"Erro no HEAD: {str(e)}"
-                await report_final_error(0, error_msg)
+                if should_report_resolution_error(0, error_msg):
+                    await report_final_error(0, error_msg)
                 set_fallback_error(error_msg)
                 return link
 
@@ -371,7 +397,8 @@ async def process_link(session, link: dict):
                 await asyncio.sleep(wait_time)
                 continue
 
-            await report_final_error(status_code, clean_message)
+            if should_report_resolution_error(status_code, clean_message):
+                await report_final_error(status_code, clean_message)
             set_fallback_error(clean_message)
             return link
         except Exception as e2:
@@ -382,7 +409,8 @@ async def process_link(session, link: dict):
                 await asyncio.sleep(wait_time)
                 continue
 
-            await report_final_error(0, error_msg)
+            if should_report_resolution_error(0, error_msg):
+                await report_final_error(0, error_msg)
             set_fallback_error(error_msg)
             return link
 
