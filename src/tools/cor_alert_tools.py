@@ -292,6 +292,8 @@ async def create_cor_alert(
         longitude=longitude,
         timestamp=timestamp,
         environment=ENVIRONMENT,
+        bairro_raw=bairro_raw,
+        bairro_normalizado=bairro_normalizado,
     )
     logger.info(f"Alerta {alert_id} registrado na tabela cor_alerts")
 
