@@ -14,6 +14,45 @@ from src.tools.equipments_tools import (
     get_equipments_instructions,
     get_equipments_categories,
 )
+from src.tools.cor_alert_tools import (
+    _extract_google_neighborhood,
+    _extract_nominatim_neighborhood,
+    normalize_neighborhood,
+)
+
+
+# Allowed neighborhoods for pontos de apoio (support points)
+ALLOWED_NEIGHBORHOODS_PONTOS_APOIO = ["acari", "guaratiba", "jardim america"]
+
+
+def _geocode_and_extract_neighborhood(address: str) -> Optional[str]:
+    """
+    Geocodifica endereço e extrai bairro normalizado.
+    Retorna bairro normalizado ou None se não conseguir geocodificar.
+    """
+    import requests
+    from src.config import env
+    from src.utils.log import logger
+
+    # Geocodificar com Google Maps (mesma lógica que equipments já usa)
+    address_full = address + " - Rio de Janeiro, RJ"
+    params = {"address": address_full, "key": env.GOOGLE_MAPS_API_KEY}
+
+    try:
+        response = requests.get(env.GOOGLE_MAPS_API_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if data["status"] == "OK":
+            first_result = data["results"][0]
+            # Extrair bairro usando função do cor_alert_tools
+            bairro_raw = _extract_google_neighborhood(first_result)
+            if bairro_raw:
+                return normalize_neighborhood(bairro_raw)
+    except Exception as e:
+        logger.warning(f"Erro ao geocodificar endereço: {e}")
+
+    return None
 
 
 class EquipmentsWorkflow(BaseWorkflow):
@@ -139,6 +178,27 @@ class EquipmentsWorkflow(BaseWorkflow):
                 error_message="Endereço ausente no estado.",
             )
             return state
+
+        # NOVA LÓGICA: Verificar bairro para pontos de apoio
+        is_pontos_apoio = categories and "PONTOS_DE_APOIO" in categories
+
+        if is_pontos_apoio:
+            # Geocodificar e extrair bairro
+            bairro_normalizado = _geocode_and_extract_neighborhood(address)
+
+            # Verificar se bairro está na whitelist
+            if not bairro_normalizado or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO:
+                # Bairro não permitido - retornar mensagem específica
+                state.agent_response = AgentResponse(
+                    description=(
+                        "Infelizmente não encontro pontos de apoio próximos da sua região.\n\n"
+                        "**Em caso de emergência, ligue imediatamente para a Defesa Civil:**\n"
+                        "📞 **199** (atendimento 24 horas)\n\n"
+                        "Eles poderão orientá-lo sobre as melhores opções de abrigo e assistência "
+                        "para a sua situação."
+                    ),
+                )
+                return state
 
         # Call existing function
         result = await get_equipments_with_instructions(
