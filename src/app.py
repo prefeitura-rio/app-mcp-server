@@ -189,13 +189,25 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool(
         "equipments_instructions",
         description="""
-        [TOOL_VERSION: {tool_version}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro. Utilizar sempre que o usuario entrar em alguma conversa tematica e seja necessario o redirecionamento para algum equipamento publico
-        
+        [TOOL_VERSION: {tool_version}] Obtém instruções e categorias disponíveis para equipamentos públicos do Rio de Janeiro.
+
+        **IMPORTANTE: Escolha o tema correto baseado na necessidade do usuário:**
+
+        - **incidentes_hidricos**: Para casos de alagamento, enchente, inundação, casa alagando, água subindo
+          - Retorna instruções específicas para PONTOS DE APOIO da Defesa Civil
+          - SEMPRE solicitar endereço INCLUINDO BAIRRO ou PONTO DE REFERÊNCIA
+
+        - **saude**: Para busca de postos de saúde, clínicas da família, emergência médica
+
+        - **educacao**: Para busca de escolas, creches
+
+        - **geral**: Para outros equipamentos públicos ou quando não se encaixa nos temas acima
+
         Args:
-            tema: Tema específico para filtrar as instruções. Se um tema inválido for fornecido, será usado "geral" como fallback e um erro será retornado. Lista de temas aceitos: {valid_themes}.
-            
+            tema: Tema específico. Temas aceitos: {valid_themes}
+
         Returns:
-            Dict contendo instruções detalhadas, categorias disponíveis e próximos passos para localizar equipamentos. Em caso de tema inválido, também retorna informações sobre os temas válidos.
+            Instruções detalhadas, categorias disponíveis e próximos passos
         """.format(
             tool_version=TOOL_VERSION, valid_themes=env.EQUIPMENTS_VALID_THEMES
         ).strip(),

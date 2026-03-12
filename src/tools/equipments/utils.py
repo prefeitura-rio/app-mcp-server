@@ -5,6 +5,7 @@ from typing import Tuple, Optional, Union
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
 from src.utils.http_client import InterceptedHTTPClient
+from src.tools.cor_alert_tools import _extract_google_neighborhood, normalize_neighborhood
 
 # from src.utils.log import logger
 
@@ -63,9 +64,16 @@ def get_coords_from_google_maps_api(address: str) -> dict:
         response = client.get_sync(env.GOOGLE_MAPS_API_URL, params=params)
         data = response.json()
     if data["status"] == "OK":
-        coords = data["results"][0]["geometry"]["location"]
-        coords["address"] = data["results"][0]["formatted_address"]
+        first_result = data["results"][0]
+        coords = first_result["geometry"]["location"]
+        coords["address"] = first_result["formatted_address"]
         coords["provider"] = "Google Maps"
+
+        # Extrair bairro
+        bairro_raw = _extract_google_neighborhood(first_result)
+        coords["bairro_raw"] = bairro_raw if bairro_raw else None
+        coords["bairro_normalizado"] = normalize_neighborhood(bairro_raw) if bairro_raw else None
+
         return coords
     return {}
 

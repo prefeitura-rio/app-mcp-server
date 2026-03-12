@@ -10,6 +10,9 @@ from src.utils.bigquery import save_response_in_bq_background
 from src.utils.error_interceptor import interceptor
 from src.config.env import EQUIPMENTS_VALID_THEMES
 
+# Bairros permitidos para pontos de apoio
+ALLOWED_NEIGHBORHOODS_PONTOS_APOIO = ["acari", "guaratiba", "jardim america"]
+
 
 def get_valid_themes() -> List[str]:
     """
@@ -150,7 +153,33 @@ async def get_equipments_with_instructions(
     """
     if categories is None:
         categories = []
-    # Buscar equipamentos
+
+    # NOVA LÓGICA: Verificar bairro para pontos de apoio
+    is_pontos_apoio = "PONTOS_DE_APOIO" in categories
+
+    if is_pontos_apoio:
+        # Geocodificar para obter bairro (usa mesma função que a busca usa)
+        from src.tools.equipments.utils import get_coords_from_google_maps_api
+        coords = get_coords_from_google_maps_api(address)
+
+        if coords:
+            bairro_normalizado = coords.get("bairro_normalizado")
+
+            # Verificar se bairro está na whitelist
+            if not bairro_normalizado or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO:
+                # Bairro não permitido - retornar mensagem específica
+                return {
+                    "instructions": (
+                        "Infelizmente não encontro pontos de apoio próximos da sua região.\n\n"
+                        "**Em caso de emergência, ligue imediatamente para a Defesa Civil:**\n"
+                        "📞 **199** (atendimento 24 horas)\n\n"
+                        "Eles poderão orientá-lo sobre as melhores opções de abrigo e assistência "
+                        "para a sua situação."
+                    ),
+                    "equipamentos": [],
+                }
+
+    # Buscar equipamentos normalmente
     equipments_data = await get_equipments(address=address, categories=categories)
 
     # Verificar se há erro
