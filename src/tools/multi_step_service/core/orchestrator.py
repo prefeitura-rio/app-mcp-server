@@ -6,6 +6,7 @@ from src.tools.multi_step_service.core.models import (
 )
 from src.tools.multi_step_service.core.state import StateManager, StateMode
 from src.tools.multi_step_service.workflows import workflows
+from src.utils.error_interceptor import interceptor
 
 
 class Orchestrator:
@@ -111,6 +112,17 @@ class Orchestrator:
 
         return results
 
+    @interceptor(
+        source={"source": "mcp", "tool": "multi_step_service"},
+        extract_user_id=lambda args, kwargs: (
+            kwargs.get("request").user_id if kwargs.get("request")
+            else (args[1].user_id if len(args) > 1 else "unknown")
+        ),
+        extract_source=lambda args, kwargs, base: {
+            **base,
+            "workflow": (kwargs.get("request") or args[1]).service_name if (kwargs.get("request") or len(args) > 1) else "unknown"
+        },
+    )
     async def execute_workflow(self, request: ServiceRequest) -> AgentResponse:
         """
         Executa um workflow com base na requisição do agente.

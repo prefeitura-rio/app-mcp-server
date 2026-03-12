@@ -7,6 +7,7 @@ from src.tools.equipments.pluscode_service import (
     get_pluscode_coords_equipments,
 )
 from src.utils.bigquery import save_response_in_bq_background
+from src.utils.error_interceptor import interceptor
 from src.config.env import EQUIPMENTS_VALID_THEMES
 
 
@@ -109,7 +110,7 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
         7. **REGRA CRÍTICA - Endereço não fornecido**: Se o usuário NÃO fornecer o endereço quando solicitado para localização de ponto de apoio ou indicar que nao deseja ir a um ponto de apoio:
             - NÃO insista ou peça novamente o endereço
             - Forneça orientações gerais (ligar para 199, ir para local alto e seguro)
-            - **NUNCA use a ferramenta `cor_alert` neste caso** (sem endereço não é possível usar a ferramenta)
+            - **NUNCA use a ferramenta `report_incident` neste caso** (sem endereço não é possível usar a ferramenta)
         """)
 
     has_cras = any(
@@ -133,8 +134,9 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
     return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_with_instructions(
-    address: str, categories: Optional[List[str]] = []
+    address: str, categories: Optional[List[str]] = None
 ) -> dict:
     """
     Obtém equipamentos por endereço e retorna com instruções apropriadas.
@@ -146,6 +148,8 @@ async def get_equipments_with_instructions(
     Returns:
         Dict com equipamentos e instruções específicas
     """
+    if categories is None:
+        categories = []
     # Buscar equipamentos
     equipments_data = await get_equipments(address=address, categories=categories)
 
@@ -166,6 +170,7 @@ async def get_equipments_with_instructions(
     }
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_categories() -> dict:
     response = await get_category_equipments()
     asyncio.create_task(
@@ -179,18 +184,22 @@ async def get_equipments_categories() -> dict:
     return response
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments(
-    address: str, categories: Optional[List[str]] = []
+    address: str, categories: Optional[List[str]] = None
 ) -> List[dict]:
+
+    if categories is None:
+        categories = []
 
     atencao_primaria_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
     assistencia_social_categories = ["CRAS"]
 
     if categories and any(cat in atencao_primaria_categories for cat in categories):
         # Garantir que apenas categorias válidas sejam usadas
-        categories += atencao_primaria_categories
+        categories = categories + atencao_primaria_categories
     elif categories and any(cat in assistencia_social_categories for cat in categories):
-        categories += assistencia_social_categories
+        categories = categories + assistencia_social_categories
 
     if categories:
         categories = list(set(categories))
@@ -226,6 +235,7 @@ async def get_equipments(
         ]
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_instructions(tema: str = "geral") -> List[dict]:
     # Validar se o tema é válido
     if tema not in EQUIPMENTS_VALID_THEMES:

@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
 from src.tools.crawl_pages.utils import (
     crawl_batch,
     crawl_recursive,
@@ -70,6 +71,7 @@ def _format_code_blocks(md_content: str) -> str:
     return re.sub(r"```(.*?)```", replacer, md_content, flags=re.DOTALL)
 
 
+@interceptor(source={"source": "mcp", "tool": "crawl_pages", "function": "smart_crawl_url"})
 async def smart_crawl_url(
     url: str, max_depth: int = 3, max_concurrent: int = 10, chunk_size: int = 5000
 ):

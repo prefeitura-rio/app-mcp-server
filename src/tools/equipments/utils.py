@@ -2,10 +2,9 @@ import json
 import datetime
 from typing import Tuple, Optional, Union
 
-import requests
-
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
+from src.utils.http_client import InterceptedHTTPClient
 
 # from src.utils.log import logger
 
@@ -29,11 +28,17 @@ class CustomJSONEncoder(json.JSONEncoder):
 def get_coords_from_nominatim_api(address: str) -> dict:
     params = {"q": address, "format": "json", "addressdetails": 1, "limit": 1}
     headers = {
-        "User-Agent": "YourAppName/1.0 (your.email@example.com)"  # Required by Nominatim
+        "User-Agent": "RioMCPServer/1.0 (equipments@rio)"
     }
-    response = requests.get(env.NOMINATIM_API_URL, params=params, headers=headers)
-    response.raise_for_status()
-    data = response.json()
+    with InterceptedHTTPClient(
+        user_id="unknown",
+        source={"source": "mcp", "tool": "equipments", "function": "get_coords_from_nominatim_api"},
+        sync=True,
+        timeout=10.0
+    ) as client:
+        response = client.get_sync(env.NOMINATIM_API_URL, params=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
 
     if data:
         coords = {
@@ -49,8 +54,14 @@ def get_coords_from_nominatim_api(address: str) -> dict:
 def get_coords_from_google_maps_api(address: str) -> dict:
     address = address + " - Rio de Janeiro, RJ"
     params = {"address": address, "key": env.GOOGLE_MAPS_API_KEY}
-    response = requests.get(env.GOOGLE_MAPS_API_URL, params=params)
-    data = response.json()
+    with InterceptedHTTPClient(
+        user_id="unknown",
+        source={"source": "mcp", "tool": "equipments", "function": "get_coords_from_google_maps_api"},
+        sync=True,
+        timeout=10.0
+    ) as client:
+        response = client.get_sync(env.GOOGLE_MAPS_API_URL, params=params)
+        data = response.json()
     if data["status"] == "OK":
         coords = data["results"][0]["geometry"]["location"]
         coords["address"] = data["results"][0]["formatted_address"]

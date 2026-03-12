@@ -172,7 +172,7 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool("equipments_by_address")
     async def equipments_by_address(
-        address: str, categories: Optional[List[str]] = []
+        address: str, categories: Optional[List[str]] = None
     ) -> dict:
         """
         Obtém os equipamentos mais proximos de um endereço.
@@ -183,7 +183,7 @@ def create_app() -> FastMCP:
             Lista de equipamentos
         """
         return await get_equipments_with_instructions(
-            address=address, categories=categories
+            address=address, categories=categories or []
         )
 
     @conditional_mcp_tool(
