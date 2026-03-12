@@ -332,6 +332,8 @@ async def save_cor_alert_in_bq_background(
     longitude: float,
     timestamp: str,
     environment: str,
+    bairro_raw: str = None,
+    bairro_normalizado: str = None,
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "cor_alerts",
 ):
@@ -339,24 +341,95 @@ async def save_cor_alert_in_bq_background(
     Asynchronous wrapper for saving COR alert in BigQuery.
     Catches and logs exceptions to prevent crashing background tasks.
     """
+    def _normalize(value: str) -> str:
+        if not value:
+            return ""
+        import unicodedata
+
+        normalized = unicodedata.normalize("NFKD", value.strip())
+        without_accents = "".join(
+            char for char in normalized if not unicodedata.combining(char)
+        )
+        return " ".join(without_accents.lower().split())
+
+    def _infer_neighborhood_from_address(raw_address: str) -> str:
+        if not raw_address:
+            return ""
+        address_norm = _normalize(raw_address)
+        if "jardim america" in address_norm or "jd america" in address_norm:
+            return "jardim america"
+        if "acari" in address_norm:
+            return "acari"
+        if "guaratiba" in address_norm:
+            return "guaratiba"
+        return ""
+
+    raw_candidate = (bairro_raw or "").strip()
+    normalized_candidate = _normalize(bairro_normalizado or "")
+    inferred_candidate = _infer_neighborhood_from_address(address)
+
+    final_bairro_raw = raw_candidate or inferred_candidate
+    final_bairro_normalizado = (
+        normalized_candidate
+        or _normalize(final_bairro_raw)
+        or inferred_candidate
+    )
+
+    if final_bairro_normalizado == "jd america":
+        final_bairro_normalizado = "jardim america"
+
+    def _save_alert_with_neighborhood():
+        table_full_name = f"rj-iplanrio.{dataset_id}.{table_id}"
+        schema = [
+            bigquery.SchemaField("alert_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("alert_type", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("severity", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("description", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("address", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
+            bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
+            bigquery.SchemaField("bairro_raw", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("bairro_normalizado", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("created_at", "DATETIME", mode="REQUIRED"),
+            bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
+        ]
+        job_config = bigquery.LoadJobConfig(
+            schema=schema,
+            write_disposition="WRITE_APPEND",
+            create_disposition="CREATE_IF_NEEDED",
+            schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
+            time_partitioning=bigquery.TimePartitioning(
+                type_=bigquery.TimePartitioningType.DAY,
+                field="data_particao",
+            ),
+        )
+        payload = [
+            {
+                "alert_id": alert_id,
+                "user_id": user_id,
+                "alert_type": alert_type,
+                "severity": severity,
+                "description": description,
+                "address": address,
+                "latitude": latitude,
+                "longitude": longitude,
+                "bairro_raw": final_bairro_raw or None,
+                "bairro_normalizado": final_bairro_normalizado or None,
+                "created_at": timestamp,
+                "environment": environment,
+                "data_particao": timestamp.split("T")[0],
+            }
+        ]
+        client = get_bigquery_client()
+        job = client.load_table_from_json(payload, table_full_name, job_config=job_config)
+        job.result()
+        logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
+
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            save_cor_alert_in_bq,
-            alert_id,
-            user_id,
-            alert_type,
-            severity,
-            description,
-            address,
-            latitude,
-            longitude,
-            timestamp,
-            environment,
-            dataset_id,
-            table_id,
-        )
+        await loop.run_in_executor(None, _save_alert_with_neighborhood)
     except Exception:
         logger.exception(
             f"Failed to save COR alert to BigQuery in background for alert_id: {alert_id}"

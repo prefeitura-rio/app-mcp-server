@@ -84,13 +84,20 @@ class EquipmentsWorkflow(BaseWorkflow):
             instructions_str = str(instructions_list)
 
         # Optimized description for the Agent
+        # Para tema de incidentes hídricos (pontos de apoio), pedir bairro/ponto de referência
+        address_prompt = (
+            "1. Solicite o ENDEREÇO COMPLETO incluindo BAIRRO ou PONTO DE REFERÊNCIA ao usuário.\n"
+            if current_theme == "incidentes_hidricos"
+            else "1. Solicite o ENDEREÇO COMPLETO ao usuário.\n"
+        )
+
         description_text = (
             f"INSTRUÇÕES ({current_theme}) E CATEGORIAS:\n\n"
             f"{instructions_str}\n"
             "CATEGORIAS DISPONÍVEIS:\n"
             f"{categories_str}\n\n"
             "AÇÃO NECESSÁRIA:\n"
-            "1. Solicite o ENDEREÇO COMPLETO ao usuário.\n"
+            f"{address_prompt}"
             "2. Na próxima chamada, envie 'address' e 'categories' (inferidas da lista acima com base no pedido do usuário)."
         )
 
