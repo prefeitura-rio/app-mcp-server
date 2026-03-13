@@ -506,6 +506,7 @@ def save_cor_alert_to_queue(
         schema=schema,
         write_disposition="WRITE_APPEND",
         create_disposition="CREATE_IF_NEEDED",
+        schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
         time_partitioning=bigquery.TimePartitioning(
             type_=bigquery.TimePartitioningType.DAY,
             field="data_particao",
