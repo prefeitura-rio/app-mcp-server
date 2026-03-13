@@ -160,10 +160,38 @@ async def get_equipments_with_instructions(
     if is_pontos_apoio:
         # Geocodificar para obter bairro (usa mesma função que a busca usa)
         from src.tools.equipments.utils import get_coords_from_google_maps_api
+        from src.utils.http_client import InterceptedHTTPClient
+        from src.config.env import GOOGLE_MAPS_API_URL, GOOGLE_MAPS_API_KEY
+        from src.tools.cor_alert_tools import _extract_google_neighborhood, normalize_neighborhood
+
         coords = get_coords_from_google_maps_api(address)
 
         if coords:
             bairro_normalizado = coords.get("bairro_normalizado")
+
+            # Fallback: se não encontrou bairro no forward geocoding, tenta reverse geocoding
+            if not bairro_normalizado and GOOGLE_MAPS_API_KEY:
+                try:
+                    params = {"latlng": f"{coords['lat']},{coords['lng']}", "key": GOOGLE_MAPS_API_KEY}
+                    with InterceptedHTTPClient(
+                        user_id="unknown",
+                        source={"source": "mcp", "tool": "equipments", "function": "reverse_geocode"},
+                        sync=True,
+                        timeout=10.0,
+                    ) as client:
+                        response = client.get_sync(GOOGLE_MAPS_API_URL, params=params)
+                        response.raise_for_status()
+                        data = response.json()
+
+                    if data.get("status") == "OK":
+                        for result in data["results"]:
+                            bairro_raw = _extract_google_neighborhood(result)
+                            if bairro_raw:
+                                bairro_normalizado = normalize_neighborhood(bairro_raw)
+                                logger.info(f"Bairro encontrado via reverse geocoding: {bairro_raw} -> {bairro_normalizado}")
+                                break
+                except Exception as e:
+                    logger.warning(f"Erro ao fazer reverse geocoding para PONTOS_DE_APOIO: {str(e)}")
 
             # Verificar se bairro está na whitelist
             if not bairro_normalizado or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO:
