@@ -10,7 +10,6 @@ from src.utils.bigquery import (
 )
 from src.config.env import (
     ENVIRONMENT,
-    NOMINATIM_API_URL,
     GOOGLE_MAPS_API_URL,
     GOOGLE_MAPS_API_KEY,
 )
@@ -48,19 +47,6 @@ def normalize_neighborhood(value: str) -> str:
     return NEIGHBORHOOD_ALIASES.get(normalized, normalized)
 
 
-def _extract_nominatim_neighborhood(result: Dict[str, Any]) -> str:
-    """Extract neighborhood from a Nominatim geocoding result."""
-    address_data = result.get("address", {})
-    if not isinstance(address_data, dict):
-        return ""
-
-    for key in ("suburb", "neighbourhood", "neighborhood", "city_district"):
-        value = address_data.get(key)
-        if value:
-            return str(value)
-    return ""
-
-
 def _extract_google_neighborhood(result: Dict[str, Any]) -> str:
     """Extract neighborhood from a Google Maps geocoding result."""
     components = result.get("address_components", [])
@@ -77,49 +63,29 @@ def _extract_google_neighborhood(result: Dict[str, Any]) -> str:
     return ""
 
 
-@interceptor(source={"source": "mcp", "tool": "cor_alert"})
-async def get_coordinates_nominatim(address: str) -> dict:
-    """
-    Get coordinates from Nominatim API.
-
-    Args:
-        address: Address to geocode
-
-    Returns:
-        Dictionary with lat, lng, and provider, or empty dict if failed
-    """
+async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict:
+    """Try to extract neighborhood via Google Maps reverse geocoding (lat/lng → address)."""
     try:
-        params = {
-            "q": f"{address}, Rio de Janeiro, RJ, Brasil",
-            "format": "json",
-            "addressdetails": 1,
-            "limit": 1,
-        }
-        headers = {"User-Agent": "RioMCPServer/1.0 (alertas.eai-cor@rio)"}
-
+        params = {"latlng": f"{lat},{lng}", "key": GOOGLE_MAPS_API_KEY}
         async with InterceptedHTTPClient(
             user_id="unknown",
-            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_nominatim"},
-            timeout=10.0
+            source={"source": "mcp", "tool": "cor_alert", "function": "reverse_geocode"},
+            timeout=10.0,
         ) as client:
-            response = await client.get(NOMINATIM_API_URL, params=params, headers=headers)
+            response = await client.get(GOOGLE_MAPS_API_URL, params=params)
             response.raise_for_status()
             data = response.json()
 
-        if data:
-            first_result = data[0]
-            bairro_raw = _extract_nominatim_neighborhood(first_result)
-            return {
-                "lat": float(first_result["lat"]),
-                "lng": float(first_result["lon"]),
-                "address": first_result["display_name"],
-                "provider": "Nominatim",
-                "bairro_raw": bairro_raw,
-                "bairro_normalizado": normalize_neighborhood(bairro_raw),
-            }
+        if data.get("status") == "OK":
+            for result in data["results"]:
+                bairro_raw = _extract_google_neighborhood(result)
+                if bairro_raw:
+                    return {
+                        "bairro_raw": bairro_raw,
+                        "bairro_normalizado": normalize_neighborhood(bairro_raw),
+                    }
     except Exception as e:
-        logger.warning(f"Erro ao geolocalizar com Nominatim: {str(e)}")
-
+        logger.warning(f"Erro ao fazer reverse geocoding: {str(e)}")
     return {}
 
 
@@ -168,21 +134,27 @@ async def get_coordinates_google(address: str) -> dict:
 @interceptor(source={"source": "mcp", "tool": "cor_alert"})
 async def geocode_address(address: str) -> dict:
     """
-    Geocode an address using Nominatim with Google Maps fallback.
+    Geocode an address using Google Maps API.
 
     Args:
         address: Address to geocode
 
     Returns:
         Dictionary with lat, lng, address, provider, neighborhood fields,
-        or empty dict if both failed
+        or empty dict if failed
     """
-    # Try Nominatim first
-    coords = await get_coordinates_nominatim(address)
+    coords = await get_coordinates_google(address)
 
-    # Fallback to Google Maps if Nominatim failed
-    if not coords:
-        coords = await get_coordinates_google(address)
+    # Se encontrou coords mas não encontrou bairro, tenta reverse geocoding
+    if coords and not coords.get("bairro_raw") and GOOGLE_MAPS_API_KEY:
+        logger.info(f"Coords encontradas mas sem bairro, tentando reverse geocoding...")
+        neighborhood = await _get_neighborhood_from_reverse_geocode(
+            coords["lat"], coords["lng"]
+        )
+        if neighborhood:
+            coords["bairro_raw"] = neighborhood["bairro_raw"]
+            coords["bairro_normalizado"] = neighborhood["bairro_normalizado"]
+            logger.info(f"Bairro encontrado via reverse geocoding: {coords['bairro_raw']}")
 
     return coords
 
