@@ -18,46 +18,12 @@ from uuid import uuid4
 
 from datetime import datetime
 import httpx
-
-from src.utils.log import logger
-
-
-class GeminiService:
-    def __init__(self):
-        """Inicializa o cliente Gemini com as configurações do ambiente."""
-        self.api_key = env.GEMINI_API_KEY
-        self.client = genai.Client(api_key=self.api_key)
-
-    def get_client(self):
-        """Retorna a instância do cliente Gemini."""
-        return self.client
-
-    import os
-
-
-from typing import Dict, Any, List, Optional, Union
-import asyncio
 import random
-from pathlib import Path
-from google import genai
-from google.api_core import exceptions as google_exceptions
-from google.genai.types import (
-    Tool,
-    UrlContext,
-    ThinkingConfig,
-    GenerateContentConfig,
-    GoogleSearch,
-    Content,
-    Part,
-    GenerateContentResponse,
-)
-import src.config.env as env
-from uuid import uuid4
-
-from datetime import datetime
-import httpx
 
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor, send_api_error
+from src.utils.http_client import InterceptedHTTPClient
+from google.genai import errors as genai_errors
 
 
 class GeminiService:
@@ -70,6 +36,7 @@ class GeminiService:
         """Retorna a instância do cliente Gemini."""
         return self.client
 
+    @interceptor(source={"source": "mcp", "tool": "gemini"})
     async def google_search(
         self,
         query: str,
@@ -107,6 +74,23 @@ class GeminiService:
                     )
 
                     logger.info("Resposta recebida do Gemini")
+                    
+                    if not response.candidates or len(response.candidates) == 0:
+                        logger.warning("Resposta sem candidatos válidos do Gemini")
+                        if attempt >= retry_attempts - 1:
+                            return {
+                                "id": request_id,
+                                "text": "Não foi possível obter uma resposta válida para esta consulta. Por favor, tente reformular sua pergunta ou tente novamente mais tarde.",
+                                "sources": [],
+                                "web_search_queries": [],
+                                "tokens_metadata": {},
+                                "retry_attempts": attempt + 1,
+                                "model": model,
+                                "temperature": temperature,
+                                "query": query,
+                            }
+                        continue
+                    
                     candidate = response.candidates[0]
 
                     # Check if grounding metadata and chunks exist
@@ -188,29 +172,22 @@ class GeminiService:
                         "query": query,
                     }
 
-            except (
-                google_exceptions.PermissionDenied,
-                google_exceptions.InvalidArgument,
-            ) as e:
-                logger.error(
-                    f"Erro não recuperável na API Google: {e}. Não haverá nova tentativa."
-                )
+            except genai_errors.ClientError as e:
                 last_exception = e
-                break  # Interrompe em erros de cliente (4xx)
+                logger.error(
+                    f"Erro não recuperável na API Google (4xx): {e}. Não haverá nova tentativa."
+                )
+                break
 
-            except (
-                asyncio.TimeoutError,
-                google_exceptions.InternalServerError,
-                google_exceptions.ServiceUnavailable,
-                google_exceptions.ResourceExhausted,
-            ) as e:
+            except (genai_errors.ServerError, asyncio.TimeoutError) as e:
                 last_exception = e
                 logger.warning(
-                    f"Erro transiente na API Google: {e}. Tentando novamente..."
+                    f"Erro transiente na API Google (5xx/timeout): {e}. Tentando novamente..."
                 )
 
             except Exception as e:
                 last_exception = e
+                logger.error(f"Tipo da exceção: {type(e)}")
                 logger.error(f"Erro inesperado durante a pesquisa Google: {e}")
 
             # Se não for a última tentativa, espera antes de tentar novamente
@@ -304,49 +281,146 @@ async def process_link(session, link: dict):
 
     # Timeout específico por requisição (menor que o timeout geral)
     link_timeout = 5
+    max_retries = 3
+    retryable_status_codes = {500, 502, 503, 504}
+    base_backoff_seconds = 0.5
 
-    try:
-        # Primeiro tenta HEAD request (mais rápido)
-        response = await session.head(uri, follow_redirects=True, timeout=link_timeout)
-        response.raise_for_status()
-        link["url"] = str(response.url)
-        link["error"] = None
-        return link
-    except Exception as e:
+    async def report_final_error(status_code: int, error_message: str):
+        await send_api_error(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
+            api_endpoint=uri,
+            request_body=None,
+            status_code=status_code,
+            error_message=error_message,
+        )
+
+    def should_report_resolution_error(status_code: int, error_message: str) -> bool:
+        """
+        Vertex grounding redirect URLs frequently reject HEAD/GET requests with
+        anti-bot responses or TLS issues. Those failures are noisy but usually do
+        not indicate an application regression, so they should not hit the
+        interceptor.
+        """
+        normalized_error = (error_message or "").lower()
+
+        if status_code in (401, 403, 405):
+            return False
+
+        expected_transport_errors = (
+            "certificate_verify_failed",
+            "unable to get local issuer certificate",
+            "server disconnected without sending a response",
+            "remoteprotocolerror",
+            "tlsv",
+            "ssl:",
+        )
+        return not any(token in normalized_error for token in expected_transport_errors)
+
+    def set_fallback_error(error_msg: str):
+        # Trata erro específico do Mozilla
+        mozilla_suffix = (
+            "For more information check: https://developer.mozilla.org/"
+        )
+        if mozilla_suffix in error_msg:
+            try:
+                msg = error_msg.replace(mozilla_suffix, "")
+                msg = msg.split("http")[1]
+                msg = msg.split("'\n")[0]
+                msg = "http" + msg
+                link["url"] = msg
+                link["error"] = None
+                return
+            except Exception:
+                pass
+
+        link["url"] = uri
+        link["error"] = f"Erro ao resolver URL: {error_msg}"
+
+    for attempt in range(max_retries):
+        is_last_attempt = attempt == max_retries - 1
         try:
-            # Se HEAD falhar, tenta GET request
-            response = await session.get(
-                uri, follow_redirects=True, timeout=link_timeout
+            # Primeiro tenta HEAD request (mais rápido)
+            response = await session.head(
+                uri,
+                follow_redirects=True,
+                timeout=link_timeout,
+                intercept_errors=False,
             )
             response.raise_for_status()
             link["url"] = str(response.url)
             link["error"] = None
             return link
+        except httpx.HTTPStatusError as e:
+            # 403/405 indicam que HEAD não é suportado - tentar GET abaixo
+            if e.response.status_code not in (403, 405):
+                if e.response.status_code not in retryable_status_codes or is_last_attempt:
+                    clean_message = (
+                        f"HTTP {e.response.status_code}: "
+                        f"{e.response.reason_phrase or 'Empty Reason Phrase'}"
+                    )
+                    if should_report_resolution_error(
+                        e.response.status_code, clean_message
+                    ):
+                        await report_final_error(e.response.status_code, clean_message)
+                    set_fallback_error(clean_message)
+                    return link
+        except Exception as e:
+            if is_last_attempt:
+                error_msg = f"Erro no HEAD: {str(e)}"
+                if should_report_resolution_error(0, error_msg):
+                    await report_final_error(0, error_msg)
+                set_fallback_error(error_msg)
+                return link
 
+        try:
+            # Se HEAD falhar, tenta GET request
+            response = await session.get(
+                uri,
+                follow_redirects=True,
+                timeout=link_timeout,
+                intercept_errors=False,
+            )
+            response.raise_for_status()
+            link["url"] = str(response.url)
+            link["error"] = None
+            return link
+        except httpx.HTTPStatusError as e2:
+            status_code = e2.response.status_code
+            clean_message = (
+                f"HTTP {status_code}: "
+                f"{e2.response.reason_phrase or 'Empty Reason Phrase'}"
+            )
+
+            if status_code in retryable_status_codes and not is_last_attempt:
+                wait_time = base_backoff_seconds * (2**attempt)
+                await asyncio.sleep(wait_time)
+                continue
+
+            if should_report_resolution_error(status_code, clean_message):
+                await report_final_error(status_code, clean_message)
+            set_fallback_error(clean_message)
+            return link
         except Exception as e2:
             error_msg = str(e2)
-            # Trata erro específico do Mozilla
-            mozilla_suffix = (
-                "For more information check: https://developer.mozilla.org/"
-            )
-            if mozilla_suffix in error_msg:
-                try:
-                    msg = error_msg.replace(mozilla_suffix, "")
-                    msg = msg.split("http")[1]
-                    msg = msg.split("'\n")[0]
-                    msg = "http" + msg
-                    link["url"] = msg
-                    link["error"] = None
-                except:
-                    # Se parsing falhar, usa URI original
-                    link["url"] = uri
-                    link["error"] = f"Timeout ou erro de conexão: {error_msg}"
-            else:
-                link["url"] = uri
-                link["error"] = f"Erro ao resolver URL: {error_msg}"
+
+            if not is_last_attempt:
+                wait_time = base_backoff_seconds * (2**attempt)
+                await asyncio.sleep(wait_time)
+                continue
+
+            if should_report_resolution_error(0, error_msg):
+                await report_final_error(0, error_msg)
+            set_fallback_error(error_msg)
             return link
 
+    # Fallback defensivo (não deve ser alcançado)
+    link["url"] = uri
+    link["error"] = "Erro ao resolver URL: retries esgotados"
+    return link
 
+
+@interceptor(source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"})
 async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     """
     Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
@@ -361,8 +435,12 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
     }
 
-    async with httpx.AsyncClient(
-        follow_redirects=True, timeout=30, verify=False, headers=headers
+    async with InterceptedHTTPClient(
+        user_id="unknown",
+        source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
+        timeout=30.0,
+        follow_redirects=True,
+        headers=headers
     ) as session:
         # Limita concorrência para evitar sobrecarga
         semaphore = asyncio.Semaphore(20)

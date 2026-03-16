@@ -1,10 +1,11 @@
 from src.config import env
 from src.utils.log import logger
-import httpx
+from src.utils.http_client import InterceptedHTTPClient
+from src.utils.error_interceptor import interceptor
 import asyncio
-from src.config import env
 
 
+@interceptor(source={"source": "mcp", "tool": "agent", "function": "get_system_prompt"})
 async def get_system_prompt_from_api(agent_type: str = "agentic_search") -> dict:
     """Obtém o system prompt via API"""
     try:
@@ -17,7 +18,11 @@ async def get_system_prompt_from_api(agent_type: str = "agentic_search") -> dict
         if bearer_token:
             headers["Authorization"] = f"Bearer {bearer_token}"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with InterceptedHTTPClient(
+            user_id="system",
+            source={"source": "mcp", "tool": "agent", "function": "get_system_prompt"},
+            timeout=30.0
+        ) as client:
             response = await client.get(api_url, headers=headers)
             response.raise_for_status()
             data = response.json()

@@ -1,7 +1,8 @@
 import json
 from src.config import env
 from src.utils.log import logger
-import aiohttp
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
 
 def get_integrations_url(endpoint: str) -> str:
     """
@@ -18,22 +19,24 @@ def get_integrations_url(endpoint: str) -> str:
     return f"{base_url}/{endpoint}"
 
 
+@interceptor(source={"source": "mcp", "tool": "internal_request"})
 async def internal_request(
     url: str,
     method: str = "GET",
-    request_kwargs: dict = {},
-) -> aiohttp.ClientResponse:
+    request_kwargs: dict | None = None,
+) -> dict | None:
     """
     Uses chatbot-integrations for making requests through the internal network.
 
     Args:
         url (str): The URL to be requested.
         method (str, optional): The HTTP method. Defaults to "GET".
-        request_kwargs (dict, optional): The request kwargs. Defaults to {}.
+        request_kwargs (dict, optional): The request kwargs. Defaults to None.
 
     Returns:
-        aiohttp.ClientResponse: The response object.
+        dict: The response JSON.
     """
+    request_kwargs = request_kwargs or {}
     integrations_url = get_integrations_url("request")
     payload = json.dumps(
         {
@@ -48,20 +51,22 @@ async def internal_request(
         "Authorization": f"Bearer {key}",
     }
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
-        async with session.request(
-            "POST", integrations_url, headers=headers, data=payload
-        ) as response:
-            text = await response.text()
-            if not text:
-                logger.warning(f"Empty response from {url}")
-                return None
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse JSON from {url}: {e}")
-                logger.error(f"Response text: {text[:500]}")  # Log first 500 chars
-                # Check if it's a gateway timeout or other timeout-related error
-                if "504 Gateway Time-out" in text or "502 Bad Gateway" in text or "timeout" in text.lower():
-                    raise TimeoutError(f"Gateway timeout from {url}")
-                raise
+    async with InterceptedHTTPClient(
+        user_id="unknown",
+        source={"source": "mcp", "tool": "internal_request"},
+        timeout=600.0
+    ) as client:
+        response = await client.post(integrations_url, headers=headers, content=payload)
+        text = response.text
+        if not text:
+            logger.warning(f"Empty response from {url}")
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from {url}: {e}")
+            logger.error(f"Response text: {text[:500]}")  # Log first 500 chars
+            # Check if it's a gateway timeout or other timeout-related error
+            if "504 Gateway Time-out" in text or "502 Bad Gateway" in text or "timeout" in text.lower():
+                raise TimeoutError(f"Gateway timeout from {url}")
+            raise

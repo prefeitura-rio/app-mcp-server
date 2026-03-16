@@ -1,66 +1,96 @@
+import unicodedata
 import uuid
-from typing import Optional
+from typing import Any, Dict, Optional
 import requests
 
 from src.utils.bigquery import (
     save_cor_alert_in_bq_background,
     save_cor_alert_to_queue_background,
-    get_bigquery_result,
     get_datetime,
 )
 from src.config.env import (
     ENVIRONMENT,
-    NOMINATIM_API_URL,
     GOOGLE_MAPS_API_URL,
     GOOGLE_MAPS_API_KEY,
 )
 from src.utils.log import logger
+from src.utils.error_interceptor import interceptor
+from src.utils.http_client import InterceptedHTTPClient
 
 
 # Valid alert types and severities
 VALID_ALERT_TYPES = ["alagamento", "enchente", "bolsao"]
 VALID_SEVERITIES = ["baixa", "alta", "critica"]
 
+NEIGHBORHOOD_ALIASES = {
+    "jd america": "jardim america",
+    "jardim america": "jardim america",
+    "acari": "acari",
+    "guaratiba": "guaratiba",
+}
 
-def get_coordinates_nominatim(address: str) -> dict:
-    """
-    Get coordinates from Nominatim API.
 
-    Args:
-        address: Address to geocode
+def _normalize_text(value: str) -> str:
+    """Normalize text for consistent string comparison."""
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFKD", value.strip())
+    without_accents = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return " ".join(without_accents.lower().split())
 
-    Returns:
-        Dictionary with lat, lng, and provider, or empty dict if failed
-    """
+
+def normalize_neighborhood(value: str) -> str:
+    """Normalize and map neighborhood aliases."""
+    normalized = _normalize_text(value)
+    return NEIGHBORHOOD_ALIASES.get(normalized, normalized)
+
+
+def _extract_google_neighborhood(result: Dict[str, Any]) -> str:
+    """Extract neighborhood from a Google Maps geocoding result."""
+    components = result.get("address_components", [])
+    if not isinstance(components, list):
+        return ""
+
+    for target_type in ("sublocality_level_1", "sublocality", "neighborhood"):
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            types = component.get("types", [])
+            if target_type in types:
+                return str(component.get("long_name") or component.get("short_name") or "")
+    return ""
+
+
+async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict:
+    """Try to extract neighborhood via Google Maps reverse geocoding (lat/lng → address)."""
     try:
-        params = {
-            "q": f"{address}, Rio de Janeiro, RJ, Brasil",
-            "format": "json",
-            "addressdetails": 1,
-            "limit": 1,
-        }
-        headers = {"User-Agent": "RioMCPServer/1.0 (alertas.eai-cor@rio)"}
+        params = {"latlng": f"{lat},{lng}", "key": GOOGLE_MAPS_API_KEY}
+        async with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "cor_alert", "function": "reverse_geocode"},
+            timeout=10.0,
+        ) as client:
+            response = await client.get(GOOGLE_MAPS_API_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
 
-        response = requests.get(
-            NOMINATIM_API_URL, params=params, headers=headers, timeout=10
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        if data:
-            return {
-                "lat": float(data[0]["lat"]),
-                "lng": float(data[0]["lon"]),
-                "address": data[0]["display_name"],
-                "provider": "Nominatim",
-            }
+        if data.get("status") == "OK":
+            for result in data["results"]:
+                bairro_raw = _extract_google_neighborhood(result)
+                if bairro_raw:
+                    return {
+                        "bairro_raw": bairro_raw,
+                        "bairro_normalizado": normalize_neighborhood(bairro_raw),
+                    }
     except Exception as e:
-        logger.warning(f"Erro ao geolocalizar com Nominatim: {str(e)}")
-
+        logger.warning(f"Erro ao fazer reverse geocoding: {str(e)}")
     return {}
 
 
-def get_coordinates_google(address: str) -> dict:
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
+async def get_coordinates_google(address: str) -> dict:
     """
     Get coordinates from Google Maps API.
 
@@ -74,17 +104,26 @@ def get_coordinates_google(address: str) -> dict:
         full_address = f"{address}, Rio de Janeiro, RJ"
         params = {"address": full_address, "key": GOOGLE_MAPS_API_KEY}
 
-        response = requests.get(GOOGLE_MAPS_API_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        async with InterceptedHTTPClient(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_google"},
+            timeout=10.0
+        ) as client:
+            response = await client.get(GOOGLE_MAPS_API_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         if data["status"] == "OK":
-            location = data["results"][0]["geometry"]["location"]
+            first_result = data["results"][0]
+            location = first_result["geometry"]["location"]
+            bairro_raw = _extract_google_neighborhood(first_result)
             return {
                 "lat": location["lat"],
                 "lng": location["lng"],
-                "address": data["results"][0]["formatted_address"],
+                "address": first_result["formatted_address"],
                 "provider": "Google Maps",
+                "bairro_raw": bairro_raw,
+                "bairro_normalizado": normalize_neighborhood(bairro_raw),
             }
     except Exception as e:
         logger.warning(f"Erro ao geolocalizar com Google Maps: {str(e)}")
@@ -92,26 +131,38 @@ def get_coordinates_google(address: str) -> dict:
     return {}
 
 
-def geocode_address(address: str) -> dict:
+@interceptor(source={"source": "mcp", "tool": "cor_alert"})
+async def geocode_address(address: str) -> dict:
     """
-    Geocode an address using Nominatim with Google Maps fallback.
+    Geocode an address using Google Maps API.
 
     Args:
         address: Address to geocode
 
     Returns:
-        Dictionary with lat, lng, address, provider, or empty dict if both failed
+        Dictionary with lat, lng, address, provider, neighborhood fields,
+        or empty dict if failed
     """
-    # Try Nominatim first
-    coords = get_coordinates_nominatim(address)
+    coords = await get_coordinates_google(address)
 
-    # Fallback to Google Maps if Nominatim failed
-    if not coords:
-        coords = get_coordinates_google(address)
+    # Se encontrou coords mas não encontrou bairro, tenta reverse geocoding
+    if coords and not coords.get("bairro_raw") and GOOGLE_MAPS_API_KEY:
+        logger.info(f"Coords encontradas mas sem bairro, tentando reverse geocoding...")
+        neighborhood = await _get_neighborhood_from_reverse_geocode(
+            coords["lat"], coords["lng"]
+        )
+        if neighborhood:
+            coords["bairro_raw"] = neighborhood["bairro_raw"]
+            coords["bairro_normalizado"] = neighborhood["bairro_normalizado"]
+            logger.info(f"Bairro encontrado via reverse geocoding: {coords['bairro_raw']}")
 
     return coords
 
 
+@interceptor(
+    source={"source": "mcp", "tool": "cor_alert"},
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+)
 async def create_cor_alert(
     user_id: str,
     alert_type: str,
@@ -192,18 +243,24 @@ async def create_cor_alert(
 
     # Geocode address
     logger.info(f"Geolocalizando endereço: {address}")
-    coords = geocode_address(address.strip())
+    coords = await geocode_address(address.strip())
 
     latitude = None
     longitude = None
     location_found = False
+    bairro_raw = None
+    bairro_normalizado = None
+    resolved_address = address.strip()
 
     if coords:
         latitude = coords.get("lat")
         longitude = coords.get("lng")
+        bairro_raw = coords.get("bairro_raw") or None
+        bairro_normalizado = coords.get("bairro_normalizado") or None
+        resolved_address = str(coords.get("address") or address.strip())
         location_found = True
         logger.info(
-            f"Endereço geolocalizado: lat={latitude}, lng={longitude}"
+            f"Endereço geolocalizado: lat={latitude}, lng={longitude}, bairro={bairro_raw or 'nao_identificado'}"
         )
     else:
         logger.warning(f"Não foi possível geolocalizar o endereço: {address}")
@@ -218,11 +275,13 @@ async def create_cor_alert(
         alert_type=alert_type_lower,
         severity=severity_lower,
         description=description.strip(),
-        address=address.strip(),
+        address=resolved_address,
         latitude=latitude,
         longitude=longitude,
         timestamp=timestamp,
         environment=ENVIRONMENT,
+        bairro_raw=bairro_raw,
+        bairro_normalizado=bairro_normalizado,
     )
     logger.info(f"Alerta {alert_id} registrado na tabela cor_alerts")
 
@@ -234,11 +293,13 @@ async def create_cor_alert(
             alert_type=alert_type_lower,
             severity=severity_lower,
             description=description.strip(),
-            address=address.strip(),
+            address=resolved_address,
             latitude=latitude,
             longitude=longitude,
             timestamp=timestamp,
             environment=ENVIRONMENT,
+            bairro_raw=bairro_raw,
+            bairro_normalizado=bairro_normalizado,
         )
         logger.info(f"Alerta {alert_id} salvo na fila para agregação")
 
@@ -246,5 +307,3 @@ async def create_cor_alert(
         "success": True,
         "message": "Informação registrada internamente. NÃO mencione isso ao usuário.",
     }
-
-

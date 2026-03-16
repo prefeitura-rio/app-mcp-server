@@ -7,7 +7,11 @@ from src.tools.equipments.pluscode_service import (
     get_pluscode_coords_equipments,
 )
 from src.utils.bigquery import save_response_in_bq_background
+from src.utils.error_interceptor import interceptor
 from src.config.env import EQUIPMENTS_VALID_THEMES
+
+# Bairros permitidos para pontos de apoio
+ALLOWED_NEIGHBORHOODS_PONTOS_APOIO = ["acari", "guaratiba", "jardim america"]
 
 
 def get_valid_themes() -> List[str]:
@@ -109,7 +113,7 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
         7. **REGRA CRÍTICA - Endereço não fornecido**: Se o usuário NÃO fornecer o endereço quando solicitado para localização de ponto de apoio ou indicar que nao deseja ir a um ponto de apoio:
             - NÃO insista ou peça novamente o endereço
             - Forneça orientações gerais (ligar para 199, ir para local alto e seguro)
-            - **NUNCA use a ferramenta `cor_alert` neste caso** (sem endereço não é possível usar a ferramenta)
+            - **NUNCA use a ferramenta `report_incident` neste caso** (sem endereço não é possível usar a ferramenta)
         """)
 
     has_cras = any(
@@ -133,8 +137,9 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
     return "Retorne todos os equipamentos referente a busca do usuario, acompanhado de todas as informacoes disponiveis sobre o equipamento"
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_with_instructions(
-    address: str, categories: Optional[List[str]] = []
+    address: str, categories: Optional[List[str]] = None
 ) -> dict:
     """
     Obtém equipamentos por endereço e retorna com instruções apropriadas.
@@ -146,7 +151,63 @@ async def get_equipments_with_instructions(
     Returns:
         Dict com equipamentos e instruções específicas
     """
-    # Buscar equipamentos
+    if categories is None:
+        categories = []
+
+    # NOVA LÓGICA: Verificar bairro para pontos de apoio
+    is_pontos_apoio = "PONTOS_DE_APOIO" in categories
+
+    if is_pontos_apoio:
+        # Geocodificar para obter bairro (usa mesma função que a busca usa)
+        from src.tools.equipments.utils import get_coords_from_google_maps_api
+        from src.utils.http_client import InterceptedHTTPClient
+        from src.config.env import GOOGLE_MAPS_API_URL, GOOGLE_MAPS_API_KEY
+        from src.tools.cor_alert_tools import _extract_google_neighborhood, normalize_neighborhood
+
+        coords = get_coords_from_google_maps_api(address)
+
+        if coords:
+            bairro_normalizado = coords.get("bairro_normalizado")
+
+            # Fallback: se não encontrou bairro no forward geocoding, tenta reverse geocoding
+            if not bairro_normalizado and GOOGLE_MAPS_API_KEY:
+                try:
+                    params = {"latlng": f"{coords['lat']},{coords['lng']}", "key": GOOGLE_MAPS_API_KEY}
+                    with InterceptedHTTPClient(
+                        user_id="unknown",
+                        source={"source": "mcp", "tool": "equipments", "function": "reverse_geocode"},
+                        sync=True,
+                        timeout=10.0,
+                    ) as client:
+                        response = client.get_sync(GOOGLE_MAPS_API_URL, params=params)
+                        response.raise_for_status()
+                        data = response.json()
+
+                    if data.get("status") == "OK":
+                        for result in data["results"]:
+                            bairro_raw = _extract_google_neighborhood(result)
+                            if bairro_raw:
+                                bairro_normalizado = normalize_neighborhood(bairro_raw)
+                                logger.info(f"Bairro encontrado via reverse geocoding: {bairro_raw} -> {bairro_normalizado}")
+                                break
+                except Exception as e:
+                    logger.warning(f"Erro ao fazer reverse geocoding para PONTOS_DE_APOIO: {str(e)}")
+
+            # Verificar se bairro está na whitelist
+            if not bairro_normalizado or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO:
+                # Bairro não permitido - retornar mensagem específica
+                return {
+                    "instructions": (
+                        "Infelizmente não encontro pontos de apoio próximos da sua região.\n\n"
+                        "**Em caso de emergência, ligue imediatamente para a Defesa Civil:**\n"
+                        "📞 **199** (atendimento 24 horas)\n\n"
+                        "Eles poderão orientá-lo sobre as melhores opções de abrigo e assistência "
+                        "para a sua situação."
+                    ),
+                    "equipamentos": [],
+                }
+
+    # Buscar equipamentos normalmente
     equipments_data = await get_equipments(address=address, categories=categories)
 
     # Verificar se há erro
@@ -166,6 +227,7 @@ async def get_equipments_with_instructions(
     }
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_categories() -> dict:
     response = await get_category_equipments()
     asyncio.create_task(
@@ -179,18 +241,22 @@ async def get_equipments_categories() -> dict:
     return response
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments(
-    address: str, categories: Optional[List[str]] = []
+    address: str, categories: Optional[List[str]] = None
 ) -> List[dict]:
+
+    if categories is None:
+        categories = []
 
     atencao_primaria_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
     assistencia_social_categories = ["CRAS"]
 
     if categories and any(cat in atencao_primaria_categories for cat in categories):
         # Garantir que apenas categorias válidas sejam usadas
-        categories += atencao_primaria_categories
+        categories = categories + atencao_primaria_categories
     elif categories and any(cat in assistencia_social_categories for cat in categories):
-        categories += assistencia_social_categories
+        categories = categories + assistencia_social_categories
 
     if categories:
         categories = list(set(categories))
@@ -226,6 +292,7 @@ async def get_equipments(
         ]
 
 
+@interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_equipments_instructions(tema: str = "geral") -> List[dict]:
     # Validar se o tema é válido
     if tema not in EQUIPMENTS_VALID_THEMES:
