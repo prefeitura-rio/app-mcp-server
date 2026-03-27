@@ -1,5 +1,4 @@
 version = 1
-revision = 1
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version < '3.12'",
@@ -244,15 +243,11 @@ dependencies = [
     { name = "prefeitura-rio" },
     { name = "pydantic" },
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytz" },
     { name = "redis" },
     { name = "requests" },
     { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
@@ -292,14 +287,12 @@ requires-dist = [
     { name = "prefeitura-rio", specifier = ">=1.1.2" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pytest", specifier = ">=9.0.1" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytz" },
     { name = "redis", specifier = ">=7.0.1" },
     { name = "requests", specifier = ">=2.32.4" },
     { name = "uvicorn" },
 ]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest-asyncio", specifier = ">=1.3.0" }]
 
 [[package]]
 name = "async"
@@ -705,7 +698,7 @@ name = "click"
 version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "colorama", marker = "platform_system == 'Windows'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065 }
 wheels = [
@@ -4845,7 +4838,7 @@ name = "tqdm"
 version = "4.67.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "colorama", marker = "platform_system == 'Windows'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737 }
 wheels = [

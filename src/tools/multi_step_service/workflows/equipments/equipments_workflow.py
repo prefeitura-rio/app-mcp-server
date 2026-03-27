@@ -16,7 +16,6 @@ from src.tools.equipments_tools import (
 )
 from src.tools.cor_alert_tools import (
     _extract_google_neighborhood,
-    _extract_nominatim_neighborhood,
     normalize_neighborhood,
 )
 

@@ -1,0 +1,269 @@
+name: PR Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - staging
+  push:
+    branches:
+      - main
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect lint targets
+        id: detect
+        run: |
+          if [ -f Dockerfile ]; then
+            echo "has_dockerfile=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_dockerfile=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run hadolint (Dockerfile)
+        if: steps.detect.outputs.has_dockerfile == 'true'
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Run Ruff lint
+        run: uvx ruff check .
+
+      - name: Run Ruff format check
+        run: uvx ruff format --check .
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: HIGH,CRITICAL
+
+      - name: Upload Trivy FS SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  test:
+    name: Tests + Coverage Gate
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    outputs:
+      coverage: ${{ steps.coverage.outputs.coverage }}
+      baseline: ${{ steps.coverage.outputs.baseline }}
+      delta: ${{ steps.coverage.outputs.delta }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Install coverage tooling
+        run: uv pip install pytest-cov coverage
+
+      - name: Run tests with coverage
+        env:
+          REDIS_URL: redis://localhost:6379/0
+          MONGODB_URL: mongodb://localhost:27017
+        run: uv run pytest --cov=src --cov-report=xml --cov-report=term-missing
+
+      - name: Coverage baseline gate (tolerance 0.1%)
+        id: coverage
+        run: |
+          python - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+
+          tolerance = 0.1
+          baseline_path = ".github/coverage-baseline.json"
+          xml_path = "coverage.xml"
+
+          tree = ET.parse(xml_path)
+          root = tree.getroot()
+          current = float(root.attrib["line-rate"]) * 100.0
+
+          with open(baseline_path, "r", encoding="utf-8") as f:
+              baseline = float(json.load(f)["total"])
+
+          delta = current - baseline
+
+          with open("${GITHUB_OUTPUT}", "a", encoding="utf-8") as out:
+              out.write(f"coverage={current:.2f}\n")
+              out.write(f"baseline={baseline:.2f}\n")
+              out.write(f"delta={delta:.2f}\n")
+
+          print(f"Current coverage: {current:.2f}%")
+          print(f"Baseline coverage: {baseline:.2f}%")
+          print(f"Delta: {delta:.2f} pp")
+
+          if delta < -tolerance:
+              raise SystemExit(
+                  f"Coverage dropped by {-delta:.2f} pp, exceeding tolerance of {tolerance:.1f} pp."
+              )
+          PY
+
+      - name: Upload coverage.xml artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  build:
+    name: Build Dry Run + Image Scan
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - security-scan
+      - test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (dry-run, local only)
+        run: docker build -t app-mcp-server:pr-${{ github.sha }} .
+
+      - name: Run Trivy image scan (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: app-mcp-server:pr-${{ github.sha }}
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+
+      - name: Upload Trivy image SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+  pr-summary:
+    name: PR Summary Comment
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs:
+      - lint
+      - security-scan
+      - test
+      - build
+
+    steps:
+      - name: Create or update PR summary comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = "<!-- pr-quality-gate-summary -->";
+            const body = `${marker}
+            ## PR Quality Gate Summary
+
+            | Check | Result |
+            |---|---|
+            | Lint | \`${{ needs.lint.result }}\` |
+            | Security Scan | \`${{ needs['security-scan'].result }}\` |
+            | Tests + Coverage | \`${{ needs.test.result }}\` |
+            | Build + Image Scan | \`${{ needs.build.result }}\` |
+
+            **Coverage**
+            - Current: \`${{ needs.test.outputs.coverage }}%\`
+            - Baseline: \`${{ needs.test.outputs.baseline }}%\`
+            - Delta: \`${{ needs.test.outputs.delta }} pp\`
+            `;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const previous = comments.find(
+              (c) => c.user.type === "Bot" && c.body && c.body.includes(marker)
+            );
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: previous.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }

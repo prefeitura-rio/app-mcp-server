@@ -88,7 +88,7 @@ class InterceptedHTTPClient:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._client and isinstance(self._client, httpx.AsyncClient):
+        if self._client and hasattr(self._client, "aclose"):
             await self._client.aclose()
 
     # --- Sync context manager ---
@@ -99,7 +99,7 @@ class InterceptedHTTPClient:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._client and isinstance(self._client, httpx.Client):
+        if self._client and hasattr(self._client, "close"):
             self._client.close()
 
     # --- Error interception ---
@@ -177,11 +177,14 @@ class InterceptedHTTPClient:
         if self.sync:
             raise RuntimeError("Use request_sync() para modo sync")
 
-        if not isinstance(self._client, httpx.AsyncClient):
+        if self._client is None:
             raise RuntimeError(
                 "InterceptedHTTPClient não foi inicializado via context manager. "
                 "Use 'async with InterceptedHTTPClient(...) as client:' para modo async."
             )
+        
+        if not hasattr(self._client, "request"):
+            raise RuntimeError("Cliente sync inválido")
 
         request_body = kwargs.get("json") or kwargs.get("data") or kwargs.get("params")
 
@@ -256,11 +259,14 @@ class InterceptedHTTPClient:
         if not self.sync:
             raise RuntimeError("Use request() para modo async")
 
-        if not isinstance(self._client, httpx.Client):
+        if self._client is None:
             raise RuntimeError(
                 "InterceptedHTTPClient não foi inicializado via context manager. "
                 "Use 'with InterceptedHTTPClient(..., sync=True) as client:' para modo sync."
             )
+        
+        if not hasattr(self._client, "request"):
+            raise RuntimeError("Cliente async inválido")
 
         request_body = kwargs.get("json") or kwargs.get("data") or kwargs.get("params")
 

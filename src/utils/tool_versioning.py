@@ -85,7 +85,7 @@ def get_tool_version_from_file() -> dict:
     """Retorna versão armazenada no arquivo tool_version.json"""
 
     try:
-        # Encontrar o arquivo tool_version.json no diretório raiz do projeto
+        # Encontrar o arquivo tool_version.json dentro de src/utils
         version_file = UTILS_PATH / "tool_version.json"
 
         if version_file.exists():
