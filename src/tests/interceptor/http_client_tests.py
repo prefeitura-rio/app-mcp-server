@@ -212,7 +212,7 @@ class TestInterceptedHTTPClient:
                 client._client.request = AsyncMock(return_value=mock_response)
 
                 # Por padrão, nenhum status code é interceptado
-                response = await client.get("https://api.example.com/limited")
+                await client.get("https://api.example.com/limited")
                 mock_send.assert_not_called()
 
                 # Com custom codes, 429 é interceptado
