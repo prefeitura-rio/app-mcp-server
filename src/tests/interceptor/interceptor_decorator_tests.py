@@ -341,7 +341,7 @@ class TestSerializeSource:
     def test_send_api_error_uses_serialize_source(self):
         """Verifica que send_api_error chama serialize_source para gerar o flowname."""
         import asyncio
-        from unittest.mock import AsyncMock, patch, call
+        from unittest.mock import AsyncMock, patch
 
         source = {"source": "mcp", "tool": "search"}
 

@@ -130,7 +130,7 @@ class IPTUAPIService:
                     raise DataNotFoundError(f"Endpoint não encontrado: {endpoint}")
                 elif response.status_code == 401:
                     logger.error(f"API authentication failed for {endpoint}")
-                    raise AuthenticationError(f"Falha na autenticação do serviço IPTU")
+                    raise AuthenticationError("Falha na autenticação do serviço IPTU")
                 elif response.status_code in [500, 503]:
                     logger.error(f"API internal error for {endpoint}: {response.text}")
                     raise APIUnavailableError(
@@ -472,7 +472,7 @@ class IPTUAPIService:
             shorted_url = await self.get_short_url(url=signed_url)
             return shorted_url
         else:
-            logger.warning(f"PDF download failed or returned HTML error page")
+            logger.warning("PDF download failed or returned HTML error page")
             return None
 
     async def get_imovel_info(self, inscricao: str) -> Optional[Dict]:
@@ -606,7 +606,7 @@ class IPTUAPIService:
 
                 auth_response_json = auth_response.json()
                 if "access_token" not in auth_response_json:
-                    logger.error(f"Token não encontrado na resposta de autenticação")
+                    logger.error("Token não encontrado na resposta de autenticação")
                     raise AuthenticationError("Falha ao obter token de autenticação da Dívida Ativa")
 
                 token = f'Bearer {auth_response_json["access_token"]}'

@@ -106,7 +106,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             if result and result.get("id"):
                 self.service_knowledge = result
                 
-                logger.info(f"[KNOWLEDGE] Conhecimento carregado sobre poda de árvore")
+                logger.info("[KNOWLEDGE] Conhecimento carregado sobre poda de árvore")
                 logger.debug(f"[KNOWLEDGE] Dados: {self.service_knowledge}")
             else:
                 logger.warning("[KNOWLEDGE] Não foi possível carregar conhecimento do Typesense")

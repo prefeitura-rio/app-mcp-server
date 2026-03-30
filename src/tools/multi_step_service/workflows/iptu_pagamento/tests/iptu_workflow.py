@@ -925,7 +925,7 @@ class TestIPTUWorkflowFluxosContinuidade:
             }
         )
 
-        response = await multi_step_service.ainvoke(
+        await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
@@ -979,7 +979,7 @@ class TestIPTUWorkflowFluxosContinuidade:
             }
         )
 
-        response = await multi_step_service.ainvoke(
+        await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
@@ -1090,7 +1090,7 @@ class TestIPTUWorkflowResetEstado:
 
         # Primeira inscrição
         print("📝 Informando primeira inscrição...")
-        response1 = await multi_step_service.ainvoke(
+        await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
@@ -1449,7 +1449,7 @@ class TestIPTUWorkflowErrosAPI:
         print("\n  📌 Cenário 1: Inscrição não existente (após 3 tentativas)")
         user_id_1 = f"{self.user_id}_inexistente"
 
-        response1 = await multi_step_service.ainvoke(
+        await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": user_id_1,
@@ -1478,13 +1478,13 @@ class TestIPTUWorkflowErrosAPI:
             "properties", {}
         ), f"Deve estar pedindo nova inscrição. Got schema: {response['payload_schema']}"
         # A mensagem pode ser de "não encontrada" ou de "solicitar inscrição" (ambos são válidos após reset)
-        print(f"  ✓ Após 3 tentativas, sistema resetou e está pedindo nova inscrição")
+        print("  ✓ Após 3 tentativas, sistema resetou e está pedindo nova inscrição")
 
         # --- Cenário 2: API indisponível ---
         print("\n  📌 Cenário 2: API indisponível")
         user_id_2 = f"{self.user_id}_indisponivel"
 
-        response3 = await multi_step_service.ainvoke(
+        await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": user_id_2,
@@ -1675,7 +1675,7 @@ class TestIPTUWorkflowErrosAPI:
             "properties", {}
         ), "Schema deve pedir ano_exercicio"
 
-        print(f"✅ Mensagem de dívida ativa exibida corretamente")
+        print("✅ Mensagem de dívida ativa exibida corretamente")
         print("✅ TESTE PASSOU: Dívida ativa com parcelamento detectada e informada")
 
     # @pytest.mark.asyncio

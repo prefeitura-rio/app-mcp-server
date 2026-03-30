@@ -187,7 +187,7 @@ class BaseWorkflow(ABC):
 
             return image_path
 
-        except Exception as e:
+        except Exception:
             raise
 
 

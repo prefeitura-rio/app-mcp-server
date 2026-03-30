@@ -422,7 +422,7 @@ class AddressAPIService:
                 logradouro_bairro_ipp = None
 
             if best_candidate_bairro_nome_ipp and 'logradouro_bairro_ipp' in locals() and logradouro_bairro_ipp and (jaro_similarity(best_candidate_bairro_nome_ipp, logradouro_bairro_ipp) > THRESHOLD):
-                logger.info(f"Similaridade entre bairro atual e bairro do Logradouro no IPP com maior semelhança é alta o suficiente")
+                logger.info("Similaridade entre bairro atual e bairro do Logradouro no IPP com maior semelhança é alta o suficiente")
                 return {
                     "logradouro_id": logradouro_id_ipp,
                     "logradouro_nome": logradouro_nome_ipp,

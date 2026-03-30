@@ -190,7 +190,7 @@ async def get_pluscode_coords_equipments(
 
 @interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_category_equipments() -> dict:
-    query = f"""
+    query = """
         with
         equipamentos as (
             SELECT

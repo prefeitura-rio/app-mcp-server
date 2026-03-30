@@ -1,4 +1,4 @@
-from typing import Optional, List, Union
+from typing import Optional, List
 from pydantic import BaseModel, Field, field_validator
 from src.config.env import EQUIPMENTS_VALID_THEMES
 

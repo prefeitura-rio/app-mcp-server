@@ -3,7 +3,7 @@ Modelos Pydantic para validação do workflow de Poda de Árvore
 """
 
 import re
-from typing import Literal, Optional, Union
+from typing import Optional, Union
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -229,5 +229,5 @@ class TicketDataConfirmationPayload(BaseModel):
     @classmethod
     def validate_correcao(cls, v: Optional[str], info) -> Optional[str]:
         """Valida que há uma correção quando confirmacao é False."""
-        values = info.data
+        # values = info.data
         return v

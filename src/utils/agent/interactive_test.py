@@ -1,3 +1,11 @@
+from src.config import env
+from src.utils.agent.prompt import prompt_data
+from src.utils.agent.utils import gerar_conversa_aleatoria
+from src.utils.agent.tools import mcp_tools
+
+from engine.agent import Agent
+
+import uuid
 import traceback
 import asyncio
 import json
@@ -15,14 +23,8 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-from src.config import env
-from src.utils.agent.prompt import prompt_data
-from src.utils.agent.utils import gerar_conversa_aleatoria
-from src.utils.agent.tools import mcp_tools
 
-from engine.agent import Agent
 
-import uuid
 
 print(f"mcp_tools len: {len(mcp_tools)}")
 
@@ -84,7 +86,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                         last_timestamp_str.replace("Z", "+00:00")
                     )
                     total_execution_time = (last_timestamp - start_time).total_seconds()
-                except:
+                except ValueError:
                     pass
 
         for i, message in enumerate(messages):
@@ -107,7 +109,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                             current_timestamp - previous_timestamp
                         ).total_seconds()
                     previous_timestamp = current_timestamp
-                except:
+                except ValueError:
                     pass
 
             if "HumanMessage" in msg_type:
@@ -177,7 +179,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
 
         # Mostrar tempo total no final
         if total_execution_time:
-            print(f"\n📈 EXECUTION SUMMARY:")
+            print("\n📈 EXECUTION SUMMARY:")
             print(f"   🎯 Total execution time: {total_execution_time:.3f}s")
             if start_time:
                 actual_wall_time = (
@@ -262,7 +264,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
 
 async def interactive_chat(use_local=False):
     """Start an interactive chat session."""
-    agent = local_agent if use_local else remote_agent
+    # agent = local_agent if use_local else remote_agent
     agent_name = "Local Agent" if use_local else "Remote Agent"
 
     print(f"🤖 EAI {agent_name} Interactive Chat - user_id: {user_id}")

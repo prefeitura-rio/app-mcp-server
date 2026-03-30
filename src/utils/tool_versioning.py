@@ -7,7 +7,6 @@ from typing import Any, Dict
 from pathlib import Path
 import subprocess
 from datetime import datetime
-import json
 import argparse
 
 UTILS_PATH = Path("src/utils")

@@ -1,6 +1,6 @@
 import json
 import datetime
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional
 
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
@@ -96,7 +96,7 @@ def get_plus8_coords_from_address(address: str) -> Tuple[Optional[str], Optional
         # logger.error("No coords from nominatim or google maps, returning None")
         return None, None
 
-    coords_info = json.dumps(coords, ensure_ascii=False, indent=2)
+    # coords_info = json.dumps(coords, ensure_ascii=False, indent=2)
     # logger.info(f"\nGeolocated info:\n {coords_info}")
     plus8 = olc.encode(latitude=coords["lat"], longitude=coords["lng"], codeLength=8)
     # logger.info(f"Encoded plus8 {plus8}")

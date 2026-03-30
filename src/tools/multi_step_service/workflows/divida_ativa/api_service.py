@@ -278,7 +278,7 @@ class DividaAtivaAPIService:
                 )
                 if response.status_code == 200:
                     response_data = response.json()
-                    logger.info(f"Consulta de dívida ativa realizada com sucesso")
+                    logger.info("Consulta de dívida ativa realizada com sucesso")
                     # Usa o método from_api_response do modelo para processar os dados
                     return DadosDividaAtiva.from_api_response(response_data)
                 elif response.status_code == 404:

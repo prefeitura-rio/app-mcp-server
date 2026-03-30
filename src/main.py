@@ -2,9 +2,7 @@
 Ponto de entrada principal para o servidor FastMCP do Rio de Janeiro.
 """
 
-import os
 import sys
-import argparse
 from pathlib import Path
 
 # Adiciona o diretório raiz do projeto ao Python path

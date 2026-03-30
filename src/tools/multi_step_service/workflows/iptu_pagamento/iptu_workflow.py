@@ -44,8 +44,6 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.helpers import state_
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.constants import (
     FAKE_API_ENV_VAR,
     MAX_TENTATIVAS_ANO,
-    ERROR_INSCRICAO_AUSENTE,
-    ERROR_ANO_AUSENTE,
     STATE_IS_DATA_CONFIRMED,
     STATE_HAS_CONSULTED_GUIAS,
     STATE_USE_SEPARATE_DARM,
@@ -173,7 +171,7 @@ class IPTUWorkflow(BaseWorkflow):
                     state.data["endereco"] = None
                     state.data["proprietario"] = None
 
-            except InvalidInscricaoError as e:
+            except InvalidInscricaoError:
                 # Inscrição inválida (código 033) - NÃO salva no state
                 logger.warning(f"❌ Inscrição inválida rejeitada: {inscricao_clean}")
                 response = AgentResponse(

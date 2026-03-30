@@ -1,7 +1,5 @@
-import os
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List
 import asyncio
-from pathlib import Path
 from google import genai
 from google.genai.types import (
     Tool,
@@ -657,14 +655,14 @@ def format_text_with_citations(text, citations_data):
 
     for url, num in sorted_sources:
         # Pega o 'label' da primeira vez que a fonte apareceu
-        label = next(
-            (
-                c["segments"][0]["label"]
-                for c in citations_data
-                if c["segments"] and c["segments"][0]["url"] == url
-            ),
-            url,
-        )
+        # label = next(
+        #     (
+        #         c["segments"][0]["label"]
+        #         for c in citations_data
+        #         if c["segments"] and c["segments"][0]["url"] == url
+        #     ),
+        #     url,
+        # )
         sources_list += f" - [{num}] {url}\n"
 
     return modified_text + sources_list

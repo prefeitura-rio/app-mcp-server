@@ -6,8 +6,7 @@ para permitir testes completos de todos os cenários possíveis.
 """
 
 import re
-from typing import List, Optional, Dict, Any
-from datetime import datetime, date
+from typing import List, Optional, Dict
 
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     DadosGuias,
@@ -16,12 +15,10 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     DadosCotas,
     Darm,
     DadosDarm,
-    CotaDarm,
     DadosDividaAtiva,
 )
 from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import (
     APIUnavailableError,
-    DataNotFoundError,
     AuthenticationError,
 )
 from loguru import logger
@@ -835,7 +832,7 @@ class IPTUAPIServiceFake:
         )
 
         if not darm_data:
-            logger.warning(f"FAKE API: PDF download failed - no DARM data available")
+            logger.warning("FAKE API: PDF download failed - no DARM data available")
             return None
 
         # Gera PDF base64 mockado (um PDF mínimo válido)

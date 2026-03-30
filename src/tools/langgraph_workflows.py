@@ -4,7 +4,6 @@ from src.tools.multi_step_service.core import (
     Orchestrator,
     ServiceRequest,
     StateMode,
-    tools_description,
 )
 
 from src.config import env
