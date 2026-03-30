@@ -7,6 +7,7 @@ Este conftest fornece fixtures compartilhadas para testar as tools do MCP Server
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
 @pytest.fixture(autouse=True)
 def block_real_error_interceptor():
     """Bloqueia chamadas reais ao error interceptor em TODOS os testes."""

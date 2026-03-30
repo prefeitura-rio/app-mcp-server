@@ -51,3 +51,32 @@ O servidor estará disponível em `http://localhost:80/mcp/`
 
 `kubectx rj-superapp or rj-superapp-staging`
 `kubectl port-forward svc/mcp-redis -n mcp 6379:6379`
+
+### Pre-commit
+
+Para rodar formatação e lint automaticamente antes de cada commit:
+
+```bash
+uv add --dev pre-commit
+uv run pre-commit install
+```
+
+Depois da instalação, o hook roda automaticamente sempre que você executar:
+
+```bash
+git commit
+```
+
+Se você quiser rodar manualmente antes do commit, em todo o repositório:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Resumo do fluxo:
+- `uv run pre-commit run --all-files`: roda manualmente em todos os arquivos
+- `git commit`: roda automaticamente nos arquivos incluídos no commit
+
+Hooks configurados:
+- `ruff-format`: formata os arquivos automaticamente
+- `ruff --fix`: corrige problemas simples de lint antes do commit

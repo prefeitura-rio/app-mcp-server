@@ -147,8 +147,7 @@ class BaseWorkflow(ABC):
         from src.tools.multi_step_service.core.step_navigator import StepNavigator
 
         navigator = StepNavigator(
-            step_order=self.step_order,
-            step_dependencies=self.step_dependencies
+            step_order=self.step_order, step_dependencies=self.step_dependencies
         )
 
         return navigator.auto_reset(state)

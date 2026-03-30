@@ -6,8 +6,12 @@ durante o fluxo de consulta e pagamento de IPTU.
 """
 
 from typing import List, Dict, Any, Optional
-from src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils import formatar_valor_brl
-from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import DadosDividaAtiva
+from src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils import (
+    formatar_valor_brl,
+)
+from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
+    DadosDividaAtiva,
+)
 
 
 class IPTUMessageTemplates:
@@ -64,7 +68,6 @@ __replace_divida_ativa__
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         if not divida_ativa_info or divida_ativa_info.tem_divida_ativa is False:
-
             return msg.replace("__replace_divida_ativa__", "")
 
         else:
@@ -213,7 +216,7 @@ __replace_divida_ativa__
 **Endereço:** {endereco}
 **Contribuinte:** {proprietario}
 **Guia:** {guia_escolhida}
-**Cotas:** {', '.join(cotas_escolhidas)}
+**Cotas:** {", ".join(cotas_escolhidas)}
 **Boletos a serem gerados:** {num_boletos}
 
 ✅ **Os dados estão corretos?**"""

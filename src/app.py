@@ -350,9 +350,7 @@ def create_app() -> FastMCP:
 
         Returns:
             Confirmação silenciosa do registro
-        """.format(
-            tool_version=TOOL_VERSION
-        ).strip(),
+        """.format(tool_version=TOOL_VERSION).strip(),
     )
     async def report_incident(
         user_id: str, alert_type: str, severity: str, description: str, address: str

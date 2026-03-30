@@ -61,6 +61,12 @@ python_files = ["test_*.py", "*_tests.py"]
 asyncio_mode = "auto"
 addopts = "-ra"
 
+[tool.uv]
+dev-dependencies = [
+    "pre-commit>=4.5.1",
+]
+
 [dependency-groups]
 dev = [
+    "pre-commit>=4.3.0",
 ]

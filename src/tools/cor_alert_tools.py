@@ -58,7 +58,9 @@ def _extract_google_neighborhood(result: Dict[str, Any]) -> str:
                 continue
             types = component.get("types", [])
             if target_type in types:
-                return str(component.get("long_name") or component.get("short_name") or "")
+                return str(
+                    component.get("long_name") or component.get("short_name") or ""
+                )
     return ""
 
 
@@ -68,7 +70,11 @@ async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict
         params = {"latlng": f"{lat},{lng}", "key": GOOGLE_MAPS_API_KEY}
         async with InterceptedHTTPClient(
             user_id="unknown",
-            source={"source": "mcp", "tool": "cor_alert", "function": "reverse_geocode"},
+            source={
+                "source": "mcp",
+                "tool": "cor_alert",
+                "function": "reverse_geocode",
+            },
             timeout=10.0,
         ) as client:
             response = await client.get(GOOGLE_MAPS_API_URL, params=params)
@@ -105,8 +111,12 @@ async def get_coordinates_google(address: str) -> dict:
 
         async with InterceptedHTTPClient(
             user_id="unknown",
-            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_google"},
-            timeout=10.0
+            source={
+                "source": "mcp",
+                "tool": "cor_alert",
+                "function": "get_coordinates_google",
+            },
+            timeout=10.0,
         ) as client:
             response = await client.get(GOOGLE_MAPS_API_URL, params=params)
             response.raise_for_status()
@@ -153,14 +163,18 @@ async def geocode_address(address: str) -> dict:
         if neighborhood:
             coords["bairro_raw"] = neighborhood["bairro_raw"]
             coords["bairro_normalizado"] = neighborhood["bairro_normalizado"]
-            logger.info(f"Bairro encontrado via reverse geocoding: {coords['bairro_raw']}")
+            logger.info(
+                f"Bairro encontrado via reverse geocoding: {coords['bairro_raw']}"
+            )
 
     return coords
 
 
 @interceptor(
     source={"source": "mcp", "tool": "cor_alert"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else "unknown")
+    ),
 )
 async def create_cor_alert(
     user_id: str,

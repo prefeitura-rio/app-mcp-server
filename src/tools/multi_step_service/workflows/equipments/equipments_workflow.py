@@ -184,7 +184,10 @@ class EquipmentsWorkflow(BaseWorkflow):
             bairro_normalizado = _geocode_and_extract_neighborhood(address)
 
             # Verificar se bairro está na whitelist
-            if not bairro_normalizado or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO:
+            if (
+                not bairro_normalizado
+                or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO
+            ):
                 # Bairro não permitido - retornar mensagem específica
                 state.agent_response = AgentResponse(
                     description=(

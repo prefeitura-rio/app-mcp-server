@@ -31,21 +31,152 @@ def _ensure_package(module_name: str, path: Path):
 
 _ensure_package("src", project_root / "src")
 _ensure_package("src.tools", project_root / "src" / "tools")
-_ensure_package("src.tools.multi_step_service", project_root / "src" / "tools" / "multi_step_service")
-_ensure_package("src.tools.multi_step_service.core", project_root / "src" / "tools" / "multi_step_service" / "core")
-_ensure_package("src.tools.multi_step_service.workflows", project_root / "src" / "tools" / "multi_step_service" / "workflows")
-_ensure_package("src.tools.multi_step_service.workflows.poda_de_arvore", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "poda_de_arvore")
-_ensure_package("src.tools.multi_step_service.workflows.poda_de_arvore.integrations", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "poda_de_arvore" / "integrations")
-_ensure_package("src.tools.multi_step_service.workflows.poda_de_arvore.api", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "poda_de_arvore" / "api")
-_ensure_package("src.tools.multi_step_service.workflows.iptu_pagamento", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "iptu_pagamento")
-_ensure_package("src.tools.multi_step_service.workflows.iptu_pagamento.helpers", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "iptu_pagamento" / "helpers")
-_ensure_package("src.tools.multi_step_service.workflows.iptu_pagamento.core", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "iptu_pagamento" / "core")
+_ensure_package(
+    "src.tools.multi_step_service",
+    project_root / "src" / "tools" / "multi_step_service",
+)
+_ensure_package(
+    "src.tools.multi_step_service.core",
+    project_root / "src" / "tools" / "multi_step_service" / "core",
+)
+_ensure_package(
+    "src.tools.multi_step_service.workflows",
+    project_root / "src" / "tools" / "multi_step_service" / "workflows",
+)
+_ensure_package(
+    "src.tools.multi_step_service.workflows.poda_de_arvore",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "poda_de_arvore",
+)
+_ensure_package(
+    "src.tools.multi_step_service.workflows.poda_de_arvore.integrations",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "poda_de_arvore"
+    / "integrations",
+)
+_ensure_package(
+    "src.tools.multi_step_service.workflows.poda_de_arvore.api",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "poda_de_arvore"
+    / "api",
+)
+_ensure_package(
+    "src.tools.multi_step_service.workflows.iptu_pagamento",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "iptu_pagamento",
+)
+_ensure_package(
+    "src.tools.multi_step_service.workflows.iptu_pagamento.helpers",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "iptu_pagamento"
+    / "helpers",
+)
+_ensure_package(
+    "src.tools.multi_step_service.workflows.iptu_pagamento.core",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "iptu_pagamento"
+    / "core",
+)
 
-_load_module("src.tools.multi_step_service.core.models", project_root / "src" / "tools" / "multi_step_service" / "core" / "models.py")
-_load_module("src.tools.multi_step_service.workflows.poda_de_arvore.models", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "poda_de_arvore" / "models.py")
-_load_module("src.tools.multi_step_service.workflows.poda_de_arvore.state_helpers", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "poda_de_arvore" / "state_helpers.py")
-_load_module("src.tools.multi_step_service.workflows.poda_de_arvore.templates", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "poda_de_arvore" / "templates.py")
-_load_module("src.tools.multi_step_service.workflows.poda_de_arvore.integrations.ticket_builder", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "poda_de_arvore" / "integrations" / "ticket_builder.py")
-_load_module("src.tools.multi_step_service.workflows.iptu_pagamento.core.models", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "iptu_pagamento" / "core" / "models.py")
-_load_module("src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "iptu_pagamento" / "helpers" / "utils.py")
-_load_module("src.tools.multi_step_service.workflows.iptu_pagamento.helpers.state_helpers", project_root / "src" / "tools" / "multi_step_service" / "workflows" / "iptu_pagamento" / "helpers" / "state_helpers.py")
+_load_module(
+    "src.tools.multi_step_service.core.models",
+    project_root / "src" / "tools" / "multi_step_service" / "core" / "models.py",
+)
+_load_module(
+    "src.tools.multi_step_service.workflows.poda_de_arvore.models",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "poda_de_arvore"
+    / "models.py",
+)
+_load_module(
+    "src.tools.multi_step_service.workflows.poda_de_arvore.state_helpers",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "poda_de_arvore"
+    / "state_helpers.py",
+)
+_load_module(
+    "src.tools.multi_step_service.workflows.poda_de_arvore.templates",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "poda_de_arvore"
+    / "templates.py",
+)
+_load_module(
+    "src.tools.multi_step_service.workflows.poda_de_arvore.integrations.ticket_builder",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "poda_de_arvore"
+    / "integrations"
+    / "ticket_builder.py",
+)
+_load_module(
+    "src.tools.multi_step_service.workflows.iptu_pagamento.core.models",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "iptu_pagamento"
+    / "core"
+    / "models.py",
+)
+_load_module(
+    "src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "iptu_pagamento"
+    / "helpers"
+    / "utils.py",
+)
+_load_module(
+    "src.tools.multi_step_service.workflows.iptu_pagamento.helpers.state_helpers",
+    project_root
+    / "src"
+    / "tools"
+    / "multi_step_service"
+    / "workflows"
+    / "iptu_pagamento"
+    / "helpers"
+    / "state_helpers.py",
+)

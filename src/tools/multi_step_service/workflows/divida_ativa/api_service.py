@@ -6,12 +6,18 @@ from typing import Optional, Dict, Any
 from loguru import logger
 
 from src.config import env
-from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import DadosDividaAtiva
+from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
+    DadosDividaAtiva,
+)
 from src.utils.error_interceptor import send_api_error
 
 
 class DividaAtivaAPIService:
-    ERROR_SOURCE = {"source": "mcp", "tool": "multi_step_service", "workflow": "divida_ativa"}
+    ERROR_SOURCE = {
+        "source": "mcp",
+        "tool": "multi_step_service",
+        "workflow": "divida_ativa",
+    }
 
     def __init__(self, user_id: str = "unknown"):
         self.proxy = env.PROXY_URL
@@ -28,7 +34,7 @@ class DividaAtivaAPIService:
             str: Inscrição imobiliária limpa.
         """
         return "".join(filter(str.isdigit, inscricao))
-    
+
     def _limpar_cpf_cnpj(self, documento: str) -> str:
         """
         Limpa CPF ou CNPJ removendo caracteres não numéricos.
@@ -40,7 +46,7 @@ class DividaAtivaAPIService:
             str: Documento limpo.
         """
         return "".join(filter(str.isdigit, documento))
-    
+
     def _identificar_tipo_entrada(self, entrada: str) -> tuple[str, str]:
         """
         Identifica o tipo de entrada fornecida.
@@ -52,45 +58,54 @@ class DividaAtivaAPIService:
             tuple[str, str]: Tupla com (tipo_entrada, valor_limpo).
         """
         # Remove espaços e caracteres especiais para análise
-        entrada_limpa = re.sub(r'[\s\-\.\,\/]', '', entrada)
-        
+        entrada_limpa = re.sub(r"[\s\-\.\,\/]", "", entrada)
+
         # Verifica se é CPF (11 dígitos)
-        if re.match(r'^\d{11}$', entrada_limpa):
-            return ('cpf', entrada_limpa)
-        
+        if re.match(r"^\d{11}$", entrada_limpa):
+            return ("cpf", entrada_limpa)
+
         # Verifica se é CNPJ (14 dígitos)
-        if re.match(r'^\d{14}$', entrada_limpa):
-            return ('cnpj', entrada_limpa)
-        
+        if re.match(r"^\d{14}$", entrada_limpa):
+            return ("cnpj", entrada_limpa)
+
         # Verifica se é inscrição imobiliária (7 dígitos)
-        if re.match(r'^\d{7}$', entrada_limpa):
-            return ('inscricao_imobiliaria', entrada_limpa)
-        
+        if re.match(r"^\d{7}$", entrada_limpa):
+            return ("inscricao_imobiliaria", entrada_limpa)
+
         # Verifica se é certidão de dívida ativa (formato: CDA ou número)
-        if 'cda' in entrada.lower() or 'certidao' in entrada.lower() or 'certidão' in entrada.lower():
+        if (
+            "cda" in entrada.lower()
+            or "certidao" in entrada.lower()
+            or "certidão" in entrada.lower()
+        ):
             # Extrai apenas números
-            numeros = ''.join(filter(str.isdigit, entrada))
+            numeros = "".join(filter(str.isdigit, entrada))
             if numeros:
-                return ('certidao_divida_ativa', numeros)
-        
+                return ("certidao_divida_ativa", numeros)
+
         # Verifica se é execução fiscal (formato: EF ou número de processo)
-        if 'ef' in entrada.lower() or 'execucao' in entrada.lower() or 'execução' in entrada.lower() or 'fiscal' in entrada.lower():
+        if (
+            "ef" in entrada.lower()
+            or "execucao" in entrada.lower()
+            or "execução" in entrada.lower()
+            or "fiscal" in entrada.lower()
+        ):
             # Extrai apenas números
-            numeros = ''.join(filter(str.isdigit, entrada))
+            numeros = "".join(filter(str.isdigit, entrada))
             if numeros:
-                return ('execucao_fiscal', numeros)
-        
+                return ("execucao_fiscal", numeros)
+
         # Verifica se é auto de infração (formato: ano + número)
         # Padrão: pode ser "2024 123456" ou "2024/123456" ou "123456/2024"
-        auto_match = re.match(r'(\d{4})[\s\/\-]+(\d+)', entrada)
+        auto_match = re.match(r"(\d{4})[\s\/\-]+(\d+)", entrada)
         if not auto_match:
-            auto_match = re.match(r'(\d+)[\s\/\-]+(\d{4})', entrada)
+            auto_match = re.match(r"(\d+)[\s\/\-]+(\d{4})", entrada)
             if auto_match:
                 # Inverte a ordem se o ano vier depois
                 auto_match = (auto_match.group(2), auto_match.group(1))
             else:
                 auto_match = None
-        
+
         if auto_match:
             if isinstance(auto_match, tuple):
                 ano = auto_match[0]
@@ -98,27 +113,30 @@ class DividaAtivaAPIService:
             else:
                 ano = auto_match.group(1)
                 numero = auto_match.group(2)
-            return ('auto_infracao', f'{ano}_{numero}')
-        
+            return ("auto_infracao", f"{ano}_{numero}")
+
         # Se contém a palavra "auto" e números, tenta extrair como auto de infração
-        if 'auto' in entrada.lower():
-            numeros = re.findall(r'\d+', entrada)
+        if "auto" in entrada.lower():
+            numeros = re.findall(r"\d+", entrada)
             if len(numeros) >= 2:
                 # Assume que o número de 4 dígitos é o ano
                 for num in numeros:
                     if len(num) == 4:
                         ano = num
                         numeros.remove(num)
-                        numero = ''.join(numeros)
-                        return ('auto_infracao', f'{ano}_{numero}')
-        
+                        numero = "".join(numeros)
+                        return ("auto_infracao", f"{ano}_{numero}")
+
         # Tenta identificar se é um número de processo judicial
-        if re.match(r'^\d{7}\d{2}\d{4}\d{3}\d{4}$', entrada_limpa) or len(entrada_limpa) == 20:
-            return ('execucao_fiscal', entrada_limpa)
-        
+        if (
+            re.match(r"^\d{7}\d{2}\d{4}\d{3}\d{4}$", entrada_limpa)
+            or len(entrada_limpa) == 20
+        ):
+            return ("execucao_fiscal", entrada_limpa)
+
         # Se não identificou, assume que é inscrição imobiliária
-        return ('inscricao_imobiliaria', self._limpar_inscricao(entrada))
-    
+        return ("inscricao_imobiliaria", self._limpar_inscricao(entrada))
+
     def _preparar_payload(self, tipo_entrada: str, valor: str) -> Dict[str, Any]:
         """
         Prepara o payload para a API de acordo com o tipo de entrada.
@@ -131,38 +149,38 @@ class DividaAtivaAPIService:
             Dict[str, Any]: Payload para a API.
         """
         payload = {"origem_solicitação": 0}
-        
-        if tipo_entrada == 'cpf':
-            payload['cpf'] = valor
-        elif tipo_entrada == 'cnpj':
-            payload['cnpj'] = valor
-        elif tipo_entrada == 'inscricao_imobiliaria':
-            payload['inscricaoImobiliaria'] = valor
-        elif tipo_entrada == 'auto_infracao':
+
+        if tipo_entrada == "cpf":
+            payload["cpf"] = valor
+        elif tipo_entrada == "cnpj":
+            payload["cnpj"] = valor
+        elif tipo_entrada == "inscricao_imobiliaria":
+            payload["inscricaoImobiliaria"] = valor
+        elif tipo_entrada == "auto_infracao":
             # Separa ano e número
-            partes = valor.split('_')
+            partes = valor.split("_")
             if len(partes) == 2:
-                payload['anoAutoInfracao'] = partes[0]
-                payload['numeroAutoInfracao'] = partes[1]
+                payload["anoAutoInfracao"] = partes[0]
+                payload["numeroAutoInfracao"] = partes[1]
             else:
                 # Fallback para inscrição
-                payload['inscricaoImobiliaria'] = valor
-        elif tipo_entrada == 'certidao_divida_ativa':
-            payload['certidaoDividaAtiva'] = valor
-        elif tipo_entrada == 'execucao_fiscal':
-            payload['execucaoFiscal'] = valor
+                payload["inscricaoImobiliaria"] = valor
+        elif tipo_entrada == "certidao_divida_ativa":
+            payload["certidaoDividaAtiva"] = valor
+        elif tipo_entrada == "execucao_fiscal":
+            payload["execucaoFiscal"] = valor
         else:
             # Default para inscrição imobiliária
-            payload['inscricaoImobiliaria'] = valor
-        
+            payload["inscricaoImobiliaria"] = valor
+
         return payload
-    
+
     async def get_divida_ativa_info(self, entrada: str) -> Optional[DadosDividaAtiva]:
         """
         Consulta a API de Dívida Ativa para obter informações sobre débitos.
 
         Args:
-            entrada (str): Pode ser CPF, CNPJ, inscrição imobiliária, 
+            entrada (str): Pode ser CPF, CNPJ, inscrição imobiliária,
                           ano + número do auto de infração, certidão de dívida ativa,
                           ou execução fiscal.
 
@@ -200,15 +218,11 @@ class DividaAtivaAPIService:
                         user_id=self.user_id,
                         source=self.ERROR_SOURCE,
                         api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        request_body={
-                            "Consumidor": "consultar-dividas-contribuinte"
-                        },
+                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
                         status_code=auth_response.status_code,
                         error_message="Falha na autenticação do serviço de Dívida Ativa",
                     )
-                    raise Exception(
-                        "Falha na autenticação do serviço de Dívida Ativa"
-                    )
+                    raise Exception("Falha na autenticação do serviço de Dívida Ativa")
                 elif auth_response.status_code in [500, 503]:
                     logger.error(
                         f"Erro de servidor na autenticação da Dívida Ativa: {auth_response.status_code}"
@@ -218,9 +232,7 @@ class DividaAtivaAPIService:
                         user_id=self.user_id,
                         source=self.ERROR_SOURCE,
                         api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        request_body={
-                            "Consumidor": "consultar-dividas-contribuinte"
-                        },
+                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
                         status_code=auth_response.status_code,
                         error_message=f"Serviço de Dívida Ativa temporariamente indisponível (autenticação): {auth_response.text[:500]}",
                     )
@@ -237,9 +249,7 @@ class DividaAtivaAPIService:
                         user_id=self.user_id,
                         source=self.ERROR_SOURCE,
                         api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        request_body={
-                            "Consumidor": "consultar-dividas-contribuinte"
-                        },
+                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
                         status_code=auth_response.status_code,
                         error_message="Token de acesso não encontrado na resposta de autenticação",
                     )
@@ -247,7 +257,7 @@ class DividaAtivaAPIService:
                         "Falha ao obter token de autenticação da Dívida Ativa"
                     )
 
-                token = f'Bearer {auth_response_json["access_token"]}'
+                token = f"Bearer {auth_response_json['access_token']}"
                 logger.info("Token de autenticação obtido com sucesso")
 
             except httpx.TimeoutException:
@@ -270,7 +280,7 @@ class DividaAtivaAPIService:
             try:
                 # Prepara o payload de acordo com o tipo de entrada
                 payload = self._preparar_payload(tipo_entrada, valor_limpo)
-                
+
                 response = await client.post(
                     f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
                     headers={"Authorization": token},
@@ -298,9 +308,7 @@ class DividaAtivaAPIService:
                         status_code=response.status_code,
                         error_message="Falha na autenticação ao consultar dívidas",
                     )
-                    raise Exception(
-                        "Falha na autenticação ao consultar dívidas"
-                    )
+                    raise Exception("Falha na autenticação ao consultar dívidas")
                 elif response.status_code in [500, 503]:
                     logger.error(
                         f"Erro de servidor ao consultar dívidas. Status: {response.status_code}"

@@ -24,8 +24,6 @@ logging.basicConfig(
 )
 
 
-
-
 print(f"mcp_tools len: {len(mcp_tools)}")
 
 vertexai.init(
@@ -113,14 +111,14 @@ def parse_agent_response(response, is_local=False, start_time=None):
                     pass
 
             if "HumanMessage" in msg_type:
-                print(f"\n👤 USER MESSAGE #{i+1}:")
+                print(f"\n👤 USER MESSAGE #{i + 1}:")
                 print(f"   ⏰ Timestamp: {timestamp_str}")
                 if time_since_last:
                     print(f"   ⏱️  Time since last: {time_since_last:.3f}s")
                 print(f"   {message.content}")
 
             elif "AIMessage" in msg_type:
-                print(f"\n🤖 AI RESPONSE #{i+1}:")
+                print(f"\n🤖 AI RESPONSE #{i + 1}:")
                 print(f"   ⏰ Timestamp: {timestamp_str}")
                 if time_since_last:
                     print(f"   ⏱️  Time since last: {time_since_last:.3f}s")
@@ -168,7 +166,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                     )
 
             elif "ToolMessage" in msg_type:
-                print(f"\n🔧 TOOL RESPONSE #{i+1}:")
+                print(f"\n🔧 TOOL RESPONSE #{i + 1}:")
                 tool_name = getattr(message, "name", "unknown")
                 tool_content = message.content
                 print(f"   ⏰ Timestamp: {timestamp_str}")
@@ -187,7 +185,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                 ).total_seconds()
                 print(f"   🕐 Actual wall clock time: {actual_wall_time:.3f}s")
                 print(
-                    f"   📊 Efficiency: {(total_execution_time/actual_wall_time*100):.1f}% (message timestamps vs wall clock)"
+                    f"   📊 Efficiency: {(total_execution_time / actual_wall_time * 100):.1f}% (message timestamps vs wall clock)"
                 )
     else:
         # Remote agent returns direct message objects
@@ -202,11 +200,11 @@ def parse_agent_response(response, is_local=False, start_time=None):
             content = message.get("content", "")
 
             if msg_type == "human":
-                print(f"\n👤 USER MESSAGE #{i+1}:")
+                print(f"\n👤 USER MESSAGE #{i + 1}:")
                 print(f"   {content}")
 
             elif msg_type == "ai":
-                print(f"\n🤖 AI RESPONSE #{i+1}:")
+                print(f"\n🤖 AI RESPONSE #{i + 1}:")
 
                 # Check for tool calls
                 tool_calls = message.get("tool_calls", [])
@@ -252,7 +250,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                     )
 
             elif msg_type == "tool":
-                print(f"\n🔧 TOOL RESPONSE #{i+1}:")
+                print(f"\n🔧 TOOL RESPONSE #{i + 1}:")
                 tool_name = message.get("name", "unknown")
                 tool_content = message.get("content", "")
                 tool_status = message.get("status", "unknown")

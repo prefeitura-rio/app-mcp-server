@@ -12,7 +12,6 @@ from src.app import mcp
 from src.config import env
 
 if __name__ == "__main__":
-
     if env.IS_LOCAL:
         mcp.run()
     else:

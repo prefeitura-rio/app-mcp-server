@@ -38,7 +38,15 @@ src_tools_pkg = type(sys)("src.tools")
 src_tools_pkg.__path__ = [str(project_root / "src" / "tools")]
 sys.modules["src.tools"] = src_tools_pkg
 
-_load_module_directly("src.config.settings", project_root / "src" / "config" / "settings.py")
-_load_module_directly("src.utils.tool_versioning", project_root / "src" / "utils" / "tool_versioning.py")
-_load_module_directly("src.utils.datetime_utils", project_root / "src" / "utils" / "datetime_utils.py")
-_load_module_directly("src.tools.calculator", project_root / "src" / "tools" / "calculator.py")
+_load_module_directly(
+    "src.config.settings", project_root / "src" / "config" / "settings.py"
+)
+_load_module_directly(
+    "src.utils.tool_versioning", project_root / "src" / "utils" / "tool_versioning.py"
+)
+_load_module_directly(
+    "src.utils.datetime_utils", project_root / "src" / "utils" / "datetime_utils.py"
+)
+_load_module_directly(
+    "src.tools.calculator", project_root / "src" / "tools" / "calculator.py"
+)

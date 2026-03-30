@@ -401,7 +401,7 @@ class IPTUAPIServiceFake:
                         "Situacao": situacao,
                         "NCota": numero_cota,
                         "ValorCota": valor_cota,
-                        "DataVencimento": f"07/{i if i <= 12 else i-12:02d}/2024",
+                        "DataVencimento": f"07/{i if i <= 12 else i - 12:02d}/2024",
                         "ValorPago": valor_pago,
                         "DataPagamento": data_pagamento,
                         "QuantDiasEmAtraso": (
@@ -437,7 +437,7 @@ class IPTUAPIServiceFake:
                         "Situacao": situacao,
                         "NCota": numero_cota,
                         "ValorCota": valor_cota,
-                        "DataVencimento": f"07/{(i*2):02d}/2024",
+                        "DataVencimento": f"07/{(i * 2):02d}/2024",
                         "ValorPago": valor_pago,
                         "DataPagamento": data_pagamento,
                         "QuantDiasEmAtraso": "0",

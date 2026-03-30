@@ -70,7 +70,9 @@ def _format_code_blocks(md_content: str) -> str:
     return re.sub(r"```(.*?)```", replacer, md_content, flags=re.DOTALL)
 
 
-@interceptor(source={"source": "mcp", "tool": "crawl_pages", "function": "smart_crawl_url"})
+@interceptor(
+    source={"source": "mcp", "tool": "crawl_pages", "function": "smart_crawl_url"}
+)
 async def smart_crawl_url(
     url: str, max_depth: int = 3, max_concurrent: int = 10, chunk_size: int = 5000
 ):

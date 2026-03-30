@@ -108,7 +108,11 @@ class IPTUAPIService:
         try:
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
-                source={"source": "mcp", "tool": "multi_step_service", "workflow": "iptu_pagamento"},
+                source={
+                    "source": "mcp",
+                    "tool": "multi_step_service",
+                    "workflow": "iptu_pagamento",
+                },
                 proxy=self.proxy,
                 timeout=30.0,
             ) as client:
@@ -507,7 +511,11 @@ class IPTUAPIService:
             logger.info(f"Imovel info URL: {url}")
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
-                source={"source": "mcp", "tool": "multi_step_service", "workflow": "iptu_pagamento"},
+                source={
+                    "source": "mcp",
+                    "tool": "multi_step_service",
+                    "workflow": "iptu_pagamento",
+                },
                 timeout=30.0,
             ) as client:
                 # Erros de status code são automaticamente interceptados
@@ -521,21 +529,33 @@ class IPTUAPIService:
                     "proprietario": response_data["proprietarioPrincipal"],
                 }
             elif response.status_code == 401:
-                logger.error(f"Erro de autenticação ao consultar imóvel. Status: {response.status_code}")
-                raise AuthenticationError("Falha na autenticação do serviço de dados do imóvel")
+                logger.error(
+                    f"Erro de autenticação ao consultar imóvel. Status: {response.status_code}"
+                )
+                raise AuthenticationError(
+                    "Falha na autenticação do serviço de dados do imóvel"
+                )
             elif response.status_code in [500, 503]:
-                logger.error(f"Erro de servidor ao consultar imóvel. Status: {response.status_code}")
+                logger.error(
+                    f"Erro de servidor ao consultar imóvel. Status: {response.status_code}"
+                )
                 raise APIUnavailableError(
                     f"Serviço de dados do imóvel temporariamente indisponível (HTTP {response.status_code})"
                 )
             elif response.status_code == 404:
-                logger.warning(f"Imóvel não encontrado para inscrição: {inscricao_clean}")
+                logger.warning(
+                    f"Imóvel não encontrado para inscrição: {inscricao_clean}"
+                )
                 return None
             elif response.status_code == 400:
-                logger.error(f"Erro ao consultar imóvel. Status: {response.status_code}")
+                logger.error(
+                    f"Erro ao consultar imóvel. Status: {response.status_code}"
+                )
                 error_data = response.json()
                 if error_data.get("codigo") == "033":
-                    logger.warning(f"Inscrição inválida: {inscricao_clean} - Código 033")
+                    logger.warning(
+                        f"Inscrição inválida: {inscricao_clean} - Código 033"
+                    )
                     raise InvalidInscricaoError(
                         inscricao=inscricao_clean,
                         message=f"Inscrição imobiliária {inscricao_clean} não encontrada no sistema",
@@ -548,12 +568,16 @@ class IPTUAPIService:
 
         except httpx.TimeoutException:
             logger.error("Timeout ao consultar dados do imóvel")
-            raise APIUnavailableError("Serviço de dados do imóvel não respondeu no tempo esperado")
+            raise APIUnavailableError(
+                "Serviço de dados do imóvel não respondeu no tempo esperado"
+            )
         except (APIUnavailableError, AuthenticationError, InvalidInscricaoError):
             raise
         except Exception as e:
             logger.error(f"Erro ao consultar dados do imóvel: {str(e)}")
-            raise APIUnavailableError(f"Erro ao comunicar com serviço de dados do imóvel: {str(e)}")
+            raise APIUnavailableError(
+                f"Erro ao comunicar com serviço de dados do imóvel: {str(e)}"
+            )
 
     async def get_divida_ativa_info(self, inscricao: str) -> Optional[DadosDividaAtiva]:
         """
@@ -580,7 +604,11 @@ class IPTUAPIService:
         try:
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
-                source={"source": "mcp", "tool": "multi_step_service", "workflow": "iptu_pagamento"},
+                source={
+                    "source": "mcp",
+                    "tool": "multi_step_service",
+                    "workflow": "iptu_pagamento",
+                },
                 timeout=30.0,
                 proxy=self.proxy,
             ) as client:
@@ -597,9 +625,13 @@ class IPTUAPIService:
 
                 if auth_response.status_code == 401:
                     logger.error("Falha na autenticação da Dívida Ativa")
-                    raise AuthenticationError("Falha na autenticação do serviço de Dívida Ativa")
+                    raise AuthenticationError(
+                        "Falha na autenticação do serviço de Dívida Ativa"
+                    )
                 elif auth_response.status_code in [500, 503]:
-                    logger.error(f"Erro de servidor na autenticação da Dívida Ativa: {auth_response.status_code}")
+                    logger.error(
+                        f"Erro de servidor na autenticação da Dívida Ativa: {auth_response.status_code}"
+                    )
                     raise APIUnavailableError(
                         f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {auth_response.status_code})"
                     )
@@ -607,9 +639,11 @@ class IPTUAPIService:
                 auth_response_json = auth_response.json()
                 if "access_token" not in auth_response_json:
                     logger.error("Token não encontrado na resposta de autenticação")
-                    raise AuthenticationError("Falha ao obter token de autenticação da Dívida Ativa")
+                    raise AuthenticationError(
+                        "Falha ao obter token de autenticação da Dívida Ativa"
+                    )
 
-                token = f'Bearer {auth_response_json["access_token"]}'
+                token = f"Bearer {auth_response_json['access_token']}"
                 logger.info("Token de autenticação obtido com sucesso")
 
                 # Consulta de dívidas - erros são automaticamente interceptados
@@ -627,30 +661,42 @@ class IPTUAPIService:
                     logger.info("Consulta de dívida ativa realizada com sucesso")
                     return DadosDividaAtiva.from_api_response(response_data)
                 elif response.status_code == 404:
-                    logger.info(f"Nenhuma dívida ativa encontrada para inscrição {inscricao_clean}")
+                    logger.info(
+                        f"Nenhuma dívida ativa encontrada para inscrição {inscricao_clean}"
+                    )
                     return None
                 elif response.status_code == 401:
                     logger.error("Erro de autenticação ao consultar dívidas")
-                    raise AuthenticationError("Falha na autenticação ao consultar dívidas")
+                    raise AuthenticationError(
+                        "Falha na autenticação ao consultar dívidas"
+                    )
                 elif response.status_code in [500, 503]:
-                    logger.error(f"Erro de servidor ao consultar dívidas. Status: {response.status_code}")
+                    logger.error(
+                        f"Erro de servidor ao consultar dívidas. Status: {response.status_code}"
+                    )
                     raise APIUnavailableError(
                         f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {response.status_code})"
                     )
                 else:
-                    logger.error(f"Erro ao consultar dívida ativa. Status: {response.status_code}")
+                    logger.error(
+                        f"Erro ao consultar dívida ativa. Status: {response.status_code}"
+                    )
                     raise APIUnavailableError(
                         f"Erro ao comunicar com serviço de Dívida Ativa (HTTP {response.status_code})"
                     )
 
         except httpx.TimeoutException:
             logger.error("Timeout ao consultar dívida ativa")
-            raise APIUnavailableError("Serviço de Dívida Ativa não respondeu no tempo esperado")
+            raise APIUnavailableError(
+                "Serviço de Dívida Ativa não respondeu no tempo esperado"
+            )
         except (APIUnavailableError, AuthenticationError):
             raise
         except Exception as e:
             logger.error(f"Erro ao consultar dívida ativa: {str(e)}")
-            raise APIUnavailableError(f"Erro ao comunicar com serviço de Dívida Ativa: {str(e)}")
+            raise APIUnavailableError(
+                f"Erro ao comunicar com serviço de Dívida Ativa: {str(e)}"
+            )
 
     async def upload_base64_to_gcs(self, base64_content) -> str:
         """
@@ -712,7 +758,11 @@ class IPTUAPIService:
         try:
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
-                source={"source": "mcp", "tool": "multi_step_service", "workflow": "iptu_pagamento"},
+                source={
+                    "source": "mcp",
+                    "tool": "multi_step_service",
+                    "workflow": "iptu_pagamento",
+                },
             ) as client:
                 # Erros são automaticamente interceptados
                 response = await client.post(api_url, json=payload, headers=headers)

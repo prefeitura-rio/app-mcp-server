@@ -33,7 +33,6 @@ def get_bigquery_result(query: str):
 async def get_pluscode_coords_equipments(
     address, categories: Optional[List[str]] = None
 ) -> dict:
-
     categories = categories or []
     plus8, coords = get_plus8_coords_from_address(address=address)
     if not coords:
@@ -216,7 +215,6 @@ async def get_category_equipments() -> dict:
     data = get_bigquery_result(query=query)
     categories = {}
     for d in data:
-
         if d["secretaria_responsavel"] not in categories:
             categories[d["secretaria_responsavel"]] = []
         categories[d["secretaria_responsavel"]].append(d["categoria"])
