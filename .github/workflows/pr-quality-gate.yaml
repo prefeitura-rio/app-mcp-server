@@ -66,21 +66,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Trivy
-        uses: aquasecurity/setup-trivy@v0.2.4
-        with:
-          version: v0.68.1
-          cache: true
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | \
+            sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
 
       - name: Run Trivy filesystem scan (SARIF)
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-fs.sarif
-          severity: HIGH,CRITICAL
-          skip-setup-trivy: true
+        run: trivy fs --format sarif --output trivy-fs.sarif --severity HIGH,CRITICAL .
 
       - name: Upload Trivy FS SARIF
         uses: github/codeql-action/upload-sarif@v3
@@ -226,24 +224,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Set up Trivy
-        uses: aquasecurity/setup-trivy@v0.2.4
-        with:
-          version: v0.68.1
-          cache: true
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | \
+            sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
 
       - name: Build image (dry-run, local only)
         run: docker build -t app-mcp-server:pr-${{ github.sha }} .
 
       - name: Run Trivy image scan (SARIF)
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          scan-type: image
-          image-ref: app-mcp-server:pr-${{ github.sha }}
-          format: sarif
-          output: trivy-image.sarif
-          severity: HIGH,CRITICAL
-          skip-setup-trivy: true
+        run: trivy image --format sarif --output trivy-image.sarif --severity HIGH,CRITICAL app-mcp-server:pr-${{ github.sha }}
 
       - name: Upload Trivy image SARIF
         uses: github/codeql-action/upload-sarif@v3
