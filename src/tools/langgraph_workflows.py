@@ -4,6 +4,7 @@ from src.tools.multi_step_service.core import (
     Orchestrator,
     ServiceRequest,
     StateMode,
+    tools_description,
 )
 
 from src.config import env
@@ -12,6 +13,13 @@ if env.IS_LOCAL:
     BACKEND_MODE = StateMode.JSON
 else:
     BACKEND_MODE = StateMode.REDIS
+
+__all__ = [
+    "multi_step_service",
+    "save_workflow_graphs",
+    "save_single_workflow_graph",
+    "tools_description",
+]
 
 
 async def multi_step_service(
