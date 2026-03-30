@@ -172,6 +172,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import os
           import xml.etree.ElementTree as ET
 
           tolerance = 0.1
@@ -187,7 +188,7 @@ jobs:
 
           delta = current - baseline
 
-          with open("${GITHUB_OUTPUT}", "a", encoding="utf-8") as out:
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"coverage={current:.2f}\n")
               out.write(f"baseline={baseline:.2f}\n")
               out.write(f"delta={delta:.2f}\n")
