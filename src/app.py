@@ -2,8 +2,6 @@
 Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 """
 
-# commit to trigger build
-
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
