@@ -65,6 +65,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | \
+            sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
 
       - name: Install Trivy
         run: |
@@ -81,6 +94,7 @@ jobs:
         run: trivy fs --format sarif --output trivy-fs.sarif --severity HIGH,CRITICAL .
 
       - name: Upload Trivy FS SARIF
+        if: always() && hashFiles('trivy-fs.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-fs.sarif
@@ -130,9 +144,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --all-groups
 
-      - name: Install coverage tooling
-        run: uv pip install pytest-cov coverage
-
       - name: Run tests with coverage
         env:
           VALID_TOKENS: test-token
@@ -165,7 +176,14 @@ jobs:
           DATA_DIR: /tmp
           TYPESENSE_PARAMETERS: none
           MONGODB_URL: mongodb://localhost:27017
-        run: uv run pytest --cov=src --cov-report=xml --cov-report=term-missing
+        run: uv run pytest --junitxml=pytest.xml --cov=src --cov-report=xml --cov-report=term-missing
+
+      - name: Upload pytest report artifact
+        if: always() && hashFiles('pytest.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: pytest.xml
 
       - name: Coverage baseline gate (tolerance 0.1%)
         id: coverage
@@ -243,6 +261,7 @@ jobs:
         run: trivy image --format sarif --output trivy-image.sarif --severity HIGH,CRITICAL app-mcp-server:pr-${{ github.sha }}
 
       - name: Upload Trivy image SARIF
+        if: always() && hashFiles('trivy-image.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image.sarif
@@ -251,7 +270,7 @@ jobs:
   pr-summary:
     name: PR Summary Comment
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request'
     needs:
       - lint
       - security-scan
@@ -263,21 +282,50 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const formatStatus = (result) => {
+              if (result === "success") return "Passed";
+              if (result === "failure") return "Failed";
+              if (result === "cancelled") return "Cancelled";
+              if (result === "skipped") return "Skipped";
+              return result || "Unknown";
+            };
+
+            const coverageCurrent = `${{ toJSON(needs.test.outputs.coverage) }}`;
+            const coverageBaseline = `${{ toJSON(needs.test.outputs.baseline) }}`;
+            const coverageDelta = `${{ toJSON(needs.test.outputs.delta) }}`;
+
+            const hasCoverage =
+              coverageCurrent !== "" &&
+              coverageCurrent !== "null" &&
+              coverageBaseline !== "" &&
+              coverageBaseline !== "null" &&
+              coverageDelta !== "" &&
+              coverageDelta !== "null";
+
+            const coverageBlock = hasCoverage
+              ? [
+                  "**Coverage**",
+                  `- Current: \`${coverageCurrent}%\``,
+                  `- Baseline: \`${coverageBaseline}%\``,
+                  `- Delta: \`${coverageDelta} pp\``,
+                ].join("\n")
+              : [
+                  "**Coverage**",
+                  "- Coverage data was not produced for this run.",
+                ].join("\n");
+
             const marker = "<!-- pr-quality-gate-summary -->";
             const body = `${marker}
             ## PR Quality Gate Summary
 
             | Check | Result |
             |---|---|
-            | Lint | \`${{ needs.lint.result }}\` |
-            | Security Scan | \`${{ needs['security-scan'].result }}\` |
-            | Tests + Coverage | \`${{ needs.test.result }}\` |
-            | Build + Image Scan | \`${{ needs.build.result }}\` |
+            | Lint | ${formatStatus("${{ needs.lint.result }}")} |
+            | Security Scan | ${formatStatus("${{ needs['security-scan'].result }}")} |
+            | Tests + Coverage | ${formatStatus("${{ needs.test.result }}")} |
+            | Build + Image Scan | ${formatStatus("${{ needs.build.result }}")} |
 
-            **Coverage**
-            - Current: \`${{ needs.test.outputs.coverage }}%\`
-            - Baseline: \`${{ needs.test.outputs.baseline }}%\`
-            - Delta: \`${{ needs.test.outputs.delta }} pp\`
+            ${coverageBlock}
             `;
 
             const { owner, repo } = context.repo;
