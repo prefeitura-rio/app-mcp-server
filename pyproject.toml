@@ -64,4 +64,5 @@ addopts = "-ra"
 [dependency-groups]
 dev = [
     "pre-commit>=4.3.0",
+    "pytest-cov>=6.2.1",
 ]
