@@ -80,3 +80,24 @@ Resumo do fluxo:
 Hooks configurados:
 - `ruff-format`: formata os arquivos automaticamente
 - `ruff --fix`: corrige problemas simples de lint antes do commit
+
+### Cobertura De Testes Local
+
+Para ver a cobertura localmente sem depender do PR:
+
+```bash
+uv add --dev pytest-cov coverage
+uv run pytest --cov=src --cov-report=term-missing --cov-report=xml
+```
+
+Esse comando:
+- instala o plugin de cobertura no ambiente local
+- roda a suíte em `src/tests`
+- mostra a cobertura no terminal
+- gera o arquivo `coverage.xml`
+
+Se você quiser comparar com a baseline usada no CI, confira:
+
+- `.github/coverage-baseline.json`
+
+Se quiser reproduzir mais perto do ambiente do GitHub Actions, use as mesmas variáveis dummy do workflow `pr-quality-gate.yaml`, porque este projeto depende bastante de variáveis de ambiente já no import dos módulos.
