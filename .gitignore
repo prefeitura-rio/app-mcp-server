@@ -1,13 +1,4 @@
-# Virtual Environments
-
-test*.py
-test*.ipynb
-test*.md
-test*.json
-
-**/**/test*.py
-**/**/test*.ipynb
-**/**/test*.md
+# Project data
 src/tools/multi_step_service/data
 
 .venv/

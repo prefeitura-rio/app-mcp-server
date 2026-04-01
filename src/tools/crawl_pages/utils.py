@@ -38,9 +38,13 @@ def parse_sitemap(sitemap_url: str) -> List[str]:
     try:
         with InterceptedHTTPClient(
             user_id="unknown",
-            source={"source": "mcp", "tool": "crawl_pages", "function": "parse_sitemap"},
+            source={
+                "source": "mcp",
+                "tool": "crawl_pages",
+                "function": "parse_sitemap",
+            },
             sync=True,
-            timeout=10.0
+            timeout=10.0,
         ) as client:
             resp = client.get_sync(sitemap_url)
             resp.raise_for_status()
@@ -87,7 +91,9 @@ async def crawl_batch(
     except Exception as e:
         logger.error(f"An unexpected error occurred during batch crawl: {e}")
 
-    logger.info(f"Batch crawl completed. Successfully extracted {len(results_list)} pages.")
+    logger.info(
+        f"Batch crawl completed. Successfully extracted {len(results_list)} pages."
+    )
     return results_list
 
 
@@ -145,9 +151,7 @@ async def crawl_recursive(
             async for result in results_iterator:
                 if result.success and result.markdown:
                     logger.info(f"  [OK] {result.url}")
-                    results_all.append(
-                        {"url": result.url, "markdown": result.markdown}
-                    )
+                    results_all.append({"url": result.url, "markdown": result.markdown})
                     # Collect new internal links for the next level
                     for link in result.links.get("internal", []):
                         next_url = normalize_url(link["href"])
@@ -172,7 +176,5 @@ async def crawl_recursive(
         )
         current_urls = next_level_urls
 
-    logger.info(
-        f"Recursive crawl finished. Total pages extracted: {len(results_all)}."
-    )
+    logger.info(f"Recursive crawl finished. Total pages extracted: {len(results_all)}.")
     return results_all

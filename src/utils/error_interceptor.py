@@ -376,7 +376,9 @@ def interceptor(
                         asyncio.run(_handle_error(func, args, kwargs, e))
                     except Exception as send_error:
                         # Log silencioso se falhar ao enviar erro
-                        logger.warning(f"Falha ao enviar erro para interceptor: {send_error}")
+                        logger.warning(
+                            f"Falha ao enviar erro para interceptor: {send_error}"
+                        )
                 raise
 
         async def _handle_error(func, args, kwargs, e):
@@ -419,15 +421,19 @@ def interceptor(
                     if i < len(param_names):
                         param_name = param_names[i]
                         # Evita incluir 'self' ou 'cls'
-                        if param_name not in ('self', 'cls'):
+                        if param_name not in ("self", "cls"):
                             # Serializa apenas tipos simples
-                            if isinstance(arg, (str, int, float, bool, list, dict, type(None))):
+                            if isinstance(
+                                arg, (str, int, float, bool, list, dict, type(None))
+                            ):
                                 input_body[param_name] = arg
                             else:
                                 input_body[param_name] = str(type(arg).__name__)
                 # Adiciona kwargs
                 for key, value in kwargs.items():
-                    if isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                    if isinstance(
+                        value, (str, int, float, bool, list, dict, type(None))
+                    ):
                         input_body[key] = value
                     else:
                         input_body[key] = str(type(value).__name__)

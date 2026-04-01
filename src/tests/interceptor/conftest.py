@@ -26,26 +26,28 @@ def _load_module_directly(module_name: str, file_path: str):
 
 # Mock do módulo src.config.env antes de carregar qualquer coisa
 class MockEnv:
-    ERROR_INTERCEPTOR_URL = os.environ.get("ERROR_INTERCEPTOR_URL", "https://test.local/api")
+    ERROR_INTERCEPTOR_URL = os.environ.get(
+        "ERROR_INTERCEPTOR_URL", "https://test.local/api"
+    )
     ERROR_INTERCEPTOR_TOKEN = os.environ.get("ERROR_INTERCEPTOR_TOKEN", "test-token")
 
 
 # Registra mocks para evitar imports problemáticos
-sys.modules['src'] = type(sys)('src')
-sys.modules['src.config'] = type(sys)('src.config')
-sys.modules['src.config.env'] = MockEnv
+sys.modules["src"] = type(sys)("src")
+sys.modules["src.config"] = type(sys)("src.config")
+sys.modules["src.config.env"] = MockEnv
 
 
 # Carrega os módulos necessários diretamente
 _error_interceptor_spec, _error_interceptor = _load_module_directly(
-    'src.utils.error_interceptor',
-    os.path.join(project_root, 'src', 'utils', 'error_interceptor.py')
+    "src.utils.error_interceptor",
+    os.path.join(project_root, "src", "utils", "error_interceptor.py"),
 )
 _error_interceptor_spec.loader.exec_module(_error_interceptor)
 
 _http_client_spec, _http_client = _load_module_directly(
-    'src.utils.http_client',
-    os.path.join(project_root, 'src', 'utils', 'http_client.py')
+    "src.utils.http_client",
+    os.path.join(project_root, "src", "utils", "http_client.py"),
 )
 _http_client_spec.loader.exec_module(_http_client)
 
@@ -62,7 +64,7 @@ def block_real_error_interceptor_calls():
     from unittest.mock import AsyncMock, patch
 
     with patch.object(
-        _error_interceptor, 'send_error_to_interceptor', new_callable=AsyncMock
+        _error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
     ) as mock:
         mock.return_value = True
         yield mock
@@ -74,7 +76,7 @@ def mock_send_api_error():
     from unittest.mock import AsyncMock, patch
 
     with patch.object(
-        _error_interceptor, 'send_api_error', new_callable=AsyncMock
+        _error_interceptor, "send_api_error", new_callable=AsyncMock
     ) as mock:
         mock.return_value = True
         yield mock
@@ -86,7 +88,7 @@ def mock_send_general_error():
     from unittest.mock import AsyncMock, patch
 
     with patch.object(
-        _error_interceptor, 'send_general_error', new_callable=AsyncMock
+        _error_interceptor, "send_general_error", new_callable=AsyncMock
     ) as mock:
         mock.return_value = True
         yield mock

@@ -5,7 +5,6 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
-import json
 
 from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
@@ -351,9 +350,7 @@ def create_app() -> FastMCP:
 
         Returns:
             Confirmação silenciosa do registro
-        """.format(
-            tool_version=TOOL_VERSION
-        ).strip(),
+        """.format(tool_version=TOOL_VERSION).strip(),
     )
     async def report_incident(
         user_id: str, alert_type: str, severity: str, description: str, address: str
@@ -469,7 +466,7 @@ def create_app() -> FastMCP:
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
-    logger.info(f"Servidor FastMCP configurado com sucesso!")
+    logger.info("Servidor FastMCP configurado com sucesso!")
 
     if Settings.DEBUG:
         logger.debug("Modo DEBUG ativado")

@@ -33,7 +33,9 @@ class MemoryBank(BaseModel):
 
 @interceptor(
     source={"source": "mcp", "tool": "memory"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else "unknown")
+    ),
 )
 async def get_memories(
     user_id: str, memory_name: Optional[str] = None
@@ -66,9 +68,7 @@ async def get_memories(
     headers = {"Authorization": await get_authorization_header()}
 
     async with InterceptedHTTPClient(
-        user_id=user_id,
-        source={"source": "mcp", "tool": "memory"},
-        timeout=120.0
+        user_id=user_id, source={"source": "mcp", "tool": "memory"}, timeout=120.0
     ) as client:
         response = await client.get(url, headers=headers)
         response.raise_for_status()
@@ -77,7 +77,9 @@ async def get_memories(
 
 @interceptor(
     source={"source": "mcp", "tool": "memory"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else "unknown")
+    ),
 )
 async def upsert_memory(
     user_id: str,
@@ -111,18 +113,20 @@ async def upsert_memory(
 
     # Tries to update the memory bank
     async with InterceptedHTTPClient(
-        user_id=user_id,
-        source={"source": "mcp", "tool": "memory"},
-        timeout=120.0
+        user_id=user_id, source={"source": "mcp", "tool": "memory"}, timeout=120.0
     ) as client:
         try:
-            response = await client.put(url, headers=headers, json=validated_memory_bank)
+            response = await client.put(
+                url, headers=headers, json=validated_memory_bank
+            )
             response.raise_for_status()
             return response.json()
         # If the memory bank does not exist, creates it
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                response = await client.post(url, headers=headers, json=validated_memory_bank)
+                response = await client.post(
+                    url, headers=headers, json=validated_memory_bank
+                )
                 response.raise_for_status()
                 return response.json()
             else:

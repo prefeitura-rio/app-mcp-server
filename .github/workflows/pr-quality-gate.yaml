@@ -39,6 +39,7 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
+          failure-threshold: error
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -65,14 +66,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | \
+            sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
       - name: Run Trivy filesystem scan (SARIF)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-fs.sarif
-          severity: HIGH,CRITICAL
+        run: trivy fs --format sarif --output trivy-fs.sarif --severity HIGH,CRITICAL .
 
       - name: Upload Trivy FS SARIF
         uses: github/codeql-action/upload-sarif@v3
@@ -129,7 +135,35 @@ jobs:
 
       - name: Run tests with coverage
         env:
+          VALID_TOKENS: test-token
+          WORKFLOWS_GCP_SERVICE_ACCOUNT: test-workflows-sa
+          WORKFLOWS_GCS_BUCKET: test-workflows-bucket
+          GEMINI_API_KEY: test-gemini-key
+          GEMINI_MODEL: gemini-2.5-flash
+          GOOGLE_MAPS_API_URL: https://maps.googleapis.com/maps/api/geocode/json
+          GOOGLE_MAPS_API_KEY: test-google-key
+          SHORT_API_URL: https://test.short.local
+          SHORT_API_TOKEN: test-short-token
+          GCP_SERVICE_ACCOUNT_CREDENTIALS: e30=
+          NOMINATIM_API_URL: https://nominatim.openstreetmap.org/search
+          ERROR_INTERCEPTOR_URL: https://test.interceptor.local/api
+          ERROR_INTERCEPTOR_TOKEN: test-interceptor-token
+          IPTU_API_URL: https://test.iptu.local/api
+          IPTU_API_TOKEN: test-iptu-token
+          WA_IPTU_URL: https://test.wa-iptu.local/api
+          WA_IPTU_TOKEN: test-wa-iptu-token
+          WA_IPTU_PUBLIC_KEY: test-wa-iptu-public-key
+          DIVIDA_ATIVA_API_URL: https://test.divida.local/api
+          DIVIDA_ATIVA_ACCESS_KEY: test-divida-access-key
           REDIS_URL: redis://localhost:6379/0
+          REDIS_TTL_SECONDS: "3600"
+          PROXY_URL: https://test.proxy.local
+          SGRC_URL: https://test.sgrc.local/api
+          SGRC_AUTHORIZATION_HEADER: test-sgrc-auth
+          SGRC_BODY_TOKEN: test-sgrc-body-token
+          GMAPS_API_TOKEN: test-gmaps-token
+          DATA_DIR: /tmp
+          TYPESENSE_PARAMETERS: none
           MONGODB_URL: mongodb://localhost:27017
         run: uv run pytest --cov=src --cov-report=xml --cov-report=term-missing
 
@@ -138,6 +172,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import os
           import xml.etree.ElementTree as ET
 
           tolerance = 0.1
@@ -153,7 +188,7 @@ jobs:
 
           delta = current - baseline
 
-          with open("${GITHUB_OUTPUT}", "a", encoding="utf-8") as out:
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"coverage={current:.2f}\n")
               out.write(f"baseline={baseline:.2f}\n")
               out.write(f"delta={delta:.2f}\n")
@@ -169,6 +204,7 @@ jobs:
           PY
 
       - name: Upload coverage.xml artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
@@ -189,17 +225,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | \
+            sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
       - name: Build image (dry-run, local only)
         run: docker build -t app-mcp-server:pr-${{ github.sha }} .
 
       - name: Run Trivy image scan (SARIF)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: image
-          image-ref: app-mcp-server:pr-${{ github.sha }}
-          format: sarif
-          output: trivy-image.sarif
-          severity: HIGH,CRITICAL
+        run: trivy image --format sarif --output trivy-image.sarif --severity HIGH,CRITICAL app-mcp-server:pr-${{ github.sha }}
 
       - name: Upload Trivy image SARIF
         uses: github/codeql-action/upload-sarif@v3
