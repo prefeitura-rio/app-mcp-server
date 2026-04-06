@@ -1,3 +1,5 @@
+# validation: k8s-only change to test build skip
+
 ---
 apiVersion: apps/v1
 kind: Deployment
