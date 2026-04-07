@@ -1,0 +1,169 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/app-mcp-server
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  K8S_NAMESPACE: mcp
+  ROLLOUT_NAME: mcp
+  PREVIEW_SERVICE: mcp-preview
+  ARGOCD_APP_NAME: mcp
+  ARGOCD_NAMESPACE: argocd
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether deploy needs a new image
+        id: check-changes
+        run: |
+          CHANGED_FILES=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          NON_DEPLOY_FILES=$(echo "$CHANGED_FILES" | grep -vE '^(k8s/|helm/)' || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "k8s_only=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$NON_DEPLOY_FILES" ]; then
+            echo "k8s_only=true" >> "$GITHUB_OUTPUT"
+            echo "Only deploy files changed:"
+            echo "$CHANGED_FILES"
+          else
+            echo "k8s_only=false" >> "$GITHUB_OUTPUT"
+            echo "Build-related changes detected:"
+            echo "$NON_DEPLOY_FILES"
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure kubectl for GKE
+        run: |
+          gcloud container clusters get-credentials application \
+            --zone=us-central1 \
+            --project "$GCP_PROJECT_ID"
+
+      - name: Install kubectl Argo Rollouts plugin
+        run: |
+          curl -fLO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x ./kubectl-argo-rollouts-linux-amd64
+          sudo mv ./kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+          kubectl argo rollouts version
+
+      - name: Set up Docker Buildx
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image digest from GHCR
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          for i in $(seq 1 30); do
+            DIGEST=$(docker buildx imagetools inspect "$IMAGE_NAME:${{ github.sha }}" --format '{{.Manifest.Digest}}' 2>/dev/null | grep -oE 'sha256:[a-f0-9]+' | head -n1 || true)
+            if [ -n "$DIGEST" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [ -z "$DIGEST" ]; then
+            echo "Could not resolve digest for $IMAGE_NAME:${{ github.sha }}"
+            exit 1
+          fi
+
+          FULL_IMAGE="$IMAGE_NAME:${{ github.sha }}@$DIGEST"
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "FULL_IMAGE=$FULL_IMAGE" >> "$GITHUB_ENV"
+          echo "Resolved image: $FULL_IMAGE"
+
+      - name: Update Argo CD Application image override
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=json \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/source/kustomize/images/0\", \"value\": \"$FULL_IMAGE\"}]"
+
+      - name: Wait for rollout to receive the new image
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          for i in $(seq 1 60); do
+            CURRENT_IMAGE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}')
+            if [ "$CURRENT_IMAGE" = "$FULL_IMAGE" ]; then
+              echo "Rollout updated with expected image."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Rollout did not receive expected image in time."
+          kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o yaml
+          exit 1
+
+      - name: Wait for rollout preview-ready state
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          kubectl argo rollouts status "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --timeout=10m
+          kubectl get service "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE"
+
+      - name: Start preview port-forward
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          kubectl port-forward -n "$K8S_NAMESPACE" service/"$PREVIEW_SERVICE" 8080:80 >/tmp/mcp-preview-port-forward.log 2>&1 &
+          echo $! > /tmp/mcp-preview-port-forward.pid
+
+      - name: Wait for preview health endpoint
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then
+              echo "Preview is healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Preview did not become healthy in time."
+          cat /tmp/mcp-preview-port-forward.log || true
+          exit 1
+
+      - name: Promote rollout after successful smoke test
+        if: steps.check-changes.outputs.k8s_only != 'true' && success()
+        run: |
+          kubectl argo rollouts promote "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --full
+          kubectl argo rollouts status "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --timeout=10m
+
+      - name: Abort rollout after failed smoke test
+        if: steps.check-changes.outputs.k8s_only != 'true' && failure()
+        run: kubectl argo rollouts abort "$ROLLOUT_NAME" -n "$K8S_NAMESPACE"
+
+      - name: Create deployment summary
+        if: always()
+        run: |
+          echo "## Staging Deploy" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- K8s-only change: \`${{ steps.check-changes.outputs.k8s_only || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Rollout: \`$ROLLOUT_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Preview service: \`$PREVIEW_SERVICE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`${FULL_IMAGE:-not-resolved}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Result: \`${{ job.status }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop preview port-forward
+        if: always() && steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          if [ -f /tmp/mcp-preview-port-forward.pid ]; then
+            kill "$(cat /tmp/mcp-preview-port-forward.pid)" || true
+          fi

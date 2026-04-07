@@ -17,7 +17,7 @@ spec:
     blueGreen:
       activeService: mcp
       previewService: mcp-preview
-      autoPromotionEnabled: true
+      autoPromotionEnabled: false
       scaleDownDelaySeconds: 30
       previewReplicaCount: 1
   template:
