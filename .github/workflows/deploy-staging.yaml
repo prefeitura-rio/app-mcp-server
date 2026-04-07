@@ -133,6 +133,23 @@ jobs:
           echo "Preview service was not created in time."
           exit 1
 
+      - name: Wait for preview service endpoints
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          for i in $(seq 1 60); do
+            ENDPOINT_COUNT=$(kubectl get endpoints "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | wc -w | tr -d ' ')
+            if [ "${ENDPOINT_COUNT:-0}" -gt 0 ]; then
+              echo "Preview service has ready endpoints."
+              kubectl get endpoints "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Preview service did not receive ready endpoints in time."
+          kubectl get pods -n "$K8S_NAMESPACE" -l app="$ROLLOUT_NAME" -o wide || true
+          exit 1
+
       - name: Start preview port-forward
         if: steps.check-changes.outputs.k8s_only != 'true'
         run: |
