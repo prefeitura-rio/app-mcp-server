@@ -120,8 +120,21 @@ jobs:
       - name: Wait for rollout preview-ready state
         if: steps.check-changes.outputs.k8s_only != 'true'
         run: |
-          kubectl argo rollouts status "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --timeout=10m
-          kubectl get service "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE"
+          for i in $(seq 1 60); do
+            STATUS_OUTPUT=$(kubectl argo rollouts status "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" 2>&1 || true)
+            echo "$STATUS_OUTPUT"
+
+            if echo "$STATUS_OUTPUT" | grep -q "Paused - BlueGreenPause"; then
+              echo "Preview is ready and rollout is paused awaiting promotion."
+              kubectl get service "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE"
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "Rollout did not reach BlueGreenPause in time."
+          exit 1
 
       - name: Start preview port-forward
         if: steps.check-changes.outputs.k8s_only != 'true'
