@@ -6,7 +6,7 @@ Testes E2E usados no deploy de staging antes da promocao do preview para stable.
 
 Essa suite valida duas coisas ao mesmo tempo:
 
-- o preview sobe e continua protegido por autenticacao;
+- o preview sobe e responde corretamente no endpoint de health;
 - o fluxo principal de divida ativa responde corretamente com um token real de staging.
 
 ## Escopo Atual
@@ -14,8 +14,6 @@ Essa suite valida duas coisas ao mesmo tempo:
 O runner [`run_preview_e2e.py`](src/tests/e2e/run_preview_e2e.py) cobre:
 
 - `GET /health` com resposta `200` e body `OK`;
-- validacao de `401` sem token e com token invalido em:
-  `POST /consulta_debitos`, `POST /emitir_guia`, `POST /emitir_guia_regularizacao`;
 - `POST /consulta_debitos` com token valido e payload real de staging;
 - `POST /consulta_debitos` com entrada invalida, esperando erro de contrato sem `500`;
 - `POST /emitir_guia` e `POST /emitir_guia_regularizacao` com payload invalido, esperando erro estruturado;
