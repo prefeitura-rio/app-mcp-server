@@ -73,6 +73,19 @@ def parse_json(raw: str):
         return None
 
 
+def get_auth_test_payload(route: str):
+    if route == "/consulta_debitos":
+        return build_consulta_payload(valid=True)
+
+    return {
+        "dicionario_itens": "{}",
+        "lista_cdas": "[]",
+        "lista_efs": "[]",
+        "lista_guias": "[]",
+        "apenas_um_item": "1",
+    }
+
+
 def require_status(actual: int, expected: int, context: str, body) -> None:
     if actual != expected:
         fail(f"{context}: expected HTTP {expected}, got {actual}", body)
@@ -94,13 +107,15 @@ def run_health_check() -> None:
 def run_auth_enforcement_checks() -> None:
     info("Checking auth enforcement on protected routes")
     for route in ("/consulta_debitos", "/emitir_guia", "/emitir_guia_regularizacao"):
-        status, raw, _parsed = request_json(route, payload={}, token=None)
+        payload = get_auth_test_payload(route)
+
+        status, raw, _parsed = request_json(route, payload=payload, token=None)
         require_status(status, 401, f"{route} without token", raw)
         if "token" not in raw.lower():
             fail(f"{route} without token: expected token-related error", raw)
 
         status, raw, _parsed = request_json(
-            route, payload={}, token="invalid-preview-token"
+            route, payload=payload, token="invalid-preview-token"
         )
         require_status(status, 401, f"{route} with invalid token", raw)
         if "inv" not in raw.lower():
