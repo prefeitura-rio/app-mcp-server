@@ -6,6 +6,10 @@ on:
       - staging
   workflow_dispatch:
 
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: read
@@ -22,6 +26,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: staging
 
     steps:
       - name: Checkout code
@@ -71,6 +76,16 @@ jobs:
           sudo mv ./kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
           kubectl argo rollouts version
 
+      - name: Fetch staging E2E secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.15
+        with:
+          method: universal
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ secrets.INFISICAL_PROJECT_SLUG }}
+          env-slug: staging
+          domain: ${{ secrets.INFISICAL_URL }}
+
       - name: Set up Docker Buildx
         if: steps.check-changes.outputs.k8s_only != 'true'
         uses: docker/setup-buildx-action@v3
@@ -96,11 +111,19 @@ jobs:
           echo "FULL_IMAGE=$FULL_IMAGE" >> "$GITHUB_ENV"
           echo "Resolved image: $FULL_IMAGE"
 
+      - name: Capture current Argo CD image override (for rollback)
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          CURRENT_IMAGE_OVERRIDE="$(kubectl get application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.source.kustomize.images[0]}' 2>/dev/null || true)"
+          echo "PREVIOUS_IMAGE_OVERRIDE=$CURRENT_IMAGE_OVERRIDE" >> "$GITHUB_ENV"
+          echo "Current image override: ${CURRENT_IMAGE_OVERRIDE:-<empty>}"
+
       - name: Update Argo CD Application image override
         if: steps.check-changes.outputs.k8s_only != 'true'
         run: |
           kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=json \
             -p="[{\"op\": \"replace\", \"path\": \"/spec/source/kustomize/images/0\", \"value\": \"$FULL_IMAGE\"}]"
+          echo "ARGOCD_IMAGE_PATCHED=true" >> "$GITHUB_ENV"
 
       - name: Wait for rollout to receive the new image
         if: steps.check-changes.outputs.k8s_only != 'true'
@@ -117,24 +140,27 @@ jobs:
           kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o yaml
           exit 1
 
-      - name: Wait for preview service to exist
-        if: steps.check-changes.outputs.k8s_only != 'true'
+      - name: Wait for rollout to have a pending preview (needs promotion)
+        id: wait-preview
         run: |
-          for i in $(seq 1 60); do
-            if kubectl get service "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
-              echo "Preview service exists."
-              kubectl get service "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE"
+          for i in $(seq 1 90); do
+            ACTIVE_SELECTOR="$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.blueGreen.activeSelector}' 2>/dev/null || true)"
+            PREVIEW_SELECTOR="$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.blueGreen.previewSelector}' 2>/dev/null || true)"
+
+            if [ -n "$PREVIEW_SELECTOR" ] && [ "$PREVIEW_SELECTOR" != "$ACTIVE_SELECTOR" ]; then
+              echo "Pending preview detected. activeSelector=$ACTIVE_SELECTOR previewSelector=$PREVIEW_SELECTOR"
+              echo "has_preview=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
-            sleep 5
+            sleep 10
           done
 
-          echo "Preview service was not created in time."
-          exit 1
+          echo "No pending preview detected within timeout; skipping E2E/promote/abort."
+          echo "has_preview=false" >> "$GITHUB_OUTPUT"
 
       - name: Wait for preview service endpoints
-        if: steps.check-changes.outputs.k8s_only != 'true'
+        if: steps.wait-preview.outputs.has_preview == 'true'
         run: |
           for i in $(seq 1 60); do
             ENDPOINT_COUNT=$(kubectl get endpoints "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | wc -w | tr -d ' ')
@@ -151,34 +177,56 @@ jobs:
           exit 1
 
       - name: Start preview port-forward
-        if: steps.check-changes.outputs.k8s_only != 'true'
+        if: steps.wait-preview.outputs.has_preview == 'true'
         run: |
           kubectl port-forward -n "$K8S_NAMESPACE" service/"$PREVIEW_SERVICE" 8080:80 >/tmp/mcp-preview-port-forward.log 2>&1 &
           echo $! > /tmp/mcp-preview-port-forward.pid
 
-      - name: Wait for preview health endpoint
-        if: steps.check-changes.outputs.k8s_only != 'true'
+      - name: Wait for port-forward to be ready
+        if: steps.wait-preview.outputs.has_preview == 'true'
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then
-              echo "Preview is healthy."
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "Port-forward is ready."
               exit 0
             fi
             sleep 2
           done
-          echo "Preview did not become healthy in time."
+
+          echo "Port-forward did not become ready in time."
           cat /tmp/mcp-preview-port-forward.log || true
           exit 1
 
-      - name: Promote rollout after successful smoke test
-        if: steps.check-changes.outputs.k8s_only != 'true' && success()
+      - name: Run E2E tests against preview before promotion
+        if: steps.wait-preview.outputs.has_preview == 'true'
+        env:
+          PREVIEW_BASE_URL: http://127.0.0.1:8080
+          PREVIEW_CONSULTA_TIPO: ${{ vars.PREVIEW_CONSULTA_TIPO }}
+          PREVIEW_CONSULTA_VALOR: ${{ secrets.PREVIEW_CONSULTA_VALOR }}
+          PREVIEW_CONSULTA_ANO_AUTO_INFRACAO: ${{ secrets.PREVIEW_CONSULTA_ANO_AUTO_INFRACAO }}
+        run: python3 src/tests/e2e/run_preview_e2e.py
+
+      - name: Promote rollout after successful E2E tests
+        if: steps.wait-preview.outputs.has_preview == 'true' && success()
         run: |
           kubectl argo rollouts promote "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --full
           kubectl argo rollouts status "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --timeout=10m
 
-      - name: Abort rollout after failed smoke test
-        if: steps.check-changes.outputs.k8s_only != 'true' && failure()
+      - name: Abort rollout after failed E2E tests
+        if: steps.wait-preview.outputs.has_preview == 'true' && failure()
         run: kubectl argo rollouts abort "$ROLLOUT_NAME" -n "$K8S_NAMESPACE"
+
+      - name: Roll back Argo CD image override after failed E2E (keep stable untouched)
+        if: env.ARGOCD_IMAGE_PATCHED == 'true' && steps.wait-preview.outputs.has_preview == 'true' && failure()
+        run: |
+          if [ -z "${PREVIOUS_IMAGE_OVERRIDE:-}" ]; then
+            echo "PREVIOUS_IMAGE_OVERRIDE is empty; refusing to patch Argo CD Application."
+            exit 1
+          fi
+
+          echo "Restoring Argo CD image override to: $PREVIOUS_IMAGE_OVERRIDE"
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=json \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/source/kustomize/images/0\", \"value\": \"$PREVIOUS_IMAGE_OVERRIDE\"}]"
 
       - name: Create deployment summary
         if: always()
@@ -188,11 +236,12 @@ jobs:
           echo "- K8s-only change: \`${{ steps.check-changes.outputs.k8s_only || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Rollout: \`$ROLLOUT_NAME\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Preview service: \`$PREVIEW_SERVICE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Pending preview: \`${{ steps.wait-preview.outputs.has_preview || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Image: \`${FULL_IMAGE:-not-resolved}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Result: \`${{ job.status }}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stop preview port-forward
-        if: always() && steps.check-changes.outputs.k8s_only != 'true'
+        if: always() && steps.wait-preview.outputs.has_preview == 'true'
         run: |
           if [ -f /tmp/mcp-preview-port-forward.pid ]; then
             kill "$(cat /tmp/mcp-preview-port-forward.pid)" || true
