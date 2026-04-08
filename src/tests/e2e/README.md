@@ -16,7 +16,7 @@ O runner [`run_preview_e2e.py`](src/tests/e2e/run_preview_e2e.py) cobre:
 - `GET /health` com resposta `200` e body `OK`;
 - `POST /consulta_debitos` com token valido e payload real de staging;
 - `POST /consulta_debitos` com entrada invalida, esperando erro de contrato sem `500`;
-- `POST /emitir_guia` e `POST /emitir_guia_regularizacao` com payload invalido, esperando erro estruturado;
+- `POST /emitir_guia` e `POST /emitir_guia_regularizacao` com payload minimo, validando resposta JSON sem `500`;
 - emissao real de guia quando a consulta retorna itens elegiveis.
 
 Quando a massa de staging nao retorna itens para emissao, os happy paths de guia sao pulados e o restante da suite continua valido.

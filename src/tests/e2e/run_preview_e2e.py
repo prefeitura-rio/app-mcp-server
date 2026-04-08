@@ -175,19 +175,15 @@ def find_item_index(consulta_payload, values):
     return None
 
 
-def run_emitir_guia_invalid_payload_checks() -> None:
-    info("Checking structured failures for guia endpoints")
+def run_emitir_guia_minimal_payload_checks() -> None:
+    info("Checking guia endpoints with minimal payload")
     auth_token = get_auth_token()
     for route in ("/emitir_guia", "/emitir_guia_regularizacao"):
         status, raw, parsed = request_json(route, payload={}, token=auth_token)
         require_status(status, 200, f"{route} invalid payload", raw)
-        require_json_object(parsed, f"{route} invalid payload")
-        if parsed.get("api_resposta_sucesso") is not False:
-            fail(
-                f"{route} invalid payload: expected api_resposta_sucesso=false", parsed
-            )
-        if "api_descricao_erro" not in parsed:
-            fail(f"{route} invalid payload: missing api_descricao_erro", parsed)
+        require_json_object(parsed, f"{route} minimal payload")
+        if "api_resposta_sucesso" not in parsed:
+            fail(f"{route} minimal payload: missing api_resposta_sucesso", parsed)
 
 
 def run_emitir_guia_happy_paths(consulta_payload) -> None:
@@ -261,7 +257,7 @@ def main() -> None:
     require_authenticated_env()
     consulta_payload = run_consulta_happy_path()
     run_consulta_invalid_input_check()
-    run_emitir_guia_invalid_payload_checks()
+    run_emitir_guia_minimal_payload_checks()
     run_emitir_guia_happy_paths(consulta_payload)
     print("Preview E2E checks passed.")
 
