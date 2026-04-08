@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -11,6 +12,8 @@ VALID_TOKENS = os.environ.get("VALID_TOKENS", "")
 CONSULTA_TIPO = os.environ.get("PREVIEW_CONSULTA_TIPO", "")
 CONSULTA_VALOR = os.environ.get("PREVIEW_CONSULTA_VALOR", "")
 ANO_AUTO = os.environ.get("PREVIEW_CONSULTA_ANO_AUTO_INFRACAO", "")
+AVISTA_PAYLOAD = os.environ.get("PREVIEW_AVISTA_PAYLOAD", "")
+REGULARIZACAO_PAYLOAD = os.environ.get("PREVIEW_REGULARIZACAO_PAYLOAD", "")
 
 
 def fail(message: str, details=None) -> None:
@@ -37,7 +40,7 @@ def get_auth_token() -> str:
     return ""
 
 
-def request_json(path: str, payload=None, token: str | None = None):
+def request_json(path: str, payload=None, token: str | None = None, timeout: int = 30):
     url = f"{BASE_URL}{path}"
     body = json.dumps(payload or {}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -46,24 +49,28 @@ def request_json(path: str, payload=None, token: str | None = None):
 
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
             return response.status, raw, parse_json(raw)
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
         return exc.code, raw, parse_json(raw)
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+        fail(f"{path}: request timed out or failed to connect", str(exc))
 
 
-def request_text(path: str):
+def request_text(path: str, timeout: int = 15):
     url = f"{BASE_URL}{path}"
     request = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
             return response.status, raw
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
         return exc.code, raw
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+        fail(f"{path}: request timed out or failed to connect", str(exc))
 
 
 def parse_json(raw: str):
@@ -71,6 +78,21 @@ def parse_json(raw: str):
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+def load_json_env(name: str, raw_value: str):
+    if not raw_value:
+        return None
+
+    try:
+        value = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        fail(f"{name}: invalid JSON", str(exc))
+
+    if not isinstance(value, dict):
+        fail(f"{name}: expected JSON object", value)
+
+    return value
 
 
 def require_status(actual: int, expected: int, context: str, body) -> None:
@@ -120,7 +142,7 @@ def build_consulta_payload(valid: bool):
     return payload
 
 
-def run_consulta_happy_path():
+def run_consulta_happy_path() -> None:
     info("Running authenticated consulta_debitos happy path")
     auth_token = get_auth_token()
     status, raw, parsed = request_json(
@@ -144,8 +166,6 @@ def run_consulta_happy_path():
         if key not in parsed:
             fail(f"consulta_debitos happy path: missing key '{key}'", parsed)
 
-    return parsed
-
 
 def run_consulta_invalid_input_check() -> None:
     info("Running authenticated consulta_debitos invalid-input path")
@@ -167,14 +187,6 @@ def run_consulta_invalid_input_check() -> None:
         fail("consulta_debitos invalid input: missing api_descricao_erro", parsed)
 
 
-def find_item_index(consulta_payload, values):
-    item_map = consulta_payload.get("dicionario_itens", {})
-    for index, value in item_map.items():
-        if value in values:
-            return str(index)
-    return None
-
-
 def run_emitir_guia_minimal_payload_checks() -> None:
     info("Checking guia endpoints with minimal payload")
     auth_token = get_auth_token()
@@ -186,32 +198,13 @@ def run_emitir_guia_minimal_payload_checks() -> None:
             fail(f"{route} minimal payload: missing api_resposta_sucesso", parsed)
 
 
-def run_emitir_guia_happy_paths(consulta_payload) -> None:
+def run_emitir_guia_happy_paths() -> None:
     auth_token = get_auth_token()
-    common_payload = {
-        "dicionario_itens": json.dumps(
-            consulta_payload.get("dicionario_itens", {}), ensure_ascii=True
-        ),
-        "lista_cdas": json.dumps(
-            consulta_payload.get("lista_cdas", []), ensure_ascii=True
-        ),
-        "lista_efs": json.dumps(
-            consulta_payload.get("lista_efs", []), ensure_ascii=True
-        ),
-        "lista_guias": json.dumps(
-            consulta_payload.get("lista_guias", []), ensure_ascii=True
-        ),
-    }
-
-    vista_values = set(consulta_payload.get("lista_cdas", [])) | set(
-        consulta_payload.get("lista_efs", [])
-    )
-    vista_index = find_item_index(consulta_payload, vista_values)
-    if vista_index:
+    avista_payload = load_json_env("PREVIEW_AVISTA_PAYLOAD", AVISTA_PAYLOAD)
+    if avista_payload:
         info("Running authenticated emitir_guia happy path")
-        payload = common_payload | {"apenas_um_item": vista_index}
         status, raw, parsed = request_json(
-            "/emitir_guia", payload=payload, token=auth_token
+            "/emitir_guia", payload=avista_payload, token=auth_token, timeout=90
         )
         require_status(status, 200, "emitir_guia happy path", raw)
         require_json_object(parsed, "emitir_guia happy path")
@@ -222,16 +215,19 @@ def run_emitir_guia_happy_paths(consulta_payload) -> None:
                 fail(f"emitir_guia happy path: missing key '{key}'", parsed)
     else:
         info(
-            "Skipping emitir_guia happy path because consulta_debitos returned no eligible item"
+            "Skipping emitir_guia happy path because PREVIEW_AVISTA_PAYLOAD is not set"
         )
 
-    regularizacao_values = set(consulta_payload.get("lista_guias", []))
-    regularizacao_index = find_item_index(consulta_payload, regularizacao_values)
-    if regularizacao_index:
+    regularizacao_payload = load_json_env(
+        "PREVIEW_REGULARIZACAO_PAYLOAD", REGULARIZACAO_PAYLOAD
+    )
+    if regularizacao_payload:
         info("Running authenticated emitir_guia_regularizacao happy path")
-        payload = common_payload | {"apenas_um_item": regularizacao_index}
         status, raw, parsed = request_json(
-            "/emitir_guia_regularizacao", payload=payload, token=auth_token
+            "/emitir_guia_regularizacao",
+            payload=regularizacao_payload,
+            token=auth_token,
+            timeout=90,
         )
         require_status(status, 200, "emitir_guia_regularizacao happy path", raw)
         require_json_object(parsed, "emitir_guia_regularizacao happy path")
@@ -247,7 +243,7 @@ def run_emitir_guia_happy_paths(consulta_payload) -> None:
                 )
     else:
         info(
-            "Skipping emitir_guia_regularizacao happy path because consulta_debitos returned no eligible item"
+            "Skipping emitir_guia_regularizacao happy path because PREVIEW_REGULARIZACAO_PAYLOAD is not set"
         )
 
 
@@ -255,10 +251,10 @@ def main() -> None:
     print(f"Running preview E2E checks against: {BASE_URL}")
     run_health_check()
     require_authenticated_env()
-    consulta_payload = run_consulta_happy_path()
+    run_consulta_happy_path()
     run_consulta_invalid_input_check()
     run_emitir_guia_minimal_payload_checks()
-    run_emitir_guia_happy_paths(consulta_payload)
+    run_emitir_guia_happy_paths()
     print("Preview E2E checks passed.")
 
 

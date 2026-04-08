@@ -28,6 +28,8 @@ Quando a massa de staging nao retorna itens para emissao, os happy paths de guia
 - `PREVIEW_CONSULTA_TIPO`: tipo usado em `/consulta_debitos`
 - `PREVIEW_CONSULTA_VALOR`: valor de consulta correspondente ao tipo
 - `PREVIEW_CONSULTA_ANO_AUTO_INFRACAO`: obrigatorio apenas quando o tipo for `numeroAutoInfracao`
+- `PREVIEW_AVISTA_PAYLOAD`: payload final real usado no happy path de `/emitir_guia`
+- `PREVIEW_REGULARIZACAO_PAYLOAD`: payload final real usado no happy path de `/emitir_guia_regularizacao`
 
 ## Execucao Local
 
@@ -61,6 +63,8 @@ Os parametros de consulta usados pelo teste nao precisam ficar no Infisical. No 
 - GitHub Variable `PREVIEW_CONSULTA_TIPO`
 - GitHub Secret `PREVIEW_CONSULTA_VALOR`
 - GitHub Secret `PREVIEW_CONSULTA_ANO_AUTO_INFRACAO` apenas se algum dia o tipo for `numeroAutoInfracao`
+- GitHub Secret `PREVIEW_AVISTA_PAYLOAD`
+- GitHub Secret `PREVIEW_REGULARIZACAO_PAYLOAD`
 
 ## E2E vs Quality Gate
 

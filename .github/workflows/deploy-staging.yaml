@@ -204,6 +204,8 @@ jobs:
           PREVIEW_CONSULTA_TIPO: ${{ vars.PREVIEW_CONSULTA_TIPO }}
           PREVIEW_CONSULTA_VALOR: ${{ secrets.PREVIEW_CONSULTA_VALOR }}
           PREVIEW_CONSULTA_ANO_AUTO_INFRACAO: ${{ secrets.PREVIEW_CONSULTA_ANO_AUTO_INFRACAO }}
+          PREVIEW_AVISTA_PAYLOAD: ${{ secrets.PREVIEW_AVISTA_PAYLOAD }}
+          PREVIEW_REGULARIZACAO_PAYLOAD: ${{ secrets.PREVIEW_REGULARIZACAO_PAYLOAD }}
         run: python3 src/tests/e2e/run_preview_e2e.py
 
       - name: Promote rollout after successful E2E tests
