@@ -14,6 +14,9 @@ CONSULTA_VALOR = os.environ.get("PREVIEW_CONSULTA_VALOR", "")
 ANO_AUTO = os.environ.get("PREVIEW_CONSULTA_ANO_AUTO_INFRACAO", "")
 AVISTA_PAYLOAD = os.environ.get("PREVIEW_AVISTA_PAYLOAD", "")
 REGULARIZACAO_PAYLOAD = os.environ.get("PREVIEW_REGULARIZACAO_PAYLOAD", "")
+DEFAULT_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_POST_TIMEOUT", "60"))
+DEFAULT_GET_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GET_TIMEOUT", "15"))
+GUIDE_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GUIDE_TIMEOUT", "90"))
 
 
 def fail(message: str, details=None) -> None:
@@ -40,7 +43,12 @@ def get_auth_token() -> str:
     return ""
 
 
-def request_json(path: str, payload=None, token: str | None = None, timeout: int = 30):
+def request_json(
+    path: str,
+    payload=None,
+    token: str | None = None,
+    timeout: int = DEFAULT_POST_TIMEOUT,
+):
     url = f"{BASE_URL}{path}"
     body = json.dumps(payload or {}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -59,7 +67,7 @@ def request_json(path: str, payload=None, token: str | None = None, timeout: int
         fail(f"{path}: request timed out or failed to connect", str(exc))
 
 
-def request_text(path: str, timeout: int = 15):
+def request_text(path: str, timeout: int = DEFAULT_GET_TIMEOUT):
     url = f"{BASE_URL}{path}"
     request = urllib.request.Request(url, method="GET")
     try:
@@ -204,7 +212,10 @@ def run_emitir_guia_happy_paths() -> None:
     if avista_payload:
         info("Running authenticated emitir_guia happy path")
         status, raw, parsed = request_json(
-            "/emitir_guia", payload=avista_payload, token=auth_token, timeout=90
+            "/emitir_guia",
+            payload=avista_payload,
+            token=auth_token,
+            timeout=GUIDE_POST_TIMEOUT,
         )
         require_status(status, 200, "emitir_guia happy path", raw)
         require_json_object(parsed, "emitir_guia happy path")
@@ -227,7 +238,7 @@ def run_emitir_guia_happy_paths() -> None:
             "/emitir_guia_regularizacao",
             payload=regularizacao_payload,
             token=auth_token,
-            timeout=90,
+            timeout=GUIDE_POST_TIMEOUT,
         )
         require_status(status, 200, "emitir_guia_regularizacao happy path", raw)
         require_json_object(parsed, "emitir_guia_regularizacao happy path")
