@@ -1,0 +1,328 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/app-mcp-server
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  K8S_NAMESPACE: mcp
+  ROLLOUT_NAME: mcp
+  PREVIEW_SERVICE: mcp-preview
+  ARGOCD_APP_NAME: mcp
+  ARGOCD_NAMESPACE: argocd
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether deploy needs a new image
+        id: check-changes
+        run: |
+          CHANGED_FILES=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          NON_DEPLOY_FILES=$(echo "$CHANGED_FILES" | grep -vE '^(k8s/|helm/)' || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "k8s_only=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$NON_DEPLOY_FILES" ]; then
+            echo "k8s_only=true" >> "$GITHUB_OUTPUT"
+            echo "Only deploy files changed:"
+            echo "$CHANGED_FILES"
+          else
+            echo "k8s_only=false" >> "$GITHUB_OUTPUT"
+            echo "Build-related changes detected:"
+            echo "$NON_DEPLOY_FILES"
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gke-gcloud-auth-plugin
+        run: gcloud components install gke-gcloud-auth-plugin
+
+      - name: Configure kubectl for GKE
+        run: |
+          gcloud container clusters get-credentials application \
+            --zone=us-central1 \
+            --project "$GCP_PROJECT_ID"
+
+      - name: Install kubectl Argo Rollouts plugin
+        run: |
+          curl -fLO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x ./kubectl-argo-rollouts-linux-amd64
+          sudo mv ./kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+          kubectl argo rollouts version
+
+      - name: Fetch staging E2E secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.15
+        with:
+          method: universal
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ secrets.INFISICAL_PROJECT_SLUG }}
+          env-slug: staging
+          domain: ${{ secrets.INFISICAL_URL }}
+
+      - name: Set up Docker Buildx
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image digest from GHCR
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          for i in $(seq 1 30); do
+            DIGEST=$(docker buildx imagetools inspect "$IMAGE_NAME:${{ github.sha }}" --format '{{.Manifest.Digest}}' 2>/dev/null | grep -oE 'sha256:[a-f0-9]+' | head -n1 || true)
+            if [ -n "$DIGEST" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [ -z "$DIGEST" ]; then
+            echo "Could not resolve digest for $IMAGE_NAME:${{ github.sha }}"
+            exit 1
+          fi
+
+          FULL_IMAGE="$IMAGE_NAME:${{ github.sha }}@$DIGEST"
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "FULL_IMAGE=$FULL_IMAGE" >> "$GITHUB_ENV"
+          echo "Resolved image: $FULL_IMAGE"
+
+      - name: Capture current Argo CD image override (for rollback)
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          CURRENT_IMAGE_OVERRIDE="$(kubectl get application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.source.kustomize.images[0]}' 2>/dev/null || true)"
+          echo "PREVIOUS_IMAGE_OVERRIDE=$CURRENT_IMAGE_OVERRIDE" >> "$GITHUB_ENV"
+          echo "Current image override: ${CURRENT_IMAGE_OVERRIDE:-<empty>}"
+
+      - name: Update Argo CD Application image override
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=json \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/source/kustomize/images/0\", \"value\": \"$FULL_IMAGE\"}]"
+          echo "ARGOCD_IMAGE_PATCHED=true" >> "$GITHUB_ENV"
+
+      - name: Wait for rollout to receive the new image
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          for i in $(seq 1 60); do
+            CURRENT_IMAGE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}')
+            if [ "$CURRENT_IMAGE" = "$FULL_IMAGE" ]; then
+              echo "Rollout updated with expected image."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Rollout did not receive expected image in time."
+          kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o yaml
+          exit 1
+
+      - name: Wait for rollout to have a pending preview (needs promotion)
+        id: wait-preview
+        run: |
+          for i in $(seq 1 90); do
+            ACTIVE_SELECTOR="$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.blueGreen.activeSelector}' 2>/dev/null || true)"
+            PREVIEW_SELECTOR="$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.blueGreen.previewSelector}' 2>/dev/null || true)"
+
+            if [ -n "$PREVIEW_SELECTOR" ] && [ "$PREVIEW_SELECTOR" != "$ACTIVE_SELECTOR" ]; then
+              echo "Pending preview detected. activeSelector=$ACTIVE_SELECTOR previewSelector=$PREVIEW_SELECTOR"
+              echo "has_preview=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "No pending preview detected within timeout; skipping E2E/promote/abort."
+          echo "has_preview=false" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for preview service endpoints
+        if: steps.wait-preview.outputs.has_preview == 'true'
+        run: |
+          for i in $(seq 1 60); do
+            ENDPOINT_COUNT=$(kubectl get endpoints "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | wc -w | tr -d ' ')
+            if [ "${ENDPOINT_COUNT:-0}" -gt 0 ]; then
+              echo "Preview service has ready endpoints."
+              kubectl get endpoints "$PREVIEW_SERVICE" -n "$K8S_NAMESPACE"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Preview service did not receive ready endpoints in time."
+          kubectl get pods -n "$K8S_NAMESPACE" -l app="$ROLLOUT_NAME" -o wide || true
+          exit 1
+
+      - name: Start preview port-forward
+        if: steps.wait-preview.outputs.has_preview == 'true'
+        run: |
+          kubectl port-forward -n "$K8S_NAMESPACE" service/"$PREVIEW_SERVICE" 8080:80 >/tmp/mcp-preview-port-forward.log 2>&1 &
+          echo $! > /tmp/mcp-preview-port-forward.pid
+
+      - name: Wait for port-forward to be ready
+        if: steps.wait-preview.outputs.has_preview == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "Port-forward is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Port-forward did not become ready in time."
+          cat /tmp/mcp-preview-port-forward.log || true
+          exit 1
+
+      - name: Run E2E tests against preview before promotion
+        if: steps.wait-preview.outputs.has_preview == 'true'
+        env:
+          PREVIEW_BASE_URL: http://127.0.0.1:8080
+          PREVIEW_CONSULTA_TIPO: ${{ vars.PREVIEW_CONSULTA_TIPO }}
+          PREVIEW_CONSULTA_VALOR: ${{ secrets.PREVIEW_CONSULTA_VALOR }}
+          PREVIEW_CONSULTA_ANO_AUTO_INFRACAO: ${{ secrets.PREVIEW_CONSULTA_ANO_AUTO_INFRACAO }}
+          PREVIEW_AVISTA_PAYLOAD: ${{ secrets.PREVIEW_AVISTA_PAYLOAD }}
+          PREVIEW_REGULARIZACAO_PAYLOAD: ${{ secrets.PREVIEW_REGULARIZACAO_PAYLOAD }}
+        run: python3 src/tests/e2e/run_preview_e2e.py
+
+      - name: Promote rollout after successful E2E tests
+        if: steps.wait-preview.outputs.has_preview == 'true' && success()
+        run: |
+          kubectl argo rollouts promote "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --full
+          kubectl argo rollouts status "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" --timeout=10m
+
+      - name: Abort rollout after failed E2E tests
+        if: steps.wait-preview.outputs.has_preview == 'true' && failure()
+        run: kubectl argo rollouts abort "$ROLLOUT_NAME" -n "$K8S_NAMESPACE"
+
+      - name: Roll back Argo CD image override after failed E2E (keep stable untouched)
+        if: env.ARGOCD_IMAGE_PATCHED == 'true' && steps.wait-preview.outputs.has_preview == 'true' && failure()
+        run: |
+          if [ -z "${PREVIOUS_IMAGE_OVERRIDE:-}" ]; then
+            echo "PREVIOUS_IMAGE_OVERRIDE is empty; refusing to patch Argo CD Application."
+            exit 1
+          fi
+
+          echo "Restoring Argo CD image override to: $PREVIOUS_IMAGE_OVERRIDE"
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=json \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/source/kustomize/images/0\", \"value\": \"$PREVIOUS_IMAGE_OVERRIDE\"}]"
+
+      - name: Create deployment summary
+        if: always()
+        run: |
+          echo "## Staging Deploy" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- K8s-only change: \`${{ steps.check-changes.outputs.k8s_only || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Rollout: \`$ROLLOUT_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Preview service: \`$PREVIEW_SERVICE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Pending preview: \`${{ steps.wait-preview.outputs.has_preview || 'false' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`${FULL_IMAGE:-not-resolved}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Result: \`${{ job.status }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Send Discord notification
+        if: always()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then
+            echo "Discord webhook not configured, skipping notification."
+            exit 0
+          fi
+
+          COMMIT_MSG=$(git log -1 --pretty=format:'%s' "${{ github.sha }}")
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an' "${{ github.sha }}")
+          COMMIT_URL="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          SHORT_HASH=$(git rev-parse --short "${{ github.sha }}")
+
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Succeeded"
+            COLOR="3066993"
+            DESCRIPTION="Preview tests passed and deployment was promoted to stable."
+          else
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Failed"
+            COLOR="15158332"
+            DESCRIPTION="Preview deployment failed validation. Stable service remained preserved."
+          fi
+
+          DISCORD_PAYLOAD=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "${STATUS_EMOJI} Staging Deploy ${STATUS_TEXT}",
+              "description": "${DESCRIPTION}",
+              "color": ${COLOR},
+              "fields": [
+                {
+                  "name": "Commit",
+                  "value": "[${COMMIT_MSG:0:50}](${COMMIT_URL})",
+                  "inline": false
+                },
+                {
+                  "name": "Author",
+                  "value": "${COMMIT_AUTHOR}",
+                  "inline": true
+                },
+                {
+                  "name": "Version",
+                  "value": "\`${SHORT_HASH}\`",
+                  "inline": true
+                },
+                {
+                  "name": "Image",
+                  "value": "\`${FULL_IMAGE:-not-resolved}\`",
+                  "inline": false
+                },
+                {
+                  "name": "Preview",
+                  "value": "\`${{ steps.wait-preview.outputs.has_preview || 'false' }}\`",
+                  "inline": true
+                },
+                {
+                  "name": "K8s-only",
+                  "value": "\`${{ steps.check-changes.outputs.k8s_only || 'false' }}\`",
+                  "inline": true
+                }
+              ],
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
+              "footer": {
+                "text": "GitHub Actions"
+              }
+            }]
+          }
+          EOF
+          )
+
+          curl -fsS -H "Content-Type: application/json" \
+            -d "$DISCORD_PAYLOAD" \
+            "$DISCORD_WEBHOOK"
+
+      - name: Stop preview port-forward
+        if: always() && steps.wait-preview.outputs.has_preview == 'true'
+        run: |
+          if [ -f /tmp/mcp-preview-port-forward.pid ]; then
+            kill "$(cat /tmp/mcp-preview-port-forward.pid)" || true
+          fi

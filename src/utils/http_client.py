@@ -88,7 +88,7 @@ class InterceptedHTTPClient:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._client and isinstance(self._client, httpx.AsyncClient):
+        if self._client and hasattr(self._client, "aclose"):
             await self._client.aclose()
 
     # --- Sync context manager ---
@@ -99,7 +99,7 @@ class InterceptedHTTPClient:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._client and isinstance(self._client, httpx.Client):
+        if self._client and hasattr(self._client, "close"):
             self._client.close()
 
     # --- Error interception ---
@@ -133,18 +133,8 @@ class InterceptedHTTPClient:
         """Envia erro para o interceptor de forma síncrona."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(send_api_error(
-                user_id=self.user_id,
-                source=self.source,
-                api_endpoint=str(url),
-                request_body=request_body,
-                status_code=status_code,
-                error_message=error_message,
-                traceback=traceback_str,
-            ))
-        except RuntimeError:
-            try:
-                asyncio.run(send_api_error(
+            loop.create_task(
+                send_api_error(
                     user_id=self.user_id,
                     source=self.source,
                     api_endpoint=str(url),
@@ -152,7 +142,21 @@ class InterceptedHTTPClient:
                     status_code=status_code,
                     error_message=error_message,
                     traceback=traceback_str,
-                ))
+                )
+            )
+        except RuntimeError:
+            try:
+                asyncio.run(
+                    send_api_error(
+                        user_id=self.user_id,
+                        source=self.source,
+                        api_endpoint=str(url),
+                        request_body=request_body,
+                        status_code=status_code,
+                        error_message=error_message,
+                        traceback=traceback_str,
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Falha ao enviar erro para interceptor: {e}")
 
@@ -177,18 +181,25 @@ class InterceptedHTTPClient:
         if self.sync:
             raise RuntimeError("Use request_sync() para modo sync")
 
-        if not isinstance(self._client, httpx.AsyncClient):
+        if self._client is None:
             raise RuntimeError(
                 "InterceptedHTTPClient não foi inicializado via context manager. "
                 "Use 'async with InterceptedHTTPClient(...) as client:' para modo async."
             )
+
+        if not hasattr(self._client, "request"):
+            raise RuntimeError("Cliente sync inválido")
 
         request_body = kwargs.get("json") or kwargs.get("data") or kwargs.get("params")
 
         try:
             response = await self._client.request(method, url, **kwargs)
 
-            if intercept_errors and error_status_codes and response.status_code in error_status_codes:
+            if (
+                intercept_errors
+                and error_status_codes
+                and response.status_code in error_status_codes
+            ):
                 try:
                     response_text = response.text[:500] if response.text else ""
                 except Exception:
@@ -256,18 +267,25 @@ class InterceptedHTTPClient:
         if not self.sync:
             raise RuntimeError("Use request() para modo async")
 
-        if not isinstance(self._client, httpx.Client):
+        if self._client is None:
             raise RuntimeError(
                 "InterceptedHTTPClient não foi inicializado via context manager. "
                 "Use 'with InterceptedHTTPClient(..., sync=True) as client:' para modo sync."
             )
+
+        if not hasattr(self._client, "request"):
+            raise RuntimeError("Cliente async inválido")
 
         request_body = kwargs.get("json") or kwargs.get("data") or kwargs.get("params")
 
         try:
             response = self._client.request(method, url, **kwargs)
 
-            if intercept_errors and error_status_codes and response.status_code in error_status_codes:
+            if (
+                intercept_errors
+                and error_status_codes
+                and response.status_code in error_status_codes
+            ):
                 try:
                     response_text = response.text[:500] if response.text else ""
                 except Exception:

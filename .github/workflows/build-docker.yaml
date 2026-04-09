@@ -6,6 +6,10 @@ on:
       - main
       - staging
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,34 +17,65 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether image rebuild is needed
+        id: check-changes
+        run: |
+          CHANGED_FILES=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          NON_DEPLOY_FILES=$(echo "$CHANGED_FILES" | grep -vE '^(k8s/|helm/)' || true)
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "skip_build=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$NON_DEPLOY_FILES" ]; then
+            echo "skip_build=true" >> "$GITHUB_OUTPUT"
+            echo "Only deploy files changed:"
+            echo "$CHANGED_FILES"
+          else
+            echo "skip_build=false" >> "$GITHUB_OUTPUT"
+            echo "Build-required changes detected:"
+            echo "$NON_DEPLOY_FILES"
+          fi
 
       - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
+        uses: docker/login-action@v3
+        if: steps.check-changes.outputs.skip_build != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.check-changes.outputs.skip_build != 'true'
+        uses: docker/setup-buildx-action@v3
 
       - name: Extract metadata for Docker tags
         id: meta
+        if: steps.check-changes.outputs.skip_build != 'true'
         run: |
           IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/app-mcp-server"
 
           if [ "${GITHUB_REF##*/}" == "main" ]; then
             COMMIT_HASH=${{ github.sha }}
-            TAGS="stable,$COMMIT_HASH"
+            TAG1="stable"
+            TAG2="$COMMIT_HASH"
           elif [ "${GITHUB_REF##*/}" == "staging" ]; then
             COMMIT_HASH=${{ github.sha }}
-            TAGS="latest,$COMMIT_HASH"
+            TAG1="latest"
+            TAG2="$COMMIT_HASH"
           fi
 
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
-          echo "TAGS=$TAGS" >> $GITHUB_ENV
+          echo "TAG1=$TAG1" >> $GITHUB_ENV
+          echo "TAG2=$TAG2" >> $GITHUB_ENV
 
-      - name: Build and tag Docker image
-        run: |
-          for TAG in $(echo $TAGS | tr "," "\n"); do
-            docker build -t $IMAGE_NAME:$TAG .
-          done
-
-      - name: Push Docker image
-        run: |
-          for TAG in $(echo $TAGS | tr "," "\n"); do
-            docker push $IMAGE_NAME:$TAG
-          done
+      - name: Build and push Docker image
+        if: steps.check-changes.outputs.skip_build != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.TAG1 }}
+            ${{ env.IMAGE_NAME }}:${{ env.TAG2 }}

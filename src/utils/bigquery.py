@@ -133,7 +133,9 @@ async def save_response_in_bq_background(
 
 @interceptor(
     source={"source": "mcp", "tool": "bigquery"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else "unknown")
+    ),
 )
 def save_feedback_in_bq(
     user_id: str,
@@ -231,7 +233,9 @@ async def save_feedback_in_bq_background(
 
 @interceptor(
     source={"source": "mcp", "tool": "bigquery"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[1] if len(args) > 1 else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[1] if len(args) > 1 else "unknown")
+    ),
 )
 def save_cor_alert_in_bq(
     alert_id: str,
@@ -341,6 +345,7 @@ async def save_cor_alert_in_bq_background(
     Asynchronous wrapper for saving COR alert in BigQuery.
     Catches and logs exceptions to prevent crashing background tasks.
     """
+
     def _normalize(value: str) -> str:
         if not value:
             return ""
@@ -370,9 +375,7 @@ async def save_cor_alert_in_bq_background(
 
     final_bairro_raw = raw_candidate or inferred_candidate
     final_bairro_normalizado = (
-        normalized_candidate
-        or _normalize(final_bairro_raw)
-        or inferred_candidate
+        normalized_candidate or _normalize(final_bairro_raw) or inferred_candidate
     )
 
     if final_bairro_normalizado == "jd america":
@@ -423,7 +426,9 @@ async def save_cor_alert_in_bq_background(
             }
         ]
         client = get_bigquery_client()
-        job = client.load_table_from_json(payload, table_full_name, job_config=job_config)
+        job = client.load_table_from_json(
+            payload, table_full_name, job_config=job_config
+        )
         job.result()
         logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
 

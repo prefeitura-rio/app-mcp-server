@@ -310,14 +310,10 @@ class TestBigQueryScenarios:
         ) as mock_send:
             mock_send.return_value = True
 
-            with patch(
-                "src.utils.bigquery.get_bigquery_client"
-            ) as mock_client:
+            with patch("src.utils.bigquery.get_bigquery_client") as mock_client:
                 mock_bq = MagicMock()
                 mock_job = MagicMock()
-                mock_job.result = MagicMock(
-                    side_effect=Exception("Table not found")
-                )
+                mock_job.result = MagicMock(side_effect=Exception("Table not found"))
                 mock_bq.load_table_from_json.return_value = mock_job
                 mock_client.return_value = mock_bq
 

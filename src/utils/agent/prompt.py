@@ -21,7 +21,7 @@ async def get_system_prompt_from_api(agent_type: str = "agentic_search") -> dict
         async with InterceptedHTTPClient(
             user_id="system",
             source={"source": "mcp", "tool": "agent", "function": "get_system_prompt"},
-            timeout=30.0
+            timeout=30.0,
         ) as client:
             response = await client.get(api_url, headers=headers)
             response.raise_for_status()

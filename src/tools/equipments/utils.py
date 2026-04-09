@@ -1,11 +1,14 @@
 import json
 import datetime
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional
 
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
 from src.utils.http_client import InterceptedHTTPClient
-from src.tools.cor_alert_tools import _extract_google_neighborhood, normalize_neighborhood
+from src.tools.cor_alert_tools import (
+    _extract_google_neighborhood,
+    normalize_neighborhood,
+)
 
 # from src.utils.log import logger
 
@@ -28,16 +31,20 @@ class CustomJSONEncoder(json.JSONEncoder):
 
 def get_coords_from_nominatim_api(address: str) -> dict:
     params = {"q": address, "format": "json", "addressdetails": 1, "limit": 1}
-    headers = {
-        "User-Agent": "RioMCPServer/1.0 (equipments@rio)"
-    }
+    headers = {"User-Agent": "RioMCPServer/1.0 (equipments@rio)"}
     with InterceptedHTTPClient(
         user_id="unknown",
-        source={"source": "mcp", "tool": "equipments", "function": "get_coords_from_nominatim_api"},
+        source={
+            "source": "mcp",
+            "tool": "equipments",
+            "function": "get_coords_from_nominatim_api",
+        },
         sync=True,
-        timeout=10.0
+        timeout=10.0,
     ) as client:
-        response = client.get_sync(env.NOMINATIM_API_URL, params=params, headers=headers)
+        response = client.get_sync(
+            env.NOMINATIM_API_URL, params=params, headers=headers
+        )
         response.raise_for_status()
         data = response.json()
 
@@ -57,9 +64,13 @@ def get_coords_from_google_maps_api(address: str) -> dict:
     params = {"address": address, "key": env.GOOGLE_MAPS_API_KEY}
     with InterceptedHTTPClient(
         user_id="unknown",
-        source={"source": "mcp", "tool": "equipments", "function": "get_coords_from_google_maps_api"},
+        source={
+            "source": "mcp",
+            "tool": "equipments",
+            "function": "get_coords_from_google_maps_api",
+        },
         sync=True,
-        timeout=10.0
+        timeout=10.0,
     ) as client:
         response = client.get_sync(env.GOOGLE_MAPS_API_URL, params=params)
         data = response.json()
@@ -72,7 +83,9 @@ def get_coords_from_google_maps_api(address: str) -> dict:
         # Extrair bairro
         bairro_raw = _extract_google_neighborhood(first_result)
         coords["bairro_raw"] = bairro_raw if bairro_raw else None
-        coords["bairro_normalizado"] = normalize_neighborhood(bairro_raw) if bairro_raw else None
+        coords["bairro_normalizado"] = (
+            normalize_neighborhood(bairro_raw) if bairro_raw else None
+        )
 
         return coords
     return {}
@@ -96,7 +109,7 @@ def get_plus8_coords_from_address(address: str) -> Tuple[Optional[str], Optional
         # logger.error("No coords from nominatim or google maps, returning None")
         return None, None
 
-    coords_info = json.dumps(coords, ensure_ascii=False, indent=2)
+    # coords_info = json.dumps(coords, ensure_ascii=False, indent=2)
     # logger.info(f"\nGeolocated info:\n {coords_info}")
     plus8 = olc.encode(latitude=coords["lat"], longitude=coords["lng"], codeLength=8)
     # logger.info(f"Encoded plus8 {plus8}")

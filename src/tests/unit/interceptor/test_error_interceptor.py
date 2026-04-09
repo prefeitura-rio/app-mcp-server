@@ -8,12 +8,14 @@ para funções sync e async, sem modificar as funções originais.
 import pytest
 from unittest.mock import AsyncMock, patch
 import asyncio
+import json
 import sys
 
 # Usa os módulos carregados pelo conftest
-error_interceptor = sys.modules['src.utils.error_interceptor']
+error_interceptor = sys.modules["src.utils.error_interceptor"]
 interceptor = error_interceptor.interceptor
 send_general_error = error_interceptor.send_general_error
+real_send_error_to_interceptor = error_interceptor.send_error_to_interceptor
 
 
 class TestInterceptorDecoratorAsync:
@@ -148,7 +150,10 @@ class TestInterceptorDecoratorAsync:
 
         @interceptor(
             source={"source": "mcp", "tool": "test_tool"},
-            extract_source=lambda args, kwargs, base: {**base, "inscricao": kwargs.get("inscricao")},
+            extract_source=lambda args, kwargs, base: {
+                **base,
+                "inscricao": kwargs.get("inscricao"),
+            },
         )
         async def failing_function(inscricao: str):
             raise Exception("Falha na consulta")
@@ -341,27 +346,37 @@ class TestSerializeSource:
     def test_send_api_error_uses_serialize_source(self):
         """Verifica que send_api_error chama serialize_source para gerar o flowname."""
         import asyncio
-        from unittest.mock import AsyncMock, patch, call
+        from unittest.mock import AsyncMock, patch
 
         source = {"source": "mcp", "tool": "search"}
 
-        with patch.object(
-            error_interceptor, "serialize_source", wraps=error_interceptor.serialize_source
-        ) as mock_serialize, patch.object(
-            error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
-        ) as mock_send:
+        with (
+            patch.object(
+                error_interceptor,
+                "serialize_source",
+                wraps=error_interceptor.serialize_source,
+            ) as mock_serialize,
+            patch.object(
+                error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
+            ) as mock_send,
+        ):
             mock_send.return_value = True
 
-            asyncio.run(error_interceptor.send_api_error(
-                user_id="test_user",
-                source=source,
-                api_endpoint="https://api.example.com/test",
-                request_body={},
-                status_code=500,
-                error_message="Error",
-            ))
+            asyncio.run(
+                error_interceptor.send_api_error(
+                    user_id="test_user",
+                    source=source,
+                    api_endpoint="https://api.example.com/test",
+                    request_body={},
+                    status_code=500,
+                    error_message="Error",
+                )
+            )
 
-            mock_serialize.assert_called_once_with(source)
+            mock_serialize.assert_called_once()
+            assert mock_serialize.call_args.args[0]["source"] == "mcp"
+            assert mock_serialize.call_args.args[0]["tool"] == "search"
+            assert mock_serialize.call_args.args[0]["environment"] == "test"
 
     def test_send_general_error_uses_serialize_source(self):
         """Verifica que send_general_error chama serialize_source para gerar o flowname."""
@@ -370,18 +385,122 @@ class TestSerializeSource:
 
         source = {"source": "mcp", "tool": "search"}
 
-        with patch.object(
-            error_interceptor, "serialize_source", wraps=error_interceptor.serialize_source
-        ) as mock_serialize, patch.object(
-            error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
-        ) as mock_send:
+        with (
+            patch.object(
+                error_interceptor,
+                "serialize_source",
+                wraps=error_interceptor.serialize_source,
+            ) as mock_serialize,
+            patch.object(
+                error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
+            ) as mock_send,
+        ):
             mock_send.return_value = True
 
-            asyncio.run(error_interceptor.send_general_error(
-                user_id="test_user",
-                source=source,
-                error_type="ValueError",
-                error_message="Test error",
-            ))
+            asyncio.run(
+                error_interceptor.send_general_error(
+                    user_id="test_user",
+                    source=source,
+                    error_type="ValueError",
+                    error_message="Test error",
+                )
+            )
 
-            mock_serialize.assert_called_once_with(source)
+            mock_serialize.assert_called_once()
+            assert mock_serialize.call_args.args[0]["source"] == "mcp"
+            assert mock_serialize.call_args.args[0]["tool"] == "search"
+            assert mock_serialize.call_args.args[0]["environment"] == "test"
+
+
+class TestInterceptorEnvironmentControls:
+    """Testes do comportamento por ambiente do interceptor."""
+
+    @pytest.mark.asyncio
+    async def test_send_error_to_interceptor_skips_during_tests(self):
+        with (
+            patch.object(error_interceptor.env, "ENVIRONMENT", "test"),
+            patch.object(error_interceptor.env, "IS_LOCAL", False),
+            patch.object(error_interceptor.httpx, "AsyncClient") as mock_client,
+        ):
+            result = await real_send_error_to_interceptor(
+                customer_whatsapp_number="unknown",
+                flowname="source=mcp | tool=test",
+                api_endpoint="internal://Exception",
+                input_body={"hello": "world"},
+                http_status_code=0,
+                error_message="erro",
+                source={"source": "mcp", "tool": "test"},
+            )
+
+        assert result is False
+        mock_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_general_error_includes_environment_in_source(self):
+        with (
+            patch.object(error_interceptor.env, "ENVIRONMENT", "staging"),
+            patch.object(error_interceptor.env, "IS_LOCAL", False),
+            patch.object(
+                error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
+            ) as mock_send,
+        ):
+            mock_send.return_value = True
+
+            await error_interceptor.send_general_error(
+                user_id="unknown",
+                source={"source": "mcp", "tool": "divida_ativa"},
+                error_type="Exception",
+                error_message="erro",
+            )
+
+        sent_source = mock_send.call_args.kwargs["source"]
+        assert sent_source["environment"] == "staging"
+
+    @pytest.mark.asyncio
+    async def test_send_error_to_interceptor_includes_environment_in_payload(self):
+        class DummyResponse:
+            status_code = 200
+            text = "ok"
+
+        class DummyClient:
+            def __init__(self):
+                self.post_calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def post(self, *args, **kwargs):
+                self.post_calls.append((args, kwargs))
+                return DummyResponse()
+
+        dummy_client = DummyClient()
+
+        with (
+            patch.object(error_interceptor.env, "ENVIRONMENT", "staging"),
+            patch.object(error_interceptor.env, "IS_LOCAL", False),
+            patch.object(
+                error_interceptor.env, "ERROR_INTERCEPTOR_URL", "https://test.local/api"
+            ),
+            patch.object(error_interceptor.env, "ERROR_INTERCEPTOR_TOKEN", "token"),
+            patch.object(error_interceptor, "_should_report_errors", return_value=True),
+            patch.object(
+                error_interceptor.httpx, "AsyncClient", return_value=dummy_client
+            ),
+        ):
+            result = await real_send_error_to_interceptor(
+                customer_whatsapp_number="unknown",
+                flowname="source=mcp | tool=test",
+                api_endpoint="internal://Exception",
+                input_body={"hello": "world"},
+                http_status_code=0,
+                error_message="erro",
+                source={"source": "mcp", "tool": "test"},
+            )
+
+        assert result is True
+        payload = dummy_client.post_calls[0][1]["json"]
+        parsed_source = json.loads(payload["source"])
+        assert parsed_source["environment"] == "staging"

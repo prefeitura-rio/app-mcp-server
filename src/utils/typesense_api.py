@@ -40,7 +40,6 @@ async def hub_search(request: HubSearchRequest) -> Optional[dict]:
     r = response.json()
 
     if "results" in r:
-
         results_clean = []
         for doc in r["results"]:
             metadata = doc.get("metadata", {})

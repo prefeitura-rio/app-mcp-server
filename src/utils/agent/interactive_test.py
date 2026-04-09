@@ -1,3 +1,11 @@
+from src.config import env
+from src.utils.agent.prompt import prompt_data
+from src.utils.agent.utils import gerar_conversa_aleatoria
+from src.utils.agent.tools import mcp_tools
+
+from engine.agent import Agent
+
+import uuid
 import traceback
 import asyncio
 import json
@@ -15,14 +23,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-from src.config import env
-from src.utils.agent.prompt import prompt_data
-from src.utils.agent.utils import gerar_conversa_aleatoria
-from src.utils.agent.tools import mcp_tools
-
-from engine.agent import Agent
-
-import uuid
 
 print(f"mcp_tools len: {len(mcp_tools)}")
 
@@ -84,7 +84,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                         last_timestamp_str.replace("Z", "+00:00")
                     )
                     total_execution_time = (last_timestamp - start_time).total_seconds()
-                except:
+                except ValueError:
                     pass
 
         for i, message in enumerate(messages):
@@ -107,18 +107,18 @@ def parse_agent_response(response, is_local=False, start_time=None):
                             current_timestamp - previous_timestamp
                         ).total_seconds()
                     previous_timestamp = current_timestamp
-                except:
+                except ValueError:
                     pass
 
             if "HumanMessage" in msg_type:
-                print(f"\n👤 USER MESSAGE #{i+1}:")
+                print(f"\n👤 USER MESSAGE #{i + 1}:")
                 print(f"   ⏰ Timestamp: {timestamp_str}")
                 if time_since_last:
                     print(f"   ⏱️  Time since last: {time_since_last:.3f}s")
                 print(f"   {message.content}")
 
             elif "AIMessage" in msg_type:
-                print(f"\n🤖 AI RESPONSE #{i+1}:")
+                print(f"\n🤖 AI RESPONSE #{i + 1}:")
                 print(f"   ⏰ Timestamp: {timestamp_str}")
                 if time_since_last:
                     print(f"   ⏱️  Time since last: {time_since_last:.3f}s")
@@ -166,7 +166,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                     )
 
             elif "ToolMessage" in msg_type:
-                print(f"\n🔧 TOOL RESPONSE #{i+1}:")
+                print(f"\n🔧 TOOL RESPONSE #{i + 1}:")
                 tool_name = getattr(message, "name", "unknown")
                 tool_content = message.content
                 print(f"   ⏰ Timestamp: {timestamp_str}")
@@ -177,7 +177,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
 
         # Mostrar tempo total no final
         if total_execution_time:
-            print(f"\n📈 EXECUTION SUMMARY:")
+            print("\n📈 EXECUTION SUMMARY:")
             print(f"   🎯 Total execution time: {total_execution_time:.3f}s")
             if start_time:
                 actual_wall_time = (
@@ -185,7 +185,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                 ).total_seconds()
                 print(f"   🕐 Actual wall clock time: {actual_wall_time:.3f}s")
                 print(
-                    f"   📊 Efficiency: {(total_execution_time/actual_wall_time*100):.1f}% (message timestamps vs wall clock)"
+                    f"   📊 Efficiency: {(total_execution_time / actual_wall_time * 100):.1f}% (message timestamps vs wall clock)"
                 )
     else:
         # Remote agent returns direct message objects
@@ -200,11 +200,11 @@ def parse_agent_response(response, is_local=False, start_time=None):
             content = message.get("content", "")
 
             if msg_type == "human":
-                print(f"\n👤 USER MESSAGE #{i+1}:")
+                print(f"\n👤 USER MESSAGE #{i + 1}:")
                 print(f"   {content}")
 
             elif msg_type == "ai":
-                print(f"\n🤖 AI RESPONSE #{i+1}:")
+                print(f"\n🤖 AI RESPONSE #{i + 1}:")
 
                 # Check for tool calls
                 tool_calls = message.get("tool_calls", [])
@@ -250,7 +250,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
                     )
 
             elif msg_type == "tool":
-                print(f"\n🔧 TOOL RESPONSE #{i+1}:")
+                print(f"\n🔧 TOOL RESPONSE #{i + 1}:")
                 tool_name = message.get("name", "unknown")
                 tool_content = message.get("content", "")
                 tool_status = message.get("status", "unknown")
@@ -262,7 +262,7 @@ def parse_agent_response(response, is_local=False, start_time=None):
 
 async def interactive_chat(use_local=False):
     """Start an interactive chat session."""
-    agent = local_agent if use_local else remote_agent
+    # agent = local_agent if use_local else remote_agent
     agent_name = "Local Agent" if use_local else "Remote Agent"
 
     print(f"🤖 EAI {agent_name} Interactive Chat - user_id: {user_id}")
