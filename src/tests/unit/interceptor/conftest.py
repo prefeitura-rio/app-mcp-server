@@ -26,6 +26,8 @@ def _load_module_directly(module_name: str, file_path: str):
 
 # Mock do módulo src.config.env antes de carregar qualquer coisa
 class MockEnv:
+    ENVIRONMENT = os.environ.get("ENVIRONMENT", "test")
+    IS_LOCAL = os.environ.get("IS_LOCAL", "false") == "true"
     ERROR_INTERCEPTOR_URL = os.environ.get(
         "ERROR_INTERCEPTOR_URL", "https://test.local/api"
     )
