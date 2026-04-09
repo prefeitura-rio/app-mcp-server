@@ -1239,7 +1239,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             return ticket_failed(
                 state,
                 error_code="erro_interno",
-                message=tpl.erro_criar_solicitacao(),
+                description=tpl.erro_criar_solicitacao(),
                 error_message=str(exc),
             )
 
