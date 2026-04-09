@@ -719,3 +719,178 @@ async def test_iptu_confirmation_and_boleto_description(
     )
     description = workflow._gerar_descricao_boletos_gerados(state)
     assert "123" in description
+
+
+@pytest.mark.asyncio
+async def test_iptu_inscricao_ano_and_guias_branches(
+    iptu_workflow_module, service_models, monkeypatch
+):
+    workflow = iptu_workflow_module.IPTUWorkflow(use_fake_api=True)
+
+    invalid_error = iptu_workflow_module.InvalidInscricaoError("inscrição inválida")
+
+    async def raise_invalid_inscricao(inscricao):
+        raise invalid_error
+
+    workflow._api_service = types.SimpleNamespace(
+        get_imovel_info=raise_invalid_inscricao
+    )
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        payload={"inscricao_imobiliaria": "123"},
+    )
+    result = await workflow._informar_inscricao_imobiliaria(state)
+    assert "não foi encontrada" in result.agent_response.error_message.lower()
+
+    api_error = iptu_workflow_module.APIUnavailableError("api fora")
+
+    async def raise_api_error(inscricao):
+        raise api_error
+
+    workflow._api_service = types.SimpleNamespace(get_imovel_info=raise_api_error)
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        payload={"inscricao_imobiliaria": "12345678"},
+    )
+    result = await workflow._informar_inscricao_imobiliaria(state)
+    assert result.data["inscricao_imobiliaria"] == "12345678"
+    assert result.data["endereco"] is None
+
+    state = service_models.ServiceState(user_id="u1", service_name="iptu_pagamento")
+    result = await workflow._escolher_ano_exercicio(state)
+    assert result.agent_response.payload_schema is not None
+
+    monkeypatch.setattr(
+        iptu_workflow_module.state_helpers,
+        "reset_completo",
+        lambda state, manter_inscricao=False: state.data.update({"reset": True}),
+    )
+
+    async def fake_divida(inscricao):
+        return None
+
+    async def fake_guias(inscricao, exercicio):
+        return None
+
+    workflow._api_service = types.SimpleNamespace(
+        get_divida_ativa_info=fake_divida,
+        consultar_guias=fake_guias,
+    )
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        data={"inscricao_imobiliaria": "12345678", "ano_exercicio": 2025},
+        internal={f"{iptu_workflow_module.STATE_FAILED_ATTEMPTS_PREFIX}12345678": 2},
+        payload={},
+    )
+    result = await workflow._consultar_guias_disponiveis(state)
+    assert result.data["reset"] is True
+    assert result.agent_response.payload_schema is not None
+
+
+@pytest.mark.asyncio
+async def test_iptu_cotas_and_darm_branches(
+    iptu_workflow_module, service_models, monkeypatch
+):
+    workflow = iptu_workflow_module.IPTUWorkflow(use_fake_api=True)
+
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        data={"dados_guias": {"inscricao_imobiliaria": "123", "exercicio": "2025"}},
+        payload={"guia_escolhida": "00"},
+    )
+    result = await workflow._usuario_escolhe_guias_iptu(state)
+    assert result.data["guia_escolhida"] == "00"
+
+    state = service_models.ServiceState(
+        user_id="u1", service_name="iptu_pagamento", payload={}
+    )
+    result = await workflow._consultar_cotas(state)
+    assert (
+        "dados para consulta de cotas ausentes"
+        in result.agent_response.description.lower()
+    )
+
+    unpaid_cota = {
+        "Situacao": {"codigo": "02"},
+        "NCota": "01",
+        "ValorCota": "100,00",
+        "DataVencimento": "01/01/2026",
+        "ValorPago": "0,00",
+        "DataPagamento": "",
+        "QuantDiasEmAtraso": "0",
+        "esta_paga": False,
+        "esta_vencida": False,
+        "valor_numerico": 100.0,
+    }
+    paid_cota = {
+        **unpaid_cota,
+        "NCota": "02",
+        "DataVencimento": "01/01/2025",
+        "esta_paga": True,
+    }
+
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        data={
+            "dados_cotas": {
+                "inscricao_imobiliaria": "123",
+                "exercicio": "2025",
+                "numero_guia": "00",
+                "tipo_guia": "IPTU",
+                "cotas": [unpaid_cota, paid_cota],
+            }
+        },
+        payload={"cotas_escolhidas": ["02"]},
+    )
+    result = await workflow._usuario_escolhe_cotas_iptu(state)
+    assert "já está paga" in result.agent_response.description.lower()
+
+    state.payload = {"cotas_escolhidas": ["01"]}
+    result = await workflow._usuario_escolhe_cotas_iptu(state)
+    assert "2026" in result.agent_response.description
+
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        data={"cotas_escolhidas": ["01", "02"]},
+    )
+    result = await workflow._perguntar_formato_darm(state)
+    assert result.agent_response.payload_schema is not None
+
+    state.payload = {"darm_separado": True}
+    result = await workflow._perguntar_formato_darm(state)
+    assert result.internal[iptu_workflow_module.STATE_USE_SEPARATE_DARM] is True
+
+    monkeypatch.setattr(
+        iptu_workflow_module.state_helpers,
+        "validar_dados_obrigatorios",
+        lambda state, campos: None,
+    )
+    monkeypatch.setattr(
+        iptu_workflow_module.state_helpers,
+        "reset_para_selecao_cotas",
+        lambda state: state.data.update({"reset_cotas": True}),
+    )
+
+    async def consultar_darm(*args, **kwargs):
+        return None
+
+    workflow._api_service = types.SimpleNamespace(consultar_darm=consultar_darm)
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        data={
+            "inscricao_imobiliaria": "123",
+            "guia_escolhida": "00",
+            "cotas_escolhidas": ["01"],
+            "ano_exercicio": 2025,
+        },
+    )
+    result = await workflow._gerar_darm(state)
+    assert result.data["reset_cotas"] is True
+    assert result.agent_response.payload_schema is not None

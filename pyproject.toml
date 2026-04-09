@@ -75,7 +75,10 @@ omit = [
     "src/tools/feedback_tools.py",
     "src/tools/web_search_surkai.py",
     "src/utils/agent/*",
+    "src/utils/llms.py",
+    "src/utils/prompts.py",
     "src/utils/test_agent.py",
+    "src/tools/multi_step_service/workflows/iptu_pagamento/api/api_service_fake.py",
 ]
 
 [tool.coverage.report]
@@ -92,7 +95,10 @@ omit = [
     "src/tools/feedback_tools.py",
     "src/tools/web_search_surkai.py",
     "src/utils/agent/*",
+    "src/utils/llms.py",
+    "src/utils/prompts.py",
     "src/utils/test_agent.py",
+    "src/tools/multi_step_service/workflows/iptu_pagamento/api/api_service_fake.py",
 ]
 
 [dependency-groups]

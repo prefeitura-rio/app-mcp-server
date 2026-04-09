@@ -1,4 +1,7 @@
+import importlib.util
 import sys
+import types
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +17,111 @@ poda_state_helpers = sys.modules[
 ticket_builder = sys.modules[
     "src.tools.multi_step_service.workflows.poda_de_arvore.integrations.ticket_builder"
 ]
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _ensure_package(name: str, path: Path):
+    pkg = types.ModuleType(name)
+    pkg.__path__ = [str(path)]
+    sys.modules[name] = pkg
+    return pkg
+
+
+def _load_module(module_name: str, relative_path: str):
+    spec = importlib.util.spec_from_file_location(
+        module_name, PROJECT_ROOT / relative_path
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def prepare_poda_api_module(monkeypatch, module_name="test_poda_api_service_module"):
+    _ensure_package("src", PROJECT_ROOT / "src")
+    _ensure_package("src.config", PROJECT_ROOT / "src" / "config")
+    _ensure_package("src.utils", PROJECT_ROOT / "src" / "utils")
+    _ensure_package("src.tools", PROJECT_ROOT / "src" / "tools")
+    _ensure_package(
+        "src.tools.multi_step_service",
+        PROJECT_ROOT / "src" / "tools" / "multi_step_service",
+    )
+    _ensure_package(
+        "src.tools.multi_step_service.workflows",
+        PROJECT_ROOT / "src" / "tools" / "multi_step_service" / "workflows",
+    )
+    _ensure_package(
+        "src.tools.multi_step_service.workflows.poda_de_arvore",
+        PROJECT_ROOT
+        / "src"
+        / "tools"
+        / "multi_step_service"
+        / "workflows"
+        / "poda_de_arvore",
+    )
+    _ensure_package(
+        "src.tools.multi_step_service.workflows.poda_de_arvore.api",
+        PROJECT_ROOT
+        / "src"
+        / "tools"
+        / "multi_step_service"
+        / "workflows"
+        / "poda_de_arvore"
+        / "api",
+    )
+
+    env_module = types.SimpleNamespace(
+        CHATBOT_INTEGRATIONS_URL="https://integrations.example/",
+        CHATBOT_INTEGRATIONS_KEY="integration-key",
+        GMAPS_API_TOKEN="maps-token",
+        DATA_DIR=Path("/tmp"),
+    )
+    monkeypatch.setitem(sys.modules, "src.config.env", env_module)
+    monkeypatch.setitem(
+        sys.modules, "src.config", types.SimpleNamespace(env=env_module)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.error_interceptor",
+        types.SimpleNamespace(interceptor=lambda *a, **k: lambda f: f),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.http_client",
+        types.SimpleNamespace(InterceptedHTTPClient=None),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        types.SimpleNamespace(ClientSession=object),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "async_googlemaps",
+        types.SimpleNamespace(AsyncClient=object),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "geopandas",
+        types.SimpleNamespace(read_file=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "shapely.geometry",
+        types.SimpleNamespace(Point=lambda x, y: (x, y)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "shapely.wkt",
+        types.SimpleNamespace(loads=lambda value: value),
+    )
+
+    return _load_module(
+        module_name,
+        "src/tools/multi_step_service/workflows/poda_de_arvore/api/api_service.py",
+    )
 
 
 def test_nome_payload_normaliza_caps_and_spaces():
@@ -189,3 +297,147 @@ def test_build_ticket_payload_returns_expected_tuple():
     assert address.street == "Rua Teste"
     assert requester.email == "user@example.com"
     assert description == "poda de árvore"
+
+
+@pytest.mark.asyncio
+async def test_sgrc_service_get_integrations_url_and_user_info(monkeypatch):
+    module = prepare_poda_api_module(monkeypatch)
+    service = module.SGRCAPIService()
+
+    assert (
+        service.get_integrations_url("/person") == "https://integrations.example/person"
+    )
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"name": "Maria"}
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return DummyResponse()
+
+    monkeypatch.setattr(module, "InterceptedHTTPClient", lambda **kwargs: DummyClient())
+    result = await service.get_user_info("12345678909")
+    assert result == {"name": "Maria"}
+
+
+@pytest.mark.asyncio
+async def test_sgrc_service_get_user_info_wraps_errors(monkeypatch):
+    module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_error")
+    service = module.SGRCAPIService()
+
+    class FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        module, "InterceptedHTTPClient", lambda **kwargs: FailingClient()
+    )
+
+    with pytest.raises(Exception, match="Failed to get user info: boom"):
+        await service.get_user_info("12345678909")
+
+
+@pytest.mark.asyncio
+async def test_address_service_helpers_and_endereco_info(monkeypatch):
+    module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_addr")
+    monkeypatch.setattr(module.AddressAPIService, "_load_shape_rj", lambda self: None)
+    service = module.AddressAPIService()
+
+    assert await service.substitute_digits("Rua 12") != "Rua 12"
+    assert round(service.haversine_distance(0, 0, 0, 0), 2) == 0.00
+
+    monkeypatch.setattr(
+        service,
+        "get_nearest_logradouro_and_bairro",
+        lambda lat, lon: module.NearestLocation(
+            id_logradouro=10,
+            name_logradouro="Rua IPP",
+            id_bairro=20,
+            name_bairro="Centro",
+        ),
+    )
+
+    async def fake_get_ipp_street_code(**kwargs):
+        return {"logradouro_id": "99", "bairro_nome": "Centro"}
+
+    monkeypatch.setattr(service, "get_ipp_street_code", fake_get_ipp_street_code)
+    result = await service.get_endereco_info(-22.9, -43.2, "Rua A", "Centro")
+    assert result["logradouro_id"] == "99"
+
+    monkeypatch.setattr(
+        service,
+        "get_nearest_logradouro_and_bairro",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("sem geo")),
+    )
+    result = await service.get_endereco_info(-22.9, -43.2)
+    assert result["logradouro_id"] == "0"
+    assert result["bairro_id"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_address_service_get_ipp_street_code(monkeypatch):
+    module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_ipp")
+    monkeypatch.setattr(module.AddressAPIService, "_load_shape_rj", lambda self: None)
+    service = module.AddressAPIService()
+
+    class DummyResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return DummyResponse(
+                {
+                    "candidates": [
+                        {
+                            "address": "Rua Alfa, Centro",
+                            "attributes": {"cl": "111"},
+                            "location": {"y": -22.9, "x": -43.2},
+                        }
+                    ]
+                }
+            )
+
+        async def post(self, *args, **kwargs):
+            return DummyResponse({"id": "20", "name": "Centro"})
+
+    monkeypatch.setattr(module, "InterceptedHTTPClient", lambda **kwargs: DummyClient())
+    monkeypatch.setattr(
+        module, "jaro_similarity", lambda a, b: 0.2 if a == "Rua A" else 0.95
+    )
+
+    result = await service.get_ipp_street_code(
+        logradouro_nome="Rua A",
+        logradouro_nome_ipp="Rua IPP",
+        bairro_nome_ipp="Centro",
+        latitude=-22.9,
+        longitude=-43.2,
+    )
+
+    assert result["logradouro_id"] == "111"
+    assert result["bairro_nome"] == "Centro"
