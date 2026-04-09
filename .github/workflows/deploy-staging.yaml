@@ -242,6 +242,84 @@ jobs:
           echo "- Image: \`${FULL_IMAGE:-not-resolved}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Result: \`${{ job.status }}\`" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Send Discord notification
+        if: always()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then
+            echo "Discord webhook not configured, skipping notification."
+            exit 0
+          fi
+
+          COMMIT_MSG=$(git log -1 --pretty=format:'%s' "${{ github.sha }}")
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an' "${{ github.sha }}")
+          COMMIT_URL="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          SHORT_HASH=$(git rev-parse --short "${{ github.sha }}")
+
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Succeeded"
+            COLOR="3066993"
+            DESCRIPTION="Preview tests passed and deployment was promoted to stable."
+          else
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Failed"
+            COLOR="15158332"
+            DESCRIPTION="Preview deployment failed validation. Stable service remained preserved."
+          fi
+
+          DISCORD_PAYLOAD=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "${STATUS_EMOJI} Staging Deploy ${STATUS_TEXT}",
+              "description": "${DESCRIPTION}",
+              "color": ${COLOR},
+              "fields": [
+                {
+                  "name": "Commit",
+                  "value": "[${COMMIT_MSG:0:50}](${COMMIT_URL})",
+                  "inline": false
+                },
+                {
+                  "name": "Author",
+                  "value": "${COMMIT_AUTHOR}",
+                  "inline": true
+                },
+                {
+                  "name": "Version",
+                  "value": "\`${SHORT_HASH}\`",
+                  "inline": true
+                },
+                {
+                  "name": "Image",
+                  "value": "\`${FULL_IMAGE:-not-resolved}\`",
+                  "inline": false
+                },
+                {
+                  "name": "Preview",
+                  "value": "\`${{ steps.wait-preview.outputs.has_preview || 'false' }}\`",
+                  "inline": true
+                },
+                {
+                  "name": "K8s-only",
+                  "value": "\`${{ steps.check-changes.outputs.k8s_only || 'false' }}\`",
+                  "inline": true
+                }
+              ],
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
+              "footer": {
+                "text": "GitHub Actions"
+              }
+            }]
+          }
+          EOF
+          )
+
+          curl -fsS -H "Content-Type: application/json" \
+            -d "$DISCORD_PAYLOAD" \
+            "$DISCORD_WEBHOOK"
+
       - name: Stop preview port-forward
         if: always() && steps.wait-preview.outputs.has_preview == 'true'
         run: |
