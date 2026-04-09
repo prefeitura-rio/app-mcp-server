@@ -11,6 +11,10 @@ on:
       - staging
   workflow_dispatch:
 
+concurrency:
+  group: pr-quality-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
@@ -20,6 +24,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
@@ -61,6 +66,7 @@ jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
@@ -92,6 +98,7 @@ jobs:
   test:
     name: Tests + Coverage Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     services:
       redis:
@@ -183,6 +190,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           tolerance = 0.1
+          minimum_coverage = 50.0
           baseline_path = ".github/coverage-baseline.json"
           xml_path = "coverage.xml"
 
@@ -199,10 +207,17 @@ jobs:
               out.write(f"coverage={current:.2f}\n")
               out.write(f"baseline={baseline:.2f}\n")
               out.write(f"delta={delta:.2f}\n")
+              out.write(f"minimum={minimum_coverage:.2f}\n")
 
           print(f"Current coverage: {current:.2f}%")
           print(f"Baseline coverage: {baseline:.2f}%")
+          print(f"Minimum required coverage: {minimum_coverage:.2f}%")
           print(f"Delta: {delta:.2f} pp")
+
+          if current < minimum_coverage:
+              raise SystemExit(
+                  f"Coverage is {current:.2f}%, below the minimum required threshold of {minimum_coverage:.1f}%."
+              )
 
           if delta < -tolerance:
               raise SystemExit(
@@ -220,6 +235,7 @@ jobs:
   build:
     name: Build Dry Run + Image Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs:
       - lint
       - security-scan
@@ -244,7 +260,7 @@ jobs:
           sudo apt-get install -y trivy
 
       - name: Build image (dry-run, local only)
-        run: docker build -t app-mcp-server:pr-${{ github.sha }} .
+        run: docker buildx build --load -t app-mcp-server:pr-${{ github.sha }} .
 
       - name: Run Trivy image scan (SARIF)
         run: trivy image --format sarif --output trivy-image.sarif --severity HIGH,CRITICAL app-mcp-server:pr-${{ github.sha }}
@@ -259,6 +275,7 @@ jobs:
   pr-summary:
     name: PR Summary Comment
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: always() && github.event_name == 'pull_request'
     needs:
       - lint
@@ -282,6 +299,26 @@ jobs:
             const coverageCurrent = `${{ toJSON(needs.test.outputs.coverage) }}`;
             const coverageBaseline = `${{ toJSON(needs.test.outputs.baseline) }}`;
             const coverageDelta = `${{ toJSON(needs.test.outputs.delta) }}`;
+            const coverageMinimum = "50.00";
+
+            const formatCoverageDelta = (delta) => {
+              const numeric = Number(delta);
+              if (Number.isNaN(numeric)) return delta;
+              const signal = numeric >= 0 ? "+" : "";
+              return `${signal}${numeric.toFixed(2)}`;
+            };
+
+            const coverageStatus = (current, baseline, minimum) => {
+              const currentNumber = Number(current);
+              const baselineNumber = Number(baseline);
+              const minimumNumber = Number(minimum);
+              if ([currentNumber, baselineNumber, minimumNumber].some(Number.isNaN)) {
+                return "Unknown";
+              }
+              if (currentNumber < minimumNumber) return "Failed";
+              if (currentNumber + 0.1 < baselineNumber) return "Failed";
+              return "Passed";
+            };
 
             const hasCoverage =
               coverageCurrent !== "" &&
@@ -293,19 +330,27 @@ jobs:
 
             const coverageBlock = hasCoverage
               ? [
-                  "**Coverage**",
+                  "### 📊 Coverage",
                   `- Current: \`${coverageCurrent}%\``,
                   `- Baseline: \`${coverageBaseline}%\``,
-                  `- Delta: \`${coverageDelta} pp\``,
+                  `- Minimum: \`${coverageMinimum}%\``,
+                  `- Delta: \`${formatCoverageDelta(coverageDelta)} pp\``,
+                  `- Status: **${coverageStatus(coverageCurrent, coverageBaseline, coverageMinimum)}**`,
                 ].join("\n")
               : [
-                  "**Coverage**",
+                  "### 📊 Coverage",
                   "- Coverage data was not produced for this run.",
                 ].join("\n");
 
+            const allPassed =
+              "${{ needs.lint.result }}" === "success" &&
+              "${{ needs['security-scan'].result }}" === "success" &&
+              "${{ needs.test.result }}" === "success" &&
+              "${{ needs.build.result }}" === "success";
+
             const marker = "<!-- pr-quality-gate-summary -->";
             const body = `${marker}
-            ## PR Quality Gate Summary
+            ## 🚦 PR Quality Gate Summary
 
             | Check | Result |
             |---|---|
@@ -315,6 +360,12 @@ jobs:
             | Build + Image Scan | ${formatStatus("${{ needs.build.result }}")} |
 
             ${coverageBlock}
+
+            ---
+
+            ${allPassed
+              ? "### ✅ All quality checks passed"
+              : "### ❌ Quality gate failed"}
             `;
 
             const { owner, repo } = context.repo;

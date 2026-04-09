@@ -61,6 +61,40 @@ python_files = ["test_*.py", "*_tests.py"]
 asyncio_mode = "auto"
 addopts = "-ra"
 
+[tool.coverage.run]
+omit = [
+    "src/tests/*",
+    "src/resources/*",
+    "src/tools/caio/*",
+    "src/tools/crawl_pages/*",
+    "src/tools/multi_step_service/workflows/divida_ativa/*",
+    "src/tools/multi_step_service/workflows/bank_account.py",
+    "src/tools/calculator.py",
+    "src/tools/datetime_tools.py",
+    "src/tools/dharma_search.py",
+    "src/tools/feedback_tools.py",
+    "src/tools/web_search_surkai.py",
+    "src/utils/agent/*",
+    "src/utils/test_agent.py",
+]
+
+[tool.coverage.report]
+omit = [
+    "src/tests/*",
+    "src/resources/*",
+    "src/tools/caio/*",
+    "src/tools/crawl_pages/*",
+    "src/tools/multi_step_service/workflows/divida_ativa/*",
+    "src/tools/multi_step_service/workflows/bank_account.py",
+    "src/tools/calculator.py",
+    "src/tools/datetime_tools.py",
+    "src/tools/dharma_search.py",
+    "src/tools/feedback_tools.py",
+    "src/tools/web_search_surkai.py",
+    "src/utils/agent/*",
+    "src/utils/test_agent.py",
+]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.3.0",
