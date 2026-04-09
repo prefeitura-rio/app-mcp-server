@@ -103,6 +103,7 @@ omit = [
 
 [dependency-groups]
 dev = [
-    "pre-commit>=4.3.0",
-    "pytest-cov>=6.2.1",
+    "pre-commit>=4.5.1",
+    "pytest-cov>=7.1.0",
+    "coverage>=7.13.5",
 ]
