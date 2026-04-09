@@ -16,7 +16,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/app-mcp-server
-  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID_STAGING }}
   K8S_NAMESPACE: mcp
   ROLLOUT_NAME: mcp
   PREVIEW_SERVICE: mcp-preview
@@ -55,7 +55,7 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON_STAGING }}
 
       - name: Set up gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -121,8 +121,8 @@ jobs:
       - name: Update Argo CD Application image override
         if: steps.check-changes.outputs.k8s_only != 'true'
         run: |
-          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=json \
-            -p="[{\"op\": \"replace\", \"path\": \"/spec/source/kustomize/images/0\", \"value\": \"$FULL_IMAGE\"}]"
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=merge \
+            -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$FULL_IMAGE\"]}}}}"
           echo "ARGOCD_IMAGE_PATCHED=true" >> "$GITHUB_ENV"
 
       - name: Wait for rollout to receive the new image
@@ -227,8 +227,8 @@ jobs:
           fi
 
           echo "Restoring Argo CD image override to: $PREVIOUS_IMAGE_OVERRIDE"
-          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=json \
-            -p="[{\"op\": \"replace\", \"path\": \"/spec/source/kustomize/images/0\", \"value\": \"$PREVIOUS_IMAGE_OVERRIDE\"}]"
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=merge \
+            -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$PREVIOUS_IMAGE_OVERRIDE\"]}}}}"
 
       - name: Create deployment summary
         if: always()
