@@ -1,0 +1,290 @@
+name: Release and Deploy
+
+on:
+  release:
+    types:
+      - published
+
+concurrency:
+  group: deploy-production-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/app-mcp-server
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID_PROD }}
+  K8S_NAMESPACE: mcp
+  ROLLOUT_NAME: mcp
+  ARGOCD_APP_NAME: mcp
+  ARGOCD_NAMESPACE: argocd
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract release version
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION_NO_V="${VERSION#v}"
+          COMMIT_HASH="$(git rev-parse --short HEAD)"
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION_NO_V=$VERSION_NO_V" >> "$GITHUB_ENV"
+          echo "COMMIT_HASH=$COMMIT_HASH" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_no_v=$VERSION_NO_V" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=$COMMIT_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.commit_hash }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version_no_v }}
+            ${{ env.IMAGE_NAME }}:latest-release
+
+      - name: Resolve image digest from GHCR
+        run: |
+          for i in $(seq 1 30); do
+            DIGEST=$(docker buildx imagetools inspect "$IMAGE_NAME:$VERSION" --format '{{.Manifest.Digest}}' 2>/dev/null | grep -oE 'sha256:[a-f0-9]+' | head -n1 || true)
+            if [ -n "$DIGEST" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [ -z "$DIGEST" ]; then
+            echo "Could not resolve digest for $IMAGE_NAME:$VERSION"
+            exit 1
+          fi
+
+          FULL_IMAGE="$IMAGE_NAME:$VERSION@$DIGEST"
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "FULL_IMAGE=$FULL_IMAGE" >> "$GITHUB_ENV"
+          echo "Resolved image: $FULL_IMAGE"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON_PROD }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gke-gcloud-auth-plugin
+        run: gcloud components install gke-gcloud-auth-plugin
+
+      - name: Configure kubectl for GKE
+        run: |
+          gcloud container clusters get-credentials application \
+            --zone=us-central1 \
+            --project "$GCP_PROJECT_ID"
+
+      - name: Install kubectl Argo Rollouts plugin
+        run: |
+          curl -fLO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x ./kubectl-argo-rollouts-linux-amd64
+          sudo mv ./kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+          kubectl argo rollouts version
+
+      - name: Capture current Argo CD image override
+        run: |
+          CURRENT_IMAGE_OVERRIDE="$(kubectl get application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" -o jsonpath='{.spec.source.kustomize.images[0]}' 2>/dev/null || true)"
+          echo "PREVIOUS_IMAGE_OVERRIDE=$CURRENT_IMAGE_OVERRIDE" >> "$GITHUB_ENV"
+          echo "Current image override: ${CURRENT_IMAGE_OVERRIDE:-<empty>}"
+
+      - name: Update Argo CD Application image override
+        run: |
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=merge \
+            -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$FULL_IMAGE\"]}}}}"
+          echo "ARGOCD_IMAGE_PATCHED=true" >> "$GITHUB_ENV"
+
+      - name: Wait for rollout to receive the new image
+        timeout-minutes: 10
+        run: |
+          for i in $(seq 1 60); do
+            CURRENT_IMAGE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+            if [ "$CURRENT_IMAGE" = "$FULL_IMAGE" ]; then
+              echo "Rollout updated with expected image."
+              kubectl argo rollouts get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" || true
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Rollout did not receive expected image in time."
+          kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o yaml || true
+          exit 1
+
+      - name: Monitor canary rollout
+        timeout-minutes: 45
+        run: |
+          while true; do
+            PHASE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+            MESSAGE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.message}' 2>/dev/null || true)
+            CURRENT_IMAGE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+
+            echo "Rollout phase: $PHASE"
+            echo "Message: $MESSAGE"
+            echo "Current image: $CURRENT_IMAGE"
+
+            if [ "$CURRENT_IMAGE" != "$FULL_IMAGE" ]; then
+              echo "Warning: rollout image differs from expected release image."
+            fi
+
+            if [ "$PHASE" = "Healthy" ]; then
+              echo "Canary rollout completed successfully."
+              exit 0
+            fi
+
+            if [ "$PHASE" = "Degraded" ] || [ "$PHASE" = "Aborted" ]; then
+              echo "Rollout failed with phase: $PHASE"
+              kubectl argo rollouts get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" || true
+              kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o yaml || true
+              exit 1
+            fi
+
+            kubectl argo rollouts get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" || true
+            sleep 30
+          done
+
+      - name: Roll back Argo CD image override after failed rollout
+        if: env.ARGOCD_IMAGE_PATCHED == 'true' && failure()
+        run: |
+          if [ -z "${PREVIOUS_IMAGE_OVERRIDE:-}" ]; then
+            echo "PREVIOUS_IMAGE_OVERRIDE is empty; refusing to patch Argo CD Application."
+            exit 1
+          fi
+
+          echo "Restoring Argo CD image override to: $PREVIOUS_IMAGE_OVERRIDE"
+          kubectl patch application "$ARGOCD_APP_NAME" -n "$ARGOCD_NAMESPACE" --type=merge \
+            -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$PREVIOUS_IMAGE_OVERRIDE\"]}}}}"
+
+      - name: Create deployment summary
+        if: always()
+        run: |
+          PHASE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+
+          echo "## Production Release" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`$COMMIT_HASH\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Rollout: \`$ROLLOUT_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`${FULL_IMAGE:-not-resolved}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Final status: \`$PHASE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Result: \`${{ job.status }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Send Discord notification
+        if: always()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then
+            echo "Discord webhook not configured, skipping notification."
+            exit 0
+          fi
+
+          COMMIT_MSG=$(git log -1 --pretty=format:'%s' "${{ github.sha }}")
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an' "${{ github.sha }}")
+          COMMIT_URL="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
+          PHASE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+
+          if [ "$PHASE" = "Healthy" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Successful"
+            COLOR="3066993"
+            DESCRIPTION="Canary deployment completed successfully. New version is serving 100% traffic in production."
+          elif [ "$PHASE" = "Aborted" ]; then
+            STATUS_EMOJI="🛑"
+            STATUS_TEXT="Aborted"
+            COLOR="15105570"
+            DESCRIPTION="Rollout was aborted due to failed analysis metrics. Deployment rolled back to stable version."
+          elif [ "$PHASE" = "Degraded" ]; then
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Failed"
+            COLOR="15158332"
+            DESCRIPTION="Rollout entered degraded state. Check logs for details."
+          else
+            STATUS_EMOJI="⚠️"
+            STATUS_TEXT="Unknown"
+            COLOR="16776960"
+            DESCRIPTION="Rollout status could not be determined. Manual investigation required."
+          fi
+
+          DISCORD_PAYLOAD=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "${STATUS_EMOJI} Production Release ${STATUS_TEXT}",
+              "description": "${DESCRIPTION}",
+              "color": ${COLOR},
+              "fields": [
+                {
+                  "name": "🏷️ Version",
+                  "value": "[${VERSION}](${RELEASE_URL})",
+                  "inline": true
+                },
+                {
+                  "name": "📊 Status",
+                  "value": "\`${PHASE}\`",
+                  "inline": true
+                },
+                {
+                  "name": "📝 Commit",
+                  "value": "[${COMMIT_MSG:0:50}](${COMMIT_URL})",
+                  "inline": false
+                },
+                {
+                  "name": "👤 Author",
+                  "value": "${COMMIT_AUTHOR}",
+                  "inline": true
+                },
+                {
+                  "name": "🔖 Hash",
+                  "value": "\`${COMMIT_HASH}\`",
+                  "inline": true
+                },
+                {
+                  "name": "🐳 Image",
+                  "value": "\`${FULL_IMAGE:-not-resolved}\`",
+                  "inline": false
+                }
+              ],
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
+              "footer": {
+                "text": "GitHub Actions"
+              }
+            }]
+          }
+          EOF
+          )
+
+          curl -fsS -H "Content-Type: application/json" \
+            -d "$DISCORD_PAYLOAD" \
+            "$DISCORD_WEBHOOK"
