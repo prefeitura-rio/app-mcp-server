@@ -1,5 +1,6 @@
 import random
 import string
+import json
 
 
 def gerar_conversa_aleatoria(num_mensagens: int, tamanho_content: int) -> list:

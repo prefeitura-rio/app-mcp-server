@@ -9,14 +9,23 @@ Para adicionar um novo workflow:
 """
 
 # Import workflows aqui
+from src.tools.multi_step_service.workflows.bank_account import BankAccountWorkflow
 from src.tools.multi_step_service.workflows.iptu_pagamento import IPTUWorkflow
+from src.tools.multi_step_service.workflows.equipments.equipments_workflow import (
+    EquipmentsWorkflow,
+)
+from src.tools.multi_step_service.workflows.equipments.equipments_workflow import (
+    EquipmentsWorkflow,
+)
 from src.tools.multi_step_service.workflows.poda_de_arvore.workflow import (
     PodaDeArvoreWorkflow,
 )
 
 # Lista central de workflows (classes)
 workflows = [
+    # BankAccountWorkflow,
     IPTUWorkflow,
+    # EquipmentsWorkflow,
     PodaDeArvoreWorkflow,
 ]
 

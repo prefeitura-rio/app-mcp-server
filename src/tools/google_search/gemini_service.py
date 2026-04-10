@@ -1,5 +1,7 @@
-from typing import Dict, Any, List
+import os
+from typing import Dict, Any, List, Optional, Union
 import asyncio
+from pathlib import Path
 from google import genai
 from google.genai.types import (
     Tool,
@@ -72,7 +74,7 @@ class GeminiService:
                     )
 
                     logger.info("Resposta recebida do Gemini")
-
+                    
                     if not response.candidates or len(response.candidates) == 0:
                         logger.warning("Resposta sem candidatos válidos do Gemini")
                         if attempt >= retry_attempts - 1:
@@ -88,7 +90,7 @@ class GeminiService:
                                 "query": query,
                             }
                         continue
-
+                    
                     candidate = response.candidates[0]
 
                     # Check if grounding metadata and chunks exist
@@ -317,7 +319,9 @@ async def process_link(session, link: dict):
 
     def set_fallback_error(error_msg: str):
         # Trata erro específico do Mozilla
-        mozilla_suffix = "For more information check: https://developer.mozilla.org/"
+        mozilla_suffix = (
+            "For more information check: https://developer.mozilla.org/"
+        )
         if mozilla_suffix in error_msg:
             try:
                 msg = error_msg.replace(mozilla_suffix, "")
@@ -350,10 +354,7 @@ async def process_link(session, link: dict):
         except httpx.HTTPStatusError as e:
             # 403/405 indicam que HEAD não é suportado - tentar GET abaixo
             if e.response.status_code not in (403, 405):
-                if (
-                    e.response.status_code not in retryable_status_codes
-                    or is_last_attempt
-                ):
+                if e.response.status_code not in retryable_status_codes or is_last_attempt:
                     clean_message = (
                         f"HTTP {e.response.status_code}: "
                         f"{e.response.reason_phrase or 'Empty Reason Phrase'}"
@@ -439,7 +440,7 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
         source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
         timeout=30.0,
         follow_redirects=True,
-        headers=headers,
+        headers=headers
     ) as session:
         # Limita concorrência para evitar sobrecarga
         semaphore = asyncio.Semaphore(20)
@@ -656,14 +657,14 @@ def format_text_with_citations(text, citations_data):
 
     for url, num in sorted_sources:
         # Pega o 'label' da primeira vez que a fonte apareceu
-        # label = next(
-        #     (
-        #         c["segments"][0]["label"]
-        #         for c in citations_data
-        #         if c["segments"] and c["segments"][0]["url"] == url
-        #     ),
-        #     url,
-        # )
+        label = next(
+            (
+                c["segments"][0]["label"]
+                for c in citations_data
+                if c["segments"] and c["segments"][0]["url"] == url
+            ),
+            url,
+        )
         sources_list += f" - [{num}] {url}\n"
 
     return modified_text + sources_list

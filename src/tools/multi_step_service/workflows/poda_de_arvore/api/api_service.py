@@ -17,9 +17,12 @@ from jellyfish import jaro_similarity
 from num2words import num2words
 
 
+
+
 class SGRCAPIService:
     def __init__(self):
         self.api_base_url = "https://api.prefeitura.rio/poda_de_arvore"
+
 
     def get_integrations_url(self, endpoint: str) -> str:
         """
@@ -32,13 +35,8 @@ class SGRCAPIService:
             endpoint = endpoint[1:]
         return f"{base_url}/{endpoint}"
 
-    @interceptor(
-        source={
-            "source": "mcp",
-            "tool": "multi_step_service",
-            "workflow": "poda_de_arvore",
-        }
-    )
+
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
     async def get_user_info(self, cpf: str) -> dict:
         url = self.get_integrations_url("person")
         key = env.CHATBOT_INTEGRATIONS_KEY
@@ -50,24 +48,17 @@ class SGRCAPIService:
         try:
             async with InterceptedHTTPClient(
                 user_id="unknown",
-                source={
-                    "source": "mcp",
-                    "tool": "multi_step_service",
-                    "workflow": "poda_de_arvore",
-                    "function": "get_user_info",
-                },
-                timeout=30.0,
+                source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore", "function": "get_user_info"},
+                timeout=30.0
             ) as client:
-                response = await client.post(
-                    url, headers=headers, content=json.dumps({"cpf": cpf})
-                )
+                response = await client.post(url, headers=headers, content=json.dumps({"cpf": cpf}))
                 response.raise_for_status()
                 data = response.json()
             return data
 
         except Exception as exc:  # noqa
             raise Exception(f"Failed to get user info: {exc}") from exc
-
+        
 
 class NearestLocation(BaseModel):
     id_logradouro: int
@@ -91,13 +82,7 @@ class AddressAPIService:
             logger.warning(f"Não foi possível carregar shape do RJ: {e}")
             self.shape_rj = None
 
-    @interceptor(
-        source={
-            "source": "mcp",
-            "tool": "multi_step_service",
-            "workflow": "poda_de_arvore",
-        }
-    )
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
     async def google_geolocator(self, address: str) -> dict:
         """
         Uses Google Maps API to get the formatted address using geocode
@@ -106,10 +91,7 @@ class AddressAPIService:
         def set_logradouro(geocode_result: list, accepted_logradouros: dict):
             for _, resultado in enumerate(geocode_result):
                 for item in resultado["address_components"]:
-                    if any(
-                        logradouro in item["types"]
-                        for logradouro in accepted_logradouros
-                    ):
+                    if any(logradouro in item["types"] for logradouro in accepted_logradouros):
                         logradouro = item["long_name"]
                         resultado = resultado
                         return logradouro, resultado
@@ -122,14 +104,9 @@ class AddressAPIService:
             for item in resultado["address_components"]:
                 if "street_number" in item["types"]:
                     address_info["numero"] = item["long_name"]
-                elif any(
-                    logradouro in item["types"] for logradouro in accepted_logradouros
-                ):
+                elif any(logradouro in item["types"] for logradouro in accepted_logradouros):
                     address_info["logradouro"] = item["long_name"]
-                elif (
-                    "sublocality" in item["types"]
-                    or "sublocality_level_1" in item["types"]
-                ):
+                elif ("sublocality" in item["types"] or "sublocality_level_1" in item["types"]):
                     address_info["bairro"] = item["long_name"]
                 elif "postal_code" in item["types"]:
                     address_info["cep"] = validate_cep(item["long_name"])
@@ -137,7 +114,7 @@ class AddressAPIService:
                     address_info["cidade"] = item["long_name"]
                 elif "administrative_area_level_1" in item["types"]:
                     address_info["estado"] = item["short_name"]
-
+            
             return address_info
 
         def validate_cep(cep: str) -> str:
@@ -151,7 +128,7 @@ class AddressAPIService:
             if cidade and cidade != "Rio de Janeiro":
                 logger.info("O município do endereço é diferente de Rio de Janeiro")
                 return True
-
+            
             if not cidade and self.shape_rj:
                 logger.info("Não foi identificado um município para esse endereço")
                 point = Point(
@@ -161,7 +138,7 @@ class AddressAPIService:
                 if not self.shape_rj.contains(point):
                     logger.info("O endereço identificado está fora do Rio de Janeiro")
                     return True
-
+                
             return False
 
         ACCEPTED_LOGRADOUROS = [
@@ -197,24 +174,17 @@ class AddressAPIService:
         logradouro_lat = resultado["geometry"]["location"]["lat"]
         logradouro_long = resultado["geometry"]["location"]["lng"]
 
-        logger.info(f"Lat, Long: {logradouro_lat}, {logradouro_long}")
+        logger.info(f'Lat, Long: {logradouro_lat}, {logradouro_long}')
 
-        logradouro_fora_do_rj = validate_city(
-            address_info.get("cidade"), logradouro_long, logradouro_lat
-        )
+        logradouro_fora_do_rj = validate_city(address_info.get("cidade"), logradouro_long, logradouro_lat)
         if logradouro_fora_do_rj:
-            return {
-                "valid": False,
-                "error": "O endereço informado está fora do município do Rio de Janeiro",
-            }
+            return {"valid": False, "error": "O endereço informado está fora do município do Rio de Janeiro"}
 
         try:
             numero = address_info.get("numero", "")
             numero = numero.split(".")[0]
         except:  # noqa
-            logger.info(
-                "logradouro_numero: falhou ao tentar pegar a parcela antes do `.`"
-            )
+            logger.info("logradouro_numero: falhou ao tentar pegar a parcela antes do `.`")
             numero = ""
 
         return {
@@ -227,12 +197,10 @@ class AddressAPIService:
             "cep": address_info.get("cep", ""),
             "cidade": address_info.get("cidade", "Rio de Janeiro"),
             "estado": address_info.get("estado", "RJ"),
-            "formatted_address": resultado.get("formatted_address", ""),
+            "formatted_address": resultado.get("formatted_address", "")
         }
-
-    def get_nearest_logradouro_and_bairro(
-        self, latitude: float, longitude: float
-    ) -> NearestLocation:
+    
+    def get_nearest_logradouro_and_bairro(self, latitude: float, longitude: float) -> NearestLocation:
         """
         Get the nearest logradouro and bairro to a given latitude and longitude.
 
@@ -248,18 +216,14 @@ class AddressAPIService:
         logradouros["geometry"] = logradouros["geometry"].apply(loads)
         bairros = pd.read_json(env.DATA_DIR / "bairros.json")
         bairros["geometry"] = bairros["geometry"].apply(loads)
-
+        
         query_point = Point(longitude, latitude)
 
         logradouros_copy = logradouros.copy(deep=True)
         bairros_copy = bairros.copy(deep=True)
 
-        logradouros_copy["distance"] = logradouros_copy["geometry"].apply(
-            lambda x: x.distance(query_point)
-        )
-        bairros_copy["distance"] = bairros_copy["geometry"].apply(
-            lambda x: x.distance(query_point)
-        )
+        logradouros_copy["distance"] = logradouros_copy["geometry"].apply(lambda x: x.distance(query_point))
+        bairros_copy["distance"] = bairros_copy["geometry"].apply(lambda x: x.distance(query_point))
 
         nearest_logradouro = logradouros_copy.loc[logradouros_copy["distance"].idxmin()]
         nearest_bairro = bairros_copy.loc[bairros_copy["distance"].idxmin()]
@@ -270,36 +234,24 @@ class AddressAPIService:
             id_bairro=nearest_bairro["id"],
             name_bairro=nearest_bairro["nome"],
         )
-
-    @interceptor(
-        source={
-            "source": "mcp",
-            "tool": "multi_step_service",
-            "workflow": "poda_de_arvore",
-        }
-    )
-    async def get_endereco_info(
-        self, latitude, longitude, logradouro_google=None, bairro_google=None
-    ) -> dict:
+    
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
+    async def get_endereco_info(self, latitude, longitude, logradouro_google=None, bairro_google=None) -> dict:
         try:
             latitude = float(latitude)
             longitude = float(longitude)
 
-            nearest_location: NearestLocation = self.get_nearest_logradouro_and_bairro(
-                latitude, longitude
-            )
+            nearest_location: NearestLocation = self.get_nearest_logradouro_and_bairro(latitude, longitude)
 
             logradouro_id_ipp = str(nearest_location.id_logradouro)
             bairro_id_ipp = str(nearest_location.id_bairro)
             logradouro_nome_ipp = str(nearest_location.name_logradouro)
             bairro_nome_ipp = str(nearest_location.name_bairro)
 
-            logger.info(f"Código bairro obtido: {bairro_id_ipp}")
-            logger.info(f"Nome bairro obtido: {bairro_nome_ipp}")
+            logger.info(f'Código bairro obtido: {bairro_id_ipp}')
+            logger.info(f'Nome bairro obtido: {bairro_nome_ipp}')
         except Exception as e:
-            logger.info(
-                f"Falha ao obter endereço usando get_nearest_logradouro_and_bairro(): {e}"
-            )
+            logger.info(f"Falha ao obter endereço usando get_nearest_logradouro_and_bairro(): {e}")
             bairro_id_ipp = "0"
             logradouro_id_ipp = "0"
             logradouro_nome_ipp = " "
@@ -312,18 +264,16 @@ class AddressAPIService:
 
             # Se temos logradouro do Google, tenta obter código IPP mais preciso
             if logradouro_google:
-                logger.info(
-                    "Chamando função que identifica o logradouro por similaridade de texto"
-                )
+                logger.info("Chamando função que identifica o logradouro por similaridade de texto")
                 ipp_result = await self.get_ipp_street_code(
                     logradouro_nome=logradouro_google,
                     logradouro_nome_ipp=logradouro_nome_ipp,
                     bairro_nome_ipp=bairro_nome_ipp,
                     latitude=latitude,
                     longitude=longitude,
-                    bairro_google=bairro_google,
+                    bairro_google=bairro_google
                 )
-
+                
                 # Se conseguiu resultado melhor do IPP, usa ele
                 if ipp_result and not ipp_result.get("error"):
                     return ipp_result
@@ -335,15 +285,19 @@ class AddressAPIService:
                 "bairro_id": bairro_id_ipp,
                 "bairro_nome": bairro_nome_ipp,
                 "latitude": latitude,
-                "longitude": longitude,
+                "longitude": longitude
             }
         except Exception as e:
             logger.info(f"Erro ao processar endereço: {e}")
-            return {"error": str(e), "abertura_manual": True}
-
+            return {
+                "error": str(e),
+                "abertura_manual": True
+            }
+        
     async def substitute_digits(self, address: str) -> str:
         pattern = re.compile(r"\d+")
         return pattern.sub(lambda x: num2words(int(x.group()), lang="pt-br"), address)
+
 
     def haversine_distance(self, lat1, lon1, lat2, lon2):
         lat1 = float(lat1) if isinstance(lat1, str) else lat1
@@ -377,27 +331,13 @@ class AddressAPIService:
         # Distância em metros
         distance_m = distance_km * 1000
         return distance_m
-
-    @interceptor(
-        source={
-            "source": "mcp",
-            "tool": "multi_step_service",
-            "workflow": "poda_de_arvore",
-        }
-    )
-    async def get_ipp_street_code(
-        self,
-        logradouro_nome,
-        logradouro_nome_ipp,
-        bairro_nome_ipp,
-        latitude,
-        longitude,
-        bairro_google=None,
-    ) -> dict:
+    
+    @interceptor(source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore"})
+    async def get_ipp_street_code(self, logradouro_nome, logradouro_nome_ipp, bairro_nome_ipp, latitude, longitude, bairro_google=None) -> dict:
         THRESHOLD = 0.8
         logradouro_google = logradouro_nome
         logradouro_ipp = logradouro_nome_ipp.lstrip("0123456789 -")
-        logradouro_completo = f"{logradouro_google}, {bairro_nome_ipp}"
+        logradouro_completo = f'{logradouro_google}, {bairro_nome_ipp}'
 
         logger.info(f"Logradouro IPP: {logradouro_ipp}")
 
@@ -414,27 +354,19 @@ class AddressAPIService:
             return
 
         if address_similarity < THRESHOLD:
-            logger.info(
-                f"logradouro_nome retornado pelo Google significantemente diferente do retornado pelo IPP. Threshold: {address_similarity}"
-            )
+            logger.info(f"logradouro_nome retornado pelo Google significantemente diferente do retornado pelo IPP. Threshold: {address_similarity}")
             logradouro_google = await self.substitute_digits(logradouro_google)
             if bairro_nome_ipp == " ":
-                logger.info(
-                    "Além dos endereços serem muito diferentes, não há bairro IPP. Então vou considerar o bairro do Google."
-                )
+                logger.info("Além dos endereços serem muito diferentes, não há bairro IPP. Então vou considerar o bairro do Google.")
                 if bairro_google:
-                    logradouro_completo = f"{logradouro_google}, {bairro_google}"
+                    logradouro_completo = f'{logradouro_google}, {bairro_google}'
                 else:
                     logradouro_completo = logradouro_google
         elif bairro_nome_ipp == " ":
-            logger.info(
-                f"Bairro IPP não identificado. Valor Bairro IPP: {bairro_nome_ipp}. Vou considerar o do Google."
-            )
-            logger.info(
-                "Atualizando o logradouro que vai ser geolocalizado para considerar o logradouro_ipp em vez do Google"
-            )
+            logger.info(f"Bairro IPP não identificado. Valor Bairro IPP: {bairro_nome_ipp}. Vou considerar o do Google.")
+            logger.info("Atualizando o logradouro que vai ser geolocalizado para considerar o logradouro_ipp em vez do Google")
             if bairro_google:
-                logradouro_completo = f"{logradouro_ipp}, {bairro_google}"
+                logradouro_completo = f'{logradouro_ipp}, {bairro_google}'
             else:
                 logradouro_completo = logradouro_ipp
 
@@ -448,13 +380,8 @@ class AddressAPIService:
 
         async with InterceptedHTTPClient(
             user_id="unknown",
-            source={
-                "source": "mcp",
-                "tool": "multi_step_service",
-                "workflow": "poda_de_arvore",
-                "function": "get_ipp_street_code",
-            },
-            timeout=30.0,
+            source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore", "function": "get_ipp_street_code"},
+            timeout=30.0
         ) as client:
             response = await client.get(geocode_logradouro_ipp_url)
             data = response.json()
@@ -465,40 +392,25 @@ class AddressAPIService:
 
             if bairro_nome_ipp == " ":
                 best_distance = 1000000000
-                logger.info(
-                    f"Logradouro será o mais próximo do lat/long retornado pelo Google. Lat:{latitude} | Long:{longitude}"
-                )
+                logger.info(f'Logradouro será o mais próximo do lat/long retornado pelo Google. Lat:{latitude} | Long:{longitude}')
                 for candidato in candidates:
-                    distance = self.haversine_distance(
-                        latitude,
-                        longitude,
-                        candidato["location"]["y"],
-                        candidato["location"]["x"],
-                    )
+                    distance = self.haversine_distance(latitude, longitude, candidato["location"]["y"], candidato["location"]["x"])
                     if distance < best_distance and "," in candidato["address"]:
                         best_distance = distance
                         logradouro_codigo = candidato["attributes"]["cl"]
                         logradouro_real = candidato["address"]
-                logger.info(
-                    f"Logradouro no IPP com maior semelhança: {logradouro_real}, cl: {logradouro_codigo}, distância: {best_distance} metros"
-                )
+                logger.info(f"Logradouro no IPP com maior semelhança: {logradouro_real}, cl: {logradouro_codigo}, distância: {best_distance} metros")
             else:
                 best_similarity = 0
                 logger.info("Logradouro será selecionado pela similaridade de texto")
                 for candidato in candidates:
-                    similarity = jaro_similarity(
-                        candidato["address"], logradouro_completo
-                    )
+                    similarity = jaro_similarity(candidato["address"], logradouro_completo)
                     if similarity > best_similarity and "," in candidato["address"]:
                         best_similarity = similarity
                         logradouro_codigo = candidato["attributes"]["cl"]
                         logradouro_real = candidato["address"]
-                logger.info(
-                    f"Logradouro no IPP com maior similaridade: {logradouro_real}, cl: {logradouro_codigo}, similaridade: {best_similarity}"
-                )
-            logger.info(
-                f"Logradouro encontrado no Google, com bairro do IPP: {logradouro_completo}"
-            )
+                logger.info(f"Logradouro no IPP com maior similaridade: {logradouro_real}, cl: {logradouro_codigo}, similaridade: {best_similarity}")
+            logger.info(f"Logradouro encontrado no Google, com bairro do IPP: {logradouro_completo}")
 
             logradouro_id_ipp = logradouro_codigo
             logradouro_nome_ipp = logradouro_real.split(",")[0]
@@ -506,37 +418,21 @@ class AddressAPIService:
             try:
                 best_candidate_bairro_nome_ipp = logradouro_real.split(",")[1][1:]
             except:  # noqa: E722
-                logger.info(
-                    "Logradouro no IPP com maior semelhança não possui bairro no nome"
-                )
+                logger.info("Logradouro no IPP com maior semelhança não possui bairro no nome")
                 logradouro_bairro_ipp = None
 
-            if (
-                best_candidate_bairro_nome_ipp
-                and "logradouro_bairro_ipp" in locals()
-                and logradouro_bairro_ipp
-                and (
-                    jaro_similarity(
-                        best_candidate_bairro_nome_ipp, logradouro_bairro_ipp
-                    )
-                    > THRESHOLD
-                )
-            ):
-                logger.info(
-                    "Similaridade entre bairro atual e bairro do Logradouro no IPP com maior semelhança é alta o suficiente"
-                )
+            if best_candidate_bairro_nome_ipp and 'logradouro_bairro_ipp' in locals() and logradouro_bairro_ipp and (jaro_similarity(best_candidate_bairro_nome_ipp, logradouro_bairro_ipp) > THRESHOLD):
+                logger.info(f"Similaridade entre bairro atual e bairro do Logradouro no IPP com maior semelhança é alta o suficiente")
                 return {
                     "logradouro_id": logradouro_id_ipp,
                     "logradouro_nome": logradouro_nome_ipp,
-                    "bairro_nome": bairro_nome_ipp,
-                }
+                    "bairro_nome": bairro_nome_ipp
+                } 
             else:
                 # Se o bairro do endereço com maior similaridade for diferente do que coletamos usando geolocalização,
                 # pegamos o codigo correto buscando o nome do bairro desse endereço na base do IPP e pegando o codigo correspondente
                 logger.info("Foi necessário atualizar o bairro")
-                logger.info(
-                    f"Bairro obtido anteriormente com geolocalização: {bairro_nome_ipp if 'bairro_nome_ipp' in locals() else 'não definido'}"
-                )
+                logger.info(f'Bairro obtido anteriormente com geolocalização: {bairro_nome_ipp if "bairro_nome_ipp" in locals() else "não definido"}')
 
                 sgrc_service = SGRCAPIService()
                 url = sgrc_service.get_integrations_url("neighborhood_id")
@@ -549,29 +445,24 @@ class AddressAPIService:
 
                 async with InterceptedHTTPClient(
                     user_id="unknown",
-                    source={
-                        "source": "mcp",
-                        "tool": "multi_step_service",
-                        "workflow": "poda_de_arvore",
-                        "function": "get_ipp_street_code",
-                    },
-                    timeout=30.0,
+                    source={"source": "mcp", "tool": "multi_step_service", "workflow": "poda_de_arvore", "function": "get_ipp_street_code"},
+                    timeout=30.0
                 ) as client:
                     response = await client.post(url, headers=headers, content=payload)
                     response_json = response.json()
                     logradouro_id_bairro_ipp = response_json["id"]
                     logradouro_bairro_ipp = response_json["name"]
 
-                logger.info(
-                    f"Bairro obtido agora com busca por similaridade: {logradouro_bairro_ipp}"
-                )
-
+                logger.info(f'Bairro obtido agora com busca por similaridade: {logradouro_bairro_ipp}')
+                
                 return {
                     "logradouro_id": logradouro_id_ipp,
                     "logradouro_nome": logradouro_nome_ipp,
                     "bairro_id": logradouro_id_bairro_ipp,
-                    "bairro_nome": logradouro_bairro_ipp,
+                    "bairro_nome": logradouro_bairro_ipp
                 }
         except Exception as e:
             logger.info(f"Erro ao buscar código IPP: {e}")
-            return {"error": str(e)}
+            return {
+                "error": str(e)
+            } 

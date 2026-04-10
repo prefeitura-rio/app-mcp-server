@@ -6,7 +6,8 @@ para permitir testes completos de todos os cenários possíveis.
 """
 
 import re
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
+from datetime import datetime, date
 
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     DadosGuias,
@@ -15,10 +16,12 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     DadosCotas,
     Darm,
     DadosDarm,
+    CotaDarm,
     DadosDividaAtiva,
 )
 from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import (
     APIUnavailableError,
+    DataNotFoundError,
     AuthenticationError,
 )
 from loguru import logger
@@ -401,7 +404,7 @@ class IPTUAPIServiceFake:
                         "Situacao": situacao,
                         "NCota": numero_cota,
                         "ValorCota": valor_cota,
-                        "DataVencimento": f"07/{i if i <= 12 else i - 12:02d}/2024",
+                        "DataVencimento": f"07/{i if i <= 12 else i-12:02d}/2024",
                         "ValorPago": valor_pago,
                         "DataPagamento": data_pagamento,
                         "QuantDiasEmAtraso": (
@@ -437,7 +440,7 @@ class IPTUAPIServiceFake:
                         "Situacao": situacao,
                         "NCota": numero_cota,
                         "ValorCota": valor_cota,
-                        "DataVencimento": f"07/{(i * 2):02d}/2024",
+                        "DataVencimento": f"07/{(i*2):02d}/2024",
                         "ValorPago": valor_pago,
                         "DataPagamento": data_pagamento,
                         "QuantDiasEmAtraso": "0",
@@ -832,7 +835,7 @@ class IPTUAPIServiceFake:
         )
 
         if not darm_data:
-            logger.warning("FAKE API: PDF download failed - no DARM data available")
+            logger.warning(f"FAKE API: PDF download failed - no DARM data available")
             return None
 
         # Gera PDF base64 mockado (um PDF mínimo válido)

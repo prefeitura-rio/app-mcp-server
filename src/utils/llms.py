@@ -47,6 +47,7 @@ class GeminiClient:
 
     async def generate_embedding(self, chunks: List[str]) -> List:
         try:
+
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,

@@ -18,30 +18,26 @@ from src.utils.error_interceptor import interceptor
 
 class OAuth2TokenManager:
     """Manages OAuth2 tokens for RMI API using Client Credentials flow"""
-
+    
     def __init__(self):
         self._access_token: Optional[str] = None
         self._token_expiry: Optional[float] = None
         self._lock = asyncio.Lock()
-
+    
     async def get_access_token(self) -> str:
         """Get a valid access token, refreshing if necessary"""
         async with self._lock:
             # Check if we have a valid token
-            if (
-                self._access_token
-                and self._token_expiry
-                and time.time() < self._token_expiry
-            ):
+            if self._access_token and self._token_expiry and time.time() < self._token_expiry:
                 return self._access_token
-
+            
             # Get new token
             token_data = await self._request_token()
             self._access_token = token_data["access_token"]
             # Set expiry with 5-minute buffer for safety
             self._token_expiry = time.time() + token_data["expires_in"] - 300
             return self._access_token
-
+    
     @interceptor(source={"source": "mcp", "tool": "oauth2"})
     async def _request_token(self) -> Dict[str, Any]:
         """Request a new access token using Client Credentials flow"""
@@ -64,21 +60,17 @@ class OAuth2TokenManager:
             async with InterceptedHTTPClient(
                 user_id="system",
                 source={"source": "mcp", "tool": "oauth2"},
-                timeout=30.0,
+                timeout=30.0
             ) as client:
                 response = await client.post(
                     token_url,
                     data=data,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
                 )
                 if response.status_code != 200:
                     error_text = response.text
-                    logger.error(
-                        f"OAuth2 token request failed: {response.status_code} - {error_text}"
-                    )
-                    raise Exception(
-                        f"OAuth2 token request failed: {response.status_code} - {error_text}"
-                    )
+                    logger.error(f"OAuth2 token request failed: {response.status_code} - {error_text}")
+                    raise Exception(f"OAuth2 token request failed: {response.status_code} - {error_text}")
 
                 token_data = response.json()
 
@@ -101,10 +93,10 @@ _token_manager: Optional[OAuth2TokenManager] = None
 async def get_rmi_access_token() -> str:
     """Get an access token for RMI API using OAuth2 Client Credentials flow"""
     global _token_manager
-
+    
     if _token_manager is None:
         _token_manager = OAuth2TokenManager()
-
+    
     return await _token_manager.get_access_token()
 
 

@@ -10,6 +10,12 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.helpers.utils import 
     formatar_valor_brl,
 )
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
+    DadosGuias,
+    Guia,
+    Cota,
+    DadosCotas,
+    Darm,
+    DadosDarm,
     DadosDividaAtiva,
 )
 
@@ -68,6 +74,7 @@ __replace_divida_ativa__
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         if not divida_ativa_info or divida_ativa_info.tem_divida_ativa is False:
+
             return msg.replace("__replace_divida_ativa__", "")
 
         else:
@@ -143,7 +150,7 @@ __replace_divida_ativa__
 
 """
 
-        guias_em_aberto = [g for g in guias if g.get("esta_em_aberto")]
+        guias_em_aberto = [g for g in guias if g.get("esta_em_aberto") == True]
         from src.utils.log import logger
 
         logger.debug(f"Guias em aberto: {guias_em_aberto}")
@@ -216,7 +223,7 @@ __replace_divida_ativa__
 **Endereço:** {endereco}
 **Contribuinte:** {proprietario}
 **Guia:** {guia_escolhida}
-**Cotas:** {", ".join(cotas_escolhidas)}
+**Cotas:** {', '.join(cotas_escolhidas)}
 **Boletos a serem gerados:** {num_boletos}
 
 ✅ **Os dados estão corretos?**"""
@@ -323,7 +330,7 @@ __replace_divida_ativa__
             ano: Ano do exercício consultado
             divida_info: Objeto DadosDividaAtiva com todos os dados
         """
-        texto = """⚠️ **IPTU inscrito na Dívida Ativa Municipal**
+        texto = f"""⚠️ **IPTU inscrito na Dívida Ativa Municipal**
 """
         texto += "\n"
         texto += "📄 **Débitos encontrados na Dívida Ativa:**\n\n"

@@ -1,6 +1,7 @@
 import unicodedata
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+import requests
 
 from src.utils.bigquery import (
     save_cor_alert_in_bq_background,
@@ -58,9 +59,7 @@ def _extract_google_neighborhood(result: Dict[str, Any]) -> str:
                 continue
             types = component.get("types", [])
             if target_type in types:
-                return str(
-                    component.get("long_name") or component.get("short_name") or ""
-                )
+                return str(component.get("long_name") or component.get("short_name") or "")
     return ""
 
 
@@ -70,11 +69,7 @@ async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict
         params = {"latlng": f"{lat},{lng}", "key": GOOGLE_MAPS_API_KEY}
         async with InterceptedHTTPClient(
             user_id="unknown",
-            source={
-                "source": "mcp",
-                "tool": "cor_alert",
-                "function": "reverse_geocode",
-            },
+            source={"source": "mcp", "tool": "cor_alert", "function": "reverse_geocode"},
             timeout=10.0,
         ) as client:
             response = await client.get(GOOGLE_MAPS_API_URL, params=params)
@@ -111,12 +106,8 @@ async def get_coordinates_google(address: str) -> dict:
 
         async with InterceptedHTTPClient(
             user_id="unknown",
-            source={
-                "source": "mcp",
-                "tool": "cor_alert",
-                "function": "get_coordinates_google",
-            },
-            timeout=10.0,
+            source={"source": "mcp", "tool": "cor_alert", "function": "get_coordinates_google"},
+            timeout=10.0
         ) as client:
             response = await client.get(GOOGLE_MAPS_API_URL, params=params)
             response.raise_for_status()
@@ -156,25 +147,21 @@ async def geocode_address(address: str) -> dict:
 
     # Se encontrou coords mas não encontrou bairro, tenta reverse geocoding
     if coords and not coords.get("bairro_raw") and GOOGLE_MAPS_API_KEY:
-        logger.info("Coords encontradas mas sem bairro, tentando reverse geocoding...")
+        logger.info(f"Coords encontradas mas sem bairro, tentando reverse geocoding...")
         neighborhood = await _get_neighborhood_from_reverse_geocode(
             coords["lat"], coords["lng"]
         )
         if neighborhood:
             coords["bairro_raw"] = neighborhood["bairro_raw"]
             coords["bairro_normalizado"] = neighborhood["bairro_normalizado"]
-            logger.info(
-                f"Bairro encontrado via reverse geocoding: {coords['bairro_raw']}"
-            )
+            logger.info(f"Bairro encontrado via reverse geocoding: {coords['bairro_raw']}")
 
     return coords
 
 
 @interceptor(
     source={"source": "mcp", "tool": "cor_alert"},
-    extract_user_id=lambda args, kwargs: (
-        kwargs.get("user_id") or (args[0] if args else "unknown")
-    ),
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
 )
 async def create_cor_alert(
     user_id: str,
@@ -260,7 +247,7 @@ async def create_cor_alert(
 
     latitude = None
     longitude = None
-    # location_found = False
+    location_found = False
     bairro_raw = None
     bairro_normalizado = None
     resolved_address = address.strip()
@@ -271,7 +258,7 @@ async def create_cor_alert(
         bairro_raw = coords.get("bairro_raw") or None
         bairro_normalizado = coords.get("bairro_normalizado") or None
         resolved_address = str(coords.get("address") or address.strip())
-        # location_found = True
+        location_found = True
         logger.info(
             f"Endereço geolocalizado: lat={latitude}, lng={longitude}, bairro={bairro_raw or 'nao_identificado'}"
         )

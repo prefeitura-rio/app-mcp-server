@@ -4,7 +4,6 @@ from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 
-
 def get_integrations_url(endpoint: str) -> str:
     """
     Returns the URL of the endpoint in the integrations service.
@@ -55,7 +54,7 @@ async def internal_request(
     async with InterceptedHTTPClient(
         user_id="unknown",
         source={"source": "mcp", "tool": "internal_request"},
-        timeout=600.0,
+        timeout=600.0
     ) as client:
         response = await client.post(integrations_url, headers=headers, content=payload)
         text = response.text
@@ -68,10 +67,6 @@ async def internal_request(
             logger.error(f"Failed to parse JSON from {url}: {e}")
             logger.error(f"Response text: {text[:500]}")  # Log first 500 chars
             # Check if it's a gateway timeout or other timeout-related error
-            if (
-                "504 Gateway Time-out" in text
-                or "502 Bad Gateway" in text
-                or "timeout" in text.lower()
-            ):
+            if "504 Gateway Time-out" in text or "502 Bad Gateway" in text or "timeout" in text.lower():
                 raise TimeoutError(f"Gateway timeout from {url}")
             raise

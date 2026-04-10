@@ -27,7 +27,7 @@ A GitHub Action atualiza automaticamente a versão a cada push:
 on:
   push:
     branches: [main, staging]
-    paths: ['src/**', 'src/utils/tool_version.json']
+    paths: ['src/**', 'tool_version.json']
 ```
 
 ## 🛠️ Uso Manual

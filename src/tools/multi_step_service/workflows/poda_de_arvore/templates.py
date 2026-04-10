@@ -8,7 +8,6 @@ durante o fluxo de solicitação de poda de árvore.
 
 # ========== ENDEREÇO ==========
 
-
 def solicitar_endereco() -> str:
     """Mensagem solicitando endereço."""
     return (
@@ -65,9 +64,7 @@ def endereco_historico(endereco_formatado: str) -> str:
 
 def confirmar_resposta_invalida() -> str:
     """Mensagem quando resposta de confirmação é inválida."""
-    return (
-        "Por favor, confirme se o endereço está correto respondendo com 'sim' ou 'não'."
-    )
+    return "Por favor, confirme se o endereço está correto respondendo com 'sim' ou 'não'."
 
 
 def solicitar_novo_endereco(tentativa: int, max_tentativas: int) -> str:
@@ -84,7 +81,6 @@ def solicitar_novo_endereco(tentativa: int, max_tentativas: int) -> str:
 
 # ========== PONTO DE REFERÊNCIA ==========
 
-
 def solicitar_ponto_referencia() -> str:
     """Mensagem solicitando ponto de referência."""
     return (
@@ -98,13 +94,12 @@ def solicitar_ponto_referencia() -> str:
 
 # ========== IDENTIFICAÇÃO (CPF) ==========
 
-
 def solicitar_cpf() -> str:
     """Mensagem solicitando CPF."""
     return "Por favor, informe seu CPF para que possamos buscar seus dados cadastrais. Caso prefira não se identificar, digite 'avançar' para prosseguir sem identificação."
 
 
-def cpf_invalido(tentativa: int, max_tentativas: int = 3) -> str:
+def cpf_invalido(tentativa: int, max_tentativas: int=3) -> str:
     """Mensagem quando CPF é inválido."""
     return f"CPF inválido. Tentativa {tentativa}/{max_tentativas}. {solicitar_cpf()}"
 
@@ -116,13 +111,12 @@ def maximo_tentativas_excedido() -> str:
 
 # ========== EMAIL ==========
 
-
 def solicitar_email() -> str:
     """Mensagem solicitando email."""
     return "Por favor, informe seu email. Caso não queira enviar, digite 'avançar' para prosseguir sem email."
 
 
-def email_invalido(tentativa: int, max_tentativas: int = 3) -> str:
+def email_invalido(tentativa: int, max_tentativas: int=3) -> str:
     """Mensagem quando email é inválido."""
     return f"Email inválido. Tentativa {tentativa}/{max_tentativas}. Por favor, informe um email válido (ou deixe em branco para pular)."
 
@@ -133,7 +127,6 @@ def email_maximo_tentativas() -> str:
 
 
 # ========== NOME ==========
-
 
 def solicitar_nome() -> str:
     """Mensagem solicitando nome."""
@@ -152,7 +145,6 @@ def nome_maximo_tentativas() -> str:
 
 # ========== DADOS PESSOAIS SALVOS ==========
 
-
 def confirmar_dados_salvos(dados_mascarados: list) -> str:
     """Mensagem pedindo confirmação de dados pessoais salvos."""
     message = "Você tem os seguintes dados salvos:\n\n"
@@ -163,7 +155,6 @@ def confirmar_dados_salvos(dados_mascarados: list) -> str:
 
 # ========== CRIAÇÃO DE TICKET ==========
 
-
 def solicitacao_criada_sucesso(protocol_id: str) -> str:
     """Mensagem de sucesso ao criar solicitação."""
     return (
@@ -171,16 +162,15 @@ def solicitacao_criada_sucesso(protocol_id: str) -> str:
         f"O número do protocolo é {protocol_id}.\n\n" + msg_solicitacao()
     )
 
-
 def solicitacao_existente(protocol_id: str) -> str:
     """Mensagem quando solicitação já existe."""
-    return f"A solicitação {protocol_id} já existe.\n\n" + msg_solicitacao()
-
+    return (
+        f"A solicitação {protocol_id} já existe.\n\n" + msg_solicitacao()
+    )
 
 def msg_solicitacao() -> str:
     """Mensagem informando sobre a criação da solicitação."""
     return "Você pode acompanhar sua solicitação informando o protocolo em https://www.1746.rio/hc/pt-br/p/solicitacoes"
-
 
 def erro_criar_solicitacao() -> str:
     """Mensagem de erro ao criar solicitação."""
@@ -208,7 +198,6 @@ def reiniciar_apos_erro(error_msg: str) -> str:
 
 # ========== CONFIRMAÇÃO DE DADOS DO TICKET ==========
 
-
 def confirmar_dados_ticket(dados_formatados: str) -> str:
     """Mensagem pedindo confirmação final dos dados antes de criar o ticket."""
     return (
@@ -231,7 +220,6 @@ def solicitar_correcao_dados() -> str:
         "O que você gostaria de fazer?"
     )
 
-
 def dados_corrigidos_solicitar_campo(campo: str) -> str:
     """Mensagem solicitando o novo valor para um campo específico."""
     mensagens = {
@@ -239,6 +227,6 @@ def dados_corrigidos_solicitar_campo(campo: str) -> str:
         "nome": "Por favor, informe seu nome completo correto:",
         "cpf": "Por favor, informe o CPF correto (ou deixe vazio para pular):",
         "email": "Por favor, informe o email correto (ou deixe vazio para pular):",
-        "ponto_referencia": "Por favor, informe o ponto de referência correto (ou deixe vazio para remover):",
+        "ponto_referencia": "Por favor, informe o ponto de referência correto (ou deixe vazio para remover):"
     }
     return mensagens.get(campo, f"Por favor, informe o valor correto para {campo}:")

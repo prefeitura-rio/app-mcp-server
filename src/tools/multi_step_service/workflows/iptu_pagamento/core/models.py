@@ -2,7 +2,7 @@
 Modelos Pydantic para validação do workflow IPTU Ano Vigente
 """
 
-from typing import Optional, List, Dict, Any, Union
+from typing import Literal, Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 

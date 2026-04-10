@@ -18,15 +18,17 @@ async def dharma_search(query: str):
 
     headers = {
         "Authorization": f"Bearer {DHARMA_API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
 
-    payload = {"message": query}
+    payload = {
+        "message": query
+    }
 
     async with InterceptedHTTPClient(
         user_id="unknown",
         source={"source": "mcp", "tool": "dharma_search"},
-        timeout=120.0,
+        timeout=120.0
     ) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()

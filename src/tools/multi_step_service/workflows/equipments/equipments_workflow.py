@@ -1,4 +1,6 @@
-from typing import Optional
+import asyncio
+import json
+from typing import List, Optional
 from langgraph.graph import StateGraph, END
 from src.config.env import EQUIPMENTS_VALID_THEMES
 from src.tools.multi_step_service.core.base_workflow import BaseWorkflow, handle_errors
@@ -184,10 +186,7 @@ class EquipmentsWorkflow(BaseWorkflow):
             bairro_normalizado = _geocode_and_extract_neighborhood(address)
 
             # Verificar se bairro está na whitelist
-            if (
-                not bairro_normalizado
-                or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO
-            ):
+            if not bairro_normalizado or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO:
                 # Bairro não permitido - retornar mensagem específica
                 state.agent_response = AgentResponse(
                     description=(

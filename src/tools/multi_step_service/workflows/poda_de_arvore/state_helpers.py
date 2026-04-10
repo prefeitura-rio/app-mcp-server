@@ -1,9 +1,7 @@
 from src.tools.multi_step_service.core.models import AgentResponse, ServiceState
 
 
-def ticket_opened(
-    state: ServiceState, protocol_id: str, description: str
-) -> ServiceState:
+def ticket_opened(state: ServiceState, protocol_id: str, description: str) -> ServiceState:
     state.data["protocol_id"] = protocol_id
     state.data["ticket_created"] = True
     state.agent_response = AgentResponse(description=description)

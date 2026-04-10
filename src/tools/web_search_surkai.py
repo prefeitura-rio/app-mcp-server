@@ -20,15 +20,19 @@ async def surkai_search(query: str, k: int = 6, lang: str = "pt-BR"):
 
     headers = {
         "Authorization": f"Bearer {SURKAI_API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
 
-    payload = {"k": k, "lang": lang, "query": query}
+    payload = {
+        "k": k,
+        "lang": lang,
+        "query": query
+    }
 
     async with InterceptedHTTPClient(
         user_id="unknown",
         source={"source": "mcp", "tool": "surkai_search"},
-        timeout=120.0,
+        timeout=120.0
     ) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()

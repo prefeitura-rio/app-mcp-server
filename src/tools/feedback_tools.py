@@ -12,9 +12,7 @@ from src.utils.error_interceptor import interceptor
 
 @interceptor(
     source={"source": "mcp", "tool": "feedback"},
-    extract_user_id=lambda args, kwargs: (
-        kwargs.get("user_id") or (args[0] if args else "unknown")
-    ),
+    extract_user_id=lambda args, kwargs: kwargs.get("user_id") or (args[0] if args else "unknown"),
 )
 async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
     """
@@ -34,15 +32,15 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
                 "success": False,
                 "error": "user_id não pode estar vazio",
                 "timestamp": None,
-                "message": None,
+                "message": None
             }
-
+        
         if not feedback or not feedback.strip():
             return {
                 "success": False,
                 "error": "feedback não pode estar vazio",
                 "timestamp": None,
-                "message": None,
+                "message": None
             }
 
         if feedback.strip() == "closed_beta_feedback":
@@ -50,12 +48,12 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
                 "success": True,
                 "timestamp": None,
                 "message": "A mensagem não é um feedback. Cumprimente o usuário e pergunte como pode ajudá-lo. Ex.: Olá! Como posso ajudar?",
-                "error": None,
+                "error": None
             }
 
         # Gera timestamp
         timestamp = get_datetime()
-
+        
         # Salva no BigQuery de forma assíncrona
         asyncio.create_task(
             save_feedback_in_bq_background(
@@ -72,7 +70,7 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
             "success": True,
             "timestamp": timestamp,
             "message": "Feedback armazenado com sucesso. Você pode agradecer ao usuário e informar que o feedback foi registrado para análise e melhorias futuras.",
-            "error": None,
+            "error": None
         }
 
     except Exception as e:
@@ -81,5 +79,5 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
             "success": False,
             "error": f"Erro interno ao salvar feedback: {str(e)}",
             "timestamp": None,
-            "message": None,
+            "message": None
         }

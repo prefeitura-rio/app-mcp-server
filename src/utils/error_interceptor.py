@@ -10,31 +10,12 @@ garantindo que falhas no envio de erros não afetem o fluxo principal da aplica�
 
 import inspect
 import json
-import os
 import traceback as tb
 from typing import Any, Callable, Dict, Optional
 import httpx
 from loguru import logger
 
 from src.config import env
-
-
-def _with_environment(source: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Garante que o source carregue o ambiente atual para facilitar triagem."""
-    enriched_source = dict(source or {})
-    enriched_source.setdefault("environment", env.ENVIRONMENT)
-    return enriched_source
-
-
-def _should_report_errors() -> bool:
-    """Evita enviar alertas em contexto de teste/local, mas mantém staging/prod elegíveis."""
-    if os.getenv("PYTEST_CURRENT_TEST"):
-        return False
-
-    if getattr(env, "IS_LOCAL", False):
-        return False
-
-    return env.ENVIRONMENT.lower() not in {"test", "local"}
 
 
 async def send_error_to_interceptor(
@@ -76,13 +57,6 @@ async def send_error_to_interceptor(
         True
     """
 
-    if not _should_report_errors():
-        logger.info(
-            f"Error Interceptor silenciado para o ambiente {env.ENVIRONMENT}. "
-            "Erro não será reportado ao sistema de monitoramento."
-        )
-        return False
-
     # Valida se as configurações estão disponíveis
     if not env.ERROR_INTERCEPTOR_URL or not env.ERROR_INTERCEPTOR_TOKEN:
         logger.warning(
@@ -107,12 +81,9 @@ async def send_error_to_interceptor(
 
     # Serializa source como JSON string se for dicionário
     if source is not None:
-        source = _with_environment(source)
         source_str = json.dumps(source, indent=2, ensure_ascii=False)
     else:
-        source_str = json.dumps(
-            _with_environment({"source": "mcp"}), indent=2, ensure_ascii=False
-        )
+        source_str = "mcp"
 
     # Prepara o payload
     payload = {
@@ -255,7 +226,6 @@ async def send_api_error(
         ... )
     """
 
-    source = _with_environment(source)
     flowname = serialize_source(source)
 
     return await send_error_to_interceptor(
@@ -317,7 +287,6 @@ async def send_general_error(
         ... )
     """
 
-    source = _with_environment(source)
     flowname = serialize_source(source)
 
     return await send_error_to_interceptor(
@@ -407,9 +376,7 @@ def interceptor(
                         asyncio.run(_handle_error(func, args, kwargs, e))
                     except Exception as send_error:
                         # Log silencioso se falhar ao enviar erro
-                        logger.warning(
-                            f"Falha ao enviar erro para interceptor: {send_error}"
-                        )
+                        logger.warning(f"Falha ao enviar erro para interceptor: {send_error}")
                 raise
 
         async def _handle_error(func, args, kwargs, e):
@@ -428,9 +395,7 @@ def interceptor(
 
             # Constrói source final
             # Começa com o source base e permite modificações via extract_source
-            final_source = _with_environment(
-                source
-            )  # Copia para não modificar o original
+            final_source = dict(source)  # Copia para não modificar o original
 
             if extract_source:
                 try:
@@ -454,19 +419,15 @@ def interceptor(
                     if i < len(param_names):
                         param_name = param_names[i]
                         # Evita incluir 'self' ou 'cls'
-                        if param_name not in ("self", "cls"):
+                        if param_name not in ('self', 'cls'):
                             # Serializa apenas tipos simples
-                            if isinstance(
-                                arg, (str, int, float, bool, list, dict, type(None))
-                            ):
+                            if isinstance(arg, (str, int, float, bool, list, dict, type(None))):
                                 input_body[param_name] = arg
                             else:
                                 input_body[param_name] = str(type(arg).__name__)
                 # Adiciona kwargs
                 for key, value in kwargs.items():
-                    if isinstance(
-                        value, (str, int, float, bool, list, dict, type(None))
-                    ):
+                    if isinstance(value, (str, int, float, bool, list, dict, type(None))):
                         input_body[key] = value
                     else:
                         input_body[key] = str(type(value).__name__)

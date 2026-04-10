@@ -12,7 +12,6 @@ Cobre todos os cenários possíveis:
 import os
 import time
 import asyncio
-
 # import pytest
 from src.tools.multi_step_service.tool import multi_step_service
 
@@ -88,9 +87,9 @@ class TestIPTUWorkflowHappyPath:
         )
 
         print(f"✅ Response 2: {response2['description'][:100]}...")
-        assert "guia" in response2["description"].lower(), (
-            "Deve exibir guias disponíveis"
-        )
+        assert (
+            "guia" in response2["description"].lower()
+        ), "Deve exibir guias disponíveis"
 
         # Etapa 3: Escolher guia
         print("💳 Etapa 3: Escolhendo guia...")
@@ -419,12 +418,12 @@ class TestIPTUWorkflowHappyPath:
                     "payload": {"ano_exercicio": 2025},
                 }
             )
-            assert response2["error_message"] is None, (
-                f"Erro no ano para inscrição {inscricao}"
-            )
-            assert "guia" in response2["description"].lower(), (
-                f"Deve mostrar guias para inscrição {inscricao}"
-            )
+            assert (
+                response2["error_message"] is None
+            ), f"Erro no ano para inscrição {inscricao}"
+            assert (
+                "guia" in response2["description"].lower()
+            ), f"Deve mostrar guias para inscrição {inscricao}"
 
         print("✅ TESTE PASSOU: Todas as inscrições funcionam corretamente")
 
@@ -522,9 +521,9 @@ class TestIPTUWorkflowHappyPath:
                     }
                 )
                 # Deve voltar para seleção de guias
-                assert "guia" in response_atual["description"].lower(), (
-                    "Deve mostrar guias disponíveis novamente"
-                )
+                assert (
+                    "guia" in response_atual["description"].lower()
+                ), "Deve mostrar guias disponíveis novamente"
 
                 # Escolhe segunda guia (01 - EXTRAORDINÁRIA)
                 response_atual = await multi_step_service.ainvoke(
@@ -926,7 +925,7 @@ class TestIPTUWorkflowFluxosContinuidade:
             }
         )
 
-        await multi_step_service.ainvoke(
+        response = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
@@ -980,7 +979,7 @@ class TestIPTUWorkflowFluxosContinuidade:
             }
         )
 
-        await multi_step_service.ainvoke(
+        response = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
@@ -1091,7 +1090,7 @@ class TestIPTUWorkflowResetEstado:
 
         # Primeira inscrição
         print("📝 Informando primeira inscrição...")
-        await multi_step_service.ainvoke(
+        response1 = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
@@ -1278,9 +1277,9 @@ class TestIPTUWorkflowCasosEspeciais:
                 }
             )
 
-            assert response3["error_message"] is None, (
-                f"Deve aceitar guia {numero_guia} ({tipo_esperado})"
-            )
+            assert (
+                response3["error_message"] is None
+            ), f"Deve aceitar guia {numero_guia} ({tipo_esperado})"
 
         print("✅ TESTE PASSOU: Todos os tipos de guias funcionam")
 
@@ -1340,9 +1339,7 @@ class TestIPTUWorkflowErrosAPI:
         assert (
             "indisponível" in response2["description"].lower()
             or "unavailable" in response2["description"].lower()
-        ), (
-            f"Mensagem deve indicar que API está indisponível. Got: {response2['description']}"
-        )
+        ), f"Mensagem deve indicar que API está indisponível. Got: {response2['description']}"
 
         # Deve manter o payload_schema para permitir retry
         assert response2["payload_schema"] is not None, "Deve manter schema para retry"
@@ -1388,9 +1385,7 @@ class TestIPTUWorkflowErrosAPI:
         assert (
             "autenticação" in response2["description"].lower()
             or "authentication" in response2["description"].lower()
-        ), (
-            f"Mensagem deve indicar erro de autenticação. Got: {response2['description']}"
-        )
+        ), f"Mensagem deve indicar erro de autenticação. Got: {response2['description']}"
 
         print(f"✅ Erro de autenticação tratado: {response2['description'][:100]}...")
 
@@ -1454,7 +1449,7 @@ class TestIPTUWorkflowErrosAPI:
         print("\n  📌 Cenário 1: Inscrição não existente (após 3 tentativas)")
         user_id_1 = f"{self.user_id}_inexistente"
 
-        await multi_step_service.ainvoke(
+        response1 = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": user_id_1,
@@ -1481,17 +1476,15 @@ class TestIPTUWorkflowErrosAPI:
         assert response["payload_schema"] is not None, "Deve ter payload_schema"
         assert "inscricao_imobiliaria" in response["payload_schema"].get(
             "properties", {}
-        ), (
-            f"Deve estar pedindo nova inscrição. Got schema: {response['payload_schema']}"
-        )
+        ), f"Deve estar pedindo nova inscrição. Got schema: {response['payload_schema']}"
         # A mensagem pode ser de "não encontrada" ou de "solicitar inscrição" (ambos são válidos após reset)
-        print("  ✓ Após 3 tentativas, sistema resetou e está pedindo nova inscrição")
+        print(f"  ✓ Após 3 tentativas, sistema resetou e está pedindo nova inscrição")
 
         # --- Cenário 2: API indisponível ---
         print("\n  📌 Cenário 2: API indisponível")
         user_id_2 = f"{self.user_id}_indisponivel"
 
-        await multi_step_service.ainvoke(
+        response3 = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": user_id_2,
@@ -1513,9 +1506,9 @@ class TestIPTUWorkflowErrosAPI:
             "indisponível" in response4["description"].lower()
             or "unavailable" in response4["description"].lower()
         )
-        assert "não encontr" not in response4["description"].lower(), (
-            "Não deve dizer que inscrição não foi encontrada"
-        )
+        assert (
+            "não encontr" not in response4["description"].lower()
+        ), "Não deve dizer que inscrição não foi encontrada"
 
         print("✅ TESTE PASSOU: Diferença entre erros está clara")
 
@@ -1565,14 +1558,12 @@ class TestIPTUWorkflowErrosAPI:
         assert (
             "nenhuma guia" in response2["description"].lower()
             or "não foi encontrada" in response2["description"].lower()
-        ), (
-            f"Deve informar que nenhuma guia foi encontrada. Got: {response2['description']}"
-        )
+        ), f"Deve informar que nenhuma guia foi encontrada. Got: {response2['description']}"
 
         # 2. Deve mencionar o ano 2024 especificamente
-        assert "2024" in response2["description"], (
-            f"Deve mencionar o ano 2024. Got: {response2['description']}"
-        )
+        assert (
+            "2024" in response2["description"]
+        ), f"Deve mencionar o ano 2024. Got: {response2['description']}"
 
         # 3. Deve pedir para escolher outro ano
         assert (
@@ -1581,12 +1572,12 @@ class TestIPTUWorkflowErrosAPI:
         ), f"Deve pedir para escolher outro ano. Got: {response2['description']}"
 
         # 4. Deve ter schema para permitir nova tentativa
-        assert response2["payload_schema"] is not None, (
-            "Deve manter schema para nova tentativa"
-        )
-        assert "ano_exercicio" in response2["payload_schema"].get("properties", {}), (
-            "Schema deve pedir ano_exercicio"
-        )
+        assert (
+            response2["payload_schema"] is not None
+        ), "Deve manter schema para nova tentativa"
+        assert "ano_exercicio" in response2["payload_schema"].get(
+            "properties", {}
+        ), "Schema deve pedir ano_exercicio"
 
         print(f"✅ Mensagem correta exibida: '{response2['description'][:120]}...'")
 
@@ -1602,9 +1593,9 @@ class TestIPTUWorkflowErrosAPI:
 
         # Deve exibir guias disponíveis
         assert response3["error_message"] is None, "Não deve ter erro para ano 2025"
-        assert "guia" in response3["description"].lower(), (
-            f"Deve exibir guias disponíveis para 2025. Got: {response3['description'][:120]}"
-        )
+        assert (
+            "guia" in response3["description"].lower()
+        ), f"Deve exibir guias disponíveis para 2025. Got: {response3['description'][:120]}"
 
         print(f"✅ Guias encontradas para 2025: {response3['description'][:80]}...")
 
@@ -1658,33 +1649,33 @@ class TestIPTUWorkflowErrosAPI:
         ), f"Deve mencionar dívida ativa. Got: {response2['description']}"
 
         # 2. Deve mencionar o ano 2024
-        assert "2024" in response2["description"], (
-            f"Deve mencionar o ano 2024. Got: {response2['description']}"
-        )
+        assert (
+            "2024" in response2["description"]
+        ), f"Deve mencionar o ano 2024. Got: {response2['description']}"
 
         # 3. Deve incluir o link da dívida ativa
-        assert "daminternet.rio.rj.gov.br/divida" in response2["description"], (
-            f"Deve incluir link da dívida ativa. Got: {response2['description']}"
-        )
+        assert (
+            "daminternet.rio.rj.gov.br/divida" in response2["description"]
+        ), f"Deve incluir link da dívida ativa. Got: {response2['description']}"
 
         # 4. Deve mostrar informações do parcelamento
-        assert "parcelamento" in response2["description"].lower(), (
-            f"Deve mencionar parcelamento. Got: {response2['description']}"
-        )
+        assert (
+            "parcelamento" in response2["description"].lower()
+        ), f"Deve mencionar parcelamento. Got: {response2['description']}"
 
-        assert "2024/0256907" in response2["description"], (
-            f"Deve mostrar número do parcelamento. Got: {response2['description']}"
-        )
+        assert (
+            "2024/0256907" in response2["description"]
+        ), f"Deve mostrar número do parcelamento. Got: {response2['description']}"
 
         # 5. Deve ter schema para permitir nova tentativa
-        assert response2["payload_schema"] is not None, (
-            "Deve manter schema para nova tentativa"
-        )
-        assert "ano_exercicio" in response2["payload_schema"].get("properties", {}), (
-            "Schema deve pedir ano_exercicio"
-        )
+        assert (
+            response2["payload_schema"] is not None
+        ), "Deve manter schema para nova tentativa"
+        assert "ano_exercicio" in response2["payload_schema"].get(
+            "properties", {}
+        ), "Schema deve pedir ano_exercicio"
 
-        print("✅ Mensagem de dívida ativa exibida corretamente")
+        print(f"✅ Mensagem de dívida ativa exibida corretamente")
         print("✅ TESTE PASSOU: Dívida ativa com parcelamento detectada e informada")
 
     # @pytest.mark.asyncio
@@ -1723,9 +1714,9 @@ class TestIPTUWorkflowErrosAPI:
 
         # Verificações
         assert "dívida ativa" in response2["description"].lower()
-        assert "cda" in response2["description"].lower(), (
-            f"Deve mencionar CDA. Got: {response2['description']}"
-        )
+        assert (
+            "cda" in response2["description"].lower()
+        ), f"Deve mencionar CDA. Got: {response2['description']}"
         assert (
             "2024/123456" in response2["description"]
             or "2023/654321" in response2["description"]
@@ -1774,9 +1765,9 @@ class TestIPTUWorkflowErrosAPI:
             "ef" in response2["description"].lower()
             or "execu" in response2["description"].lower()
         ), f"Deve mencionar EF. Got: {response2['description']}"
-        assert "2024/789012" in response2["description"], (
-            f"Deve mostrar número da EF. Got: {response2['description']}"
-        )
+        assert (
+            "2024/789012" in response2["description"]
+        ), f"Deve mostrar número da EF. Got: {response2['description']}"
         assert "daminternet.rio.rj.gov.br/divida" in response2["description"]
 
         print("✅ TESTE PASSOU: Dívida ativa com EFs detectada e informada")
@@ -1819,7 +1810,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": self.inscricao_valida},
+                "payload": {"inscricao_imobiliaria": self.inscricao_valida}
             }
         )
         assert "ano de exercício" in response1["description"].lower()
@@ -1829,7 +1820,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2025},
+                "payload": {"ano_exercicio": 2025}
             }
         )
         assert "guias disponíveis" in response2["description"].lower()
@@ -1839,7 +1830,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "00"},
+                "payload": {"guia_escolhida": "00"}
             }
         )
         assert "selecione as cotas" in response3["description"].lower()
@@ -1850,20 +1841,16 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2024},
+                "payload": {"ano_exercicio": 2024}
             }
         )
 
         # Esperado: Sistema reseta e mostra guias do ano 2024
         assert "guias disponíveis" in response4["description"].lower()
         assert "2024" in response4["description"]
-        assert response4.get("error_message") is None, (
-            f"Não deveria ter erro: {response4.get('error_message')}"
-        )
+        assert response4.get("error_message") is None, f"Não deveria ter erro: {response4.get('error_message')}"
 
-        print(
-            "✅ TESTE PASSOU: Reset automático funcionou, ano mudou de 2025 para 2024"
-        )
+        print("✅ TESTE PASSOU: Reset automático funcionou, ano mudou de 2025 para 2024")
 
     # @pytest.mark.asyncio
     async def test_voltar_de_selecao_cotas_para_guia(self):
@@ -1882,14 +1869,14 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": self.inscricao_valida},
+                "payload": {"inscricao_imobiliaria": self.inscricao_valida}
             }
         )
         await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2025},
+                "payload": {"ano_exercicio": 2025}
             }
         )
 
@@ -1898,34 +1885,26 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "00"},
+                "payload": {"guia_escolhida": "00"}
             }
         )
         # Verifica que está pedindo cotas
-        assert (
-            "selecione as cotas" in response3["description"].lower()
-            or "cotas" in response3["description"].lower()
-        )
+        assert "selecione as cotas" in response3["description"].lower() or "cotas" in response3["description"].lower()
 
         # STEP 4: Ao invés de escolher cotas, muda para guia 01
         response4 = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "01"},
+                "payload": {"guia_escolhida": "01"}
             }
         )
 
         # Esperado: Sistema reseta e pede para escolher cotas da nova guia 01
-        assert (
-            "selecione as cotas" in response4["description"].lower()
-            or "cotas" in response4["description"].lower()
-        )
+        assert "selecione as cotas" in response4["description"].lower() or "cotas" in response4["description"].lower()
         assert response4.get("error_message") is None
 
-        print(
-            "✅ TESTE PASSOU: Reset automático permitiu mudar de guia durante seleção de cotas"
-        )
+        print("✅ TESTE PASSOU: Reset automático permitiu mudar de guia durante seleção de cotas")
 
     # @pytest.mark.asyncio
     async def test_voltar_para_inscricao_reseta_tudo(self):
@@ -1944,21 +1923,21 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": self.inscricao_valida},
+                "payload": {"inscricao_imobiliaria": self.inscricao_valida}
             }
         )
         await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2025},
+                "payload": {"ano_exercicio": 2025}
             }
         )
         await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "00"},
+                "payload": {"guia_escolhida": "00"}
             }
         )
 
@@ -1968,7 +1947,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": nova_inscricao},
+                "payload": {"inscricao_imobiliaria": nova_inscricao}
             }
         )
 
@@ -1996,7 +1975,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": self.inscricao_valida},
+                "payload": {"inscricao_imobiliaria": self.inscricao_valida}
             }
         )
 
@@ -2009,7 +1988,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2025},
+                "payload": {"ano_exercicio": 2025}
             }
         )
 
@@ -2018,7 +1997,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "00"},
+                "payload": {"guia_escolhida": "00"}
             }
         )
 
@@ -2027,7 +2006,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2024},
+                "payload": {"ano_exercicio": 2024}
             }
         )
 
@@ -2035,10 +2014,7 @@ class TestIPTUWorkflowNonLinearNavigation:
         assert self.inscricao_valida in response4["description"]
         # Se tinha endereço antes, deve continuar tendo
         if original_endereco_presente:
-            assert (
-                "endereço" in response4["description"].lower()
-                or "dados do imóvel" in response4["description"].lower()
-            )
+            assert "endereço" in response4["description"].lower() or "dados do imóvel" in response4["description"].lower()
 
         print("✅ TESTE PASSOU: Inscrição preservada ao mudar ano")
 
@@ -2059,7 +2035,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": self.inscricao_valida},
+                "payload": {"inscricao_imobiliaria": self.inscricao_valida}
             }
         )
 
@@ -2068,14 +2044,14 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2025},
+                "payload": {"ano_exercicio": 2025}
             }
         )
         await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "00"},
+                "payload": {"guia_escolhida": "00"}
             }
         )
 
@@ -2084,7 +2060,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2024},
+                "payload": {"ano_exercicio": 2024}
             }
         )
         assert "2024" in response_2024["description"]
@@ -2095,7 +2071,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "00"},
+                "payload": {"guia_escolhida": "00"}
             }
         )
 
@@ -2104,7 +2080,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"ano_exercicio": 2023},
+                "payload": {"ano_exercicio": 2023}
             }
         )
         assert "2023" in response_2023["description"]
@@ -2114,7 +2090,7 @@ class TestIPTUWorkflowNonLinearNavigation:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"guia_escolhida": "00"},
+                "payload": {"guia_escolhida": "00"}
             }
         )
         assert "cotas" in response_final["description"].lower()
@@ -2146,9 +2122,9 @@ async def run_all_tests():
     failed_tests = 0
 
     for test_class in test_classes:
-        print(f"\n{'=' * 80}")
+        print(f"\n{'='*80}")
         print(f"📦 Executando: {test_class.__name__}")
-        print(f"{'=' * 80}")
+        print(f"{'='*80}")
 
         # Pega todos os métodos de teste
         test_methods = [
@@ -2176,14 +2152,14 @@ async def run_all_tests():
                 test_instance.teardown_method()
 
     # Resumo final
-    print(f"\n{'=' * 80}")
+    print(f"\n{'='*80}")
     print("📊 RESUMO DOS TESTES")
-    print(f"{'=' * 80}")
+    print(f"{'='*80}")
     print(f"Total de testes: {total_tests}")
     print(f"✅ Passaram: {passed_tests}")
     print(f"❌ Falharam: {failed_tests}")
     print(
-        f"Taxa de sucesso: {(passed_tests / total_tests * 100) if total_tests > 0 else 0:.1f}%"
+        f"Taxa de sucesso: {(passed_tests/total_tests*100) if total_tests > 0 else 0:.1f}%"
     )
     print("=" * 80)
 

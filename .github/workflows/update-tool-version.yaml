@@ -7,7 +7,7 @@ on:
       - staging
     paths:
       - 'src/**'
-      - 'src/utils/tool_version.json'
+      - 'tool_version.json'
 
 jobs:
   update-version:

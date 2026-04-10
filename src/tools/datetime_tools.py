@@ -4,6 +4,7 @@ Ferramentas de data e hora para o servidor FastMCP.
 
 import json
 
+from typing import Dict, Any
 from src.utils.datetime_utils import get_current_rio_time
 
 
@@ -28,8 +29,8 @@ def format_greeting() -> str:
     """
     time_info = get_current_rio_time()
     current_hour = int(time_info["time"].split(":")[0])
-    # weekday = time_info["weekday_pt"]
-    # date_br = time_info["date_br"]
+    weekday = time_info["weekday_pt"]
+    date_br = time_info["date_br"]
 
     if 5 <= current_hour < 12:
         greeting = "Bom dia"

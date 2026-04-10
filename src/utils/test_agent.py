@@ -1,12 +1,14 @@
 import asyncio
-from typing import Any, List
+from typing import Any, List, Dict
 import json
 
 from google import genai
 from google.genai.types import (
     Tool,
+    UrlContext,
     ThinkingConfig,
     GenerateContentConfig,
+    GoogleSearch,
     Content,
     Part,
     FunctionDeclaration,

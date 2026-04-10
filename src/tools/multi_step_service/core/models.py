@@ -55,9 +55,7 @@ class ServiceState(BaseModel):
     status: Literal["progress", "completed", "error"] = "progress"
     data: Dict[str, Any] = Field(default_factory=dict)
     payload: Dict[str, Any] = Field(default_factory=dict)  # Payload atual da requisição
-    internal: Dict[str, Any] = Field(
-        default_factory=dict
-    )  # Dados internos não visíveis ao agente
+    internal: Dict[str, Any] = Field(default_factory=dict)  # Dados internos não visíveis ao agente
     metadata: ServiceMetadata = Field(
         default_factory=ServiceMetadata
     )  # Metadados autogeridos
