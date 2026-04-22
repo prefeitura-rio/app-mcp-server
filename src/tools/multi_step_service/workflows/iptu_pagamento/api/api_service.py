@@ -65,6 +65,11 @@ class IPTUAPIService:
         self.user_id = user_id
 
         logger.info(f"IPTUAPIService initialized with API URL: {self.api_base_url}")
+        print(
+            "IPTU env debug - "
+            f"url_prefix={str(self.api_base_url)[:24]!r}, "
+            f"token_prefix={str(self.api_token)[:3]!r}"
+        )
 
     @staticmethod
     def _limpar_inscricao(inscricao: str) -> str:
