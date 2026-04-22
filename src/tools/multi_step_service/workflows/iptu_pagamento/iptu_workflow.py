@@ -764,6 +764,7 @@ class IPTUWorkflow(BaseWorkflow):
                         "vencimento": dados_darm.darm.data_vencimento,
                         "codigo_barras": dados_darm.darm.codigo_barras,
                         "linha_digitavel": dados_darm.darm.sequencia_numerica,
+                        "pix": dados_darm.darm.chave_pix,
                         "pdf": urls,
                     }
                 )

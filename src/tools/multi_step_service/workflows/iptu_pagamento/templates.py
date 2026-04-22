@@ -264,6 +264,7 @@ __replace_divida_ativa__
             texto += f"**Valor:** {formatar_valor_brl(valor)}\n"
             texto += f"**Vencimento:** {guia['vencimento']}\n"
             texto += f"**Código de Barras:** {guia['codigo_barras']}\n"
+            texto += f"**Pix copia-e-cola:** {guia.get('pix', 'Não disponível')}\n"
             # texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
             texto += f"**PDF:** {guia.get('pdf', 'Não disponível')}\n\n"
 

@@ -508,6 +508,7 @@ class IPTUAPIServiceFake:
             "CreditoEmissao": "0,00",
             "ValorAPagar": valor_total_str,
             "SequenciaNumerica": sequencia_numerica,
+            "ChavePix": f"00020126580014br.gov.bcb.pix0136{inscricao_clean}{numero_guia}{int(valor_total * 100):08d}520400005303986540{valor_total:.2f}5802BR",
             "DescricaoDARM": f"DARM por cota ref.cotas {','.join(cotas_selecionadas)}",
             "CodReceita": "310-7",
             "DesReceita": "RECEITA DE PAGAMENTO",

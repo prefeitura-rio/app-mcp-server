@@ -209,6 +209,7 @@ class Darm(BaseModel):
     credito_emissao: str = Field(alias="CreditoEmissao")  # Formato brasileiro "0,00"
     valor_a_pagar: str = Field(alias="ValorAPagar")  # Formato brasileiro "261,44"
     sequencia_numerica: str = Field(alias="SequenciaNumerica")  # Linha digitável
+    chave_pix: Optional[str] = Field(default=None, alias="ChavePix")
     descricao_darm: str = Field(
         alias="DescricaoDARM"
     )  # "DARM por cota ref.cotas 01,02,03"

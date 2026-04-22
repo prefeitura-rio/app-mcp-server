@@ -463,6 +463,7 @@ async def test_iptu_api_service_helpers_and_parsing(monkeypatch):
                 "CreditoEmissao": "0,00",
                 "ValorAPagar": "89,44",
                 "SequenciaNumerica": "123.456 789",
+                "ChavePix": "pix-copia-e-cola",
                 "DescricaoDARM": "DARM",
                 "CodReceita": "310-7",
                 "DesReceita": "RECEITA",
@@ -496,6 +497,7 @@ async def test_iptu_api_service_helpers_and_parsing(monkeypatch):
 
     dados_darm = await service.consultar_darm("12.345.678", 2025, "00", ["01"])
     assert dados_darm.darm.codigo_barras == "123456789"
+    assert dados_darm.darm.chave_pix == "pix-copia-e-cola"
 
     pdf_url = await service.download_pdf_darm("12.345.678", 2025, "00", ["01"])
     assert pdf_url == "short-url"
