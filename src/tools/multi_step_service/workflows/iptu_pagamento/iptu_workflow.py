@@ -423,7 +423,7 @@ class IPTUWorkflow(BaseWorkflow):
         # Faz consulta via API
         try:
             dados_cotas = await self.api_service.obter_cotas(
-                str(inscricao), int(exercicio or 2025), str(guia_escolhida)
+                str(inscricao), int(exercicio or 2026), str(guia_escolhida)
             )
         except APIUnavailableError as e:
             # API indisponível - volta para seleção de guias

@@ -36,7 +36,7 @@ class IPTUMessageTemplates:
             msg += f"💼 **Contribuinte:** {proprietario}\n"
         if endereco:
             msg += f"📍 **Endereço:** {endereco}\n"
-        msg += "📅 Agora informe o **ano de exercício** para consulta do IPTU (ex: 2024, 2025)."
+        msg += "📅 Agora informe o **ano de exercício** para consulta do IPTU (ex: 2025, 2026)."
         return msg
 
     # --- Erros de Consulta ---

@@ -10,8 +10,8 @@ from typing import Dict, Any
 
 
 # Dados de teste reutilizáveis
-INSCRICAO_VALIDA = "01234567890123"  # Válida na API fake
-INSCRICAO_SEM_GUIAS = "99999999999999"  # Sem guias na API fake
+INSCRICAO_VALIDA = "12345678"  # Válida na API fake
+INSCRICAO_SEM_GUIAS = "99999999"  # Sem guias na API fake
 INSCRICAO_INVALIDA = "123"  # Formato inválido
 ANO_VALIDO = 2025
 ANO_INVALIDO = 2019
@@ -70,7 +70,7 @@ def criar_payload_inscricao(inscricao: str = INSCRICAO_VALIDA) -> Dict[str, str]
 
     Examples:
         >>> criar_payload_inscricao()
-        {'inscricao_imobiliaria': '01234567890123'}
+        {'inscricao_imobiliaria': '12345678'}
     """
     return {"inscricao_imobiliaria": inscricao}
 

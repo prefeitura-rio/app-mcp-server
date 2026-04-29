@@ -6,6 +6,11 @@ from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 import re
 
+from src.tools.multi_step_service.workflows.iptu_pagamento.core.constants import (
+    INSCRICAO_MAX_LENGTH,
+    INSCRICAO_MIN_LENGTH,
+)
+
 
 class InscricaoImobiliariaPayload(BaseModel):
     """Payload para coleta da inscrição imobiliária."""
@@ -13,8 +18,8 @@ class InscricaoImobiliariaPayload(BaseModel):
     inscricao_imobiliaria: str = Field(
         ...,
         description="Inscrição imobiliária do imóvel.",
-        min_length=1,
-        max_length=15,
+        min_length=INSCRICAO_MIN_LENGTH,
+        max_length=INSCRICAO_MAX_LENGTH,
     )
 
     @field_validator(
@@ -31,11 +36,18 @@ class InscricaoImobiliariaPayload(BaseModel):
         # Remove todos os caracteres não numéricos
         clean_inscricao = re.sub(r"[^0-9]", "", v)
 
-        if len(clean_inscricao) < 8:
-            clean_inscricao = clean_inscricao.zfill(8)
+        if len(clean_inscricao) < INSCRICAO_MIN_LENGTH:
+            raise ValueError(
+                f"Inscrição imobiliária deve ter no mínimo {INSCRICAO_MIN_LENGTH} dígitos"
+            )
 
-        if len(clean_inscricao) > 15:
-            raise ValueError("Inscrição imobiliária não pode ter mais de 15 dígitos")
+        if len(clean_inscricao) < INSCRICAO_MAX_LENGTH:
+            clean_inscricao = clean_inscricao.zfill(INSCRICAO_MAX_LENGTH)
+
+        if len(clean_inscricao) > INSCRICAO_MAX_LENGTH:
+            raise ValueError(
+                f"Inscrição imobiliária não pode ter mais de {INSCRICAO_MAX_LENGTH} dígitos"
+            )
 
         return clean_inscricao
 

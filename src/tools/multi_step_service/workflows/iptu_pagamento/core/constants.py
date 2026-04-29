@@ -11,8 +11,8 @@ ANO_MIN_VALIDO = 2020
 ANO_MAX_VALIDO = datetime.now().year
 
 # Validação de Inscrição Imobiliária
-INSCRICAO_MIN_LENGTH = 8
-INSCRICAO_MAX_LENGTH = 15
+INSCRICAO_MIN_LENGTH = 2
+INSCRICAO_MAX_LENGTH = 8
 INSCRICAO_PATTERN = r"^[0-9]+$"
 
 # Limites e Tentativas

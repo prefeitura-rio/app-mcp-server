@@ -46,7 +46,7 @@ Este workflow implementa o fluxo completo de consulta de IPTU seguindo o fluxogr
 👤 Usuário: "Quero pagar meu IPTU"
 🤖 Sistema: "📋 Por favor, informe a inscrição imobiliária do imóvel."
 
-👤 Usuário: "01234567890123"
+👤 Usuário: "12345678"
 🤖 Sistema: "✅ Inscrição válida!
            📍 Endereço: RUA EXEMPLO, 123
            👤 Proprietário: JOÃO DA SILVA
@@ -74,7 +74,7 @@ Este workflow implementa o fluxo completo de consulta de IPTU seguindo o fluxogr
 👤 Usuário: "1"
 🤖 Sistema: "✅ **Confirmação de Dados**
 
-           📍 Inscrição: 01234567890123
+           📍 Inscrição: 12345678
            🏠 Endereço: RUA EXEMPLO, 123
            👤 Proprietário: JOÃO DA SILVA
            📄 Guia: 00
@@ -102,7 +102,7 @@ Este workflow implementa o fluxo completo de consulta de IPTU seguindo o fluxogr
 👤 Usuário: "Quero pagar IPTU"
 🤖 Sistema: "Informe a inscrição..."
 
-👤 Usuário: "01234567890123"
+👤 Usuário: "12345678"
 🤖 Sistema: "Escolha o ano..."
 
 👤 Usuário: "2025"
@@ -198,13 +198,13 @@ class InscricaoImobiliariaPayload(BaseModel):
     def validate_inscricao(cls, v: str) -> str:
         # Remove formatação
         clean = re.sub(r'[^0-9]', '', v)
-        if len(clean) < 8 or len(clean) > 15:
-            raise ValueError("Inscrição deve ter entre 8 e 15 dígitos")
+        if len(clean) < 2 or len(clean) > 8:
+            raise ValueError("Inscrição deve ter entre 2 e 8 dígitos")
         return clean
 ```
 
 **Modelos disponíveis:**
-- `InscricaoImobiliariaPayload` - Valida inscrição (8-15 dígitos)
+- `InscricaoImobiliariaPayload` - Valida inscrição (2-8 dígitos)
 - `EscolhaAnoPayload` - Valida ano (2020-2025)
 - `EscolhaGuiasIPTUPayload` - Valida escolha de guia
 - `EscolhaCotasParceladasPayload` - Valida lista de cotas
@@ -544,7 +544,7 @@ Total: R$ 1.500,00
 ```
 ✅ **Confirmação de Dados**
 
-📍 Inscrição: 01234567890123
+📍 Inscrição: 12345678
 🏠 Endereço: RUA EXEMPLO, 123
 👤 Proprietário: JOÃO DA SILVA
 📄 Guia: 00
@@ -683,7 +683,7 @@ Resultado:
 
 ```
 Estado atual: Usuário está em usuario_escolhe_guias (step 3)
-Payload recebido: {inscricao_imobiliaria: "99999999999999"}
+Payload recebido: {inscricao_imobiliaria: "99999999"}
 
 Detecção:
   → 'inscricao_imobiliaria' é step 1
@@ -805,7 +805,7 @@ GET /iptu/guias?inscricao={inscricao}&exercicio={ano}
 **Response**:
 ```json
 {
-  "inscricao_imobiliaria": "01234567890123",
+  "inscricao_imobiliaria": "12345678",
   "exercicio": 2025,
   "guias": [
     {
@@ -834,7 +834,7 @@ GET /iptu/cotas?inscricao={inscricao}&exercicio={ano}&guia={numero}
 **Response**:
 ```json
 {
-  "inscricao_imobiliaria": "01234567890123",
+  "inscricao_imobiliaria": "12345678",
   "exercicio": 2025,
   "numero_guia": "00",
   "cotas": [
@@ -855,7 +855,7 @@ POST /iptu/darm
 Content-Type: application/json
 
 {
-  "inscricao_imobiliaria": "01234567890123",
+  "inscricao_imobiliaria": "12345678",
   "exercicio": 2025,
   "numero_guia": "00",
   "cotas": ["1"]
@@ -884,7 +884,7 @@ GET /iptu/imovel?inscricao={inscricao}
 **Response**:
 ```json
 {
-  "inscricao_imobiliaria": "01234567890123",
+  "inscricao_imobiliaria": "12345678",
   "endereco": "RUA EXEMPLO, 123 - CENTRO",
   "proprietario": "JOÃO DA SILVA"
 }
@@ -899,7 +899,7 @@ GET /divida-ativa/consulta?inscricao={inscricao}
 **Response**:
 ```json
 {
-  "inscricao_imobiliaria": "01234567890123",
+  "inscricao_imobiliaria": "12345678",
   "tem_divida_ativa": true,
   "cdas": [
     {
@@ -981,7 +981,7 @@ except APIUnavailableError as e:
 ```
 ⚠️ **IPTU de 2024 Migrado para Dívida Ativa**
 
-O IPTU do exercício de 2024 para a inscrição 01234567890123 foi
+O IPTU do exercício de 2024 para a inscrição 12345678 foi
 migrado para dívida ativa.
 
 📋 **Débitos Encontrados:**
@@ -1093,7 +1093,7 @@ Por favor, tente novamente em instantes.
 1. Usuario informa inscricao
 2. Escolhe ano 2025 → sem guias
 3. Consulta divida ativa → sem divida
-4. Incrementa failed_attempts_01234567890123 = 1
+4. Incrementa failed_attempts_12345678 = 1
 5. Escolhe ano 2024 → sem guias (tentativa 2)
 6. Escolhe ano 2023 → sem guias (tentativa 3)
 7. failed_attempts >= MAX_TENTATIVAS_ANO:
@@ -1105,7 +1105,7 @@ Por favor, tente novamente em instantes.
 ```
 ❌ **Inscrição Não Encontrada**
 
-Não foram encontradas guias de IPTU para a inscrição 01234567890123
+Não foram encontradas guias de IPTU para a inscrição 12345678
 nos últimos anos consultados.
 
 Por favor, verifique se a inscrição está correta e tente novamente.
@@ -1193,7 +1193,7 @@ class TestIPTUWorkflowHappyPath:
         """Executado antes de cada teste."""
         self.user_id = f"test_user_{uuid.uuid4()}"
         self.service_name = "iptu_pagamento"
-        self.inscricao_valida = "01234567890123"
+        self.inscricao_valida = "12345678"
 
         # Força uso de API fake
         os.environ["IPTU_USE_FAKE_API"] = "true"
@@ -1460,14 +1460,14 @@ def minha_funcao_helper(state: ServiceState, parametro: str) -> bool:
 
 ### Problema: "Inscrição inválida"
 
-**Causa**: Inscrição tem menos de 8 ou mais de 15 dígitos
+**Causa**: Inscrição tem mais de 8 dígitos
 
 **Solução**:
 - Verificar se inscrição está correta no carnê do IPTU
 - Remover caracteres especiais (pontos, traços)
 - Workflow aceita com ou sem formatação
 
-**Exemplo válido**: `01234567890123` ou `0123.456.789-0123`
+**Exemplo válido**: `12345678` ou `1234.567-8`
 
 ---
 
@@ -1572,8 +1572,8 @@ ANO_MIN_VALIDO = 2020          # Ano mínimo aceito
 ANO_MAX_VALIDO = 2025          # Ano máximo aceito
 
 # Inscrição
-INSCRICAO_MIN_LENGTH = 8       # Tamanho mínimo (sem formatação)
-INSCRICAO_MAX_LENGTH = 15      # Tamanho máximo
+INSCRICAO_MIN_LENGTH = 2       # Tamanho mínimo (sem formatação)
+INSCRICAO_MAX_LENGTH = 8       # Tamanho máximo
 
 # Tentativas
 MAX_TENTATIVAS_ANO = 3         # Máx tentativas antes de pedir nova inscrição
