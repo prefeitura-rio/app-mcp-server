@@ -189,9 +189,9 @@ def test_inscricao_imobiliaria_padding():
 
 
 def test_inscricao_imobiliaria_rejects_too_long_value():
-    with pytest.raises(ValueError, match="não pode ter mais de 15"):
+    with pytest.raises(ValueError, match="não pode ter mais de 8"):
         iptu_models.InscricaoImobiliariaPayload.model_validate(
-            {"inscricao_imobiliaria": "1234567890123456"}
+            {"inscricao_imobiliaria": "123456789"}
         )
 
 
