@@ -42,6 +42,10 @@ from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
 )
+from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service import (
+    SGRCAPIService,
+    AddressAPIService,
+)
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -374,6 +378,133 @@ def create_app() -> FastMCP:
             service_name=service_name, user_id=user_id, payload=payload
         )
         return response
+
+    @conditional_mcp_tool("validate_address")
+    async def validate_address(address: str) -> dict:
+        """
+        Valida endereço e retorna dados estruturados com códigos IPP necessários
+        para abertura de chamados no SGRC da Prefeitura do Rio.
+        """
+        address_service = AddressAPIService()
+
+        geo = await address_service.google_geolocator(f"{address}, Rio de Janeiro - RJ")
+        if not geo.get("valid"):
+            return geo
+
+        ipp = await address_service.get_endereco_info(
+            latitude=geo["latitude"],
+            longitude=geo["longitude"],
+            logradouro_google=geo.get("logradouro"),
+            bairro_google=geo.get("bairro"),
+        )
+
+        return {
+            "valid": True,
+            "formatted_address": geo.get("formatted_address", address),
+            "latitude": geo["latitude"],
+            "longitude": geo["longitude"],
+            "logradouro": geo.get("logradouro", ""),
+            "logradouro_id_ipp": ipp.get("logradouro_id", ""),
+            "logradouro_nome_ipp": ipp.get("logradouro_nome", ""),
+            "numero": geo.get("numero", ""),
+            "bairro": geo.get("bairro", ""),
+            "bairro_id_ipp": ipp.get("bairro_id", ""),
+            "bairro_nome_ipp": ipp.get("bairro_nome", ""),
+            "cep": geo.get("cep", ""),
+        }
+
+    @conditional_mcp_tool("get_user_by_cpf")
+    async def get_user_by_cpf(cpf: str) -> dict:
+        """
+        Consulta cadastro do cidadão pelo CPF no sistema da Prefeitura do Rio.
+        Retorna nome, e-mail e telefone se o cidadão estiver cadastrado.
+        """
+        import httpx
+
+        try:
+            sgrc = SGRCAPIService()
+            data = await sgrc.get_user_info(cpf)
+            phones = data.get("phones") or []
+            return {
+                "found": bool(data.get("name") or data.get("email")),
+                "name": data.get("name"),
+                "email": data.get("email"),
+                "phone": str(phones[0]) if phones else None,
+            }
+        except Exception as e:
+            if isinstance(e.__cause__, httpx.HTTPStatusError) and e.__cause__.response.status_code == 404:
+                return {"found": False, "name": None, "email": None, "phone": None}
+            return {"found": False, "name": None, "email": None, "phone": None, "error": str(e)}
+
+    @conditional_mcp_tool("register_sgrc_ticket")
+    async def register_sgrc_ticket(
+        classification_code: str,
+        description: str,
+        street: str,
+        street_code: str,
+        neighborhood: str,
+        neighborhood_code: str,
+        number: str,
+        zip_code: str = "",
+        reference_point: str = "",
+        cpf: str = "",
+        name: str = "",
+        email: str = "",
+        phone: str = "",
+    ) -> dict:
+        """
+        Abre chamado no SGRC da Prefeitura do Rio com protocolo real.
+        Os campos street_code e neighborhood_code devem vir do validate_address.
+        """
+        from prefeitura_rio.integrations.sgrc import async_new_ticket
+        from prefeitura_rio.integrations.sgrc.models import Address, Requester, Phones
+        from prefeitura_rio.integrations.sgrc.exceptions import (
+            SGRCDuplicateTicketException,
+            SGRCEquivalentTicketException,
+        )
+
+        number_digits = "".join(filter(str.isdigit, str(number))) or "1"
+
+        address = Address(
+            street=street,
+            street_code=street_code,
+            neighborhood=neighborhood,
+            neighborhood_code=neighborhood_code,
+            number=number_digits,
+            locality=reference_point,
+            zip_code=zip_code,
+        )
+
+        phones = Phones()
+        if phone:
+            phones.telefone1 = phone
+
+        requester = Requester(
+            cpf=cpf,
+            name=name,
+            email=email,
+            phones=phones,
+        )
+
+        try:
+            ticket = await async_new_ticket(
+                classification_code=classification_code,
+                description=description,
+                address=address,
+                requester=requester,
+                occurrence_origin_code="28",
+            )
+            return {
+                "success": True,
+                "protocol_id": ticket.protocol_id,
+                "ticket_id": ticket.ticket_id,
+            }
+
+        except (SGRCDuplicateTicketException, SGRCEquivalentTicketException) as e:
+            return {"success": False, "protocol_id": getattr(e, "protocol_id", None), "ticket_id": None, "error": str(e)}
+
+        except Exception as e:
+            return {"success": False, "protocol_id": None, "error": str(e)}
 
     # ===== REGISTRAR RESOURCES =====
 
