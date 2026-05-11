@@ -5,7 +5,9 @@ def solicitar_cpf(required: bool = False) -> str:
     return base + " Se preferir não se identificar, diga que quer continuar sem CPF."
 
 
-def cpf_invalido(tentativa: int, max_tentativas: int = 3, required: bool = False) -> str:
+def cpf_invalido(
+    tentativa: int, max_tentativas: int = 3, required: bool = False
+) -> str:
     if required:
         complemento = "Informe um CPF válido para continuar."
     else:
@@ -26,7 +28,9 @@ def solicitar_email(required: bool = False) -> str:
     return base + " Caso não queira informar, diga que quer continuar sem email."
 
 
-def email_invalido(tentativa: int, max_tentativas: int = 3, required: bool = False) -> str:
+def email_invalido(
+    tentativa: int, max_tentativas: int = 3, required: bool = False
+) -> str:
     if required:
         complemento = "Informe um email válido para continuar."
     else:
@@ -47,7 +51,9 @@ def solicitar_nome(required: bool = False) -> str:
     return base + " Caso não queira informar, diga que quer continuar sem nome."
 
 
-def nome_invalido(tentativa: int, max_tentativas: int = 3, required: bool = False) -> str:
+def nome_invalido(
+    tentativa: int, max_tentativas: int = 3, required: bool = False
+) -> str:
     if required:
         complemento = "Informe nome e sobrenome para continuar."
     else:

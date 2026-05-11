@@ -11,7 +11,9 @@ from src.config.env import PODA_SERVICE_ID
 from src.tools.multi_step_service.core.base_workflow import BaseWorkflow, handle_errors
 from src.tools.multi_step_service.core.models import ServiceState, AgentResponse
 from src.tools.multi_step_service.workflows.sgrc_components import CommonWorkflowConfig
-from src.tools.multi_step_service.workflows.sgrc_components.address import AddressFlowMixin
+from src.tools.multi_step_service.workflows.sgrc_components.address import (
+    AddressFlowMixin,
+)
 from src.tools.multi_step_service.workflows.sgrc_components.identification import (
     IdentificationFlowMixin,
 )

@@ -65,12 +65,14 @@ def solicitar_localizacao() -> str:
         "5. Praça\n"
         "6. Quadra de esportes\n"
         "7. Rua\n\n"
-        "Caso não saiba, digite \"não sei\"."
+        'Caso não saiba, digite "não sei".'
     )
 
 
 def localizacao_invalida() -> str:
-    return "Não entendi a localização. Escolha uma opção de 1 a 7 ou responda 'não sei'."
+    return (
+        "Não entendi a localização. Escolha uma opção de 1 a 7 ou responda 'não sei'."
+    )
 
 
 def solicitar_endereco() -> str:

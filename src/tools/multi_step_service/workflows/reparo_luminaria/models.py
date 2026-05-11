@@ -15,6 +15,17 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     TicketDataConfirmationPayload,
 )
 
+__all__ = [
+    "AddressConfirmationPayload",
+    "AddressData",
+    "AddressPayload",
+    "AddressValidationState",
+    "CPFPayload",
+    "EmailPayload",
+    "NomePayload",
+    "TicketDataConfirmationPayload",
+]
+
 
 def _normalize_text(value: object) -> str:
     text = str(value or "").strip().lower()

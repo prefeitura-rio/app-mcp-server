@@ -22,7 +22,9 @@ from src.tools.multi_step_service.workflows.reparo_luminaria.models import (
     QuadraEsportesPayload,
 )
 from src.tools.multi_step_service.workflows.sgrc_components import CommonWorkflowConfig
-from src.tools.multi_step_service.workflows.sgrc_components.address import AddressFlowMixin
+from src.tools.multi_step_service.workflows.sgrc_components.address import (
+    AddressFlowMixin,
+)
 from src.tools.multi_step_service.workflows.sgrc_components.identification import (
     IdentificationFlowMixin,
 )
@@ -109,7 +111,12 @@ class ReparoLuminariaWorkflow(
         localizacao_quadra = (
             "1" if localizacao_luminaria == "Quadra de esportes" else "0"
         )
-        localizacao_praca = "1" if self._logradouro_indicador_praca(state) or localizacao_luminaria == "Praça" else "0"
+        localizacao_praca = (
+            "1"
+            if self._logradouro_indicador_praca(state)
+            or localizacao_luminaria == "Praça"
+            else "0"
+        )
 
         if localizacao_quadra == "1":
             localizacao_luminaria = "Quadra"
@@ -126,13 +133,29 @@ class ReparoLuminariaWorkflow(
         mapping = {
             ("Apagada", "uma", None): "Apagada",
             ("Apagada", "grupo", "bloco"): "Bloco ou grupo de luminárias apagadas",
-            ("Apagada", "grupo", "intercaladas"): "Várias luminárias intercaladas apagadas",
+            (
+                "Apagada",
+                "grupo",
+                "intercaladas",
+            ): "Várias luminárias intercaladas apagadas",
             ("Piscando", "uma", None): "Piscando",
             ("Piscando", "grupo", "bloco"): "Bloco ou grupo de luminárias piscando",
-            ("Piscando", "grupo", "intercaladas"): "Bloco ou grupo de luminárias piscando",
+            (
+                "Piscando",
+                "grupo",
+                "intercaladas",
+            ): "Bloco ou grupo de luminárias piscando",
             ("Acesa de dia", "uma", None): "Acesa durante o dia",
-            ("Acesa de dia", "grupo", "bloco"): "Bloco ou grupo de luminárias acesas de dia",
-            ("Acesa de dia", "grupo", "intercaladas"): "Várias luminárias intercaladas acesas de dia",
+            (
+                "Acesa de dia",
+                "grupo",
+                "bloco",
+            ): "Bloco ou grupo de luminárias acesas de dia",
+            (
+                "Acesa de dia",
+                "grupo",
+                "intercaladas",
+            ): "Várias luminárias intercaladas acesas de dia",
             ("Pendurada", None, None): "Pendurada",
             ("Danificada", None, None): "Danificada",
             ("Com ruído", None, None): "Com ruído",
@@ -143,7 +166,9 @@ class ReparoLuminariaWorkflow(
             state.data.get("luminaria_intercaladas_bloco"),
         )
         state.data["luminaria_defeito_classificado"] = mapping[key]
-        logger.info(f"Defeito classificado: {state.data['luminaria_defeito_classificado']}")
+        logger.info(
+            f"Defeito classificado: {state.data['luminaria_defeito_classificado']}"
+        )
 
     def _is_praca_address(self, state: ServiceState) -> bool:
         return self._logradouro_indicador_praca(state)
@@ -151,10 +176,15 @@ class ReparoLuminariaWorkflow(
     def _logradouro_indicador_praca(self, state: ServiceState) -> bool:
         address = state.data.get("address") or {}
         street = address.get("logradouro_nome_ipp") or address.get("logradouro") or ""
-        return _strip_accents(street).startswith("praca ") or _strip_accents(street) == "praca"
+        return (
+            _strip_accents(street).startswith("praca ")
+            or _strip_accents(street) == "praca"
+        )
 
     def _esta_na_praca(self, state: ServiceState) -> bool:
-        return state.data.get("luminaria_localizacao") == "Praça" or self._is_praca_address(state)
+        return state.data.get(
+            "luminaria_localizacao"
+        ) == "Praça" or self._is_praca_address(state)
 
     def _nome_praca(self, state: ServiceState) -> str:
         address = state.data.get("address") or {}
@@ -191,7 +221,10 @@ class ReparoLuminariaWorkflow(
             state.data["reparo_luminaria_quadra_esportes"] = True
             state.data["reparo_luminaria_endereco_especial_executado"] = True
             return False
-        return self._is_praca_address(state) or state.data.get("luminaria_localizacao") == "Praça"
+        return (
+            self._is_praca_address(state)
+            or state.data.get("luminaria_localizacao") == "Praça"
+        )
 
     async def _load_service_knowledge(self) -> None:
         """Carrega conhecimento do serviço a partir do hub, sem travar o fluxo se falhar."""
@@ -211,9 +244,13 @@ class ReparoLuminariaWorkflow(
 
             if result and result.get("id"):
                 self.service_knowledge = result
-                logger.info("[KNOWLEDGE] Conhecimento carregado sobre reparo de luminária")
+                logger.info(
+                    "[KNOWLEDGE] Conhecimento carregado sobre reparo de luminária"
+                )
             else:
-                logger.warning("[KNOWLEDGE] Não foi possível carregar conhecimento do Typesense")
+                logger.warning(
+                    "[KNOWLEDGE] Não foi possível carregar conhecimento do Typesense"
+                )
 
         except Exception as exc:
             logger.error(f"[KNOWLEDGE] Erro ao buscar conhecimento: {exc}")
@@ -264,7 +301,11 @@ class ReparoLuminariaWorkflow(
             try:
                 validated = LuminariaDefeitoPayload.model_validate(state.payload)
                 state.data["luminaria_defeito"] = validated.luminaria_defeito
-                if validated.luminaria_defeito in {"Apagada", "Piscando", "Acesa de dia"}:
+                if validated.luminaria_defeito in {
+                    "Apagada",
+                    "Piscando",
+                    "Acesa de dia",
+                }:
                     state.agent_response = None
                     return state
                 self._classifica_defeito(state)
@@ -319,7 +360,10 @@ class ReparoLuminariaWorkflow(
         if state.payload and "luminaria_quantidade" in state.payload:
             try:
                 validated = LuminariaQuantidadePayload.model_validate(state.payload)
-                if state.data.get("luminaria_quantidade") != validated.luminaria_quantidade:
+                if (
+                    state.data.get("luminaria_quantidade")
+                    != validated.luminaria_quantidade
+                ):
                     state.data.pop("luminaria_intercaladas_bloco", None)
                     state.data.pop("luminaria_defeito_classificado", None)
                 state.data["luminaria_quantidade"] = validated.luminaria_quantidade
@@ -409,7 +453,11 @@ class ReparoLuminariaWorkflow(
     async def _collect_quantity(self, state: ServiceState) -> ServiceState:
         logger.info("[ENTRADA] _collect_quantity")
 
-        if state.data.get("luminaria_defeito") not in {"Apagada", "Piscando", "Acesa de dia"}:
+        if state.data.get("luminaria_defeito") not in {
+            "Apagada",
+            "Piscando",
+            "Acesa de dia",
+        }:
             return state
         if state.data.get("luminaria_quantidade"):
             return state
@@ -447,8 +495,12 @@ class ReparoLuminariaWorkflow(
 
         if state.payload and "luminaria_intercaladas_bloco" in state.payload:
             try:
-                validated = LuminariaIntercaladasBlocoPayload.model_validate(state.payload)
-                state.data["luminaria_intercaladas_bloco"] = validated.luminaria_intercaladas_bloco
+                validated = LuminariaIntercaladasBlocoPayload.model_validate(
+                    state.payload
+                )
+                state.data["luminaria_intercaladas_bloco"] = (
+                    validated.luminaria_intercaladas_bloco
+                )
                 self._classifica_defeito(state)
                 state.agent_response = None
                 return state
@@ -482,7 +534,9 @@ class ReparoLuminariaWorkflow(
         if state.payload and "luminaria_localizacao" in state.payload:
             try:
                 validated = LuminariaLocalizacaoPayload.model_validate(state.payload)
-                state.data["luminaria_localizacao"] = validated.luminaria_localizacao or "Não sei"
+                state.data["luminaria_localizacao"] = (
+                    validated.luminaria_localizacao or "Não sei"
+                )
                 if validated.luminaria_localizacao == "Quadra de esportes":
                     state.data["reparo_luminaria_quadra_esportes"] = True
                     state.data["reparo_luminaria_endereco_especial_executado"] = True
@@ -513,7 +567,9 @@ class ReparoLuminariaWorkflow(
         if state.payload and "reparo_luminaria_quadra_esportes" in state.payload:
             try:
                 validated = QuadraEsportesPayload.model_validate(state.payload)
-                state.data["reparo_luminaria_quadra_esportes"] = validated.reparo_luminaria_quadra_esportes
+                state.data["reparo_luminaria_quadra_esportes"] = (
+                    validated.reparo_luminaria_quadra_esportes
+                )
                 state.data["reparo_luminaria_endereco_especial_executado"] = True
                 state.agent_response = None
                 return state
@@ -565,9 +621,7 @@ class ReparoLuminariaWorkflow(
         if state.data.get("cpf"):
             cpf = state.data["cpf"]
             cpf_formatado = (
-                f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}"
-                if len(cpf) == 11
-                else cpf
+                f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}" if len(cpf) == 11 else cpf
             )
             dados_pessoais.append(f"- CPF: {cpf_formatado}")
         if state.data.get("email"):
@@ -622,12 +676,49 @@ class ReparoLuminariaWorkflow(
                     return state
 
                 correction_map = [
-                    (("defeito", "luminaria", "luminária"), "defect", "defeito", LuminariaDefeitoPayload),
-                    (("quantidade", "grupo", "uma"), "quantity", "quantidade", LuminariaQuantidadePayload),
-                    (("intercal", "bloco"), "intercaladas_bloco", "intercaladas_bloco", LuminariaIntercaladasBlocoPayload),
-                    (("local", "localizacao", "localização", "quadra", "praca", "praça"), "location", "localizacao", LuminariaLocalizacaoPayload),
-                    (("endereco", "endereço", "rua", "avenida"), "address", "endereco", AddressPayload),
-                    (("ponto", "referencia", "referência"), "reference_point", "ponto_referencia", PontoReferenciaPayload),
+                    (
+                        ("defeito", "luminaria", "luminária"),
+                        "defect",
+                        "defeito",
+                        LuminariaDefeitoPayload,
+                    ),
+                    (
+                        ("quantidade", "grupo", "uma"),
+                        "quantity",
+                        "quantidade",
+                        LuminariaQuantidadePayload,
+                    ),
+                    (
+                        ("intercal", "bloco"),
+                        "intercaladas_bloco",
+                        "intercaladas_bloco",
+                        LuminariaIntercaladasBlocoPayload,
+                    ),
+                    (
+                        (
+                            "local",
+                            "localizacao",
+                            "localização",
+                            "quadra",
+                            "praca",
+                            "praça",
+                        ),
+                        "location",
+                        "localizacao",
+                        LuminariaLocalizacaoPayload,
+                    ),
+                    (
+                        ("endereco", "endereço", "rua", "avenida"),
+                        "address",
+                        "endereco",
+                        AddressPayload,
+                    ),
+                    (
+                        ("ponto", "referencia", "referência"),
+                        "reference_point",
+                        "ponto_referencia",
+                        PontoReferenciaPayload,
+                    ),
                     (("cpf",), "cpf", "cpf", CPFPayload),
                     (("email", "e-mail"), "email", "email", EmailPayload),
                     (("nome",), "name", "nome", NomePayload),
@@ -638,7 +729,9 @@ class ReparoLuminariaWorkflow(
                         state.data.pop("ticket_data_confirmed", None)
                         self._clear_corrected_field(state, key)
                         state.agent_response = AgentResponse(
-                            description=tpl.dados_corrigidos_solicitar_campo(template_key),
+                            description=tpl.dados_corrigidos_solicitar_campo(
+                                template_key
+                            ),
                             payload_schema=payload_model.model_json_schema(),
                         )
                         return state
@@ -666,16 +759,32 @@ class ReparoLuminariaWorkflow(
 
     def _clear_corrected_field(self, state: ServiceState, key: str) -> None:
         if key == "defect":
-            for field in ["luminaria_defeito", "luminaria_quantidade", "luminaria_intercaladas_bloco", "luminaria_defeito_classificado"]:
+            for field in [
+                "luminaria_defeito",
+                "luminaria_quantidade",
+                "luminaria_intercaladas_bloco",
+                "luminaria_defeito_classificado",
+            ]:
                 state.data.pop(field, None)
         elif key == "quantity":
-            for field in ["luminaria_quantidade", "luminaria_intercaladas_bloco", "luminaria_defeito_classificado"]:
+            for field in [
+                "luminaria_quantidade",
+                "luminaria_intercaladas_bloco",
+                "luminaria_defeito_classificado",
+            ]:
                 state.data.pop(field, None)
         elif key == "intercaladas_bloco":
-            for field in ["luminaria_intercaladas_bloco", "luminaria_defeito_classificado"]:
+            for field in [
+                "luminaria_intercaladas_bloco",
+                "luminaria_defeito_classificado",
+            ]:
                 state.data.pop(field, None)
         elif key == "location":
-            for field in ["luminaria_localizacao", "reparo_luminaria_quadra_esportes", "reparo_luminaria_endereco_especial_executado"]:
+            for field in [
+                "luminaria_localizacao",
+                "reparo_luminaria_quadra_esportes",
+                "reparo_luminaria_endereco_especial_executado",
+            ]:
                 state.data.pop(field, None)
         elif key == "address":
             self._clear_address_data(state)
@@ -695,7 +804,11 @@ class ReparoLuminariaWorkflow(
     def _route_after_defect(self, state: ServiceState) -> str:
         if state.agent_response:
             return END
-        if state.data.get("luminaria_defeito") in {"Apagada", "Piscando", "Acesa de dia"} and not state.data.get("luminaria_quantidade"):
+        if state.data.get("luminaria_defeito") in {
+            "Apagada",
+            "Piscando",
+            "Acesa de dia",
+        } and not state.data.get("luminaria_quantidade"):
             return "collect_quantity"
         return "collect_location"
 
@@ -707,7 +820,9 @@ class ReparoLuminariaWorkflow(
     def _route_after_quantity(self, state: ServiceState) -> str:
         if state.agent_response:
             return END
-        if state.data.get("luminaria_quantidade") == "grupo" and not state.data.get("luminaria_intercaladas_bloco"):
+        if state.data.get("luminaria_quantidade") == "grupo" and not state.data.get(
+            "luminaria_intercaladas_bloco"
+        ):
             return "collect_intercaladas_bloco"
         return "collect_location"
 
@@ -723,7 +838,10 @@ class ReparoLuminariaWorkflow(
 
     def _route_after_address(self, state: ServiceState) -> str:
         if state.agent_response:
-            if not (state.data.get("address_validated") and state.data.get("address_confirmed")):
+            if not (
+                state.data.get("address_validated")
+                and state.data.get("address_confirmed")
+            ):
                 return END
         if state.data.get("address_needs_confirmation"):
             return "confirm_address"
@@ -834,39 +952,77 @@ class ReparoLuminariaWorkflow(
 
         graph.set_entry_point("initialize")
         graph.add_edge("initialize", "collect_luminaria_details")
-        graph.add_conditional_edges("collect_luminaria_details", self._route_after_luminaria_details, {
-            "collect_address": "collect_address", END: END
-        })
-        graph.add_conditional_edges("collect_address", self._route_after_address, {
-            "collect_address": "collect_address", "confirm_address": "confirm_address", "collect_quadra_esportes": "collect_quadra_esportes", END: END
-        })
-        graph.add_conditional_edges("confirm_address", self._route_after_confirmation, {
-            "collect_address": "collect_address", "collect_quadra_esportes": "collect_quadra_esportes", END: END
-        })
-        graph.add_conditional_edges("collect_quadra_esportes", self._route_after_quadra, {
-            "collect_reference_point": "collect_reference_point", END: END
-        })
-        graph.add_conditional_edges("collect_reference_point", self._route_after_reference, {
-            "collect_cpf": "collect_cpf", END: END
-        })
-        graph.add_conditional_edges("collect_cpf", self._route_after_cpf, {
-            "collect_email": "collect_email", "collect_name": "collect_name", "confirm_ticket_data": "confirm_ticket_data", END: END
-        })
-        graph.add_conditional_edges("collect_email", self._route_after_email, {
-            "collect_name": "collect_name", "confirm_ticket_data": "confirm_ticket_data", END: END
-        })
-        graph.add_conditional_edges("collect_name", self._route_after_name, {
-            "confirm_ticket_data": "confirm_ticket_data", END: END
-        })
-        graph.add_conditional_edges("confirm_ticket_data", self._route_after_ticket_confirmation, {
-            "collect_luminaria_details": "collect_luminaria_details",
-            "collect_address": "collect_address",
-            "collect_reference_point": "collect_reference_point",
-            "collect_cpf": "collect_cpf",
-            "collect_email": "collect_email",
-            "collect_name": "collect_name",
-            "open_ticket": "open_ticket",
-            END: END,
-        })
+        graph.add_conditional_edges(
+            "collect_luminaria_details",
+            self._route_after_luminaria_details,
+            {"collect_address": "collect_address", END: END},
+        )
+        graph.add_conditional_edges(
+            "collect_address",
+            self._route_after_address,
+            {
+                "collect_address": "collect_address",
+                "confirm_address": "confirm_address",
+                "collect_quadra_esportes": "collect_quadra_esportes",
+                END: END,
+            },
+        )
+        graph.add_conditional_edges(
+            "confirm_address",
+            self._route_after_confirmation,
+            {
+                "collect_address": "collect_address",
+                "collect_quadra_esportes": "collect_quadra_esportes",
+                END: END,
+            },
+        )
+        graph.add_conditional_edges(
+            "collect_quadra_esportes",
+            self._route_after_quadra,
+            {"collect_reference_point": "collect_reference_point", END: END},
+        )
+        graph.add_conditional_edges(
+            "collect_reference_point",
+            self._route_after_reference,
+            {"collect_cpf": "collect_cpf", END: END},
+        )
+        graph.add_conditional_edges(
+            "collect_cpf",
+            self._route_after_cpf,
+            {
+                "collect_email": "collect_email",
+                "collect_name": "collect_name",
+                "confirm_ticket_data": "confirm_ticket_data",
+                END: END,
+            },
+        )
+        graph.add_conditional_edges(
+            "collect_email",
+            self._route_after_email,
+            {
+                "collect_name": "collect_name",
+                "confirm_ticket_data": "confirm_ticket_data",
+                END: END,
+            },
+        )
+        graph.add_conditional_edges(
+            "collect_name",
+            self._route_after_name,
+            {"confirm_ticket_data": "confirm_ticket_data", END: END},
+        )
+        graph.add_conditional_edges(
+            "confirm_ticket_data",
+            self._route_after_ticket_confirmation,
+            {
+                "collect_luminaria_details": "collect_luminaria_details",
+                "collect_address": "collect_address",
+                "collect_reference_point": "collect_reference_point",
+                "collect_cpf": "collect_cpf",
+                "collect_email": "collect_email",
+                "collect_name": "collect_name",
+                "open_ticket": "open_ticket",
+                END: END,
+            },
+        )
         graph.add_edge("open_ticket", END)
         return graph

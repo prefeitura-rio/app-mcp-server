@@ -32,9 +32,13 @@ def build_address(state: ServiceState) -> Address:
     )
 
     return Address(
-        street=address_data.get("logradouro_nome_ipp", address_data.get("logradouro", "")),
+        street=address_data.get(
+            "logradouro_nome_ipp", address_data.get("logradouro", "")
+        ),
         street_code=address_data.get("logradouro_id_ipp", ""),
-        neighborhood=address_data.get("bairro_nome_ipp", address_data.get("bairro", "")),
+        neighborhood=address_data.get(
+            "bairro_nome_ipp", address_data.get("bairro", "")
+        ),
         neighborhood_code=address_data.get("bairro_id_ipp", ""),
         number=street_number,
         locality=ponto_ref,
