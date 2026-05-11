@@ -432,9 +432,18 @@ def create_app() -> FastMCP:
                 "phone": str(phones[0]) if phones else None,
             }
         except Exception as e:
-            if isinstance(e.__cause__, httpx.HTTPStatusError) and e.__cause__.response.status_code == 404:
+            if (
+                isinstance(e.__cause__, httpx.HTTPStatusError)
+                and e.__cause__.response.status_code == 404
+            ):
                 return {"found": False, "name": None, "email": None, "phone": None}
-            return {"found": False, "name": None, "email": None, "phone": None, "error": str(e)}
+            return {
+                "found": False,
+                "name": None,
+                "email": None,
+                "phone": None,
+                "error": str(e),
+            }
 
     @conditional_mcp_tool("register_sgrc_ticket")
     async def register_sgrc_ticket(
@@ -501,7 +510,12 @@ def create_app() -> FastMCP:
             }
 
         except (SGRCDuplicateTicketException, SGRCEquivalentTicketException) as e:
-            return {"success": False, "protocol_id": getattr(e, "protocol_id", None), "ticket_id": None, "error": str(e)}
+            return {
+                "success": False,
+                "protocol_id": getattr(e, "protocol_id", None),
+                "ticket_id": None,
+                "error": str(e),
+            }
 
         except Exception as e:
             return {"success": False, "protocol_id": None, "error": str(e)}
