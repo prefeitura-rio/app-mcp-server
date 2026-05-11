@@ -24,6 +24,7 @@ from langchain_google_cloud_sql_pg import (
     PostgresEngine,
     PostgresSaver,
 )
+from langgraph.checkpoint.memory import InMemorySaver
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -56,6 +57,7 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         include_thoughts: bool = True,
         thinking_budget: int = -1,
         otpl_service: str = "langgraph-eai-vX",
+        use_checkpointer: bool = True,
     ):
         self._model = model
         self._tools = tools or []
@@ -64,6 +66,7 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         self._include_thoughts = include_thoughts
         self._thinking_budget = thinking_budget
         self._otpl_service = otpl_service
+        self._use_checkpointer = use_checkpointer
         # Database configuration
         self._project_id = getenv("PROJECT_ID", "")
         self._region = getenv("LOCATION", "")
@@ -852,6 +855,10 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
 
         if self._setup_complete_async:
             return
+        if not self._use_checkpointer:
+            self._create_react_agent(checkpointer=InMemorySaver())
+            self._setup_complete_async = True
+            return
         engine = await PostgresEngine.afrom_instance(
             project_id=self._project_id,
             region=self._region,
@@ -871,6 +878,10 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         self._set_up_opentelemetry()
 
         if self._setup_complete_sync:
+            return self._graph
+        if not self._use_checkpointer:
+            self._create_react_agent(checkpointer=InMemorySaver())
+            self._setup_complete_sync = True
             return self._graph
         engine = PostgresEngine.from_instance(
             project_id=self._project_id,
