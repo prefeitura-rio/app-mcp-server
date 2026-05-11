@@ -222,6 +222,7 @@ class Darm(BaseModel):
     valor_a_pagar: str = Field(alias="ValorAPagar")  # Formato brasileiro "261,44"
     sequencia_numerica: str = Field(alias="SequenciaNumerica")  # Linha digitável
     chave_pix: Optional[str] = Field(default=None, alias="ChavePix")
+    qr_code_pix: Optional[str] = Field(default=None, alias="QrCodePIX")
     descricao_darm: str = Field(
         alias="DescricaoDARM"
     )  # "DARM por cota ref.cotas 01,02,03"
@@ -233,6 +234,7 @@ class Darm(BaseModel):
     # Campos calculados/processados localmente
     valor_numerico: Optional[float] = None
     codigo_barras: Optional[str] = None  # Derivado da sequencia_numerica
+    pix_page_url: Optional[str] = None
 
     model_config = ConfigDict(validate_by_name=True)
 

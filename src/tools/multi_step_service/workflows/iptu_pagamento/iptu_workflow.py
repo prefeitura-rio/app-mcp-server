@@ -765,6 +765,7 @@ class IPTUWorkflow(BaseWorkflow):
                         "codigo_barras": dados_darm.darm.codigo_barras,
                         "linha_digitavel": dados_darm.darm.sequencia_numerica,
                         "pix": dados_darm.darm.chave_pix,
+                        "pix_url": dados_darm.darm.pix_page_url,
                         "pdf": urls,
                     }
                 )

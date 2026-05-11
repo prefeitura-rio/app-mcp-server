@@ -479,7 +479,7 @@ async def test_iptu_api_service_helpers_and_parsing(monkeypatch):
     async def fake_upload_base64_to_gcs(base64_content):
         return "signed-url"
 
-    async def fake_get_short_url(url):
+    async def fake_get_short_url(url, **_kwargs):
         return "short-url"
 
     monkeypatch.setattr(service, "upload_base64_to_gcs", fake_upload_base64_to_gcs)
