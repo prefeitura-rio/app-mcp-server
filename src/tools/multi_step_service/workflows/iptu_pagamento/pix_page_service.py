@@ -24,8 +24,11 @@ PIX_PAGE_TTL_HOURS = 24
 
 
 def format_expires_at(expiration: dt.datetime) -> str:
-    return expiration.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z"
+    return (
+        expiration.astimezone(dt.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
 
 
@@ -49,7 +52,9 @@ class IPTUPixPageService:
         page_html = build_pix_copy_page(qr_code_pix=qr_code_pix, pix_code=pix_code)
         blob = bucket.blob(f"iptu/qrcode-pix/{uuid.uuid4()}.html")
         blob.upload_from_string(page_html, content_type="text/html; charset=utf-8")
-        return blob.generate_signed_url(expiration=dt.timedelta(hours=PIX_PAGE_TTL_HOURS))
+        return blob.generate_signed_url(
+            expiration=dt.timedelta(hours=PIX_PAGE_TTL_HOURS)
+        )
 
     async def create_pix_copy_page_url(
         self,
