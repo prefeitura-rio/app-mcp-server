@@ -33,6 +33,9 @@ from src.tools.cor_alert_tools import create_cor_alert
 from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
+from src.tools.inbound_media import (
+    register_inbound_media as register_inbound_media_impl,
+)
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -311,6 +314,73 @@ def create_app() -> FastMCP:
         """
         response = await store_user_feedback(user_id, feedback)
         return response
+
+    @conditional_mcp_tool(
+        "register_inbound_media",
+        description="""
+        Registra recepcao de uma midia (imagem, audio ou localizacao) que o
+        cidadao enviou via WhatsApp. Stub atual: APENAS LOGA + retorna ack —
+        processamento real (visao pra imagens, transcricao pra audios, geocoding
+        pra localizacao) sera adicionado em fases posteriores.
+
+        QUANDO USAR esta tool:
+        - Quando a `message` recebida pelo agent contiver indicacao de midia
+          (ex: '[Cidadao enviou uma imagem...]', '[Cidadao enviou uma mensagem de
+          voz...]') OU quando o metadata da chamada incluir `message_type` !=
+          'text' com `media.content_version_id` populado.
+        - SEMPRE chamar antes de responder ao cidadao, pra registrar audit do
+          recebimento + obter `suggested_reply_pt_br`.
+
+        ARGS:
+        - `media_type` (obrig): 'image' | 'audio' | 'location' | 'unsupported'.
+        - `user_number` (obrig): telefone E.164 sem '+' (ex: '5521989091014').
+        - `message_id` (opt): UUID da ConversationEntry (audit).
+        - `salesforce_download_path` (opt): caminho REST relativo ao SF instance
+          pra baixar bytes (`/services/data/v62.0/sobjects/ContentVersion/{Id}/VersionData`).
+          NAO baixar aqui — Engine usa este caminho em fases posteriores.
+        - `content_version_id` (opt): Id da ContentVersion auto-attachado pelo bridge UWC.
+        - `file_extension` (opt): 'jpg', 'png', 'oga' (audio PTT), etc.
+        - `file_size_bytes` (opt): tamanho do arquivo.
+        - `latitude` / `longitude` / `address` (opt): placeholders futuros (BSP atual
+          NAO entrega localizacao real — Apex classifica como Unsupported).
+        - `messaging_session_id` / `conversation_identifier` (opt): correlacao SF.
+
+        RETORNO: dict com `status='received'`, `media_type`, `processing='deferred'`,
+        `suggested_reply_pt_br`. Use o `suggested_reply_pt_br` como base da
+        resposta ao cidadao — adapte tom mas preserve o pedido de texto.
+
+        ERRO: se `media_type` invalido OU `user_number` vazio, retorna
+        `status='rejected'` com `error`.
+        """,
+    )
+    async def register_inbound_media(
+        media_type: str,
+        user_number: str,
+        message_id: Optional[str] = None,
+        salesforce_download_path: Optional[str] = None,
+        content_version_id: Optional[str] = None,
+        file_extension: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+        address: Optional[str] = None,
+        messaging_session_id: Optional[str] = None,
+        conversation_identifier: Optional[str] = None,
+    ) -> dict:
+        return await register_inbound_media_impl(
+            media_type=media_type,
+            user_number=user_number,
+            message_id=message_id,
+            salesforce_download_path=salesforce_download_path,
+            content_version_id=content_version_id,
+            file_extension=file_extension,
+            file_size_bytes=file_size_bytes,
+            latitude=latitude,
+            longitude=longitude,
+            address=address,
+            messaging_session_id=messaging_session_id,
+            conversation_identifier=conversation_identifier,
+        )
 
     @conditional_mcp_tool(
         "report_incident",
