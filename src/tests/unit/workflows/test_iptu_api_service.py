@@ -205,6 +205,37 @@ def test_ano_exercicio_rejects_out_of_range():
         iptu_models.EscolhaAnoPayload.model_validate({"ano_exercicio": 1999})
 
 
+def test_darm_accepts_real_api_qrcodepix_key():
+    darm = iptu_models.Darm.model_validate(
+        {
+            "Cotas": [{"ncota": "01", "valor": "89,44"}],
+            "Inscricao": "12345678",
+            "Exercicio": "2026",
+            "NGuia": "00",
+            "Tipo": "ORDINÁRIA",
+            "DataVencimento": "30/04/2026",
+            "ValorIPTUOriginal": "100,00",
+            "ValorDARM": "89,44",
+            "ValorDescCotaUnica": "0,00",
+            "CreditoNotaCarioca": "0,00",
+            "CreditoDECAD": "0,00",
+            "CreditoIsencao": "0,00",
+            "CreditoEmissao": "0,00",
+            "ValorAPagar": "89,44",
+            "SequenciaNumerica": "123.456 789",
+            "ChavePix": "pix-copia-e-cola",
+            "QrCodePix": "base64-real-api",
+            "DescricaoDARM": "DARM",
+            "CodReceita": "310-7",
+            "DesReceita": "RECEITA",
+            "Endereco": None,
+            "Nome": None,
+        }
+    )
+
+    assert darm.qr_code_pix == "base64-real-api"
+
+
 def test_formatar_valor_brl():
     assert iptu_utils.formatar_valor_brl(None) == "R$ 0,00"
     assert iptu_utils.formatar_valor_brl(1234.56) == "R$ 1.234,56"

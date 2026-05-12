@@ -3,7 +3,7 @@ Modelos Pydantic para validação do workflow IPTU Ano Vigente
 """
 
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, field_validator, ConfigDict
 import re
 
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.constants import (
@@ -222,7 +222,11 @@ class Darm(BaseModel):
     valor_a_pagar: str = Field(alias="ValorAPagar")  # Formato brasileiro "261,44"
     sequencia_numerica: str = Field(alias="SequenciaNumerica")  # Linha digitável
     chave_pix: Optional[str] = Field(default=None, alias="ChavePix")
-    qr_code_pix: Optional[str] = Field(default=None, alias="QrCodePIX")
+    qr_code_pix: Optional[str] = Field(
+        default=None,
+        alias="QrCodePIX",
+        validation_alias=AliasChoices("QrCodePIX", "QrCodePix"),
+    )
     descricao_darm: str = Field(
         alias="DescricaoDARM"
     )  # "DARM por cota ref.cotas 01,02,03"
