@@ -211,7 +211,10 @@ async def _run_script(
         print(f"👤 {turn}")
         t0 = time.time()
         try:
-            result = await _query(agent, turn, thread_id)
+            # Tools que printam stdout (ex: IPTUAPIService) contaminam o output
+            # de cada turn. Redireciono pra stderr só durante a query.
+            with contextlib.redirect_stdout(sys.stderr):
+                result = await _query(agent, turn, thread_id)
         except Exception as e:
             print(f"❌ erro no turn {i}: {type(e).__name__}: {e}")
             if args.verbose:
@@ -293,14 +296,13 @@ def main() -> int:
 
     agent = _build_agent()
     started = datetime.now(timezone.utc)
-    # Em --json o pipeline esperado é `... --json | jq .`. Tools que printam
-    # pra stdout (ex: IPTUAPIService.__init__) contaminariam a saída JSON,
-    # então redirecionamos stdout pra stderr durante a query — só o
-    # `json.dumps` final vai pra stdout limpo.
-    if args.json:
-        with contextlib.redirect_stdout(sys.stderr):
-            result = asyncio.run(_query(agent, message, thread_id))
-    else:
+    # Tools que printam pra stdout (ex: IPTUAPIService.__init__ printa env debug)
+    # contaminariam a saída — invalida `--json | jq .` e também quebra callers
+    # que consomem o stdout do default mode como a resposta final. Redireciono
+    # stdout pra stderr durante a query em todos os modos one-shot; só o
+    # output formatado (_final_text / json.dumps / _verbose_dump) vai pra
+    # stdout limpo.
+    with contextlib.redirect_stdout(sys.stderr):
         result = asyncio.run(_query(agent, message, thread_id))
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
     _format_one_shot(result, args, thread_id, elapsed)
