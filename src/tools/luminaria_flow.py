@@ -43,9 +43,20 @@ _CLASSIFICATION = {
 # ---------------------------------------------------------------------------
 
 
+def _normalize_pem(pem: str) -> str:
+    """Reconstrói PEM com quebras de linha caso a env var não as preserve."""
+    if "\n" in pem:
+        return pem
+    header = "-----BEGIN PRIVATE KEY-----"
+    footer = "-----END PRIVATE KEY-----"
+    raw = pem.replace(header, "").replace(footer, "").strip()
+    wrapped = "\n".join(raw[i : i + 64] for i in range(0, len(raw), 64))
+    return f"{header}\n{wrapped}\n{footer}\n"
+
+
 def _decrypt_request(body: dict, private_key_pem: str):
     private_key = serialization.load_pem_private_key(
-        private_key_pem.encode(), password=None
+        _normalize_pem(private_key_pem).encode(), password=None
     )
     aes_key = private_key.decrypt(
         base64.b64decode(body["encrypted_aes_key"]),
