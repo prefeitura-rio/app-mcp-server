@@ -57,14 +57,15 @@ prompt_data = asyncio.run(get_system_prompt_from_api())
 
 
 # ----------------------------------------------------------------------------
-# Opt-in addendum: protótipo de análise de imagem via Gemini Vision
+# Addendum: análise de imagem via Gemini Vision (default-on)
 # ----------------------------------------------------------------------------
-# Ativado quando ENABLE_VISION_ADDENDUM=true no .env. Estende o system prompt
-# remoto pra ensinar o agente a chamar `analyze_inbound_image` (definida em
-# src/tools/inbound_media_vision.py) depois de `register_inbound_media`.
+# Habilitado por padrão. Kill switch: setar ENABLE_VISION_ADDENDUM=false no
+# .env desliga. Estende o system prompt remoto pra ensinar o agente a chamar
+# `analyze_inbound_image` (definida em src/tools/inbound_media_vision.py)
+# depois de `register_inbound_media`.
 #
-# Em produção, esta regra deve ir pro prompt remoto (v180+) e o flag pode ser
-# removido. Mantemos opt-in pra não impactar quem só consome o prompt remoto.
+# Em produção, esta regra deve eventualmente ir pro prompt remoto (v180+) e
+# este addendum + flag podem ser removidos.
 _VISION_ADDENDUM = """
 
 # === EXTENSÃO LOCAL: PROCESSAMENTO DE IMAGEM (PROTÓTIPO) ===
@@ -98,11 +99,19 @@ disponível — a análise visual é a diferença entre um stub e uma resposta
 informada sobre o problema reportado.
 """
 
-if (os.environ.get("ENABLE_VISION_ADDENDUM") or "").lower() == "true":
+_vision_addendum_enabled = (
+    os.environ.get("ENABLE_VISION_ADDENDUM") or "true"
+).lower() != "false"
+
+if _vision_addendum_enabled:
     prompt_data["prompt"] = prompt_data["prompt"] + _VISION_ADDENDUM
     logger.info(
-        "[ENABLE_VISION_ADDENDUM=true] System prompt extended with Vision "
-        f"addendum ({len(_VISION_ADDENDUM)} chars)."
+        f"Vision addendum habilitado por padrão (kill switch: ENABLE_VISION_ADDENDUM=false). "
+        f"System prompt extended with Vision addendum ({len(_VISION_ADDENDUM)} chars)."
+    )
+else:
+    logger.info(
+        "[ENABLE_VISION_ADDENDUM=false] Vision addendum desabilitado via env."
     )
 
 # PROMPT_PROVISORIO = """

@@ -388,10 +388,12 @@ def create_app() -> FastMCP:
             conversation_identifier=conversation_identifier,
         )
 
-    # Tool de protótipo: registrar SOMENTE quando ENABLE_VISION_ADDENDUM=true.
-    # O addendum em src/utils/agent/prompt.py também é opt-in pelo mesmo flag;
-    # sem o flag o agente nem vê a tool E o prompt remoto não pede pra chamar.
-    _vision_enabled = (os.environ.get("ENABLE_VISION_ADDENDUM") or "").lower() == "true"
+    # Tool de visão habilitada por padrão. Kill switch: setar
+    # ENABLE_VISION_ADDENDUM=false no env desliga o registro da tool E o
+    # addendum em src/utils/agent/prompt.py (mesma semântica).
+    # Default-on: env var vazia/ausente OU qualquer valor que não seja
+    # "false" (case-insensitive) ⇒ habilitado.
+    _vision_enabled = (os.environ.get("ENABLE_VISION_ADDENDUM") or "true").lower() != "false"
 
     if _vision_enabled:
 
