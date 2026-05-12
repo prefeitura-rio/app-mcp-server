@@ -29,10 +29,33 @@ uv sync
 
 3. Configure as variáveis locais em `src/config/.env`:
 
+```bash
+cp src/config/.env.example src/config/.env
+# preencha os ___FILL_ME___ com as credenciais reais
+```
+
+Mínimo absoluto pra subir o servidor:
+
 ```env
 VALID_TOKENS="token"
 IS_LOCAL="true"
 ```
+
+> **Nota:** não defina `ENVIRONMENT="staging"` no `.env` — o default já é
+> `staging`, e setar isso quebra o conftest que sobrescreve pra `"test"` em
+> `pytest`.
+
+4. Pra usar workflows que dependem de Vertex AI / Reasoning Engine (interactive_test,
+   headless_test, scripts de agente), aponte ADC pra uma Service Account com
+   acesso ao projeto `rj-superapp-staging`:
+
+```env
+# em src/config/.env:
+GOOGLE_APPLICATION_CREDENTIALS="/path/to/agent-engine-sa.json"
+```
+
+A SA `agent-engine@rj-superapp-staging.iam.gserviceaccount.com` é a que
+normalmente tem permissão. Alternativa: `gcloud auth application-default login`.
 
 ## Uso Local
 
@@ -59,6 +82,31 @@ uv run src/main.py
 ```
 
 O servidor ficará disponível em `http://localhost:80/mcp/`.
+
+### Opção 3: Headless test contra o agente local
+
+Pra testar o agente local (mesmo prompt e tools de staging) sem precisar de
+TTY — útil pra smoke tests em CI, debug rápido ou rodar fluxos multi-step
+via script:
+
+```bash
+# one-shot, resposta limpa
+uv run src/utils/agent/headless_test.py "qual horas são?"
+
+# trace passo-a-passo (tool calls + thinking)
+uv run src/utils/agent/headless_test.py --verbose "qual o IPTU da inscrição 05856711?"
+
+# script multi-turn (workflows como poda, IPTU, reparo dependem disso pra
+# manter contexto entre turns via InMemorySaver do LangGraph)
+uv run src/utils/agent/headless_test.py --script ./turns.txt
+
+# Saída JSON pro pipeline
+uv run src/utils/agent/headless_test.py --json "..." | jq .
+```
+
+`interactive_test.py` ainda existe pra REPL com TTY. A diferença é que o
+`headless_test.py` não instancia o `remote_agent` (não pede permissão IAM
+no Reasoning Engine).
 
 ## Testes
 

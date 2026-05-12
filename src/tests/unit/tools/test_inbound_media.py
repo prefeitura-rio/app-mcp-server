@@ -54,14 +54,6 @@ def inbound_media_module(monkeypatch):
     return module
 
 
-def _run(coro):
-    return (
-        asyncio.get_event_loop().run_until_complete(coro)
-        if not asyncio._get_running_loop()
-        else asyncio.ensure_future(coro)
-    )
-
-
 def test_register_image_returns_received_with_pt_br_suggestion(inbound_media_module):
     register = inbound_media_module.register_inbound_media
     result = asyncio.run(
