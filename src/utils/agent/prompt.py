@@ -1,8 +1,10 @@
+import asyncio
+import os
+
 from src.config import env
 from src.utils.log import logger
 from src.utils.http_client import InterceptedHTTPClient
 from src.utils.error_interceptor import interceptor
-import asyncio
 
 
 @interceptor(source={"source": "mcp", "tool": "agent", "function": "get_system_prompt"})
@@ -52,6 +54,56 @@ async def get_system_prompt_from_api(agent_type: str = "agentic_search") -> dict
 
 
 prompt_data = asyncio.run(get_system_prompt_from_api())
+
+
+# ----------------------------------------------------------------------------
+# Opt-in addendum: protótipo de análise de imagem via Gemini Vision
+# ----------------------------------------------------------------------------
+# Ativado quando ENABLE_VISION_ADDENDUM=true no .env. Estende o system prompt
+# remoto pra ensinar o agente a chamar `analyze_inbound_image` (definida em
+# src/tools/inbound_media_vision.py) depois de `register_inbound_media`.
+#
+# Em produção, esta regra deve ir pro prompt remoto (v180+) e o flag pode ser
+# removido. Mantemos opt-in pra não impactar quem só consome o prompt remoto.
+_VISION_ADDENDUM = """
+
+# === EXTENSÃO LOCAL: PROCESSAMENTO DE IMAGEM (PROTÓTIPO) ===
+
+Quando o usuário enviar uma IMAGEM via WhatsApp, você verá um marker no
+human message tipo `[Cidadão enviou uma imagem. ...]` com campos:
+`message_id`, `content_version_id`, `file_extension`, `file_size_bytes`,
+`salesforce_download_path` e (em testes locais) `local_image_path`.
+
+**FLUXO OBRIGATÓRIO** quando receber uma imagem:
+
+1. **PRIMEIRO**: chame `register_inbound_media` com TODOS os campos do
+   marker (media_type='image', user_number, message_id, etc.). Esta tool
+   só registra audit/log — IGNORE o `suggested_reply_pt_br` que ela retorna.
+
+2. **SEGUNDO**: chame `analyze_inbound_image` passando:
+   - `user_number`, `file_extension`, `message_id`, `content_version_id`
+   - `local_image_path` (se o marker tiver esse campo — ambiente de teste local)
+   - OU `image_bytes_base64` (em produção quando o Engine pré-fetch o arquivo)
+
+3. **TERCEIRO**: use o `suggested_reply_pt_br` retornado pelo
+   `analyze_inbound_image` (NÃO o do `register_inbound_media`) como base da
+   sua resposta ao cidadão. Adapte o tom mantendo a descrição visual.
+
+4. Se `analyze_inbound_image.analysis.workflow_sugerido` for
+   `'reparo_luminaria'` ou `'poda_de_arvore'`, ao confirmar com o cidadão
+   inicie esse workflow via `multi_step_service`.
+
+NUNCA pule o passo 2 quando a tool `analyze_inbound_image` estiver
+disponível — a análise visual é a diferença entre um stub e uma resposta
+informada sobre o problema reportado.
+"""
+
+if (os.environ.get("ENABLE_VISION_ADDENDUM") or "").lower() == "true":
+    prompt_data["prompt"] = prompt_data["prompt"] + _VISION_ADDENDUM
+    logger.info(
+        "[ENABLE_VISION_ADDENDUM=true] System prompt extended with Vision "
+        f"addendum ({len(_VISION_ADDENDUM)} chars)."
+    )
 
 # PROMPT_PROVISORIO = """
 # # Persona, Tom e Estilo de Comunicação

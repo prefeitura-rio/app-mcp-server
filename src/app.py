@@ -4,6 +4,8 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 # comment to trigger build
 
+import os
+
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
@@ -35,6 +37,9 @@ from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
 from src.tools.inbound_media import (
     register_inbound_media as register_inbound_media_impl,
+)
+from src.tools.inbound_media_vision import (
+    analyze_inbound_image as analyze_inbound_image_impl,
 )
 from src.tools.luminaria_flow import process_flow_request
 from src.tools.divida_ativa import (
@@ -382,6 +387,67 @@ def create_app() -> FastMCP:
             messaging_session_id=messaging_session_id,
             conversation_identifier=conversation_identifier,
         )
+
+    # Tool de protótipo: registrar SOMENTE quando ENABLE_VISION_ADDENDUM=true.
+    # O addendum em src/utils/agent/prompt.py também é opt-in pelo mesmo flag;
+    # sem o flag o agente nem vê a tool E o prompt remoto não pede pra chamar.
+    _vision_enabled = (os.environ.get("ENABLE_VISION_ADDENDUM") or "").lower() == "true"
+
+    if _vision_enabled:
+
+        @conditional_mcp_tool(
+            "analyze_inbound_image",
+            description="""
+        Analisa visualmente uma IMAGEM inbound do WhatsApp via Gemini Vision e
+        classifica o problema reportado. Chamar SEMPRE depois de
+        `register_inbound_media` quando `media_type='image'`, antes de
+        responder ao cidadao.
+
+        QUANDO USAR:
+        - Apos register_inbound_media de uma imagem.
+        - Pra decidir qual workflow (reparo_luminaria, poda_de_arvore) iniciar
+          em seguida.
+
+        ARGS:
+        - `user_number` (obrig): telefone E.164 sem '+'.
+        - `file_extension` (obrig): 'jpg' | 'png' | 'webp' | 'gif'.
+        - `local_image_path` (opt): caminho do arquivo local quando ja tem
+          bytes em disco (cenarios de teste local; em prod o Engine
+          pre-fetch e injeta `image_bytes_base64`).
+        - `image_bytes_base64` (opt): bytes da imagem em base64. Tem
+          precedencia sobre `local_image_path` quando ambos presentes.
+        - `message_id`, `content_version_id` (opt): correlacao com
+          register_inbound_media (audit).
+
+        RETORNO: dict com `status='analyzed'`, `analysis` (descricao,
+        categoria, problema_detectado, workflow_sugerido, confianca),
+        e `suggested_reply_pt_br` adaptado ao resultado.
+        Se nao conseguir baixar/decodificar/analisar, retorna
+        `status='deferred'` ou `status='error'` com `suggested_reply_pt_br`
+        de fallback.
+
+        Use o campo `analysis.workflow_sugerido` pra decidir o proximo passo:
+        - 'reparo_luminaria' → chamar multi_step_service(reparo_luminaria).
+        - 'poda_de_arvore'   → chamar multi_step_service(poda_de_arvore).
+        - 'nenhum'           → pedir descricao em texto ao cidadao.
+        """,
+        )
+        async def analyze_inbound_image(
+            user_number: str,
+            file_extension: str,
+            local_image_path: Optional[str] = None,
+            image_bytes_base64: Optional[str] = None,
+            message_id: Optional[str] = None,
+            content_version_id: Optional[str] = None,
+        ) -> dict:
+            return await analyze_inbound_image_impl(
+                user_number=user_number,
+                file_extension=file_extension,
+                local_image_path=local_image_path,
+                image_bytes_base64=image_bytes_base64,
+                message_id=message_id,
+                content_version_id=content_version_id,
+            )
 
     @conditional_mcp_tool(
         "report_incident",
