@@ -36,6 +36,7 @@ from src.tools.feedback_tools import store_user_feedback
 from src.tools.inbound_media import (
     register_inbound_media as register_inbound_media_impl,
 )
+from src.tools.luminaria_flow import process_flow_request
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -680,6 +681,33 @@ def create_app() -> FastMCP:
         except Exception as e:
             logger.error(f"Error processing request: {str(e)}")
             return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/whatsapp-flow/luminaria", methods=["POST"])
+    async def wa_flow_luminaria(request: Request):
+        """
+        Endpoint do WhatsApp Flow de coleta de defeito de luminária pública.
+        Decripta o payload (RSA + AES-GCM), processa a action e devolve
+        a resposta criptografada como bytes (exigido pelo protocolo Meta).
+        """
+        from fastapi.responses import Response
+
+        private_key = env.WA_LUMINARIA_PRIVATE_KEY
+        if not private_key:
+            logger.error("wa_flow_luminaria: WA_LUMINARIA_PRIVATE_KEY não configurada")
+            return JSONResponse(
+                content={"error": "Flow não configurado"}, status_code=503
+            )
+
+        try:
+            body = await request.json()
+            encrypted_response = await process_flow_request(body, private_key)
+            return Response(content=encrypted_response, media_type="text/plain")
+        except ValueError as e:
+            logger.error(f"wa_flow_luminaria: erro de decriptação: {e}")
+            return JSONResponse(content={"error": str(e)}, status_code=421)
+        except Exception as e:
+            logger.error(f"wa_flow_luminaria: erro inesperado: {e}")
+            return JSONResponse(content={"error": "Erro interno"}, status_code=500)
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
