@@ -82,9 +82,18 @@ human message tipo `[Cidadão enviou uma imagem. ...]` com campos:
    só registra audit/log — IGNORE o `suggested_reply_pt_br` que ela retorna.
 
 2. **SEGUNDO**: chame `analyze_inbound_image` passando:
-   - `user_number`, `file_extension`, `message_id`, `content_version_id`
-   - `local_image_path` (se o marker tiver esse campo — ambiente de teste local)
-   - OU `image_bytes_base64` (em produção quando o Engine pré-fetch o arquivo)
+   - `user_number`, `file_extension`, `message_id`
+   - `content_version_id` (OBRIGATÓRIO quando usar
+     `salesforce_download_path` — a tool valida que o Id embarcado no
+     path bate com este antes de baixar; sem ele, o download SF é
+     pulado por safety)
+   - `salesforce_download_path` (PREFERIDO em produção — vem do campo
+     `media.download_path` do prefix `[INBOUND_MEDIA]`; a tool autentica
+     via OAuth Client Credentials e baixa direto do Salesforce REST API
+     sem precisar transferir bytes via tool args)
+   - OU `image_bytes_base64` (raro em produção — LLM trunca strings
+     >~10KB em tool args; só pra testes manuais)
+   - OU `local_image_path` (testes locais com `IS_LOCAL=true`)
 
 3. **TERCEIRO**: use o `suggested_reply_pt_br` retornado pelo
    `analyze_inbound_image` (NÃO o do `register_inbound_media`) como base da
@@ -110,9 +119,7 @@ if _vision_addendum_enabled:
         f"System prompt extended with Vision addendum ({len(_VISION_ADDENDUM)} chars)."
     )
 else:
-    logger.info(
-        "[ENABLE_VISION_ADDENDUM=false] Vision addendum desabilitado via env."
-    )
+    logger.info("[ENABLE_VISION_ADDENDUM=false] Vision addendum desabilitado via env.")
 
 # PROMPT_PROVISORIO = """
 # # Persona, Tom e Estilo de Comunicação
