@@ -113,7 +113,15 @@ def test_register_unsupported_uses_unsupported_reply(inbound_media_module):
         register(media_type="unsupported", user_number="5521989091014")
     )
     assert result["status"] == "received"
-    assert "formato ainda não é suportado" in result["suggested_reply_pt_br"]
+    # Pos-ADR-013 (2026-05-12): reply convida endereco em texto (geocoding via
+    # validate_address no turno seguinte) em vez do texto fechado anterior.
+    # Frase "não consigo processar" eh exclusiva do template unsupported —
+    # discrimina contra regressao que rotearia 'unsupported' pro template
+    # 'location' (que tambem contem endereco+localizacao).
+    reply = result["suggested_reply_pt_br"]
+    assert result["media_type"] == "unsupported"
+    assert "não consigo processar" in reply
+    assert "endereço" in reply
 
 
 def test_register_unknown_is_accepted(inbound_media_module):
