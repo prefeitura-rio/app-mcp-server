@@ -264,6 +264,10 @@ class ReparoLuminariaWorkflow(
         state.data.setdefault("identificacao_obrigatoria_1746", False)
         state.data.setdefault("ponto_referencia_obrigatorio", False)
 
+        # WhatsApp Flow: se veio do flow (_source="whatsapp_flow"), os dados de
+        # defeito já vêm pré-preenchidos no payload. O agente é responsável por
+        # chamar send_whatsapp_flow ANTES de multi_step_service (via system prompt).
+
         if not state.data.get("knowledge_loaded") and not self.service_knowledge:
             await self._load_service_knowledge()
             state.data["knowledge_loaded"] = True

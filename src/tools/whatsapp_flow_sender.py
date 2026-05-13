@@ -125,33 +125,54 @@ class WhatsAppFlowSender:
             }
 
 
-async def send_luminaria_flow(
+# Mapeamento de service_type para template_name cadastrado na Meta
+FLOW_TEMPLATES = {
+    "reparo_luminaria": "152_reparo_luminaria",
+    # Adicionar novos flows aqui conforme forem criados na Meta
+    # "poda_arvore": "153_poda_arvore",
+    # "limpeza_urbana": "154_limpeza_urbana",
+}
+
+
+async def send_flow_by_service(
+    service_type: str,
     user_number: str,
     flow_token: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Dispara WhatsApp Flow de reparo de luminária para um usuário.
+    Dispara WhatsApp Flow apropriado para um tipo de serviço.
 
     Args:
+        service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
         user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
         flow_token: Token opcional de rastreamento da sessão
 
     Returns:
         Resultado do envio com message_id e flow_token
     """
+    template_name = FLOW_TEMPLATES.get(service_type)
+
+    if not template_name:
+        available = ", ".join(FLOW_TEMPLATES.keys())
+        return {
+            "success": False,
+            "error": f"Flow não cadastrado para service_type='{service_type}'",
+            "message": f"Flow disponível apenas para: {available}",
+        }
+
     sender = WhatsAppFlowSender()
 
     try:
         result = await sender.send_flow_template(
             recipient=user_number,
-            template_name="152_reparo_luminaria",
+            template_name=template_name,
             flow_token=flow_token,
         )
 
         return result
 
     except httpx.HTTPError as e:
-        logger.error(f"Erro ao enviar flow de luminária: {e}")
+        logger.error(f"Erro ao enviar flow de {service_type}: {e}")
         return {
             "success": False,
             "error": str(e),
@@ -164,3 +185,12 @@ async def send_luminaria_flow(
             "error": str(e),
             "message": "Erro ao processar o envio do formulário.",
         }
+
+
+# Compatibilidade com código existente
+async def send_luminaria_flow(
+    user_number: str,
+    flow_token: str | None = None,
+) -> Dict[str, Any]:
+    """Wrapper para compatibilidade. Use send_flow_by_service."""
+    return await send_flow_by_service("reparo_luminaria", user_number, flow_token)

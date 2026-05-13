@@ -42,7 +42,7 @@ from src.tools.inbound_media_vision import (
     analyze_inbound_image as analyze_inbound_image_impl,
 )
 from src.tools.luminaria_flow import process_flow_request
-from src.tools.whatsapp_flow_sender import send_luminaria_flow
+from src.tools.whatsapp_flow_sender import send_flow_by_service, FLOW_TEMPLATES
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -525,24 +525,26 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool(
         "send_whatsapp_flow",
-        description="""
+        description=f"""
         Envia formulário interativo (WhatsApp Flow) para coleta estruturada de dados.
 
         QUANDO USAR:
-        - Quando o cidadão solicitar reparo de luminária E ainda não forneceu detalhes do defeito
-        - ANTES de iniciar multi_step_service("reparo_luminaria")
+        - Quando o cidadão solicitar um serviço que tem Flow disponível
+        - ANTES de iniciar multi_step_service para o serviço
         - Apenas se o canal for WhatsApp (verificar contexto)
 
+        FLOWS DISPONÍVEIS: {", ".join(FLOW_TEMPLATES.keys())}
+
         FLUXO:
-        1. Detectar solicitação de reparo de luminária
-        2. Chamar send_whatsapp_flow com o número do usuário
+        1. Detectar solicitação de serviço que tem Flow
+        2. Chamar send_whatsapp_flow com o número do usuário e service_type
         3. Informar ao cidadão que o formulário foi enviado
         4. Aguardar resposta do flow (dados virão automaticamente via webhook)
         5. Workflow continuará com dados pré-preenchidos
 
         Args:
             user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
-            service_type: Tipo de serviço (ex: reparo_luminaria)
+            service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
 
         Returns:
             Confirmação de envio com message_id e instruções para o cidadão
@@ -550,24 +552,29 @@ def create_app() -> FastMCP:
     )
     async def send_whatsapp_flow(
         user_number: str,
-        service_type: str = "reparo_luminaria",
+        service_type: str,
     ) -> dict:
         """Envia WhatsApp Flow para coleta estruturada de dados."""
-        if service_type != "reparo_luminaria":
+        # Verificar se há flow cadastrado para este serviço
+        if service_type not in FLOW_TEMPLATES:
+            available = ", ".join(FLOW_TEMPLATES.keys())
             return {
                 "success": False,
-                "error": f"Flow não disponível para {service_type}",
-                "message": "Vamos continuar por texto.",
+                "error": f"Flow não disponível para '{service_type}'",
+                "message": f"Flow disponível apenas para: {available}. Vamos continuar por texto.",
             }
 
-        result = await send_luminaria_flow(user_number=user_number)
+        result = await send_flow_by_service(
+            service_type=service_type,
+            user_number=user_number,
+        )
 
         if result.get("success"):
             return {
                 "success": True,
                 "message": (
-                    "Enviei um formulário rápido no WhatsApp para você preencher os dados "
-                    "da luminária. Após preencher, eu continuo te ajudando com o restante."
+                    "Enviei um formulário rápido no WhatsApp para você preencher os dados. "
+                    "Após preencher, eu continuo te ajudando com o restante."
                 ),
                 "flow_token": result.get("flow_token"),
                 "next_step": "wait_for_flow_completion",
@@ -582,6 +589,44 @@ def create_app() -> FastMCP:
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
     ) -> dict:
+        # WhatsApp Flow auto-trigger: se o serviço tem Flow cadastrado e ainda
+        # não foi enviado (_source != "whatsapp_flow"), envia automaticamente
+        if service_name in FLOW_TEMPLATES:
+            payload = payload or {}
+            source = payload.get("_source")
+
+            if source != "whatsapp_flow":
+                logger.info(
+                    f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
+                    f"service={service_name}, user={user_id}"
+                )
+                flow_result = await send_flow_by_service(
+                    service_type=service_name,
+                    user_number=user_id,
+                )
+
+                if flow_result.get("success"):
+                    return {
+                        "status": "flow_sent",
+                        "message": (
+                            "Enviei um formulário rápido no WhatsApp para você preencher os dados. "
+                            "Após preencher, eu continuo automaticamente com o atendimento."
+                        ),
+                        "flow_token": flow_result.get("flow_token"),
+                        "next_step": "await_flow_completion",
+                        "instruction": (
+                            "IMPORTANTE: Informe ao cidadão que o formulário foi enviado. "
+                            "NÃO prossiga coletando dados manualmente. Aguarde o webhook "
+                            "com os dados preenchidos - o workflow será chamado automaticamente."
+                        ),
+                    }
+                else:
+                    # Flow falhou, continuar normalmente por texto
+                    logger.warning(
+                        f"[AUTO_FLOW] Falha ao enviar flow: {flow_result.get('error')}"
+                    )
+
+        # Prosseguir normalmente com o workflow
         response = await mss(
             service_name=service_name, user_id=user_id, payload=payload
         )
