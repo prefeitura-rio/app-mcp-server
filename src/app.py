@@ -59,6 +59,7 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service impor
     SGRCAPIService,
     AddressAPIService,
 )
+from src.tools.multi_step_service.workflows.sgrc_components.models import CPFPayload
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -763,14 +764,26 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool("get_user_by_cpf")
     async def get_user_by_cpf(cpf: str) -> dict:
         """
-        Consulta cadastro do cidadão pelo CPF no sistema da Prefeitura do Rio.
+        Consulta cadastro do cidadão por CPF válido no sistema da Prefeitura do Rio.
+        Use apenas quando o usuário informou explicitamente um CPF com 11 dígitos.
+        Não use para inscrição imobiliária, número de protocolo, guia ou outros identificadores.
         Retorna nome, e-mail e telefone se o cidadão estiver cadastrado.
         """
         import httpx
 
         try:
+            validated = CPFPayload.model_validate({"cpf": cpf})
+            if not validated.cpf:
+                return {
+                    "found": False,
+                    "name": None,
+                    "email": None,
+                    "phone": None,
+                    "error": "CPF ausente ou inválido. Use esta ferramenta apenas com CPF válido de 11 dígitos.",
+                }
+
             sgrc = SGRCAPIService()
-            data = await sgrc.get_user_info(cpf)
+            data = await sgrc.get_user_info(validated.cpf)
             phones = data.get("phones") or []
             return {
                 "found": bool(data.get("name") or data.get("email")),
