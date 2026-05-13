@@ -108,6 +108,31 @@ def _read_image_bytes(local_image_path: Optional[str]) -> Optional[bytes]:
     return path.read_bytes()
 
 
+def _path_matches_content_version_id(path: str, content_version_id: str) -> bool:
+    """Cross-check: extrai o Id embarcado no salesforce_download_path e
+    confirma que bate com o content_version_id do marker.
+
+    Salesforce ContentVersion Ids têm forma 15- ou 18-char alfanuméricos.
+    O 15-char é prefix do 18-char (sufixo 3-char é checksum case-sensitive).
+    Por isso comparamos só os primeiros 15 chars de cada — independente de
+    qual lado é 15 ou 18.
+    """
+    if not path or not content_version_id:
+        return False
+    try:
+        # Path: .../sobjects/ContentVersion/<Id>/VersionData
+        parts = path.rstrip("/").split("/")
+        if "ContentVersion" not in parts:
+            return False
+        idx = parts.index("ContentVersion")
+        if idx + 1 >= len(parts):
+            return False
+        path_id = parts[idx + 1]
+    except (ValueError, IndexError):
+        return False
+    return path_id[:15] == content_version_id[:15]
+
+
 def _mime_from_extension(file_extension: Optional[str]) -> str:
     ext = (file_extension or "jpg").lower().lstrip(".")
     if ext == "jpg":
@@ -196,14 +221,28 @@ async def analyze_inbound_image(
     #    async que offload o httpx sync pra thread, pra não bloquear o
     #    event loop do FastMCP.
     if salesforce_download_path:
-        from src.utils.salesforce_client import download_content_version_async
-
-        image_bytes = await download_content_version_async(salesforce_download_path)
-        if image_bytes is None:
-            logger.info(
-                "analyze_inbound_image: salesforce_download_path falhou; "
-                "caindo em image_bytes_base64/local_image_path se disponíveis."
+        # Cross-check: o ContentVersion Id embarcado no path tem que bater
+        # com `content_version_id` quando ambos vieram do mesmo marker.
+        # Sem isso, um LLM com prompt injection (ou marker stale) poderia
+        # apontar pro path de OUTRO arquivo e a auditoria ficaria com Id
+        # diferente do baixado. Rejeitamos silenciosamente nesses casos.
+        if content_version_id and not _path_matches_content_version_id(
+            salesforce_download_path, content_version_id
+        ):
+            logger.warning(
+                f"analyze_inbound_image: salesforce_download_path Id mismatch "
+                f"vs content_version_id={content_version_id!r}; ignorando "
+                f"download pra evitar fetch de arquivo divergente."
             )
+        else:
+            from src.utils.salesforce_client import download_content_version_async
+
+            image_bytes = await download_content_version_async(salesforce_download_path)
+            if image_bytes is None:
+                logger.info(
+                    "analyze_inbound_image: salesforce_download_path falhou; "
+                    "caindo em image_bytes_base64/local_image_path se disponíveis."
+                )
 
     # 2) image_bytes_base64 — alternativa pra testes ou Engine pré-fetch
     if image_bytes is None and image_bytes_base64:
