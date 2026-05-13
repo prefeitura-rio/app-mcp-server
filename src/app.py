@@ -393,7 +393,9 @@ def create_app() -> FastMCP:
     # addendum em src/utils/agent/prompt.py (mesma semântica).
     # Default-on: env var vazia/ausente OU qualquer valor que não seja
     # "false" (case-insensitive) ⇒ habilitado.
-    _vision_enabled = (os.environ.get("ENABLE_VISION_ADDENDUM") or "true").lower() != "false"
+    _vision_enabled = (
+        os.environ.get("ENABLE_VISION_ADDENDUM") or "true"
+    ).lower() != "false"
 
     if _vision_enabled:
 
@@ -413,13 +415,22 @@ def create_app() -> FastMCP:
         ARGS:
         - `user_number` (obrig): telefone E.164 sem '+'.
         - `file_extension` (obrig): 'jpg' | 'png' | 'webp' | 'gif'.
-        - `local_image_path` (opt): caminho do arquivo local quando ja tem
-          bytes em disco (cenarios de teste local; em prod o Engine
-          pre-fetch e injeta `image_bytes_base64`).
-        - `image_bytes_base64` (opt): bytes da imagem em base64. Tem
-          precedencia sobre `local_image_path` quando ambos presentes.
+        - `salesforce_download_path` (opt, PREFERIDO em prod): caminho REST
+          relativo do ContentVersion (ex:
+          `/services/data/v62.0/sobjects/ContentVersion/068xxx/VersionData`).
+          A tool autentica via OAuth Client Credentials e baixa direto
+          do Salesforce, sem precisar transferir bytes via tool args (o
+          LLM tende a truncar strings longas).
+        - `local_image_path` (opt): caminho do arquivo local em /tmp pra
+          testes locais (requer `IS_LOCAL=true`).
+        - `image_bytes_base64` (opt): bytes inline em base64. Pouco
+          confiavel em produção (LLM trunca >~10KB); use apenas pra
+          testes manuais.
         - `message_id`, `content_version_id` (opt): correlacao com
           register_inbound_media (audit).
+
+        PRIORIDADE da fonte de bytes (primeira que retornar bytes ganha):
+        `salesforce_download_path` → `image_bytes_base64` → `local_image_path`.
 
         RETORNO: dict com `status='analyzed'`, `analysis` (descricao,
         categoria, problema_detectado, workflow_sugerido, confianca),
@@ -437,6 +448,7 @@ def create_app() -> FastMCP:
         async def analyze_inbound_image(
             user_number: str,
             file_extension: str,
+            salesforce_download_path: Optional[str] = None,
             local_image_path: Optional[str] = None,
             image_bytes_base64: Optional[str] = None,
             message_id: Optional[str] = None,
@@ -445,6 +457,7 @@ def create_app() -> FastMCP:
             return await analyze_inbound_image_impl(
                 user_number=user_number,
                 file_extension=file_extension,
+                salesforce_download_path=salesforce_download_path,
                 local_image_path=local_image_path,
                 image_bytes_base64=image_bytes_base64,
                 message_id=message_id,

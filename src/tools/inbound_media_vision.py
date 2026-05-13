@@ -151,6 +151,7 @@ async def analyze_inbound_image(
     file_extension: str,
     local_image_path: Optional[str] = None,
     image_bytes_base64: Optional[str] = None,
+    salesforce_download_path: Optional[str] = None,
     message_id: Optional[str] = None,
     content_version_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -162,10 +163,20 @@ async def analyze_inbound_image(
         user_number: telefone E.164 sem '+'.
         file_extension: 'jpg' | 'png' | 'webp' | 'gif'.
         local_image_path: caminho local pro arquivo (file:// ou absoluto).
-            Usado em testes ou quando o Engine pre-fetch o arquivo.
-        image_bytes_base64: bytes da imagem em base64 (alternativa ao
-            local_image_path). Proposto pro Engine injetar após fetch SF.
+            Usado em testes locais (sandbox /tmp; requer IS_LOCAL=true).
+        image_bytes_base64: bytes em base64 inline. Pouco prático em fluxo
+            real porque o LLM trunca strings longas em tool args (>~10KB) —
+            preferir salesforce_download_path quando vier do Salesforce.
+        salesforce_download_path: caminho REST relativo do ContentVersion
+            (ex: ``/services/data/v62.0/sobjects/ContentVersion/068.../VersionData``).
+            Esta tool autentica via OAuth Client Credentials (Connected App)
+            e baixa direto — sem truncation pelo LLM e sem precisar do
+            Engine pré-fetch.
         message_id, content_version_id: correlação com register_inbound_media.
+
+    Prioridade de fonte (primeiro que retornar bytes ganha):
+        ``salesforce_download_path`` → ``image_bytes_base64`` →
+        ``local_image_path``
 
     Returns:
         Dict com 'status', 'analysis' (descricao, categoria, workflow_sugerido,
@@ -179,7 +190,23 @@ async def analyze_inbound_image(
         }
 
     image_bytes: Optional[bytes] = None
-    if image_bytes_base64:
+
+    # 1) salesforce_download_path tem prioridade — caminho real-world em
+    #    produção, sem dependência do LLM passar bytes inline. Usa wrapper
+    #    async que offload o httpx sync pra thread, pra não bloquear o
+    #    event loop do FastMCP.
+    if salesforce_download_path:
+        from src.utils.salesforce_client import download_content_version_async
+
+        image_bytes = await download_content_version_async(salesforce_download_path)
+        if image_bytes is None:
+            logger.info(
+                "analyze_inbound_image: salesforce_download_path falhou; "
+                "caindo em image_bytes_base64/local_image_path se disponíveis."
+            )
+
+    # 2) image_bytes_base64 — alternativa pra testes ou Engine pré-fetch
+    if image_bytes is None and image_bytes_base64:
         try:
             image_bytes = base64.b64decode(image_bytes_base64)
         except Exception as e:
@@ -199,16 +226,19 @@ async def analyze_inbound_image(
                     "Pode mandar uma foto com qualidade menor?"
                 ),
             }
-    elif local_image_path:
+
+    # 3) local_image_path — sandbox /tmp em desenvolvimento
+    if image_bytes is None and local_image_path:
         image_bytes = _read_image_bytes(local_image_path)
 
     if not image_bytes:
-        # Não fazemos download do salesforce_download_path aqui (depende do
-        # Engine pré-fetch). Sem bytes a análise visual é impossível agora.
-        # Não prometer "processando" — isso ficaria pendurado pra sempre.
         return {
             "status": "deferred",
-            "error": "nem local_image_path acessível nem image_bytes_base64 válido",
+            "error": (
+                "nenhuma fonte de bytes disponível: salesforce_download_path "
+                "(faltam env vars ou download falhou), image_bytes_base64 "
+                "(ausente/inválido), local_image_path (fora de sandbox/IS_LOCAL)"
+            ),
             "suggested_reply_pt_br": (
                 "Recebi sua imagem, mas não consegui analisá-la agora. "
                 "Pode descrever em texto o que precisa pra eu te ajudar?"
