@@ -221,12 +221,22 @@ async def analyze_inbound_image(
     #    async que offload o httpx sync pra thread, pra não bloquear o
     #    event loop do FastMCP.
     if salesforce_download_path:
-        # Cross-check: o ContentVersion Id embarcado no path tem que bater
-        # com `content_version_id` quando ambos vieram do mesmo marker.
-        # Sem isso, um LLM com prompt injection (ou marker stale) poderia
-        # apontar pro path de OUTRO arquivo e a auditoria ficaria com Id
-        # diferente do baixado. Rejeitamos silenciosamente nesses casos.
-        if content_version_id and not _path_matches_content_version_id(
+        # Cross-check defensivo: `content_version_id` é OBRIGATÓRIO quando
+        # `salesforce_download_path` é usado, e o Id embarcado no path tem
+        # que bater com ele. Sem isso, um LLM (com prompt injection ou
+        # marker stale) poderia apontar pro path de OUTRO arquivo —
+        # incluindo omitir o `content_version_id` pra burlar o check.
+        # Rejeitamos os 2 casos:
+        #   - content_version_id ausente → skip download (não consigo
+        #     correlacionar o path com o que o marker registra como audit)
+        #   - Id no path ≠ content_version_id → skip download (divergência)
+        if not content_version_id:
+            logger.warning(
+                "analyze_inbound_image: salesforce_download_path sem "
+                "content_version_id pra cross-check; ignorando download "
+                "pra evitar fetch de arquivo arbitrário."
+            )
+        elif not _path_matches_content_version_id(
             salesforce_download_path, content_version_id
         ):
             logger.warning(
