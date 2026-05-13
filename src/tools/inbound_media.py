@@ -41,9 +41,17 @@ _SUGGESTED_REPLIES_PT_BR = {
         "Recebi sua localização! Por enquanto preciso do endereço em texto "
         "(rua, número, bairro) pra prosseguir com a solicitação."
     ),
+    # Causa predominante de 'unsupported' no canal BSP-managed atual é tentativa
+    # de compartilhar localizacao (pin de mapa) — o BSP injeta magic-string em
+    # ingles em vez de entregar coords. Convidamos endereco em texto pra acionar
+    # geocoding via `validate_address` no turno seguinte. Mantemos abertura pra
+    # outros conteudos (video/sticker/documento) porque o magic string nao
+    # discrimina o tipo original. Ver ADR-013 em study-sf-whatsapp-poc1.
     "unsupported": (
-        "Recebi sua mensagem, mas esse formato ainda não é suportado. "
-        "Por favor, envie texto, imagem ou áudio."
+        "Recebi sua mensagem! Vi que você tentou compartilhar algo que não "
+        "consigo processar por aqui — provavelmente uma localização. Pode me "
+        "passar o endereço em texto (rua, número, bairro)? Se for outro "
+        "conteúdo, descreve em texto que eu te ajudo."
     ),
     # 'unknown' = upstream (Apex) emite quando FileExtension nao casa whitelist
     # image/audio ou quando correlacao ContentVersion falha (quarantena).
