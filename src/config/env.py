@@ -39,6 +39,10 @@ DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
 
 TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
 
+# WhatsApp Business API - Flow Sender
+WA_TOKEN = getenv_or_action("WA_TOKEN", action="ignore")
+WA_PHONE_NUMBER_ID = getenv_or_action("WA_PHONE_NUMBER_ID", action="ignore")
+
 # Error Interceptor Configuration
 ERROR_INTERCEPTOR_URL = getenv_or_action("ERROR_INTERCEPTOR_URL")
 ERROR_INTERCEPTOR_TOKEN = getenv_or_action("ERROR_INTERCEPTOR_TOKEN")

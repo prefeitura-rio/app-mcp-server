@@ -42,6 +42,7 @@ from src.tools.inbound_media_vision import (
     analyze_inbound_image as analyze_inbound_image_impl,
 )
 from src.tools.luminaria_flow import process_flow_request
+from src.tools.whatsapp_flow_sender import send_luminaria_flow
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -521,6 +522,61 @@ def create_app() -> FastMCP:
             address=address,
         )
         return add_tool_version(response)
+
+    @conditional_mcp_tool(
+        "send_whatsapp_flow",
+        description="""
+        Envia formulário interativo (WhatsApp Flow) para coleta estruturada de dados.
+
+        QUANDO USAR:
+        - Quando o cidadão solicitar reparo de luminária E ainda não forneceu detalhes do defeito
+        - ANTES de iniciar multi_step_service("reparo_luminaria")
+        - Apenas se o canal for WhatsApp (verificar contexto)
+
+        FLUXO:
+        1. Detectar solicitação de reparo de luminária
+        2. Chamar send_whatsapp_flow com o número do usuário
+        3. Informar ao cidadão que o formulário foi enviado
+        4. Aguardar resposta do flow (dados virão automaticamente via webhook)
+        5. Workflow continuará com dados pré-preenchidos
+
+        Args:
+            user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
+            service_type: Tipo de serviço (ex: reparo_luminaria)
+
+        Returns:
+            Confirmação de envio com message_id e instruções para o cidadão
+        """,
+    )
+    async def send_whatsapp_flow(
+        user_number: str,
+        service_type: str = "reparo_luminaria",
+    ) -> dict:
+        """Envia WhatsApp Flow para coleta estruturada de dados."""
+        if service_type != "reparo_luminaria":
+            return {
+                "success": False,
+                "error": f"Flow não disponível para {service_type}",
+                "message": "Vamos continuar por texto.",
+            }
+
+        result = await send_luminaria_flow(user_number=user_number)
+
+        if result.get("success"):
+            return {
+                "success": True,
+                "message": (
+                    "Enviei um formulário rápido no WhatsApp para você preencher os dados "
+                    "da luminária. Após preencher, eu continuo te ajudando com o restante."
+                ),
+                "flow_token": result.get("flow_token"),
+                "next_step": "wait_for_flow_completion",
+            }
+        else:
+            return {
+                "success": False,
+                "message": result.get("message", "Vamos continuar por texto."),
+            }
 
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
