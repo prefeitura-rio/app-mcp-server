@@ -41,6 +41,9 @@ from src.tools.inbound_media import (
 from src.tools.inbound_media_vision import (
     analyze_inbound_image as analyze_inbound_image_impl,
 )
+from src.tools.inbound_media_audio import (
+    analyze_inbound_audio as analyze_inbound_audio_impl,
+)
 from src.tools.luminaria_flow import process_flow_request
 from src.tools.whatsapp_flow_sender import send_luminaria_flow
 from src.tools.divida_ativa import (
@@ -398,6 +401,13 @@ def create_app() -> FastMCP:
         os.environ.get("ENABLE_VISION_ADDENDUM") or "true"
     ).lower() != "false"
 
+    # Tool de transcrição de áudio habilitada por padrão. Mesma semântica de
+    # kill switch do vision: ENABLE_AUDIO_ADDENDUM=false desliga registro e
+    # prompt module audio_inbound (no engine).
+    _audio_enabled = (
+        os.environ.get("ENABLE_AUDIO_ADDENDUM") or "true"
+    ).lower() != "false"
+
     if _vision_enabled:
 
         @conditional_mcp_tool(
@@ -427,11 +437,19 @@ def create_app() -> FastMCP:
         - `image_bytes_base64` (opt): bytes inline em base64. Pouco
           confiavel em produção (LLM trunca >~10KB); use apenas pra
           testes manuais.
-        - `message_id`, `content_version_id` (opt): correlacao com
-          register_inbound_media (audit).
+        - `message_id` (opt): correlacao com register_inbound_media (audit).
+        - `content_version_id` (CONDICIONALMENTE OBRIGATORIO):
+          obrigatorio quando `salesforce_download_path` esta presente —
+          a tool usa esse Id pra cross-checar (anti prompt-injection) que
+          o path aponta de fato pro arquivo registrado pelo
+          `register_inbound_media`. Se omitido junto com
+          `salesforce_download_path`, a tool RECUSA o download por seguranca
+          e cai pra fallback (base64/local). No prefix [INBOUND_MEDIA]
+          esse campo vem como `media.content_version_id` — sempre repassar.
 
         PRIORIDADE da fonte de bytes (primeira que retornar bytes ganha):
-        `salesforce_download_path` → `image_bytes_base64` → `local_image_path`.
+        `salesforce_download_path` (+ content_version_id) →
+        `image_bytes_base64` → `local_image_path`.
 
         RETORNO: dict com `status='analyzed'`, `analysis` (descricao,
         categoria, problema_detectado, workflow_sugerido, confianca),
@@ -461,6 +479,82 @@ def create_app() -> FastMCP:
                 salesforce_download_path=salesforce_download_path,
                 local_image_path=local_image_path,
                 image_bytes_base64=image_bytes_base64,
+                message_id=message_id,
+                content_version_id=content_version_id,
+            )
+
+    if _audio_enabled:
+
+        @conditional_mcp_tool(
+            "analyze_inbound_audio",
+            description="""
+        Transcreve e classifica um AUDIO inbound do WhatsApp via Gemini
+        multimodal. Chamar SEMPRE depois de `register_inbound_media` quando
+        `media_type='audio'`, antes de responder ao cidadao.
+
+        QUANDO USAR:
+        - Apos register_inbound_media de um audio (PTT do WhatsApp, .oga, etc.).
+        - Pra obter transcricao + workflow sugerido a partir do que o cidadao
+          falou em voz.
+
+        ARGS:
+        - `user_number` (obrig): telefone E.164 sem '+'.
+        - `file_extension` (obrig): 'oga' | 'ogg' | 'aac' | 'mp3' | 'wav' | 'flac' | 'aiff'. (m4a/amr não são suportados pelo Gemini audio input — viram rejected.)
+        - `salesforce_download_path` (opt, PREFERIDO em prod): caminho REST
+          relativo do ContentVersion (ex:
+          `/services/data/v62.0/sobjects/ContentVersion/068xxx/VersionData`).
+          A tool autentica via OAuth Client Credentials e baixa direto do
+          Salesforce, sem precisar transferir bytes via tool args.
+        - `local_audio_path` (opt): caminho do arquivo local em /tmp pra
+          testes locais (requer `IS_LOCAL=true`).
+        - `audio_bytes_base64` (opt): bytes inline em base64. Pouco
+          confiavel em prod (LLM trunca >~10KB); useu pra testes.
+        - `message_id` (opt): correlacao com register_inbound_media (audit).
+        - `content_version_id` (CONDICIONALMENTE OBRIGATORIO):
+          obrigatorio quando `salesforce_download_path` esta presente —
+          a tool usa esse Id pra cross-checar (anti prompt-injection) que
+          o path aponta de fato pro arquivo registrado pelo
+          `register_inbound_media`. Se omitido junto com
+          `salesforce_download_path`, a tool RECUSA o download por seguranca
+          e cai pra fallback (base64/local). No prefix [INBOUND_MEDIA]
+          esse campo vem como `media.content_version_id` — sempre repassar.
+
+        PRIORIDADE da fonte de bytes:
+        `salesforce_download_path` (+ content_version_id) →
+        `audio_bytes_base64` → `local_audio_path`.
+
+        RETORNO: dict com `status='transcribed'`, `analysis` (transcricao,
+        resumo, idioma_detectado, intencao_detectada, categoria,
+        endereco_mencionado, workflow_sugerido, confianca), e
+        `suggested_reply_pt_br` adaptado ao resultado. Se falhar,
+        `status='deferred'`/`error'` com `suggested_reply_pt_br` de fallback.
+
+        Use `analysis.workflow_sugerido` pra decidir proximo passo:
+        - 'reparo_luminaria' → confirme + chame multi_step_service(reparo_luminaria).
+        - 'poda_de_arvore'   → confirme + chame multi_step_service(poda_de_arvore).
+        - 'nenhum'           → conduza atendimento usando `analysis.transcricao`
+          como mensagem real do cidadao (NAO peca pra repetir em texto).
+
+        Se `analysis.endereco_mencionado` veio preenchido, considere
+        chamar `validate_address` direto no proximo turno em vez de
+        pedir o endereco de novo.
+        """,
+        )
+        async def analyze_inbound_audio(
+            user_number: str,
+            file_extension: str,
+            salesforce_download_path: Optional[str] = None,
+            local_audio_path: Optional[str] = None,
+            audio_bytes_base64: Optional[str] = None,
+            message_id: Optional[str] = None,
+            content_version_id: Optional[str] = None,
+        ) -> dict:
+            return await analyze_inbound_audio_impl(
+                user_number=user_number,
+                file_extension=file_extension,
+                salesforce_download_path=salesforce_download_path,
+                local_audio_path=local_audio_path,
+                audio_bytes_base64=audio_bytes_base64,
                 message_id=message_id,
                 content_version_id=content_version_id,
             )
