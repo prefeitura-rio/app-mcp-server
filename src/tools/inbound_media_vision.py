@@ -177,6 +177,7 @@ async def analyze_inbound_image(
     local_image_path: Optional[str] = None,
     image_bytes_base64: Optional[str] = None,
     salesforce_download_path: Optional[str] = None,
+    meta_media_id: Optional[str] = None,
     message_id: Optional[str] = None,
     content_version_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -191,22 +192,95 @@ async def analyze_inbound_image(
             Usado em testes locais (sandbox /tmp; requer IS_LOCAL=true).
         image_bytes_base64: bytes em base64 inline. Pouco prático em fluxo
             real porque o LLM trunca strings longas em tool args (>~10KB) —
-            preferir salesforce_download_path quando vier do Salesforce.
+            preferir salesforce_download_path / meta_media_id quando vier
+            do canal real.
         salesforce_download_path: caminho REST relativo do ContentVersion
             (ex: ``/services/data/v62.0/sobjects/ContentVersion/068.../VersionData``).
-            Esta tool autentica via OAuth Client Credentials (Connected App)
-            e baixa direto — sem truncation pelo LLM e sem precisar do
-            Engine pré-fetch.
+            Caminho UWC legacy — Apex baixou via Connect API e atachou em
+            ContentVersion. Esta tool autentica via OAuth Client
+            Credentials e baixa direto. ADR-014.
+        meta_media_id: Id de mídia retornado no Meta webhook direto
+            (``messages[].<type>.id``). Usado quando o inbound vem via
+            `/meta/webhook` (Mule), não UWC. Tool faz 2 GETs no Graph API
+            (metadata + signed CDN URL) com `WA_TOKEN`. ADR-017.
         message_id, content_version_id: correlação com register_inbound_media.
 
     Prioridade de fonte (primeiro que retornar bytes ganha):
-        ``salesforce_download_path`` → ``image_bytes_base64`` →
-        ``local_image_path``
+        ``meta_media_id`` → ``salesforce_download_path`` →
+        ``image_bytes_base64`` → ``local_image_path``
 
     Returns:
         Dict com 'status', 'analysis' (descricao, categoria, workflow_sugerido,
         confianca etc), 'suggested_reply_pt_br' adaptado ao resultado.
     """
+    image_bytes: Optional[bytes] = None
+
+    # 0) meta_media_id — caminho Meta webhook direto (ADR-017). Maior
+    #    prioridade quando presente. Faz download + extrai MIME real;
+    #    deriva file_extension do MIME pra que o magic-byte check
+    #    downstream funcione independente do que o caller passou.
+    if meta_media_id:
+        from src.utils.meta_cdn_client import MetaCDNError, download_meta_media
+
+        try:
+            image_bytes, _meta_mime = await download_meta_media(meta_media_id)
+        except MetaCDNError as exc:
+            logger.warning(
+                f"analyze_inbound_image: download Meta CDN falhou "
+                f"(meta_media_id={meta_media_id!r}): {exc}; "
+                f"caindo em salesforce_download_path/base64/local se disponíveis."
+            )
+        else:
+            # Strip codec/charset params do MIME (ex: "image/webp; charset=utf-8")
+            _mime_clean = (_meta_mime or "").split(";")[0].strip().lower()
+            _mime_to_ext = {
+                "image/jpeg": "jpg",
+                "image/jpg": "jpg",
+                "image/png": "png",
+                "image/webp": "webp",
+                "image/gif": "gif",
+            }
+            _ext_from_mime = _mime_to_ext.get(_mime_clean)
+            if _ext_from_mime:
+                # MIME do Meta é autoritativo; sobrescreve caller (ele pode
+                # ter passado errado ou passado um MIME string em vez de ext).
+                file_extension = _ext_from_mime
+            elif not file_extension:
+                # MIME desconhecido + caller não passou nada → reject
+                logger.warning(
+                    f"analyze_inbound_image: MIME Meta CDN inesperado "
+                    f"({_meta_mime!r}) e file_extension ausente."
+                )
+                return {
+                    "status": "rejected",
+                    "error": (
+                        f"MIME Meta CDN não suportado: {_meta_mime!r}. "
+                        f"Aceitos: image/jpeg, image/png, image/webp, image/gif."
+                    ),
+                    "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
+                }
+
+    # Caso especial: Meta-only chamada (meta_media_id presente, file_extension
+    # vazio) falhou no download Meta CDN → file_extension continua vazio + sem
+    # bytes. Tratar como deferred (operacional) ao invés de rejected (caller-fault).
+    if meta_media_id and not file_extension and image_bytes is None:
+        logger.info(
+            f"analyze_inbound_image: Meta CDN download falhou pra "
+            f"meta_media_id={meta_media_id!r} sem file_extension; "
+            f"retornando deferred."
+        )
+        return {
+            "status": "deferred",
+            "error": (
+                "Meta CDN não retornou bytes nem MIME (token/timeout/expired); "
+                "sem fallback configurado."
+            ),
+            "suggested_reply_pt_br": (
+                "Recebi sua imagem, mas tive um problema pra acessá-la agora. "
+                "Pode descrever em texto o que precisa pra eu te ajudar?"
+            ),
+        }
+
     if (file_extension or "").lower().lstrip(".") not in _ACCEPTED_EXTENSIONS:
         return {
             "status": "rejected",
@@ -214,13 +288,14 @@ async def analyze_inbound_image(
             "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
         }
 
-    image_bytes: Optional[bytes] = None
+    # Fallbacks abaixo só rodam se meta_media_id ausente ou seu download
+    # falhou (image_bytes ainda None).
 
-    # 1) salesforce_download_path tem prioridade — caminho real-world em
-    #    produção, sem dependência do LLM passar bytes inline. Usa wrapper
+    # 1) salesforce_download_path — caminho UWC legacy (ADR-014). Apex
+    #    baixou via Connect API e atachou em ContentVersion. Usa wrapper
     #    async que offload o httpx sync pra thread, pra não bloquear o
     #    event loop do FastMCP.
-    if salesforce_download_path:
+    if image_bytes is None and salesforce_download_path:
         # Cross-check defensivo: `content_version_id` é OBRIGATÓRIO quando
         # `salesforce_download_path` é usado, e o Id embarcado no path tem
         # que bater com ele. Sem isso, um LLM (com prompt injection ou
@@ -284,9 +359,10 @@ async def analyze_inbound_image(
         return {
             "status": "deferred",
             "error": (
-                "nenhuma fonte de bytes disponível: salesforce_download_path "
-                "(faltam env vars ou download falhou), image_bytes_base64 "
-                "(ausente/inválido), local_image_path (fora de sandbox/IS_LOCAL)"
+                "nenhuma fonte de bytes disponível: meta_media_id "
+                "(token/CDN falhou), salesforce_download_path (faltam env "
+                "vars ou download falhou), image_bytes_base64 (ausente/"
+                "inválido), local_image_path (fora de sandbox/IS_LOCAL)"
             ),
             "suggested_reply_pt_br": (
                 "Recebi sua imagem, mas não consegui analisá-la agora. "

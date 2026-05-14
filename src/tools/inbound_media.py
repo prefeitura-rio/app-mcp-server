@@ -72,6 +72,10 @@ async def register_inbound_media(
     content_version_id: Optional[str] = None,
     file_extension: Optional[str] = None,
     file_size_bytes: Optional[int] = None,
+    # Meta webhook direto (ADR-017): Id de mídia retornado por Meta. Tool
+    # downstream baixa via Graph API (não via SF):
+    meta_media_id: Optional[str] = None,
+    meta_mime_type: Optional[str] = None,
     # Localização — não entregue pelo BSP atual; deixar pra suporte futuro:
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
@@ -126,6 +130,8 @@ async def register_inbound_media(
         "message_id": message_id,
         "salesforce_download_path": salesforce_download_path,
         "content_version_id": content_version_id,
+        "meta_media_id": meta_media_id,
+        "meta_mime_type": meta_mime_type,
         "file_extension": file_extension,
         "file_size_bytes": file_size_bytes,
         "latitude": latitude,
