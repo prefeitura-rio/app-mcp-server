@@ -296,11 +296,17 @@ class AddressAPIService:
         logger.info(f"REVERSE GEOCODE RESULT:\n{geocode_result}")
 
         if len(geocode_result) == 0:
-            return {"valid": False, "error": "Endereço não encontrado para as coordenadas informadas"}
+            return {
+                "valid": False,
+                "error": "Endereço não encontrado para as coordenadas informadas",
+            }
 
         logradouro, resultado = set_logradouro(geocode_result, ACCEPTED_LOGRADOUROS)
         if not logradouro:
-            return {"valid": False, "error": "Logradouro não identificado para as coordenadas informadas"}
+            return {
+                "valid": False,
+                "error": "Logradouro não identificado para as coordenadas informadas",
+            }
 
         address_info = set_additional_info(resultado, ACCEPTED_LOGRADOUROS)
 
