@@ -230,6 +230,115 @@ class AddressAPIService:
             "formatted_address": resultado.get("formatted_address", ""),
         }
 
+    @interceptor(
+        source={
+            "source": "mcp",
+            "tool": "multi_step_service",
+            "workflow": "poda_de_arvore",
+        }
+    )
+    async def reverse_geolocator(self, latitude: float, longitude: float) -> dict:
+        """
+        Uses Google Maps API to get the nearest address from latitude and longitude
+        using reverse geocoding.
+        """
+
+        def set_logradouro(geocode_result: list, accepted_logradouros: dict):
+            for _, resultado in enumerate(geocode_result):
+                for item in resultado["address_components"]:
+                    if any(
+                        logradouro in item["types"]
+                        for logradouro in accepted_logradouros
+                    ):
+                        logradouro = item["long_name"]
+                        resultado = resultado
+                        return logradouro, resultado
+
+            logger.info("Google não conseguiu encontrar um logradouro válido")
+            return None, None
+
+        def set_additional_info(resultado, accepted_logradouros):
+            address_info = {}
+            for item in resultado["address_components"]:
+                if "street_number" in item["types"]:
+                    address_info["numero"] = item["long_name"]
+                elif any(
+                    logradouro in item["types"] for logradouro in accepted_logradouros
+                ):
+                    address_info["logradouro"] = item["long_name"]
+                elif (
+                    "sublocality" in item["types"]
+                    or "sublocality_level_1" in item["types"]
+                ):
+                    address_info["bairro"] = item["long_name"]
+                elif "postal_code" in item["types"]:
+                    cep = item["long_name"].replace("-", "")
+                    address_info["cep"] = item["long_name"] if len(cep) >= 8 else None
+                elif "administrative_area_level_2" in item["types"]:
+                    address_info["cidade"] = item["long_name"]
+                elif "administrative_area_level_1" in item["types"]:
+                    address_info["estado"] = item["short_name"]
+
+            return address_info
+
+        ACCEPTED_LOGRADOUROS = [
+            "route",
+            "establishment",
+            "street_address",
+            "town_square",
+            "point_of_interest",
+        ]
+
+        async with aiohttp.ClientSession() as maps_session:
+            client = AsyncClient(maps_session, key=env.GMAPS_API_TOKEN)
+            geocode_result = await client.reverse_geocode((latitude, longitude))
+
+        logger.info(f"REVERSE GEOCODE RESULT:\n{geocode_result}")
+
+        if len(geocode_result) == 0:
+            return {"valid": False, "error": "Endereço não encontrado para as coordenadas informadas"}
+
+        logradouro, resultado = set_logradouro(geocode_result, ACCEPTED_LOGRADOUROS)
+        if not logradouro:
+            return {"valid": False, "error": "Logradouro não identificado para as coordenadas informadas"}
+
+        address_info = set_additional_info(resultado, ACCEPTED_LOGRADOUROS)
+
+        cidade = address_info.get("cidade")
+        if cidade and cidade != "Rio de Janeiro":
+            logger.info("O município do endereço é diferente de Rio de Janeiro")
+            return {
+                "valid": False,
+                "error": "As coordenadas informadas estão fora do município do Rio de Janeiro",
+            }
+
+        if not cidade and self.shape_rj:
+            point = Point(float(longitude), float(latitude))
+            if not self.shape_rj.contains(point):
+                return {
+                    "valid": False,
+                    "error": "As coordenadas informadas estão fora do município do Rio de Janeiro",
+                }
+
+        try:
+            numero = address_info.get("numero", "")
+            numero = numero.split(".")[0]
+        except:  # noqa
+            numero = ""
+
+        return {
+            "valid": True,
+            "latitude": latitude,
+            "longitude": longitude,
+            "logradouro": address_info.get("logradouro", ""),
+            "numero": numero,
+            "bairro": address_info.get("bairro", ""),
+            "cep": address_info.get("cep", ""),
+            "cidade": address_info.get("cidade", "Rio de Janeiro"),
+            "estado": address_info.get("estado", "RJ"),
+            "formatted_address": resultado.get("formatted_address", ""),
+        }
+
     def get_nearest_logradouro_and_bairro(
         self, latitude: float, longitude: float
     ) -> NearestLocation:

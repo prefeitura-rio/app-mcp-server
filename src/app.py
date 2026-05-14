@@ -413,6 +413,23 @@ def create_app() -> FastMCP:
             "cep": geo.get("cep", ""),
         }
 
+    @conditional_mcp_tool("reverse_geocode_address")
+    async def reverse_geocode_address(latitude: float, longitude: float) -> dict:
+        """
+        Dado latitude e longitude, retorna o endereço mais próximo usando
+        reverse geocoding do Google Maps.
+
+        Args:
+            latitude: Latitude da localização.
+            longitude: Longitude da localização.
+
+        Returns:
+            Dict com endereço estruturado (logradouro, número, bairro, CEP,
+            cidade, estado, formatted_address) ou erro com campo 'valid: False'.
+        """
+        address_service = AddressAPIService()
+        return await address_service.reverse_geolocator(latitude, longitude)
+
     @conditional_mcp_tool("get_user_by_cpf")
     async def get_user_by_cpf(cpf: str) -> dict:
         """
