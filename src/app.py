@@ -370,6 +370,8 @@ def create_app() -> FastMCP:
         message_id: Optional[str] = None,
         salesforce_download_path: Optional[str] = None,
         content_version_id: Optional[str] = None,
+        meta_media_id: Optional[str] = None,
+        meta_mime_type: Optional[str] = None,
         file_extension: Optional[str] = None,
         file_size_bytes: Optional[int] = None,
         latitude: Optional[float] = None,
@@ -384,6 +386,8 @@ def create_app() -> FastMCP:
             message_id=message_id,
             salesforce_download_path=salesforce_download_path,
             content_version_id=content_version_id,
+            meta_media_id=meta_media_id,
+            meta_mime_type=meta_mime_type,
             file_extension=file_extension,
             file_size_bytes=file_size_bytes,
             latitude=latitude,
@@ -427,8 +431,14 @@ def create_app() -> FastMCP:
         ARGS:
         - `user_number` (obrig): telefone E.164 sem '+'.
         - `file_extension` (obrig): 'jpg' | 'png' | 'webp' | 'gif'.
-        - `salesforce_download_path` (opt, PREFERIDO em prod): caminho REST
-          relativo do ContentVersion (ex:
+        - `meta_media_id` (opt, PREFERIDO quando inbound vem via `/meta/webhook`
+          direto do Mule, ADR-017): Id de mídia do Graph API
+          (`messages[].<type>.id`). Tool faz 2 GETs no Graph API
+          (metadata + signed CDN URL) com `WA_TOKEN`. Caminho usado quando
+          o cidadão envia foto via WhatsApp e Bruno apontou Meta App
+          não-BSP pro Mule.
+        - `salesforce_download_path` (opt, PREFERIDO em UWC legacy): caminho
+          REST relativo do ContentVersion (ex:
           `/services/data/v62.0/sobjects/ContentVersion/068xxx/VersionData`).
           A tool autentica via OAuth Client Credentials e baixa direto
           do Salesforce, sem precisar transferir bytes via tool args (o
@@ -449,7 +459,7 @@ def create_app() -> FastMCP:
           esse campo vem como `media.content_version_id` — sempre repassar.
 
         PRIORIDADE da fonte de bytes (primeira que retornar bytes ganha):
-        `salesforce_download_path` (+ content_version_id) →
+        `meta_media_id` → `salesforce_download_path` (+ content_version_id) →
         `image_bytes_base64` → `local_image_path`.
 
         RETORNO: dict com `status='analyzed'`, `analysis` (descricao,
@@ -467,19 +477,25 @@ def create_app() -> FastMCP:
         )
         async def analyze_inbound_image(
             user_number: str,
-            file_extension: str,
+            file_extension: Optional[str] = None,
             salesforce_download_path: Optional[str] = None,
             local_image_path: Optional[str] = None,
             image_bytes_base64: Optional[str] = None,
+            meta_media_id: Optional[str] = None,
             message_id: Optional[str] = None,
             content_version_id: Optional[str] = None,
         ) -> dict:
+            # `file_extension` é Optional aqui porque caminho Meta direto
+            # (ADR-017) pode derivar do MIME real retornado pelo Graph API
+            # (impl faz isso). Pra caminho Salesforce/legacy, impl exige
+            # extension explícita e rejeita.
             return await analyze_inbound_image_impl(
                 user_number=user_number,
-                file_extension=file_extension,
+                file_extension=file_extension or "",
                 salesforce_download_path=salesforce_download_path,
                 local_image_path=local_image_path,
                 image_bytes_base64=image_bytes_base64,
+                meta_media_id=meta_media_id,
                 message_id=message_id,
                 content_version_id=content_version_id,
             )
@@ -501,8 +517,13 @@ def create_app() -> FastMCP:
         ARGS:
         - `user_number` (obrig): telefone E.164 sem '+'.
         - `file_extension` (obrig): 'oga' | 'ogg' | 'aac' | 'mp3' | 'wav' | 'flac' | 'aiff'. (m4a/amr não são suportados pelo Gemini audio input — viram rejected.)
-        - `salesforce_download_path` (opt, PREFERIDO em prod): caminho REST
-          relativo do ContentVersion (ex:
+        - `meta_media_id` (opt, PREFERIDO quando inbound vem via `/meta/webhook`
+          direto do Mule, ADR-017): Id de mídia do Graph API
+          (`messages[].audio.id`). Tool faz 2 GETs no Graph API (metadata
+          + signed CDN URL) com `WA_TOKEN`. Caminho usado quando cidadão
+          envia áudio via WhatsApp e Bruno apontou Meta App não-BSP pro Mule.
+        - `salesforce_download_path` (opt, PREFERIDO em UWC legacy): caminho
+          REST relativo do ContentVersion (ex:
           `/services/data/v62.0/sobjects/ContentVersion/068xxx/VersionData`).
           A tool autentica via OAuth Client Credentials e baixa direto do
           Salesforce, sem precisar transferir bytes via tool args.
@@ -521,7 +542,7 @@ def create_app() -> FastMCP:
           esse campo vem como `media.content_version_id` — sempre repassar.
 
         PRIORIDADE da fonte de bytes:
-        `salesforce_download_path` (+ content_version_id) →
+        `meta_media_id` → `salesforce_download_path` (+ content_version_id) →
         `audio_bytes_base64` → `local_audio_path`.
 
         RETORNO: dict com `status='transcribed'`, `analysis` (transcricao,
@@ -543,19 +564,22 @@ def create_app() -> FastMCP:
         )
         async def analyze_inbound_audio(
             user_number: str,
-            file_extension: str,
+            file_extension: Optional[str] = None,
             salesforce_download_path: Optional[str] = None,
             local_audio_path: Optional[str] = None,
             audio_bytes_base64: Optional[str] = None,
+            meta_media_id: Optional[str] = None,
             message_id: Optional[str] = None,
             content_version_id: Optional[str] = None,
         ) -> dict:
+            # `file_extension` é Optional pra caminho Meta direto (ADR-017).
             return await analyze_inbound_audio_impl(
                 user_number=user_number,
-                file_extension=file_extension,
+                file_extension=file_extension or "",
                 salesforce_download_path=salesforce_download_path,
                 local_audio_path=local_audio_path,
                 audio_bytes_base64=audio_bytes_base64,
+                meta_media_id=meta_media_id,
                 message_id=message_id,
                 content_version_id=content_version_id,
             )

@@ -201,6 +201,7 @@ async def analyze_inbound_audio(
     salesforce_download_path: Optional[str] = None,
     local_audio_path: Optional[str] = None,
     audio_bytes_base64: Optional[str] = None,
+    meta_media_id: Optional[str] = None,
     message_id: Optional[str] = None,
     content_version_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -212,20 +213,92 @@ async def analyze_inbound_audio(
         file_extension: 'oga' | 'ogg' | 'm4a' | 'aac' | 'amr' | 'mp3' | 'wav'.
         salesforce_download_path: caminho REST relativo do ContentVersion (ex:
             ``/services/data/v62.0/sobjects/ContentVersion/068.../VersionData``).
-            Tool autentica via OAuth Client Credentials e baixa direto — sem
-            truncation pelo LLM, sem Engine pré-fetch.
+            Caminho UWC legacy — Apex baixou via Connect API. ADR-015.
+        meta_media_id: Id de mídia retornado no Meta webhook direto
+            (``messages[].audio.id``). Usado quando o inbound vem via
+            `/meta/webhook` (Mule), não UWC. Tool faz 2 GETs no Graph API
+            (metadata + signed CDN URL) com `WA_TOKEN`. ADR-017.
         local_audio_path: sandbox /tmp pra testes locais (requer IS_LOCAL=true).
         audio_bytes_base64: bytes inline (raro em produção; LLM trunca).
         message_id, content_version_id: correlação com register_inbound_media.
 
-    Prioridade de fonte: salesforce_download_path > audio_bytes_base64 >
-    local_audio_path.
+    Prioridade de fonte: meta_media_id > salesforce_download_path >
+    audio_bytes_base64 > local_audio_path.
 
     Returns:
         Dict com 'status', 'analysis' (transcricao, resumo, categoria,
         intencao_detectada, workflow_sugerido, confianca etc),
         'suggested_reply_pt_br' adaptado ao resultado.
     """
+    audio_bytes: Optional[bytes] = None
+
+    # 0) meta_media_id — caminho Meta webhook direto (ADR-017). Maior
+    #    prioridade. Cidadão veio via /meta/webhook (Mule), não UWC.
+    #    Deriva file_extension do MIME real retornado pelo Graph API pra
+    #    handle MIME params (`audio/ogg; codecs=opus` é comum em PTT).
+    if meta_media_id:
+        from src.utils.meta_cdn_client import MetaCDNError, download_meta_media
+
+        try:
+            audio_bytes, _meta_mime = await download_meta_media(meta_media_id)
+        except MetaCDNError as exc:
+            logger.warning(
+                f"analyze_inbound_audio: download Meta CDN falhou "
+                f"(meta_media_id={meta_media_id!r}): {exc}; "
+                f"caindo em salesforce_download_path/base64/local."
+            )
+        else:
+            # Strip codec/charset params (ex: "audio/ogg; codecs=opus")
+            _mime_clean = (_meta_mime or "").split(";")[0].strip().lower()
+            _mime_to_ext = {
+                "audio/ogg": "ogg",
+                "audio/opus": "ogg",  # opus container OGG
+                "audio/mpeg": "mp3",
+                "audio/mp3": "mp3",
+                "audio/wav": "wav",
+                "audio/x-wav": "wav",
+                "audio/wave": "wav",
+                "audio/aac": "aac",
+                "audio/x-aac": "aac",
+                "audio/flac": "flac",
+                "audio/x-flac": "flac",
+                "audio/aiff": "aiff",
+                "audio/x-aiff": "aiff",
+            }
+            _ext_from_mime = _mime_to_ext.get(_mime_clean)
+            if _ext_from_mime:
+                file_extension = _ext_from_mime
+            elif not file_extension:
+                logger.warning(
+                    f"analyze_inbound_audio: MIME Meta CDN inesperado "
+                    f"({_meta_mime!r}) e file_extension ausente."
+                )
+                return {
+                    "status": "rejected",
+                    "error": f"MIME Meta CDN não suportado pra audio: {_meta_mime!r}.",
+                    "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
+                }
+
+    # Caso especial: Meta-only chamada falhou no download Meta CDN. Tratar
+    # como deferred (operacional) ao invés de rejected (caller-fault).
+    if meta_media_id and not file_extension and audio_bytes is None:
+        logger.info(
+            f"analyze_inbound_audio: Meta CDN download falhou pra "
+            f"meta_media_id={meta_media_id!r} sem file_extension; "
+            f"retornando deferred."
+        )
+        return {
+            "status": "deferred",
+            "error": (
+                "Meta CDN não retornou bytes nem MIME (token/timeout/expired); "
+                "sem fallback configurado."
+            ),
+            "suggested_reply_pt_br": (
+                "Recebi seu áudio, mas tive um problema pra acessá-lo agora. "
+                "Pode escrever em texto o que precisa pra eu te ajudar?"
+            ),
+        }
+
     if (file_extension or "").lower().lstrip(".") not in _ACCEPTED_EXTENSIONS:
         return {
             "status": "rejected",
@@ -233,12 +306,13 @@ async def analyze_inbound_audio(
             "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
         }
 
-    audio_bytes: Optional[bytes] = None
+    # Fallbacks abaixo só rodam se meta_media_id ausente ou seu download
+    # falhou (audio_bytes ainda None).
 
-    # 1) salesforce_download_path (prioritário em prod). Mesma defesa anti
+    # 1) salesforce_download_path (ADR-015 — UWC legacy). Mesma defesa anti
     # prompt-injection do vision: content_version_id obrigatório, Id no path
     # tem que bater com ele.
-    if salesforce_download_path:
+    if audio_bytes is None and salesforce_download_path:
         if not content_version_id:
             logger.warning(
                 "analyze_inbound_audio: salesforce_download_path sem "
@@ -309,8 +383,9 @@ async def analyze_inbound_audio(
         return {
             "status": "deferred",
             "error": (
-                "nenhuma fonte de bytes disponível: salesforce_download_path "
-                "(faltam env vars ou download falhou), audio_bytes_base64 "
+                "nenhuma fonte de bytes disponível: meta_media_id "
+                "(token/CDN falhou), salesforce_download_path (faltam "
+                "env vars ou download falhou), audio_bytes_base64 "
                 "(ausente/inválido), local_audio_path (fora de sandbox/IS_LOCAL)"
             ),
             "suggested_reply_pt_br": (
