@@ -319,6 +319,38 @@ async def analyze_inbound_audio(
             ),
         }
 
+    # Anti-hallucination: confere magic bytes batem com tipo declarado.
+    # Sem isso, Gemini com bytes errados (ex: JPG enviado como audio/ogg
+    # por causa de Apex correlation race) pode alucinar uma transcrição
+    # plausível. Comportamento observado em smoke test 2026-05-14:
+    # ContentVersion JPG enviado como audio retornou uma vez transcrição
+    # inventada de denúncia, outra vez retornou vazio. Determinístico
+    # rejeitar aqui é mais seguro.
+    from src.utils.media_sniff import detect_media_subtype, matches_expected_extension
+
+    if not matches_expected_extension(audio_bytes, file_extension):
+        detected_subtype = detect_media_subtype(audio_bytes) or "unknown"
+        logger.warning(
+            f"analyze_inbound_audio: subtype dos magic bytes não bate com a "
+            f"extension declarada (detected_subtype={detected_subtype!r}, "
+            f"declared file_extension={file_extension!r}, "
+            f"first_bytes={audio_bytes[:8]!r}, message_id={message_id}, "
+            f"content_version_id={content_version_id})"
+        )
+        return {
+            "status": "rejected",
+            "error": (
+                f"bytes baixados não batem com extension declarada "
+                f"(detected={detected_subtype!r}, declared={file_extension!r}). "
+                f"Rejeitando pra evitar análise alucinada pelo Gemini."
+            ),
+            "suggested_reply_pt_br": (
+                "Recebi sua mensagem, mas o arquivo de áudio não chegou em um "
+                "formato que eu consigo entender. Pode me descrever em texto "
+                "o que você precisa?"
+            ),
+        }
+
     if not env.GEMINI_API_KEY:
         logger.warning("analyze_inbound_audio: GEMINI_API_KEY não configurada")
         return {
