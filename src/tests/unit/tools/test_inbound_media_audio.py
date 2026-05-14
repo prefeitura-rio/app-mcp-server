@@ -387,6 +387,49 @@ def test_deferred_when_no_bytes_source(audio_module):
     assert "suggested_reply_pt_br" in out
 
 
+def test_rejects_when_bytes_are_image_not_audio(audio_module):
+    """Anti-hallucination: se MCP baixou JPG mas declared file_extension='oga'
+    (Apex misclassified ou prompt injection), Gemini não recebe os bytes — tool
+    rejeita ANTES da chamada. Reproduzido em smoke 2026-05-14."""
+    fake_jpg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01" + (b"x" * 200)
+    audio_module._test_sf_calls["return_bytes"] = fake_jpg_bytes
+    out = _run(
+        audio_module.analyze_inbound_audio(
+            user_number="5521989091014",
+            file_extension="oga",
+            salesforce_download_path=(
+                "/services/data/v62.0/sobjects/ContentVersion/0688800000Bgd3TAA/VersionData"
+            ),
+            content_version_id="0688800000Bgd3TAA",
+        )
+    )
+    assert out["status"] == "rejected"
+    assert "detected='jpeg'" in out["error"]
+    assert "declared='oga'" in out["error"]
+    # Gemini NÃO foi chamado
+    assert audio_module._test_gemini_calls["calls"] == []
+    logs = audio_module._test_log_messages
+    assert any("subtype dos magic bytes" in m for _, m in logs)
+
+
+def test_rejects_when_bytes_are_pdf_or_garbage(audio_module):
+    """Bytes corrompidos ou tipo não-mídia → rejeita sem chamar Gemini."""
+    pdf_bytes = b"%PDF-1.7\n" + (b"x" * 200)
+    audio_module._test_sf_calls["return_bytes"] = pdf_bytes
+    out = _run(
+        audio_module.analyze_inbound_audio(
+            user_number="5521989091014",
+            file_extension="oga",
+            salesforce_download_path=(
+                "/services/data/v62.0/sobjects/ContentVersion/0688800000PdfCorr/VersionData"
+            ),
+            content_version_id="0688800000PdfCorr",
+        )
+    )
+    assert out["status"] == "rejected"
+    assert audio_module._test_gemini_calls["calls"] == []
+
+
 def test_deferred_when_gemini_api_key_missing(audio_module):
     """Sem GEMINI_API_KEY: deferred + suggested_reply educado."""
     audio_module._test_env.GEMINI_API_KEY = ""
