@@ -34,21 +34,21 @@ class WhatsAppFlowSender:
 
         self.base_url = f"https://graph.facebook.com/v20.0/{self.phone_number_id}"
 
-    async def send_flow_template(
+    async def send_flow(
         self,
         recipient: str,
-        template_name: str,
+        flow_id: str,
         flow_token: str | None = None,
-        language_code: str = "pt_BR",
+        flow_cta: str = "Abrir",
     ) -> Dict[str, Any]:
         """
-        Envia template com flow button para um destinatário.
+        Envia WhatsApp Flow interativo para um destinatário.
 
         Args:
             recipient: Número do destinatário no formato E.164 sem + (ex: 5521999999999)
-            template_name: Nome do template aprovado na Meta (ex: 152_reparo_luminaria)
+            flow_id: ID do flow cadastrado na Meta (ex: 4141008006029185)
             flow_token: Identificador único da sessão (default: UUID gerado)
-            language_code: Código do idioma do template (default: pt_BR)
+            flow_cta: Texto do botão de CTA (default: "Abrir")
 
         Returns:
             Resposta da API do WhatsApp com message_id
@@ -64,29 +64,27 @@ class WhatsAppFlowSender:
 
         logger.info(
             f"Enviando WhatsApp Flow | recipient={recipient} | "
-            f"template={template_name} | flow_token={flow_token}"
+            f"flow_id={flow_id} | flow_token={flow_token}"
         )
 
         payload = {
             "messaging_product": "whatsapp",
             "to": recipient,
-            "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {"code": language_code},
-                "components": [
-                    {
-                        "type": "button",
-                        "sub_type": "flow",
-                        "index": "0",
-                        "parameters": [
-                            {
-                                "type": "action",
-                                "action": {"flow_token": flow_token},
-                            }
-                        ],
-                    }
-                ],
+            "type": "interactive",
+            "interactive": {
+                "type": "flow",
+                "body": {"text": "Por favor, me dê mais detalhes sobre a luminária."},
+                "action": {
+                    "name": "flow",
+                    "parameters": {
+                        "flow_message_version": "3",
+                        "flow_id": flow_id,
+                        "flow_token": flow_token,
+                        "flow_cta": flow_cta,
+                        "flow_action": "navigate",
+                        "flow_action_payload": {"screen": "MAIN"},
+                    },
+                },
             },
         }
 
@@ -121,16 +119,17 @@ class WhatsAppFlowSender:
                 "message_id": message_id,
                 "flow_token": flow_token,
                 "recipient": recipient,
-                "template_name": template_name,
+                "flow_id": flow_id,
             }
 
 
-# Mapeamento de service_type para template_name cadastrado na Meta
+# Mapeamento de service_type para flow_id cadastrado na Meta
+# Para adicionar novo flow: registrar no Meta, pegar o flow_id e adicionar aqui
 FLOW_TEMPLATES = {
-    "reparo_luminaria": "152_reparo_luminaria",
+    "reparo_luminaria": "4141008006029185",
     # Adicionar novos flows aqui conforme forem criados na Meta
-    # "poda_arvore": "153_poda_arvore",
-    # "limpeza_urbana": "154_limpeza_urbana",
+    # "poda_arvore": "FLOW_ID_AQUI",
+    # "limpeza_urbana": "FLOW_ID_AQUI",
 }
 
 
@@ -150,9 +149,9 @@ async def send_flow_by_service(
     Returns:
         Resultado do envio com message_id e flow_token
     """
-    template_name = FLOW_TEMPLATES.get(service_type)
+    flow_id = FLOW_TEMPLATES.get(service_type)
 
-    if not template_name:
+    if not flow_id:
         available = ", ".join(FLOW_TEMPLATES.keys())
         return {
             "success": False,
@@ -163,9 +162,9 @@ async def send_flow_by_service(
     sender = WhatsAppFlowSender()
 
     try:
-        result = await sender.send_flow_template(
+        result = await sender.send_flow(
             recipient=user_number,
-            template_name=template_name,
+            flow_id=flow_id,
             flow_token=flow_token,
         )
 
