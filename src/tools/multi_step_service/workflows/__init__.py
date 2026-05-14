@@ -13,11 +13,15 @@ from src.tools.multi_step_service.workflows.iptu_pagamento import IPTUWorkflow
 from src.tools.multi_step_service.workflows.poda_de_arvore.workflow import (
     PodaDeArvoreWorkflow,
 )
+from src.tools.multi_step_service.workflows.reparo_luminaria.workflow import (
+    ReparoLuminariaWorkflow,
+)
 
 # Lista central de workflows (classes)
 workflows = [
     IPTUWorkflow,
     PodaDeArvoreWorkflow,
+    ReparoLuminariaWorkflow,
 ]
 
 # Lista de workflows disponíveis para import fácil

@@ -55,6 +55,7 @@ local_agent = Agent(
     include_thoughts=True,
     thinking_budget=-1,
     otpl_service=f"eai-langgraph-v{prompt_version}",
+    use_checkpointer=False,
 )
 
 

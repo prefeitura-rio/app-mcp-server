@@ -39,6 +39,10 @@ DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
 
 TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
 
+# WhatsApp Business API - Flow Sender
+WA_TOKEN = getenv_or_action("WA_TOKEN", action="ignore")
+WA_PHONE_NUMBER_ID = getenv_or_action("WA_PHONE_NUMBER_ID", action="ignore")
+
 # Error Interceptor Configuration
 ERROR_INTERCEPTOR_URL = getenv_or_action("ERROR_INTERCEPTOR_URL")
 ERROR_INTERCEPTOR_TOKEN = getenv_or_action("ERROR_INTERCEPTOR_TOKEN")
@@ -140,3 +144,17 @@ DATA_DIR = getenv_or_action("DATA_DIR")
 TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", default="false", action="warn")
 TYPESENSE_PARAMETERS = getenv_or_action("TYPESENSE_PARAMETERS")
 PODA_SERVICE_ID = getenv_or_action("PODA_SERVICE_ID", action="ignore")
+
+# WhatsApp Flow — Luminária (chave RSA privada em PEM, \n como literal)
+WA_LUMINARIA_PRIVATE_KEY = (
+    getenv_or_action("WA_LUMINARIA_PRIVATE_KEY", action="ignore") or ""
+).replace("\\n", "\n") or None
+
+# Salesforce REST API — pro analyze_inbound_image baixar bytes de
+# ContentVersion via OAuth Client Credentials. Reusa Connected App "MuleSoft
+# LangGraph Integration" (mesma do Mule outbound, definida em devwilliam).
+# Quando ausentes, salesforce_client retorna None e a tool de visão cai em
+# fallback gracioso. Setup via Infisical em produção.
+SALESFORCE_INSTANCE_URL = getenv_or_action("SALESFORCE_INSTANCE_URL", action="ignore")
+SALESFORCE_CLIENT_ID = getenv_or_action("SALESFORCE_CLIENT_ID", action="ignore")
+SALESFORCE_CLIENT_SECRET = getenv_or_action("SALESFORCE_CLIENT_SECRET", action="ignore")

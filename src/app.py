@@ -4,6 +4,8 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 # comment to trigger build
 
+import os
+
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
@@ -33,6 +35,17 @@ from src.tools.cor_alert_tools import create_cor_alert
 from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
 from src.tools.feedback_tools import store_user_feedback
+from src.tools.inbound_media import (
+    register_inbound_media as register_inbound_media_impl,
+)
+from src.tools.inbound_media_vision import (
+    analyze_inbound_image as analyze_inbound_image_impl,
+)
+from src.tools.inbound_media_audio import (
+    analyze_inbound_audio as analyze_inbound_audio_impl,
+)
+from src.tools.luminaria_flow import process_flow_request
+from src.tools.whatsapp_flow_sender import send_flow_by_service, FLOW_TEMPLATES
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -46,6 +59,7 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service impor
     SGRCAPIService,
     AddressAPIService,
 )
+from src.tools.multi_step_service.workflows.sgrc_components.models import CPFPayload
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -313,6 +327,240 @@ def create_app() -> FastMCP:
         return response
 
     @conditional_mcp_tool(
+        "register_inbound_media",
+        description="""
+        Registra recepcao de uma midia (imagem, audio ou localizacao) que o
+        cidadao enviou via WhatsApp. Stub atual: APENAS LOGA + retorna ack —
+        processamento real (visao pra imagens, transcricao pra audios, geocoding
+        pra localizacao) sera adicionado em fases posteriores.
+
+        QUANDO USAR esta tool:
+        - Quando a `message` recebida pelo agent contiver indicacao de midia
+          (ex: '[Cidadao enviou uma imagem...]', '[Cidadao enviou uma mensagem de
+          voz...]') OU quando o metadata da chamada incluir `message_type` !=
+          'text' com `media.content_version_id` populado.
+        - SEMPRE chamar antes de responder ao cidadao, pra registrar audit do
+          recebimento + obter `suggested_reply_pt_br`.
+
+        ARGS:
+        - `media_type` (obrig): 'image' | 'audio' | 'location' | 'unsupported'.
+        - `user_number` (obrig): telefone E.164 sem '+' (ex: '5521989091014').
+        - `message_id` (opt): UUID da ConversationEntry (audit).
+        - `salesforce_download_path` (opt): caminho REST relativo ao SF instance
+          pra baixar bytes (`/services/data/v62.0/sobjects/ContentVersion/{Id}/VersionData`).
+          NAO baixar aqui — Engine usa este caminho em fases posteriores.
+        - `content_version_id` (opt): Id da ContentVersion auto-attachado pelo bridge UWC.
+        - `file_extension` (opt): 'jpg', 'png', 'oga' (audio PTT), etc.
+        - `file_size_bytes` (opt): tamanho do arquivo.
+        - `latitude` / `longitude` / `address` (opt): placeholders futuros (BSP atual
+          NAO entrega localizacao real — Apex classifica como Unsupported).
+        - `messaging_session_id` / `conversation_identifier` (opt): correlacao SF.
+
+        RETORNO: dict com `status='received'`, `media_type`, `processing='deferred'`,
+        `suggested_reply_pt_br`. Use o `suggested_reply_pt_br` como base da
+        resposta ao cidadao — adapte tom mas preserve o pedido de texto.
+
+        ERRO: se `media_type` invalido OU `user_number` vazio, retorna
+        `status='rejected'` com `error`.
+        """,
+    )
+    async def register_inbound_media(
+        media_type: str,
+        user_number: str,
+        message_id: Optional[str] = None,
+        salesforce_download_path: Optional[str] = None,
+        content_version_id: Optional[str] = None,
+        file_extension: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+        address: Optional[str] = None,
+        messaging_session_id: Optional[str] = None,
+        conversation_identifier: Optional[str] = None,
+    ) -> dict:
+        return await register_inbound_media_impl(
+            media_type=media_type,
+            user_number=user_number,
+            message_id=message_id,
+            salesforce_download_path=salesforce_download_path,
+            content_version_id=content_version_id,
+            file_extension=file_extension,
+            file_size_bytes=file_size_bytes,
+            latitude=latitude,
+            longitude=longitude,
+            address=address,
+            messaging_session_id=messaging_session_id,
+            conversation_identifier=conversation_identifier,
+        )
+
+    # Tool de visão habilitada por padrão. Kill switch: setar
+    # ENABLE_VISION_ADDENDUM=false no env desliga o registro da tool E o
+    # addendum em src/utils/agent/prompt.py (mesma semântica).
+    # Default-on: env var vazia/ausente OU qualquer valor que não seja
+    # "false" (case-insensitive) ⇒ habilitado.
+    _vision_enabled = (
+        os.environ.get("ENABLE_VISION_ADDENDUM") or "true"
+    ).lower() != "false"
+
+    # Tool de transcrição de áudio habilitada por padrão. Mesma semântica de
+    # kill switch do vision: ENABLE_AUDIO_ADDENDUM=false desliga registro e
+    # prompt module audio_inbound (no engine).
+    _audio_enabled = (
+        os.environ.get("ENABLE_AUDIO_ADDENDUM") or "true"
+    ).lower() != "false"
+
+    if _vision_enabled:
+
+        @conditional_mcp_tool(
+            "analyze_inbound_image",
+            description="""
+        Analisa visualmente uma IMAGEM inbound do WhatsApp via Gemini Vision e
+        classifica o problema reportado. Chamar SEMPRE depois de
+        `register_inbound_media` quando `media_type='image'`, antes de
+        responder ao cidadao.
+
+        QUANDO USAR:
+        - Apos register_inbound_media de uma imagem.
+        - Pra decidir qual workflow (reparo_luminaria, poda_de_arvore) iniciar
+          em seguida.
+
+        ARGS:
+        - `user_number` (obrig): telefone E.164 sem '+'.
+        - `file_extension` (obrig): 'jpg' | 'png' | 'webp' | 'gif'.
+        - `salesforce_download_path` (opt, PREFERIDO em prod): caminho REST
+          relativo do ContentVersion (ex:
+          `/services/data/v62.0/sobjects/ContentVersion/068xxx/VersionData`).
+          A tool autentica via OAuth Client Credentials e baixa direto
+          do Salesforce, sem precisar transferir bytes via tool args (o
+          LLM tende a truncar strings longas).
+        - `local_image_path` (opt): caminho do arquivo local em /tmp pra
+          testes locais (requer `IS_LOCAL=true`).
+        - `image_bytes_base64` (opt): bytes inline em base64. Pouco
+          confiavel em produção (LLM trunca >~10KB); use apenas pra
+          testes manuais.
+        - `message_id` (opt): correlacao com register_inbound_media (audit).
+        - `content_version_id` (CONDICIONALMENTE OBRIGATORIO):
+          obrigatorio quando `salesforce_download_path` esta presente —
+          a tool usa esse Id pra cross-checar (anti prompt-injection) que
+          o path aponta de fato pro arquivo registrado pelo
+          `register_inbound_media`. Se omitido junto com
+          `salesforce_download_path`, a tool RECUSA o download por seguranca
+          e cai pra fallback (base64/local). No prefix [INBOUND_MEDIA]
+          esse campo vem como `media.content_version_id` — sempre repassar.
+
+        PRIORIDADE da fonte de bytes (primeira que retornar bytes ganha):
+        `salesforce_download_path` (+ content_version_id) →
+        `image_bytes_base64` → `local_image_path`.
+
+        RETORNO: dict com `status='analyzed'`, `analysis` (descricao,
+        categoria, problema_detectado, workflow_sugerido, confianca),
+        e `suggested_reply_pt_br` adaptado ao resultado.
+        Se nao conseguir baixar/decodificar/analisar, retorna
+        `status='deferred'` ou `status='error'` com `suggested_reply_pt_br`
+        de fallback.
+
+        Use o campo `analysis.workflow_sugerido` pra decidir o proximo passo:
+        - 'reparo_luminaria' → chamar multi_step_service(reparo_luminaria).
+        - 'poda_de_arvore'   → chamar multi_step_service(poda_de_arvore).
+        - 'nenhum'           → pedir descricao em texto ao cidadao.
+        """,
+        )
+        async def analyze_inbound_image(
+            user_number: str,
+            file_extension: str,
+            salesforce_download_path: Optional[str] = None,
+            local_image_path: Optional[str] = None,
+            image_bytes_base64: Optional[str] = None,
+            message_id: Optional[str] = None,
+            content_version_id: Optional[str] = None,
+        ) -> dict:
+            return await analyze_inbound_image_impl(
+                user_number=user_number,
+                file_extension=file_extension,
+                salesforce_download_path=salesforce_download_path,
+                local_image_path=local_image_path,
+                image_bytes_base64=image_bytes_base64,
+                message_id=message_id,
+                content_version_id=content_version_id,
+            )
+
+    if _audio_enabled:
+
+        @conditional_mcp_tool(
+            "analyze_inbound_audio",
+            description="""
+        Transcreve e classifica um AUDIO inbound do WhatsApp via Gemini
+        multimodal. Chamar SEMPRE depois de `register_inbound_media` quando
+        `media_type='audio'`, antes de responder ao cidadao.
+
+        QUANDO USAR:
+        - Apos register_inbound_media de um audio (PTT do WhatsApp, .oga, etc.).
+        - Pra obter transcricao + workflow sugerido a partir do que o cidadao
+          falou em voz.
+
+        ARGS:
+        - `user_number` (obrig): telefone E.164 sem '+'.
+        - `file_extension` (obrig): 'oga' | 'ogg' | 'aac' | 'mp3' | 'wav' | 'flac' | 'aiff'. (m4a/amr não são suportados pelo Gemini audio input — viram rejected.)
+        - `salesforce_download_path` (opt, PREFERIDO em prod): caminho REST
+          relativo do ContentVersion (ex:
+          `/services/data/v62.0/sobjects/ContentVersion/068xxx/VersionData`).
+          A tool autentica via OAuth Client Credentials e baixa direto do
+          Salesforce, sem precisar transferir bytes via tool args.
+        - `local_audio_path` (opt): caminho do arquivo local em /tmp pra
+          testes locais (requer `IS_LOCAL=true`).
+        - `audio_bytes_base64` (opt): bytes inline em base64. Pouco
+          confiavel em prod (LLM trunca >~10KB); useu pra testes.
+        - `message_id` (opt): correlacao com register_inbound_media (audit).
+        - `content_version_id` (CONDICIONALMENTE OBRIGATORIO):
+          obrigatorio quando `salesforce_download_path` esta presente —
+          a tool usa esse Id pra cross-checar (anti prompt-injection) que
+          o path aponta de fato pro arquivo registrado pelo
+          `register_inbound_media`. Se omitido junto com
+          `salesforce_download_path`, a tool RECUSA o download por seguranca
+          e cai pra fallback (base64/local). No prefix [INBOUND_MEDIA]
+          esse campo vem como `media.content_version_id` — sempre repassar.
+
+        PRIORIDADE da fonte de bytes:
+        `salesforce_download_path` (+ content_version_id) →
+        `audio_bytes_base64` → `local_audio_path`.
+
+        RETORNO: dict com `status='transcribed'`, `analysis` (transcricao,
+        resumo, idioma_detectado, intencao_detectada, categoria,
+        endereco_mencionado, workflow_sugerido, confianca), e
+        `suggested_reply_pt_br` adaptado ao resultado. Se falhar,
+        `status='deferred'`/`error'` com `suggested_reply_pt_br` de fallback.
+
+        Use `analysis.workflow_sugerido` pra decidir proximo passo:
+        - 'reparo_luminaria' → confirme + chame multi_step_service(reparo_luminaria).
+        - 'poda_de_arvore'   → confirme + chame multi_step_service(poda_de_arvore).
+        - 'nenhum'           → conduza atendimento usando `analysis.transcricao`
+          como mensagem real do cidadao (NAO peca pra repetir em texto).
+
+        Se `analysis.endereco_mencionado` veio preenchido, considere
+        chamar `validate_address` direto no proximo turno em vez de
+        pedir o endereco de novo.
+        """,
+        )
+        async def analyze_inbound_audio(
+            user_number: str,
+            file_extension: str,
+            salesforce_download_path: Optional[str] = None,
+            local_audio_path: Optional[str] = None,
+            audio_bytes_base64: Optional[str] = None,
+            message_id: Optional[str] = None,
+            content_version_id: Optional[str] = None,
+        ) -> dict:
+            return await analyze_inbound_audio_impl(
+                user_number=user_number,
+                file_extension=file_extension,
+                salesforce_download_path=salesforce_download_path,
+                local_audio_path=local_audio_path,
+                audio_bytes_base64=audio_bytes_base64,
+                message_id=message_id,
+                content_version_id=content_version_id,
+            )
+
+    @conditional_mcp_tool(
         "report_incident",
         description="""
         [TOOL_VERSION: {tool_version}] Registra informação interna SILENCIOSA sobre incidentes hídricos graves.
@@ -370,10 +618,110 @@ def create_app() -> FastMCP:
         )
         return add_tool_version(response)
 
+    @conditional_mcp_tool(
+        "send_whatsapp_flow",
+        description=f"""
+        Envia formulário interativo (WhatsApp Flow) para coleta estruturada de dados.
+
+        QUANDO USAR:
+        - Quando o cidadão solicitar um serviço que tem Flow disponível
+        - ANTES de iniciar multi_step_service para o serviço
+        - Apenas se o canal for WhatsApp (verificar contexto)
+
+        FLOWS DISPONÍVEIS: {", ".join(FLOW_TEMPLATES.keys())}
+
+        FLUXO:
+        1. Detectar solicitação de serviço que tem Flow
+        2. Chamar send_whatsapp_flow com o número do usuário e service_type
+        3. Informar ao cidadão que o formulário foi enviado
+        4. Aguardar resposta do flow (dados virão automaticamente via webhook)
+        5. Workflow continuará com dados pré-preenchidos
+
+        Args:
+            user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
+            service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
+
+        Returns:
+            Confirmação de envio com message_id e instruções para o cidadão
+        """,
+    )
+    async def send_whatsapp_flow(
+        user_number: str,
+        service_type: str,
+    ) -> dict:
+        """Envia WhatsApp Flow para coleta estruturada de dados."""
+        # Verificar se há flow cadastrado para este serviço
+        if service_type not in FLOW_TEMPLATES:
+            available = ", ".join(FLOW_TEMPLATES.keys())
+            return {
+                "success": False,
+                "error": f"Flow não disponível para '{service_type}'",
+                "message": f"Flow disponível apenas para: {available}. Vamos continuar por texto.",
+            }
+
+        result = await send_flow_by_service(
+            service_type=service_type,
+            user_number=user_number,
+        )
+
+        if result.get("success"):
+            return {
+                "success": True,
+                "message": (
+                    "Enviei um formulário rápido no WhatsApp para você preencher os dados. "
+                    "Após preencher, eu continuo te ajudando com o restante."
+                ),
+                "flow_token": result.get("flow_token"),
+                "next_step": "wait_for_flow_completion",
+            }
+        else:
+            return {
+                "success": False,
+                "message": result.get("message", "Vamos continuar por texto."),
+            }
+
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
     ) -> dict:
+        # WhatsApp Flow auto-trigger: se o serviço tem Flow cadastrado e ainda
+        # não foi enviado (_source != "whatsapp_flow"), envia automaticamente
+        if service_name in FLOW_TEMPLATES:
+            payload = payload or {}
+            source = payload.get("_source")
+
+            if source != "whatsapp_flow":
+                logger.info(
+                    f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
+                    f"service={service_name}, user={user_id}"
+                )
+                flow_result = await send_flow_by_service(
+                    service_type=service_name,
+                    user_number=user_id,
+                )
+
+                if flow_result.get("success"):
+                    return {
+                        "status": "flow_sent",
+                        "message": (
+                            "Enviei um formulário rápido no WhatsApp para você preencher os dados. "
+                            "Após preencher, eu continuo automaticamente com o atendimento."
+                        ),
+                        "flow_token": flow_result.get("flow_token"),
+                        "next_step": "await_flow_completion",
+                        "instruction": (
+                            "IMPORTANTE: Informe ao cidadão que o formulário foi enviado. "
+                            "NÃO prossiga coletando dados manualmente. Aguarde o webhook "
+                            "com os dados preenchidos - o workflow será chamado automaticamente."
+                        ),
+                    }
+                else:
+                    # Flow falhou, continuar normalmente por texto
+                    logger.warning(
+                        f"[AUTO_FLOW] Falha ao enviar flow: {flow_result.get('error')}"
+                    )
+
+        # Prosseguir normalmente com o workflow
         response = await mss(
             service_name=service_name, user_id=user_id, payload=payload
         )
@@ -433,14 +781,26 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool("get_user_by_cpf")
     async def get_user_by_cpf(cpf: str) -> dict:
         """
-        Consulta cadastro do cidadão pelo CPF no sistema da Prefeitura do Rio.
+        Consulta cadastro do cidadão por CPF válido no sistema da Prefeitura do Rio.
+        Use apenas quando o usuário informou explicitamente um CPF com 11 dígitos.
+        Não use para inscrição imobiliária, número de protocolo, guia ou outros identificadores.
         Retorna nome, e-mail e telefone se o cidadão estiver cadastrado.
         """
         import httpx
 
         try:
+            validated = CPFPayload.model_validate({"cpf": cpf})
+            if not validated.cpf:
+                return {
+                    "found": False,
+                    "name": None,
+                    "email": None,
+                    "phone": None,
+                    "error": "CPF ausente ou inválido. Use esta ferramenta apenas com CPF válido de 11 dígitos.",
+                }
+
             sgrc = SGRCAPIService()
-            data = await sgrc.get_user_info(cpf)
+            data = await sgrc.get_user_info(validated.cpf)
             phones = data.get("phones") or []
             return {
                 "found": bool(data.get("name") or data.get("email")),
@@ -449,9 +809,18 @@ def create_app() -> FastMCP:
                 "phone": str(phones[0]) if phones else None,
             }
         except Exception as e:
-            if isinstance(e.__cause__, httpx.HTTPStatusError) and e.__cause__.response.status_code == 404:
+            if (
+                isinstance(e.__cause__, httpx.HTTPStatusError)
+                and e.__cause__.response.status_code == 404
+            ):
                 return {"found": False, "name": None, "email": None, "phone": None}
-            return {"found": False, "name": None, "email": None, "phone": None, "error": str(e)}
+            return {
+                "found": False,
+                "name": None,
+                "email": None,
+                "phone": None,
+                "error": str(e),
+            }
 
     @conditional_mcp_tool("register_sgrc_ticket")
     async def register_sgrc_ticket(
@@ -518,7 +887,12 @@ def create_app() -> FastMCP:
             }
 
         except (SGRCDuplicateTicketException, SGRCEquivalentTicketException) as e:
-            return {"success": False, "protocol_id": getattr(e, "protocol_id", None), "ticket_id": None, "error": str(e)}
+            return {
+                "success": False,
+                "protocol_id": getattr(e, "protocol_id", None),
+                "ticket_id": None,
+                "error": str(e),
+            }
 
         except Exception as e:
             return {"success": False, "protocol_id": None, "error": str(e)}
@@ -613,6 +987,33 @@ def create_app() -> FastMCP:
         except Exception as e:
             logger.error(f"Error processing request: {str(e)}")
             return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/whatsapp-flow/luminaria", methods=["POST"])
+    async def wa_flow_luminaria(request: Request):
+        """
+        Endpoint do WhatsApp Flow de coleta de defeito de luminária pública.
+        Decripta o payload (RSA + AES-GCM), processa a action e devolve
+        a resposta criptografada como bytes (exigido pelo protocolo Meta).
+        """
+        from fastapi.responses import Response
+
+        private_key = env.WA_LUMINARIA_PRIVATE_KEY
+        if not private_key:
+            logger.error("wa_flow_luminaria: WA_LUMINARIA_PRIVATE_KEY não configurada")
+            return JSONResponse(
+                content={"error": "Flow não configurado"}, status_code=503
+            )
+
+        try:
+            body = await request.json()
+            encrypted_response = await process_flow_request(body, private_key)
+            return Response(content=encrypted_response, media_type="text/plain")
+        except ValueError as e:
+            logger.error(f"wa_flow_luminaria: erro de decriptação: {e}")
+            return JSONResponse(content={"error": str(e)}, status_code=421)
+        except Exception as e:
+            logger.error(f"wa_flow_luminaria: erro inesperado: {e}")
+            return JSONResponse(content={"error": "Erro interno"}, status_code=500)
 
     # ===== LOG DE INICIALIZAÇÃO =====
 

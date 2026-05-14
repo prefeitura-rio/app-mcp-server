@@ -158,7 +158,9 @@ __replace_divida_ativa__
             return texto
         else:
             # Lista os números das guias disponíveis
-            numeros_disponiveis = [guia.get("numero_guia", "N/A") for guia in guias]
+            numeros_disponiveis = [
+                guia.get("numero_guia", "N/A") for guia in guias_em_aberto
+            ]
             exemplos_reais = ", ".join([f'"{num}"' for num in numeros_disponiveis])
 
             texto += f"""🎯 **Para continuar com a **emissao do IPTU {exercicio}**, selecione a guia desejada:**
@@ -264,7 +266,9 @@ __replace_divida_ativa__
             texto += f"**Valor:** {formatar_valor_brl(valor)}\n"
             texto += f"**Vencimento:** {guia['vencimento']}\n"
             texto += f"**Código de Barras:** {guia['codigo_barras']}\n"
-            texto += f"**Pix copia-e-cola:** {guia.get('pix', 'Não disponível')}\n"
+            # texto += f"**Pix copia-e-cola:** {guia.get('pix', 'Não disponível')}\n"
+            if guia.get("pix_url"):
+                texto += f"**Pagamento por Pix:** {guia['pix_url']}\n"
             # texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
             texto += f"**PDF:** {guia.get('pdf', 'Não disponível')}\n\n"
 
