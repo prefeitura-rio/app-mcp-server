@@ -1,58 +1,72 @@
 """
 Transcrição + classificação de áudio inbound do WhatsApp via Gemini multimodal.
 
-Espelha o desenho de :mod:`inbound_media_vision`: a tool baixa bytes
-direto do Salesforce REST (ContentVersion ``VersionData``) via OAuth Client
-Credentials, manda pro Gemini com ``inline_data`` (mime ``audio/ogg`` etc.)
-e retorna ``{transcricao, intencao_detectada, workflow_sugerido, ...}``.
+Estende o `register_inbound_media` (audit-only stub) com análise do áudio
+real via Gemini multimodal. O agente pode chamar AMBAS no mesmo turn:
+  1. register_inbound_media → audit + ack
+  2. analyze_inbound_audio  → transcrição → workflow apropriado
 
-Caminho real-world (produção):
-  Apex correlaciona ContentVersion do PTT do WhatsApp (FileExtension=oga,
-  FileType=UNKNOWN — UWC não popula MIME)
-    → Mule encaminha ``message_type=audio`` + ``media.download_path`` no
-      webhook do Gateway
-    → Gateway compõe ``[INBOUND_MEDIA] type=audio media={download_path,...}``
-    → Engine LLM chama ``register_inbound_media`` (audit) +
-      ``analyze_inbound_audio`` (esta tool, com ``salesforce_download_path``).
+Caminhos de fonte de bytes (em ordem de preferência):
+  - `meta_media_id` (canal canônico, ADR-017) → Graph API + Meta CDN
+  - `salesforce_download_path` (UWC legacy, ADR-015) → SF REST OAuth
+  - `audio_bytes_base64` (testes manuais)
+  - `local_audio_path` (sandbox /tmp, IS_LOCAL=true)
 
-Modos alternativos pra testes locais:
-  ``audio_bytes_base64`` (LLM trunca >~10KB, pouco útil em prod) e
-  ``local_audio_path`` (sandbox /tmp + IS_LOCAL=true).
+Refator 2026-05-14 noite (ADR-018): bulk extraído pra
+`src/utils/inbound_media_shared.py`. Este arquivo fica só com audio-specific:
+prompt, allowlist, reply builder, MIME mapping.
 """
 
-import base64
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from google import genai
-from google.genai import types
 
 from src.config import env
+from src.utils.inbound_media_shared import (
+    call_gemini_with_blob,
+    deferred_no_bytes,
+    deferred_no_gemini_key,
+    error_gemini_failed,
+    parse_analysis_json,
+    path_matches_content_version_id,
+    rejected_subtype_mismatch,
+    resolve_inbound_bytes,
+)
 from src.utils.log import logger
 
-# Diretório seguro pra `local_audio_path` (sandbox de testes locais). Mesma
-# convenção de :mod:`inbound_media_vision` — paths fora desse prefixo são
-# rejeitados pra evitar arbitrary file read via prompt injection no MCP tool.
+# Re-export pra backward compat de testes que importavam o helper privado.
+# Função real vive em src.utils.inbound_media_shared agora (ADR-018 refator).
+_path_matches_content_version_id = path_matches_content_version_id
+
 _LOCAL_AUDIO_PATH_ALLOWED_PREFIX = Path("/tmp").resolve()
 
 _AUDIO_MODEL = "gemini-2.5-flash"
 
-# Extensões aceitas. WhatsApp PTT chega como `.oga` (Opus mono 16kHz dentro
-# de OGG). Bridge UWC pode também emitir `.ogg`, `.aac`, `.mp3`, `.wav`, `.flac`,
-# `.aiff` dependendo do tipo de áudio enviado pelo cidadão.
-#
-# IMPORTANTE: a lista é restrita aos formatos documentados pelo Gemini audio
-# input (WAV, MP3, AIFF, AAC, OGG, FLAC — https://ai.google.dev/gemini-api/docs/audio).
-# Containers como AMR (codec deprecado, comum em SMS via gateways) ou M4A
-# (MP4 audio-only) NÃO estão no allowlist do Gemini inline_data — se chegarem
-# do bridge UWC, viram `rejected` aqui em vez de passar pra um erro Gemini
-# downstream. Trocar/transcodar fica como evolução futura.
+# Allowlist Gemini audio input (https://ai.google.dev/gemini-api/docs/audio):
+# WAV, MP3, AIFF, AAC, OGG, FLAC. M4A/AMR fora — viram `rejected` antes de
+# Gemini call.
 _ACCEPTED_EXTENSIONS = {"oga", "ogg", "aac", "mp3", "wav", "flac", "aiff", "aif"}
 
-# Limite do `inline_data` do Gemini (mesma fronteira de imagem). PTT
-# WhatsApp tipicamente ~15-60 KB; áudios mais longos do menu de anexo
-# raramente passam de poucos MB. 20 MB cobre com folga.
-_MAX_BYTES = 20 * 1024 * 1024
+_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — limite inline_data Gemini
+
+# MIME do Graph API → extension canônica. Strip de codec/charset params no
+# caller. PTT WhatsApp tipicamente vem como `audio/ogg; codecs=opus`.
+_MIME_TO_EXT = {
+    "audio/ogg": "ogg",
+    "audio/opus": "ogg",  # opus container OGG
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/aac": "aac",
+    "audio/x-aac": "aac",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/aiff": "aiff",
+    "audio/x-aiff": "aiff",
+}
 
 _ANALYSIS_PROMPT_PT_BR = """\
 Você é um classificador de serviços da Prefeitura do Rio de Janeiro.
@@ -120,36 +134,11 @@ def _read_audio_bytes(local_audio_path: Optional[str]) -> Optional[bytes]:
     return path.read_bytes()
 
 
-def _path_matches_content_version_id(path: str, content_version_id: str) -> bool:
-    """Cross-check do Id no path vs content_version_id do marker. Idêntico
-    ao :func:`inbound_media_vision._path_matches_content_version_id`."""
-    if not path or not content_version_id:
-        return False
-    try:
-        parts = path.rstrip("/").split("/")
-        if "ContentVersion" not in parts:
-            return False
-        idx = parts.index("ContentVersion")
-        if idx + 1 >= len(parts):
-            return False
-        path_id = parts[idx + 1]
-    except (ValueError, IndexError):
-        return False
-    return path_id[:15] == content_version_id[:15]
-
-
 def _mime_from_extension(file_extension: Optional[str]) -> str:
-    """
-    Mapeia extensão pra MIME aceito pelo Gemini ``inline_data`` (audio).
+    """Extension canônica → MIME pro Gemini blob (inline_data audio).
 
-    WhatsApp PTT chega como ``.oga`` (OGG container, codec Opus mono). Gemini
-    documenta ``audio/ogg`` como suportado — empiricamente também aceita o
-    container OGG mesmo sem o sufixo ``;codecs=opus``.
-
-    Mantemos o domínio restrito aos formatos que o Gemini audio input aceita
-    (https://ai.google.dev/gemini-api/docs/audio): WAV, MP3, AIFF, AAC, OGG,
-    FLAC. O allowlist em :data:`_ACCEPTED_EXTENSIONS` já guarda a entrada;
-    aqui é só o mapeamento ext → MIME.
+    WhatsApp PTT chega como `.oga` (OGG/Opus mono 16kHz). Gemini documenta
+    `audio/ogg` como suportado; empiricamente aceita também sem codec suffix.
     """
     ext = (file_extension or "oga").lower().lstrip(".")
     if ext in {"oga", "ogg"}:
@@ -164,339 +153,17 @@ def _mime_from_extension(file_extension: Optional[str]) -> str:
         return "audio/flac"
     if ext in {"aiff", "aif"}:
         return "audio/aiff"
-    return "audio/ogg"  # default razoável p/ PTT WhatsApp
-
-
-def _parse_analysis(text: str) -> Dict[str, Any]:
-    """Espelho de :func:`inbound_media_vision._parse_analysis`."""
-    import json
-    import re
-
-    if not text:
-        return {"raw": text, "parsed": False}
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        parsed = json.loads(cleaned)
-        if isinstance(parsed, dict):
-            return {**parsed, "parsed": True}
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            try:
-                parsed = json.loads(match.group(0))
-                if isinstance(parsed, dict):
-                    return {**parsed, "parsed": True}
-            except json.JSONDecodeError:
-                pass
-    logger.warning(f"analyze_inbound_audio: JSON inválido do Gemini: {text[:200]}")
-    return {"raw": text, "parsed": False}
-
-
-async def analyze_inbound_audio(
-    user_number: str,
-    file_extension: str,
-    salesforce_download_path: Optional[str] = None,
-    local_audio_path: Optional[str] = None,
-    audio_bytes_base64: Optional[str] = None,
-    meta_media_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    content_version_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Transcreve áudio inbound via Gemini multimodal e classifica intenção.
-
-    Args:
-        user_number: telefone E.164 sem '+'.
-        file_extension: 'oga' | 'ogg' | 'm4a' | 'aac' | 'amr' | 'mp3' | 'wav'.
-        salesforce_download_path: caminho REST relativo do ContentVersion (ex:
-            ``/services/data/v62.0/sobjects/ContentVersion/068.../VersionData``).
-            Caminho UWC legacy — Apex baixou via Connect API. ADR-015.
-        meta_media_id: Id de mídia retornado no Meta webhook direto
-            (``messages[].audio.id``). Usado quando o inbound vem via
-            `/meta/webhook` (Mule), não UWC. Tool faz 2 GETs no Graph API
-            (metadata + signed CDN URL) com `WA_TOKEN`. ADR-017.
-        local_audio_path: sandbox /tmp pra testes locais (requer IS_LOCAL=true).
-        audio_bytes_base64: bytes inline (raro em produção; LLM trunca).
-        message_id, content_version_id: correlação com register_inbound_media.
-
-    Prioridade de fonte: meta_media_id > salesforce_download_path >
-    audio_bytes_base64 > local_audio_path.
-
-    Returns:
-        Dict com 'status', 'analysis' (transcricao, resumo, categoria,
-        intencao_detectada, workflow_sugerido, confianca etc),
-        'suggested_reply_pt_br' adaptado ao resultado.
-    """
-    audio_bytes: Optional[bytes] = None
-
-    # 0) meta_media_id — caminho Meta webhook direto (ADR-017). Maior
-    #    prioridade. Cidadão veio via /meta/webhook (Mule), não UWC.
-    #    Deriva file_extension do MIME real retornado pelo Graph API pra
-    #    handle MIME params (`audio/ogg; codecs=opus` é comum em PTT).
-    if meta_media_id:
-        from src.utils.meta_cdn_client import MetaCDNError, download_meta_media
-
-        try:
-            audio_bytes, _meta_mime = await download_meta_media(meta_media_id)
-        except MetaCDNError as exc:
-            logger.warning(
-                f"analyze_inbound_audio: download Meta CDN falhou "
-                f"(meta_media_id={meta_media_id!r}): {exc}; "
-                f"caindo em salesforce_download_path/base64/local."
-            )
-        else:
-            # Strip codec/charset params (ex: "audio/ogg; codecs=opus")
-            _mime_clean = (_meta_mime or "").split(";")[0].strip().lower()
-            _mime_to_ext = {
-                "audio/ogg": "ogg",
-                "audio/opus": "ogg",  # opus container OGG
-                "audio/mpeg": "mp3",
-                "audio/mp3": "mp3",
-                "audio/wav": "wav",
-                "audio/x-wav": "wav",
-                "audio/wave": "wav",
-                "audio/aac": "aac",
-                "audio/x-aac": "aac",
-                "audio/flac": "flac",
-                "audio/x-flac": "flac",
-                "audio/aiff": "aiff",
-                "audio/x-aiff": "aiff",
-            }
-            _ext_from_mime = _mime_to_ext.get(_mime_clean)
-            if _ext_from_mime:
-                file_extension = _ext_from_mime
-            elif not file_extension:
-                logger.warning(
-                    f"analyze_inbound_audio: MIME Meta CDN inesperado "
-                    f"({_meta_mime!r}) e file_extension ausente."
-                )
-                return {
-                    "status": "rejected",
-                    "error": f"MIME Meta CDN não suportado pra audio: {_meta_mime!r}.",
-                    "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
-                }
-
-    # Caso especial: Meta-only chamada falhou no download Meta CDN. Tratar
-    # como deferred (operacional) ao invés de rejected (caller-fault).
-    if meta_media_id and not file_extension and audio_bytes is None:
-        logger.info(
-            f"analyze_inbound_audio: Meta CDN download falhou pra "
-            f"meta_media_id={meta_media_id!r} sem file_extension; "
-            f"retornando deferred."
-        )
-        return {
-            "status": "deferred",
-            "error": (
-                "Meta CDN não retornou bytes nem MIME (token/timeout/expired); "
-                "sem fallback configurado."
-            ),
-            "suggested_reply_pt_br": (
-                "Recebi seu áudio, mas tive um problema pra acessá-lo agora. "
-                "Pode escrever em texto o que precisa pra eu te ajudar?"
-            ),
-        }
-
-    if (file_extension or "").lower().lstrip(".") not in _ACCEPTED_EXTENSIONS:
-        return {
-            "status": "rejected",
-            "error": f"extensão não suportada pra transcrição: {file_extension!r}",
-            "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
-        }
-
-    # Fallbacks abaixo só rodam se meta_media_id ausente ou seu download
-    # falhou (audio_bytes ainda None).
-
-    # 1) salesforce_download_path (ADR-015 — UWC legacy). Mesma defesa anti
-    # prompt-injection do vision: content_version_id obrigatório, Id no path
-    # tem que bater com ele.
-    if audio_bytes is None and salesforce_download_path:
-        if not content_version_id:
-            logger.warning(
-                "analyze_inbound_audio: salesforce_download_path sem "
-                "content_version_id pra cross-check; ignorando download "
-                "pra evitar fetch de arquivo arbitrário."
-            )
-        elif not _path_matches_content_version_id(
-            salesforce_download_path, content_version_id
-        ):
-            logger.warning(
-                f"analyze_inbound_audio: salesforce_download_path Id mismatch "
-                f"vs content_version_id={content_version_id!r}; ignorando "
-                f"download pra evitar fetch de arquivo divergente."
-            )
-        else:
-            from src.utils.salesforce_client import download_content_version_async
-
-            audio_bytes = await download_content_version_async(salesforce_download_path)
-            if audio_bytes is None:
-                logger.info(
-                    "analyze_inbound_audio: salesforce_download_path falhou; "
-                    "caindo em audio_bytes_base64/local_audio_path se disponíveis."
-                )
-
-    # 2) audio_bytes_base64 — alternativa pra testes
-    if audio_bytes is None and audio_bytes_base64:
-        # Anti-OOM: o base64 expande bytes em ~4/3, então `encoded_len * 3 / 4`
-        # é um upper bound do tamanho decoded. Rejeitamos ANTES do decode pra
-        # não materializar buffer arbitrariamente grande (DoS-style — sem isso
-        # o servidor poderia alocar centenas de MB só pra rejeitar em seguida).
-        approx_decoded = (len(audio_bytes_base64) * 3) // 4
-        if approx_decoded > _MAX_BYTES:
-            logger.warning(
-                f"analyze_inbound_audio: audio_bytes_base64 encoded={len(audio_bytes_base64)} "
-                f"(~{approx_decoded} bytes decoded) > limite {_MAX_BYTES}; abort pre-decode"
-            )
-            return {
-                "status": "rejected",
-                "error": f"áudio excede {_MAX_BYTES} bytes (limite inline do Gemini)",
-                "suggested_reply_pt_br": (
-                    "Recebi sua mensagem de voz, mas ela está muito longa pra eu "
-                    "ouvir agora. Pode mandar um áudio mais curto ou escrever em texto?"
-                ),
-            }
-        try:
-            audio_bytes = base64.b64decode(audio_bytes_base64)
-        except Exception as e:
-            return {"status": "error", "error": f"base64 inválido: {e}"}
-        if len(audio_bytes) > _MAX_BYTES:
-            logger.warning(
-                f"analyze_inbound_audio: audio_bytes_base64 {len(audio_bytes)} "
-                f"bytes > limite {_MAX_BYTES}"
-            )
-            return {
-                "status": "rejected",
-                "error": f"áudio excede {_MAX_BYTES} bytes (limite inline do Gemini)",
-                "suggested_reply_pt_br": (
-                    "Recebi sua mensagem de voz, mas ela está muito longa pra eu "
-                    "ouvir agora. Pode mandar um áudio mais curto ou escrever em texto?"
-                ),
-            }
-
-    # 3) local_audio_path — sandbox /tmp em desenvolvimento
-    if audio_bytes is None and local_audio_path:
-        audio_bytes = _read_audio_bytes(local_audio_path)
-
-    if not audio_bytes:
-        return {
-            "status": "deferred",
-            "error": (
-                "nenhuma fonte de bytes disponível: meta_media_id "
-                "(token/CDN falhou), salesforce_download_path (faltam "
-                "env vars ou download falhou), audio_bytes_base64 "
-                "(ausente/inválido), local_audio_path (fora de sandbox/IS_LOCAL)"
-            ),
-            "suggested_reply_pt_br": (
-                "Recebi seu áudio, mas não consegui ouvir agora. "
-                "Pode escrever em texto o que precisa pra eu te ajudar?"
-            ),
-        }
-
-    # Anti-hallucination: confere magic bytes batem com tipo declarado.
-    # Sem isso, Gemini com bytes errados (ex: JPG enviado como audio/ogg
-    # por causa de Apex correlation race) pode alucinar uma transcrição
-    # plausível. Comportamento observado em smoke test 2026-05-14:
-    # ContentVersion JPG enviado como audio retornou uma vez transcrição
-    # inventada de denúncia, outra vez retornou vazio. Determinístico
-    # rejeitar aqui é mais seguro.
-    from src.utils.media_sniff import detect_media_subtype, matches_expected_extension
-
-    if not matches_expected_extension(audio_bytes, file_extension):
-        detected_subtype = detect_media_subtype(audio_bytes) or "unknown"
-        logger.warning(
-            f"analyze_inbound_audio: subtype dos magic bytes não bate com a "
-            f"extension declarada (detected_subtype={detected_subtype!r}, "
-            f"declared file_extension={file_extension!r}, "
-            f"first_bytes={audio_bytes[:8]!r}, message_id={message_id}, "
-            f"content_version_id={content_version_id})"
-        )
-        return {
-            "status": "rejected",
-            "error": (
-                f"bytes baixados não batem com extension declarada "
-                f"(detected={detected_subtype!r}, declared={file_extension!r}). "
-                f"Rejeitando pra evitar análise alucinada pelo Gemini."
-            ),
-            "suggested_reply_pt_br": (
-                "Recebi sua mensagem, mas o arquivo de áudio não chegou em um "
-                "formato que eu consigo entender. Pode me descrever em texto "
-                "o que você precisa?"
-            ),
-        }
-
-    if not env.GEMINI_API_KEY:
-        logger.warning("analyze_inbound_audio: GEMINI_API_KEY não configurada")
-        return {
-            "status": "deferred",
-            "error": "GEMINI_API_KEY ausente",
-            "suggested_reply_pt_br": (
-                "Recebi sua mensagem de voz! Por enquanto, pode escrever em texto?"
-            ),
-        }
-
-    client = genai.Client(api_key=env.GEMINI_API_KEY)
-    mime = _mime_from_extension(file_extension)
-    try:
-        response = await client.aio.models.generate_content(
-            model=_AUDIO_MODEL,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(text=_ANALYSIS_PROMPT_PT_BR),
-                        types.Part(
-                            inline_data=types.Blob(mime_type=mime, data=audio_bytes)
-                        ),
-                    ],
-                )
-            ],
-        )
-    except Exception as e:
-        logger.error(f"analyze_inbound_audio: Gemini falhou: {e}")
-        return {
-            "status": "error",
-            "error": f"{type(e).__name__}: {e}",
-            "suggested_reply_pt_br": (
-                "Recebi seu áudio, mas tive um problema pra ouvir agora. "
-                "Pode escrever em texto o que precisa?"
-            ),
-        }
-
-    raw_text = (response.text or "").strip()
-    analysis = _parse_analysis(raw_text)
-
-    suggested_reply = _build_reply_from_analysis(analysis)
-
-    logger.info(
-        f"analyze_inbound_audio: user_number={user_number} "
-        f"categoria={analysis.get('categoria')!r} "
-        f"workflow={analysis.get('workflow_sugerido')!r} "
-        f"confianca={analysis.get('confianca')!r} "
-        f"message_id={message_id} content_version_id={content_version_id} "
-        f"transcricao_len={len((analysis.get('transcricao') or ''))}"
-    )
-
-    return {
-        "status": "transcribed",
-        "analysis": analysis,
-        "suggested_reply_pt_br": suggested_reply,
-    }
+    return "audio/ogg"
 
 
 def _build_reply_from_analysis(analysis: Dict[str, Any]) -> str:
     """Monta resposta amigável pro cidadão baseada na transcrição.
 
     Princípio: se a transcrição extraiu informação útil (intenção +
-    eventualmente endereço), NÃO pedimos pro cidadão repetir o que já
-    falou. O prompt module ``audio_inbound`` reforça o mesmo contrato no
-    lado do LLM. Isso evita fricção desnecessária ("você acabou de me
-    dizer, e agora quer que eu digite de novo?").
+    eventualmente endereço), NÃO pedimos pro cidadão repetir o que já falou.
+    O prompt module `audio_inbound` reforça o mesmo contrato no lado do LLM.
     """
     if not analysis.get("parsed"):
-        # Sem JSON parseável só sobra o fallback genérico — não temos
-        # transcrição confiável pra reaproveitar.
         return (
             "Recebi sua mensagem de voz, mas não consegui entender o conteúdo "
             "agora. Pode tentar de novo, ou me descrever em texto?"
@@ -534,8 +201,102 @@ def _build_reply_from_analysis(analysis: Dict[str, Any]) -> str:
             "Vou te ajudar a abrir uma solicitação de poda de árvore — "
             "você confirma? Me passa o endereço (rua, número, bairro)."
         )
-    # workflow_sugerido='nenhum': transcrição é a mensagem real do cidadão.
-    # Não pedimos pra repetir — o LLM downstream continua o fluxo usando
-    # ``analysis.transcricao`` (instrução reforçada em audio_inbound prompt
-    # module). Mensagem aqui só ecoa o que entendemos pra dar ack.
     return f"Ouvi seu áudio: {resumo}. Vou seguir a partir disso."
+
+
+async def analyze_inbound_audio(
+    user_number: str,
+    file_extension: Optional[str] = None,
+    salesforce_download_path: Optional[str] = None,
+    local_audio_path: Optional[str] = None,
+    audio_bytes_base64: Optional[str] = None,
+    meta_media_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    content_version_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Transcreve áudio inbound via Gemini multimodal e classifica intenção.
+
+    Ver docstring do módulo pra fontes de bytes em ordem de preferência. A
+    bulk da lógica vive em `src.utils.inbound_media_shared`.
+    """
+    source = await resolve_inbound_bytes(
+        tool_name="analyze_inbound_audio",
+        meta_media_id=meta_media_id,
+        salesforce_download_path=salesforce_download_path,
+        content_version_id=content_version_id,
+        local_path=local_audio_path,
+        bytes_base64=audio_bytes_base64,
+        file_extension=file_extension,
+        accepted_extensions=_ACCEPTED_EXTENSIONS,
+        mime_to_extension=_MIME_TO_EXT,
+        max_bytes=_MAX_BYTES,
+        media_domain="audio",
+        local_path_reader=_read_audio_bytes,
+    )
+    if source.error_response is not None:
+        return source.error_response
+    audio_bytes = source.image_bytes  # MediaSourceResult.image_bytes é genérico
+    file_extension = source.file_extension
+
+    if not audio_bytes:
+        return deferred_no_bytes("audio")
+
+    # Anti-hallucination magic-byte check (ver inbound_media_shared docstring).
+    # Áudio em particular sofreu hallucination determinística no smoke test
+    # 2026-05-14 com JPG enviado como audio/ogg.
+    from src.utils.media_sniff import detect_media_subtype, matches_expected_extension
+
+    if not matches_expected_extension(audio_bytes, file_extension):
+        detected_subtype = detect_media_subtype(audio_bytes) or "unknown"
+        logger.warning(
+            f"analyze_inbound_audio: subtype dos magic bytes não bate com a "
+            f"extension declarada (detected_subtype={detected_subtype!r}, "
+            f"declared file_extension={file_extension!r}, "
+            f"first_bytes={audio_bytes[:8]!r}, message_id={message_id}, "
+            f"content_version_id={content_version_id})"
+        )
+        return rejected_subtype_mismatch(
+            detected=detected_subtype,
+            declared=file_extension or "",
+            message_id=message_id,
+            media_domain="audio",
+        )
+
+    if not env.GEMINI_API_KEY:
+        logger.warning("analyze_inbound_audio: GEMINI_API_KEY não configurada")
+        return deferred_no_gemini_key()
+
+    client = genai.Client(api_key=env.GEMINI_API_KEY)
+    mime = _mime_from_extension(file_extension)
+    gemini_result = await call_gemini_with_blob(
+        client=client,
+        model=_AUDIO_MODEL,
+        prompt_text=_ANALYSIS_PROMPT_PT_BR,
+        mime_type=mime,
+        blob_bytes=audio_bytes,
+        tool_name="analyze_inbound_audio",
+    )
+    if gemini_result.text is None:
+        return error_gemini_failed(
+            gemini_result.error_detail or "Gemini call failed", "audio"
+        )
+
+    analysis = parse_analysis_json(
+        gemini_result.text, tool_name="analyze_inbound_audio"
+    )
+    suggested_reply = _build_reply_from_analysis(analysis)
+
+    logger.info(
+        f"analyze_inbound_audio: user_number={user_number} "
+        f"categoria={analysis.get('categoria')!r} "
+        f"workflow={analysis.get('workflow_sugerido')!r} "
+        f"confianca={analysis.get('confianca')!r} "
+        f"message_id={message_id} content_version_id={content_version_id} "
+        f"transcricao_len={len((analysis.get('transcricao') or ''))}"
+    )
+
+    return {
+        "status": "transcribed",
+        "analysis": analysis,
+        "suggested_reply_pt_br": suggested_reply,
+    }
