@@ -195,16 +195,30 @@ class ReparoLuminariaWorkflow(
         if not state.payload:
             return
 
+        # WhatsApp Flow: processar qty_pattern antes dos aliases
+        if (
+            state.payload.get("_source") == "whatsapp_flow"
+            and "qty_pattern" in state.payload
+        ):
+            qty = state.payload["qty_pattern"]
+            if qty == "uma":
+                state.payload["luminaria_quantidade"] = "uma"
+            elif qty in ["bloco", "intercaladas"]:
+                state.payload["luminaria_quantidade"] = "grupo"
+                state.payload["luminaria_intercaladas_bloco"] = qty
+
         aliases = {
             "endereco": "address",
             "endereço": "address",
             "luminaria_endereco": "address",
             "defeito": "luminaria_defeito",
             "tipo_defeito": "luminaria_defeito",
+            "defect_type": "luminaria_defeito",  # WhatsApp Flow
             "quantidade": "luminaria_quantidade",
             "qtd": "luminaria_quantidade",
             "localizacao": "luminaria_localizacao",
             "localização": "luminaria_localizacao",
+            "location": "luminaria_localizacao",  # WhatsApp Flow
             "onde": "luminaria_localizacao",
             "intercaladas_bloco": "luminaria_intercaladas_bloco",
             "bloco_intercaladas": "luminaria_intercaladas_bloco",
