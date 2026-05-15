@@ -781,6 +781,51 @@ def create_app() -> FastMCP:
                 "message": result.get("message", "Vamos continuar por texto."),
             }
 
+    # Kill switch pra TTS — desliga geração de áudio + addendum sem
+    # redeploy. Default-on (env vazia/ausente OU != "false" = habilitado).
+    _tts_enabled = (os.environ.get("ENABLE_TTS_ADDENDUM") or "true").lower() != "false"
+
+    if _tts_enabled:
+
+        @conditional_mcp_tool(
+            "generate_audio_response",
+            description="""
+        Sintetiza um texto em audio OGG/Opus 16kHz mono (formato WhatsApp PTT)
+        pra responder o cidadao por voz, quando ele pediu modo audio.
+
+        QUANDO USAR:
+        - Apos detectar intent "responda por audio" / "manda audio" /
+          "quero ouvir" / "respnde em audio" (variantes), o LLM deve:
+          1. Compor a resposta normal em texto
+          2. Chamar esta tool com o texto da resposta
+          3. Anexar o `audio_base64` retornado a resposta final (campo
+             extra de telemetria ou via callback Mule)
+        - NAO chamar se cidadao nao pediu (texto eh default).
+        - NAO chamar pra ack curto ("Ok!", "Obrigado!") — desperdicio de
+          quota TTS pra fala que toma 1s.
+
+        ARGS:
+        - text (obrig): texto PT-BR a sintetizar. <=2000 chars recomendado;
+          aceita ate 5000 (limite Google TTS).
+
+        RETORNO: dict com:
+        - status: "ok" / "error" / "deferred"
+        - audio_base64: bytes do OGG codificados (se status=ok)
+        - mime_type: "audio/ogg"
+        - duration_estimate_s: estimativa pra UX
+        - voice_used: id da voz ("pt-BR-Neural2-A" default)
+        - error: descritivo se nao-ok
+
+        Kill switch: ENABLE_TTS_ADDENDUM=false desliga registro da tool +
+        prompt module audio_response (no engine).
+        """,
+        )
+        async def generate_audio_response(text: str) -> dict:
+            """Sintetiza texto em audio OGG/Opus PT-BR pra resposta por voz."""
+            from src.tools.tts import generate_audio_response as gar_impl
+
+            return await gar_impl(text=text)
+
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
