@@ -724,8 +724,13 @@ def create_app() -> FastMCP:
             )
             existing_state = await state_manager.load_service_state(service_name)
 
-            if source != "whatsapp_flow" and existing_state is None:
-                # Só envia flow se não veio de flow completion E não há workflow ativo
+            # Só bloqueia envio do flow se workflow estiver em progresso
+            workflow_is_active = (
+                existing_state is not None and existing_state.status == "progress"
+            )
+
+            if source != "whatsapp_flow" and not workflow_is_active:
+                # Envia flow se não veio de flow completion E não há workflow ativo
                 logger.info(
                     f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
                     f"service={service_name}, user={user_id}"
@@ -755,7 +760,7 @@ def create_app() -> FastMCP:
                     logger.warning(
                         f"[AUTO_FLOW] Falha ao enviar flow: {flow_result.get('error')}"
                     )
-            elif existing_state is not None and source != "whatsapp_flow":
+            elif workflow_is_active and source != "whatsapp_flow":
                 logger.info(
                     f"[AUTO_FLOW] Workflow já ativo para service={service_name}, "
                     f"user={user_id} - NÃO enviando flow novamente"
