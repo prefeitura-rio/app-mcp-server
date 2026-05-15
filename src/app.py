@@ -54,7 +54,9 @@ from src.tools.divida_ativa import (
 from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
+    BACKEND_MODE,
 )
+from src.tools.multi_step_service.core.state import StateManager
 from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service import (
     SGRCAPIService,
     AddressAPIService,
@@ -710,11 +712,20 @@ def create_app() -> FastMCP:
     ) -> dict:
         # WhatsApp Flow auto-trigger: se o serviço tem Flow cadastrado e ainda
         # não foi enviado (_source != "whatsapp_flow"), envia automaticamente
+        # APENAS se não houver um workflow já em andamento
         if service_name in FLOW_TEMPLATES:
             payload = payload or {}
             source = payload.get("_source")
 
-            if source != "whatsapp_flow":
+            # Verifica se já existe um workflow ativo antes de enviar flow
+            state_manager = StateManager(
+                user_id=user_id,
+                backend_mode=BACKEND_MODE,
+            )
+            existing_state = await state_manager.load_service_state(service_name)
+
+            if source != "whatsapp_flow" and existing_state is None:
+                # Só envia flow se não veio de flow completion E não há workflow ativo
                 logger.info(
                     f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
                     f"service={service_name}, user={user_id}"
@@ -744,6 +755,11 @@ def create_app() -> FastMCP:
                     logger.warning(
                         f"[AUTO_FLOW] Falha ao enviar flow: {flow_result.get('error')}"
                     )
+            elif existing_state is not None and source != "whatsapp_flow":
+                logger.info(
+                    f"[AUTO_FLOW] Workflow já ativo para service={service_name}, "
+                    f"user={user_id} - NÃO enviando flow novamente"
+                )
 
         # Prosseguir normalmente com o workflow
         response = await mss(
@@ -807,6 +823,7 @@ def create_app() -> FastMCP:
         """
         Consulta cadastro do cidadão por CPF válido no sistema da Prefeitura do Rio.
         Use apenas quando o usuário informou explicitamente um CPF com 11 dígitos.
+        Antes de chamar, remova pontuação e confirme que sobraram exatamente 11 dígitos.
         Não use para inscrição imobiliária, número de protocolo, guia ou outros identificadores.
         Retorna nome, e-mail e telefone se o cidadão estiver cadastrado.
         """
@@ -814,19 +831,34 @@ def create_app() -> FastMCP:
 
         try:
             validated = CPFPayload.model_validate({"cpf": cpf})
-            if not validated.cpf:
-                return {
-                    "found": False,
-                    "name": None,
-                    "email": None,
-                    "phone": None,
-                    "error": "CPF ausente ou inválido. Use esta ferramenta apenas com CPF válido de 11 dígitos.",
-                }
+        except Exception as e:
+            return {
+                "valid_cpf": False,
+                "found": None,
+                "name": None,
+                "email": None,
+                "phone": None,
+                "error": f"Entrada não é um CPF válido: {str(e)}",
+                "message": "Entrada inválida para consulta por CPF.",
+            }
 
+        if not validated.cpf:
+            return {
+                "valid_cpf": False,
+                "found": None,
+                "name": None,
+                "email": None,
+                "phone": None,
+                "error": "CPF ausente.",
+                "message": "Entrada inválida para consulta por CPF.",
+            }
+
+        try:
             sgrc = SGRCAPIService()
             data = await sgrc.get_user_info(validated.cpf)
             phones = data.get("phones") or []
             return {
+                "valid_cpf": True,
                 "found": bool(data.get("name") or data.get("email")),
                 "name": data.get("name"),
                 "email": data.get("email"),
@@ -837,8 +869,15 @@ def create_app() -> FastMCP:
                 isinstance(e.__cause__, httpx.HTTPStatusError)
                 and e.__cause__.response.status_code == 404
             ):
-                return {"found": False, "name": None, "email": None, "phone": None}
+                return {
+                    "valid_cpf": True,
+                    "found": False,
+                    "name": None,
+                    "email": None,
+                    "phone": None,
+                }
             return {
+                "valid_cpf": True,
                 "found": False,
                 "name": None,
                 "email": None,
