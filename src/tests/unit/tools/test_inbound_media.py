@@ -144,13 +144,15 @@ def test_register_unknown_is_accepted(inbound_media_module):
 
 def test_invalid_media_type_rejected(inbound_media_module):
     register = inbound_media_module.register_inbound_media
-    result = asyncio.run(register(media_type="video", user_number="5521989091014"))
+    # 'document' usado como tipo inválido (era 'video' antes; agora video é aceito).
+    result = asyncio.run(register(media_type="document", user_number="5521989091014"))
     assert result["status"] == "rejected"
-    assert "video" in result["error"]
+    assert "document" in result["error"]
     assert "accepted_types" in result
     assert set(result["accepted_types"]) == {
         "image",
         "audio",
+        "video",
         "location",
         "unsupported",
         "unknown",

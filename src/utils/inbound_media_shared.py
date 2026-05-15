@@ -100,6 +100,29 @@ def parse_analysis_json(
 # ----------------------------------------------------------------------------
 
 
+def _meta_cdn_failure_reply(media_domain: str) -> str:
+    """Texto pro cidadão quando Meta CDN não retornou bytes/MIME."""
+    if media_domain == "image":
+        return (
+            "Recebi sua imagem, mas tive um problema pra acessá-la agora. "
+            "Pode descrever em texto o que precisa pra eu te ajudar?"
+        )
+    if media_domain == "audio":
+        return (
+            "Recebi sua mensagem de voz, mas tive um problema pra acessá-la "
+            "agora. Pode descrever em texto o que precisa pra eu te ajudar?"
+        )
+    if media_domain == "video":
+        return (
+            "Recebi seu vídeo, mas tive um problema pra acessá-lo agora. "
+            "Pode descrever em texto o que precisa pra eu te ajudar?"
+        )
+    return (
+        "Recebi sua mídia, mas tive um problema pra acessá-la agora. "
+        "Pode descrever em texto o que precisa pra eu te ajudar?"
+    )
+
+
 @dataclass(frozen=True)
 class MediaSourceResult:
     """Output do resolver: (bytes ou None, file_extension derivada ou original,
@@ -200,11 +223,7 @@ async def resolve_inbound_bytes(
                     "Meta CDN não retornou bytes nem MIME "
                     "(token/timeout/expired); sem fallback configurado."
                 ),
-                "suggested_reply_pt_br": (
-                    f"Recebi sua {'imagem' if media_domain == 'image' else 'mensagem de voz'}"
-                    f", mas tive um problema pra acessá-la agora. "
-                    f"Pode descrever em texto o que precisa pra eu te ajudar?"
-                ),
+                "suggested_reply_pt_br": _meta_cdn_failure_reply(media_domain),
             },
         )
 
@@ -380,6 +399,11 @@ def deferred_no_bytes(media_domain: str) -> Dict[str, Any]:
             "Recebi seu áudio, mas não consegui ouvir agora. "
             "Pode escrever em texto o que precisa pra eu te ajudar?"
         )
+    elif media_domain == "video":
+        suggested = (
+            "Recebi seu vídeo, mas não consegui processá-lo agora. "
+            "Pode descrever em texto o que precisa pra eu te ajudar?"
+        )
     else:
         suggested = (
             "Recebi sua mídia, mas não consegui processá-la agora. "
@@ -414,6 +438,11 @@ def rejected_subtype_mismatch(
         suggested = (
             "Recebi sua mensagem, mas o arquivo de áudio não chegou em um "
             "formato que eu consigo entender. Pode me descrever em texto?"
+        )
+    elif media_domain == "video":
+        suggested = (
+            "Recebi sua mensagem, mas o arquivo de vídeo não chegou em um "
+            "formato que eu consigo analisar. Pode me descrever em texto?"
         )
     else:
         suggested = (
