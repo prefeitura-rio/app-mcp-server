@@ -44,6 +44,9 @@ from src.tools.inbound_media_vision import (
 from src.tools.inbound_media_audio import (
     analyze_inbound_audio as analyze_inbound_audio_impl,
 )
+from src.tools.inbound_media_video import (
+    analyze_inbound_video as analyze_inbound_video_impl,
+)
 from src.tools.luminaria_flow import process_flow_request
 from src.tools.whatsapp_flow_sender import send_flow_by_service, FLOW_TEMPLATES
 from src.tools.divida_ativa import (
@@ -345,7 +348,7 @@ def create_app() -> FastMCP:
           recebimento + obter `suggested_reply_pt_br`.
 
         ARGS:
-        - `media_type` (obrig): 'image' | 'audio' | 'location' | 'unsupported'.
+        - `media_type` (obrig): 'image' | 'audio' | 'video' | 'location' | 'unsupported'.
         - `user_number` (obrig): telefone E.164 sem '+' (ex: '5521989091014').
         - `message_id` (opt): UUID da ConversationEntry (audit).
         - `salesforce_download_path` (opt): caminho REST relativo ao SF instance
@@ -413,6 +416,12 @@ def create_app() -> FastMCP:
     # prompt module audio_inbound (no engine).
     _audio_enabled = (
         os.environ.get("ENABLE_AUDIO_ADDENDUM") or "true"
+    ).lower() != "false"
+
+    # Tool de análise de vídeo habilitada por padrão. Mesma semântica:
+    # ENABLE_VIDEO_ADDENDUM=false desliga registro + prompt module video_inbound.
+    _video_enabled = (
+        os.environ.get("ENABLE_VIDEO_ADDENDUM") or "true"
     ).lower() != "false"
 
     if _vision_enabled:
@@ -581,6 +590,72 @@ def create_app() -> FastMCP:
                 salesforce_download_path=salesforce_download_path,
                 local_audio_path=local_audio_path,
                 audio_bytes_base64=audio_bytes_base64,
+                meta_media_id=meta_media_id,
+                message_id=message_id,
+                content_version_id=content_version_id,
+            )
+
+    if _video_enabled:
+
+        @conditional_mcp_tool(
+            "analyze_inbound_video",
+            description="""
+        Analisa um VIDEO inbound do WhatsApp via Gemini multimodal (frames + audio)
+        e classifica o problema reportado. Chamar SEMPRE depois de
+        `register_inbound_media` quando `media_type='video'`, antes de
+        responder ao cidadao.
+
+        QUANDO USAR:
+        - Apos register_inbound_media de um video (WhatsApp limita 16MB; cabe
+          inline_data Gemini que aceita 20MB).
+        - Pra obter descricao visual + transcricao do audio (se houver) +
+          workflow sugerido.
+
+        ARGS:
+        - `user_number` (obrig): telefone E.164 sem '+'.
+        - `file_extension` (obrig): 'mp4' | 'm4v' | 'mov' | '3gp' | '3gpp' | 'webm'.
+        - `meta_media_id` (opt, PREFERIDO via `/meta/webhook`, ADR-017): Id de
+          midia do Graph API (`messages[].video.id`). Tool baixa via Graph API
+          com WA_TOKEN.
+        - `salesforce_download_path` (opt, UWC legacy): caminho REST relativo
+          do ContentVersion. Requer `content_version_id` cross-check.
+        - `local_video_path` (opt): testes locais em /tmp (requer IS_LOCAL=true).
+        - `video_bytes_base64` (opt): bytes inline. Pouco confiavel >~50KB —
+          LLM trunca strings longas.
+        - `message_id` (opt): correlacao com register_inbound_media (audit).
+        - `content_version_id` (cond. obrig): quando salesforce_download_path
+          presente, obrigatorio (anti prompt-injection).
+
+        PRIORIDADE de fonte: meta_media_id → salesforce_download_path
+        (+content_version_id) → video_bytes_base64 → local_video_path.
+
+        RETORNO: dict com `status='analyzed'`, `analysis` (descricao,
+        problema_detectado, categoria, detalhes, transcricao_audio,
+        workflow_sugerido, confianca), e `suggested_reply_pt_br` adaptado.
+
+        Use `analysis.workflow_sugerido` pra decidir proximo passo:
+        - 'reparo_luminaria' → confirme + chame multi_step_service(reparo_luminaria).
+        - 'poda_de_arvore'   → confirme + chame multi_step_service(poda_de_arvore).
+        - 'nenhum'           → use `analysis.transcricao_audio` (se houver) +
+          `analysis.descricao` pra conduzir atendimento; nao peca pra repetir.
+        """,
+        )
+        async def analyze_inbound_video(
+            user_number: str,
+            file_extension: Optional[str] = None,
+            salesforce_download_path: Optional[str] = None,
+            local_video_path: Optional[str] = None,
+            video_bytes_base64: Optional[str] = None,
+            meta_media_id: Optional[str] = None,
+            message_id: Optional[str] = None,
+            content_version_id: Optional[str] = None,
+        ) -> dict:
+            return await analyze_inbound_video_impl(
+                user_number=user_number,
+                file_extension=file_extension or "",
+                salesforce_download_path=salesforce_download_path,
+                local_video_path=local_video_path,
+                video_bytes_base64=video_bytes_base64,
                 meta_media_id=meta_media_id,
                 message_id=message_id,
                 content_version_id=content_version_id,

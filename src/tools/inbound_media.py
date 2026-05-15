@@ -23,7 +23,14 @@ from typing import Any, Dict, Optional
 
 from src.utils.log import logger
 
-_ACCEPTED_MEDIA_TYPES = {"image", "audio", "location", "unsupported", "unknown"}
+_ACCEPTED_MEDIA_TYPES = {
+    "image",
+    "audio",
+    "video",
+    "location",
+    "unsupported",
+    "unknown",
+}
 
 # Respostas PT-BR sugeridas pelo agent IA quando a mídia recebida ainda não
 # tem caminho de processamento ativo. O LLM pode adaptar mas o conteúdo aqui
@@ -36,6 +43,10 @@ _SUGGESTED_REPLIES_PT_BR = {
     "audio": (
         "Recebi seu áudio! Estou aprendendo a entender mensagens de voz — "
         "por enquanto, pode escrever sua mensagem em texto?"
+    ),
+    "video": (
+        "Recebi seu vídeo! Pode descrever em texto o que está mostrando "
+        "enquanto eu processo o vídeo aqui?"
     ),
     "location": (
         "Recebi sua localização! Por enquanto preciso do endereço em texto "

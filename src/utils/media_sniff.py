@@ -62,6 +62,13 @@ _EXTENSION_TO_SUBTYPE = {
     "flac": "flac",
     "aiff": "aiff",
     "aif": "aiff",
+    # vídeos
+    "mp4": "mp4",
+    "m4v": "mp4",
+    "mov": "mov",
+    "3gp": "3gp",
+    "3gpp": "3gp",
+    "webm": "webm",
 }
 
 
@@ -74,10 +81,11 @@ def detect_media_subtype(data: bytes) -> Optional[str]:
 
     * Imagens: ``"jpeg"``, ``"png"``, ``"gif"``, ``"webp"``
     * Áudios: ``"ogg"``, ``"mp3"``, ``"aac"``, ``"wav"``, ``"flac"``, ``"aiff"``
+    * Vídeos: ``"mp4"``, ``"mov"``, ``"3gp"``, ``"webm"``
 
     A função é proposital e estritamente defensiva: só reconhece formatos
-    que o restante do código aceita. Qualquer outro tipo (PDF, ZIP, vídeo
-    container, etc.) volta como ``None``.
+    que o restante do código aceita. Qualquer outro tipo (PDF, ZIP, etc.)
+    volta como ``None``.
     """
     if not data or len(data) < 4:
         return None
@@ -133,13 +141,68 @@ def detect_media_subtype(data: bytes) -> Optional[str]:
     ):
         return "aiff"
 
+    # --- Video headers ---
+    # ISO base media format (MP4/MOV/3GP/HEIF): marker `ftyp` em offset 4.
+    # Brand (offset 8, 4 bytes) discrimina:
+    #   - mp4: mp41, mp42, isom, iso2, iso5, avc1, dash, mmp4, M4V*
+    #   - mov: qt
+    #   - 3gp: 3g (prefix) — 3gp1, 3gp4, 3gp5, 3gp6, 3gpp, 3g2a, 3g2b
+    # Brand desconhecida (incluindo HEIC/AVIF `heic`/`avif`/`mif1`/`msf1`)
+    # retorna None — defensivo, evita classificar imagem HEIF como vídeo
+    # mp4 e mandar bytes errados pro Gemini (Codex P2 2026-05-15).
+    if _starts_with(data, b"ftyp", offset=4):
+        if len(data) >= 12:
+            brand = data[8:12]
+            # MP4-family brands (ISO base media format). Inclui iso2-iso6
+            # (versões), mp7N (MPEG-7), MP4 variants, AVC, DASH, etc.
+            mp4_brands = {
+                b"mp41",
+                b"mp42",
+                b"isom",
+                b"iso2",
+                b"iso3",
+                b"iso4",
+                b"iso5",
+                b"iso6",
+                b"iso7",
+                b"iso8",
+                b"iso9",
+                b"avc1",
+                b"dash",
+                b"mmp4",
+                b"M4V ",
+                b"M4VP",
+                b"M4VH",
+                b"MSNV",
+            }
+            if (
+                brand in mp4_brands
+                or brand.startswith(b"mp4")
+                or brand.startswith(b"mp7")
+            ):
+                return "mp4"
+            if brand.startswith(b"qt"):
+                return "mov"
+            if brand.startswith(b"3g"):
+                return "3gp"
+            # HEIF/AVIF brands (`heic`, `heix`, `avif`, `mif1`, `msf1`) NÃO
+            # são vídeo — explicitamente recusar pra evitar enviar imagem
+            # HEIF como video/mp4 pro Gemini. Codex P2 2026-05-15.
+        # Brand desconhecida — fail closed (None) em vez de default mp4.
+        return None
+    # WebM / Matroska: EBML header 1A 45 DF A3. DocType específico
+    # (`webm` vs `matroska`) vive 30-60 bytes adentro; pra propósitos
+    # defensivos do gate, qualquer EBML conta como webm aceitável.
+    if _starts_with(data, b"\x1a\x45\xdf\xa3"):
+        return "webm"
+
     return None
 
 
 def detect_media_kind(data: bytes) -> Optional[str]:
     """
-    Retorna ``'image'`` ou ``'audio'`` baseado nos primeiros bytes, ou
-    ``None`` se não bate nenhum tipo conhecido. Wrapper de
+    Retorna ``'image'``, ``'audio'`` ou ``'video'`` baseado nos primeiros
+    bytes, ou ``None`` se não bate nenhum tipo conhecido. Wrapper de
     :func:`detect_media_subtype` mantido para retrocompatibilidade.
     """
     subtype = detect_media_subtype(data)
@@ -149,6 +212,8 @@ def detect_media_kind(data: bytes) -> Optional[str]:
         return "image"
     if subtype in {"ogg", "mp3", "aac", "wav", "flac", "aiff"}:
         return "audio"
+    if subtype in {"mp4", "mov", "3gp", "webm"}:
+        return "video"
     return None
 
 
