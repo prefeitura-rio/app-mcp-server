@@ -724,9 +724,19 @@ def create_app() -> FastMCP:
             )
             existing_state = await state_manager.load_service_state(service_name)
 
-            # Só bloqueia envio do flow se workflow estiver em progresso
+            # Se payload está vazio (exceto _source), é uma NOVA solicitação
+            # Nesse caso, limpa state antigo e envia flow
+            is_new_request = len(payload) == 0 or (
+                len(payload) == 1 and "_source" in payload
+            )
+
+            # Só bloqueia envio do flow se:
+            # 1. Workflow estiver em progresso E
+            # 2. Payload NÃO está vazio (continuar workflow existente)
             workflow_is_active = (
-                existing_state is not None and existing_state.status == "progress"
+                existing_state is not None
+                and existing_state.status == "progress"
+                and not is_new_request
             )
 
             if source != "whatsapp_flow" and not workflow_is_active:
