@@ -1,40 +1,57 @@
 """
-Protótipo de análise visual pra mídia inbound do WhatsApp (Gemini Vision).
+Análise visual pra mídia inbound do WhatsApp (Gemini Vision).
 
 Estende o `register_inbound_media` (audit-only stub) com análise da imagem
 de fato via Gemini multimodal. O agente pode chamar AMBAS no mesmo turn:
   1. register_inbound_media → audit + ack
   2. analyze_inbound_image  → análise visual → workflow apropriado
 
-Em produção a imagem chega via `salesforce_download_path` (REST do SF). Aqui
-no protótipo a tool aceita também `local_image_path` (file:// ou caminho
-absoluto) pra permitir teste local sem credencial Salesforce.
+Caminhos de fonte de bytes (em ordem de preferência):
+  - `meta_media_id` (canal canônico, ADR-017) → Graph API + Meta CDN
+  - `salesforce_download_path` (UWC legacy, ADR-014) → SF REST OAuth
+  - `image_bytes_base64` (testes manuais)
+  - `local_image_path` (sandbox /tmp, IS_LOCAL=true)
 
-Quando o salesforce_download_path é usado, esta tool delega ao chamador
-(Engine) o download e injeta os bytes via `image_bytes_base64` — protocolo
-proposto pra fase 2 quando o Engine team incluir essa etapa upstream.
+Refator 2026-05-14 noite (ADR-018): bulk da lógica multi-source + magic-byte +
+Gemini call extraído pra `src/utils/inbound_media_shared.py`. Este arquivo
+fica só com o que é vision-specific: prompt, allowlist, reply builder.
 """
 
-import base64
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from google import genai
-from google.genai import types
 
 from src.config import env
+from src.utils.inbound_media_shared import (
+    call_gemini_with_blob,
+    deferred_no_bytes,
+    deferred_no_gemini_key,
+    error_gemini_failed,
+    parse_analysis_json,
+    rejected_subtype_mismatch,
+    resolve_inbound_bytes,
+)
 from src.utils.log import logger
 
-# Diretório seguro pra `local_image_path` (sandbox de testes locais). Caminhos
-# fora desse prefixo são rejeitados em produção pra evitar arbitrary file read
-# via prompt injection no MCP tool. Ver _read_image_bytes. Resolvido (.resolve)
-# pra normalizar symlinks tipo `/tmp` → `/private/tmp` no macOS.
+# Sandbox seguro pra `local_image_path` em testes locais. Caminhos fora
+# desse prefixo são rejeitados em produção. Resolvido pra normalizar symlinks
+# (`/tmp` → `/private/tmp` no macOS).
 _LOCAL_IMAGE_PATH_ALLOWED_PREFIX = Path("/tmp").resolve()
 
 
 _VISION_MODEL = "gemini-2.5-flash"
 _ACCEPTED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
-_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — limite do inline_data do Gemini
+_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — limite inline_data Gemini
+
+# MIME do Graph API → extension canônica (strip codec/charset params no caller)
+_MIME_TO_EXT = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
 
 _ANALYSIS_PROMPT_PT_BR = """\
 Você é um classificador de serviços da Prefeitura do Rio de Janeiro.
@@ -68,15 +85,13 @@ REGRAS:
 
 
 def _read_image_bytes(local_image_path: Optional[str]) -> Optional[bytes]:
-    """Lê os bytes do arquivo local (sem fazer download de SF).
+    """Lê os bytes do arquivo local com checks anti-arbitrary-read.
 
-    Como esta tool é exposta via MCP, qualquer caller (incluindo prompt
-    injection) pode passar um path arbitrário. Restringimos a leitura a:
+    Restringe a leitura a:
       - somente quando `IS_LOCAL=true` no ambiente, E
       - somente paths dentro de `_LOCAL_IMAGE_PATH_ALLOWED_PREFIX` (resolvido
         contra symlinks).
-    Em produção (IS_LOCAL=false), use `image_bytes_base64` injetado pelo
-    Engine após o fetch do Salesforce. Ver inbound_media_vision.py docstring.
+    Em produção (IS_LOCAL=false), retorna None.
     """
     if not local_image_path:
         return None
@@ -108,355 +123,18 @@ def _read_image_bytes(local_image_path: Optional[str]) -> Optional[bytes]:
     return path.read_bytes()
 
 
-def _path_matches_content_version_id(path: str, content_version_id: str) -> bool:
-    """Cross-check: extrai o Id embarcado no salesforce_download_path e
-    confirma que bate com o content_version_id do marker.
-
-    Salesforce ContentVersion Ids têm forma 15- ou 18-char alfanuméricos.
-    O 15-char é prefix do 18-char (sufixo 3-char é checksum case-sensitive).
-    Por isso comparamos só os primeiros 15 chars de cada — independente de
-    qual lado é 15 ou 18.
-    """
-    if not path or not content_version_id:
-        return False
-    try:
-        # Path: .../sobjects/ContentVersion/<Id>/VersionData
-        parts = path.rstrip("/").split("/")
-        if "ContentVersion" not in parts:
-            return False
-        idx = parts.index("ContentVersion")
-        if idx + 1 >= len(parts):
-            return False
-        path_id = parts[idx + 1]
-    except (ValueError, IndexError):
-        return False
-    return path_id[:15] == content_version_id[:15]
-
-
 def _mime_from_extension(file_extension: Optional[str]) -> str:
+    """Extension canônica → MIME pro Gemini blob (inline_data).
+
+    Default sensato pra extensions não-mapeadas (Gemini é tolerante a
+    `image/jpeg` mesmo pra PNG/WebP, então prefere isso a falhar).
+    """
     ext = (file_extension or "jpg").lower().lstrip(".")
     if ext == "jpg":
         ext = "jpeg"
     if ext not in {"jpeg", "png", "webp", "gif"}:
-        ext = "jpeg"  # default razoável
+        ext = "jpeg"
     return f"image/{ext}"
-
-
-def _parse_analysis(text: str) -> Dict[str, Any]:
-    """Tenta extrair JSON da resposta do Gemini, com fallback se vier prosa."""
-    import json
-    import re
-
-    if not text:
-        return {"raw": text, "parsed": False}
-    cleaned = text.strip()
-    # remove fences ```json ... ```
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        parsed = json.loads(cleaned)
-        if isinstance(parsed, dict):
-            return {**parsed, "parsed": True}
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            try:
-                parsed = json.loads(match.group(0))
-                if isinstance(parsed, dict):
-                    return {**parsed, "parsed": True}
-            except json.JSONDecodeError:
-                pass
-    logger.warning(f"analyze_inbound_image: JSON inválido do Gemini: {text[:200]}")
-    return {"raw": text, "parsed": False}
-
-
-async def analyze_inbound_image(
-    user_number: str,
-    file_extension: str,
-    local_image_path: Optional[str] = None,
-    image_bytes_base64: Optional[str] = None,
-    salesforce_download_path: Optional[str] = None,
-    meta_media_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    content_version_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Analisa visualmente uma imagem inbound via Gemini Vision e classifica
-    o problema reportado pelo cidadão.
-
-    Args:
-        user_number: telefone E.164 sem '+'.
-        file_extension: 'jpg' | 'png' | 'webp' | 'gif'.
-        local_image_path: caminho local pro arquivo (file:// ou absoluto).
-            Usado em testes locais (sandbox /tmp; requer IS_LOCAL=true).
-        image_bytes_base64: bytes em base64 inline. Pouco prático em fluxo
-            real porque o LLM trunca strings longas em tool args (>~10KB) —
-            preferir salesforce_download_path / meta_media_id quando vier
-            do canal real.
-        salesforce_download_path: caminho REST relativo do ContentVersion
-            (ex: ``/services/data/v62.0/sobjects/ContentVersion/068.../VersionData``).
-            Caminho UWC legacy — Apex baixou via Connect API e atachou em
-            ContentVersion. Esta tool autentica via OAuth Client
-            Credentials e baixa direto. ADR-014.
-        meta_media_id: Id de mídia retornado no Meta webhook direto
-            (``messages[].<type>.id``). Usado quando o inbound vem via
-            `/meta/webhook` (Mule), não UWC. Tool faz 2 GETs no Graph API
-            (metadata + signed CDN URL) com `WA_TOKEN`. ADR-017.
-        message_id, content_version_id: correlação com register_inbound_media.
-
-    Prioridade de fonte (primeiro que retornar bytes ganha):
-        ``meta_media_id`` → ``salesforce_download_path`` →
-        ``image_bytes_base64`` → ``local_image_path``
-
-    Returns:
-        Dict com 'status', 'analysis' (descricao, categoria, workflow_sugerido,
-        confianca etc), 'suggested_reply_pt_br' adaptado ao resultado.
-    """
-    image_bytes: Optional[bytes] = None
-
-    # 0) meta_media_id — caminho Meta webhook direto (ADR-017). Maior
-    #    prioridade quando presente. Faz download + extrai MIME real;
-    #    deriva file_extension do MIME pra que o magic-byte check
-    #    downstream funcione independente do que o caller passou.
-    if meta_media_id:
-        from src.utils.meta_cdn_client import MetaCDNError, download_meta_media
-
-        try:
-            image_bytes, _meta_mime = await download_meta_media(meta_media_id)
-        except MetaCDNError as exc:
-            logger.warning(
-                f"analyze_inbound_image: download Meta CDN falhou "
-                f"(meta_media_id={meta_media_id!r}): {exc}; "
-                f"caindo em salesforce_download_path/base64/local se disponíveis."
-            )
-        else:
-            # Strip codec/charset params do MIME (ex: "image/webp; charset=utf-8")
-            _mime_clean = (_meta_mime or "").split(";")[0].strip().lower()
-            _mime_to_ext = {
-                "image/jpeg": "jpg",
-                "image/jpg": "jpg",
-                "image/png": "png",
-                "image/webp": "webp",
-                "image/gif": "gif",
-            }
-            _ext_from_mime = _mime_to_ext.get(_mime_clean)
-            if _ext_from_mime:
-                # MIME do Meta é autoritativo; sobrescreve caller (ele pode
-                # ter passado errado ou passado um MIME string em vez de ext).
-                file_extension = _ext_from_mime
-            elif not file_extension:
-                # MIME desconhecido + caller não passou nada → reject
-                logger.warning(
-                    f"analyze_inbound_image: MIME Meta CDN inesperado "
-                    f"({_meta_mime!r}) e file_extension ausente."
-                )
-                return {
-                    "status": "rejected",
-                    "error": (
-                        f"MIME Meta CDN não suportado: {_meta_mime!r}. "
-                        f"Aceitos: image/jpeg, image/png, image/webp, image/gif."
-                    ),
-                    "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
-                }
-
-    # Caso especial: Meta-only chamada (meta_media_id presente, file_extension
-    # vazio) falhou no download Meta CDN → file_extension continua vazio + sem
-    # bytes. Tratar como deferred (operacional) ao invés de rejected (caller-fault).
-    if meta_media_id and not file_extension and image_bytes is None:
-        logger.info(
-            f"analyze_inbound_image: Meta CDN download falhou pra "
-            f"meta_media_id={meta_media_id!r} sem file_extension; "
-            f"retornando deferred."
-        )
-        return {
-            "status": "deferred",
-            "error": (
-                "Meta CDN não retornou bytes nem MIME (token/timeout/expired); "
-                "sem fallback configurado."
-            ),
-            "suggested_reply_pt_br": (
-                "Recebi sua imagem, mas tive um problema pra acessá-la agora. "
-                "Pode descrever em texto o que precisa pra eu te ajudar?"
-            ),
-        }
-
-    if (file_extension or "").lower().lstrip(".") not in _ACCEPTED_EXTENSIONS:
-        return {
-            "status": "rejected",
-            "error": f"extensão não suportada pra análise: {file_extension!r}",
-            "accepted_extensions": sorted(_ACCEPTED_EXTENSIONS),
-        }
-
-    # Fallbacks abaixo só rodam se meta_media_id ausente ou seu download
-    # falhou (image_bytes ainda None).
-
-    # 1) salesforce_download_path — caminho UWC legacy (ADR-014). Apex
-    #    baixou via Connect API e atachou em ContentVersion. Usa wrapper
-    #    async que offload o httpx sync pra thread, pra não bloquear o
-    #    event loop do FastMCP.
-    if image_bytes is None and salesforce_download_path:
-        # Cross-check defensivo: `content_version_id` é OBRIGATÓRIO quando
-        # `salesforce_download_path` é usado, e o Id embarcado no path tem
-        # que bater com ele. Sem isso, um LLM (com prompt injection ou
-        # marker stale) poderia apontar pro path de OUTRO arquivo —
-        # incluindo omitir o `content_version_id` pra burlar o check.
-        # Rejeitamos os 2 casos:
-        #   - content_version_id ausente → skip download (não consigo
-        #     correlacionar o path com o que o marker registra como audit)
-        #   - Id no path ≠ content_version_id → skip download (divergência)
-        if not content_version_id:
-            logger.warning(
-                "analyze_inbound_image: salesforce_download_path sem "
-                "content_version_id pra cross-check; ignorando download "
-                "pra evitar fetch de arquivo arbitrário."
-            )
-        elif not _path_matches_content_version_id(
-            salesforce_download_path, content_version_id
-        ):
-            logger.warning(
-                f"analyze_inbound_image: salesforce_download_path Id mismatch "
-                f"vs content_version_id={content_version_id!r}; ignorando "
-                f"download pra evitar fetch de arquivo divergente."
-            )
-        else:
-            from src.utils.salesforce_client import download_content_version_async
-
-            image_bytes = await download_content_version_async(salesforce_download_path)
-            if image_bytes is None:
-                logger.info(
-                    "analyze_inbound_image: salesforce_download_path falhou; "
-                    "caindo em image_bytes_base64/local_image_path se disponíveis."
-                )
-
-    # 2) image_bytes_base64 — alternativa pra testes ou Engine pré-fetch
-    if image_bytes is None and image_bytes_base64:
-        try:
-            image_bytes = base64.b64decode(image_bytes_base64)
-        except Exception as e:
-            return {"status": "error", "error": f"base64 inválido: {e}"}
-        # _read_image_bytes já aplica _MAX_BYTES em local_image_path; pra base64
-        # validamos aqui depois do decode, antes de mandar pro Gemini.
-        if len(image_bytes) > _MAX_BYTES:
-            logger.warning(
-                f"analyze_inbound_image: image_bytes_base64 {len(image_bytes)} "
-                f"bytes > limite {_MAX_BYTES}"
-            )
-            return {
-                "status": "rejected",
-                "error": f"imagem excede {_MAX_BYTES} bytes (limite inline do Gemini)",
-                "suggested_reply_pt_br": (
-                    "Recebi sua imagem, mas ela está muito grande pra eu analisar. "
-                    "Pode mandar uma foto com qualidade menor?"
-                ),
-            }
-
-    # 3) local_image_path — sandbox /tmp em desenvolvimento
-    if image_bytes is None and local_image_path:
-        image_bytes = _read_image_bytes(local_image_path)
-
-    if not image_bytes:
-        return {
-            "status": "deferred",
-            "error": (
-                "nenhuma fonte de bytes disponível: meta_media_id "
-                "(token/CDN falhou), salesforce_download_path (faltam env "
-                "vars ou download falhou), image_bytes_base64 (ausente/"
-                "inválido), local_image_path (fora de sandbox/IS_LOCAL)"
-            ),
-            "suggested_reply_pt_br": (
-                "Recebi sua imagem, mas não consegui analisá-la agora. "
-                "Pode descrever em texto o que precisa pra eu te ajudar?"
-            ),
-        }
-
-    # Anti-hallucination: confere magic bytes batem com tipo declarado.
-    # Sem isso, Gemini com bytes errados (ex: OGG enviado como image/jpeg
-    # por causa de Apex correlation race) pode alucinar uma descrição
-    # visual plausível. Comportamento observado em smoke test 2026-05-14
-    # com analyze_inbound_audio. Rejeitar aqui é mais seguro do que
-    # confiar que o LLM downstream vai pegar via campos parsed=false.
-    from src.utils.media_sniff import detect_media_subtype, matches_expected_extension
-
-    if not matches_expected_extension(image_bytes, file_extension):
-        detected_subtype = detect_media_subtype(image_bytes) or "unknown"
-        logger.warning(
-            f"analyze_inbound_image: subtype dos magic bytes não bate com a "
-            f"extension declarada (detected_subtype={detected_subtype!r}, "
-            f"declared file_extension={file_extension!r}, "
-            f"first_bytes={image_bytes[:8]!r}, message_id={message_id}, "
-            f"content_version_id={content_version_id})"
-        )
-        return {
-            "status": "rejected",
-            "error": (
-                f"bytes baixados não batem com extension declarada "
-                f"(detected={detected_subtype!r}, declared={file_extension!r}). "
-                f"Rejeitando pra evitar análise alucinada pelo Gemini."
-            ),
-            "suggested_reply_pt_br": (
-                "Recebi sua mensagem, mas o arquivo de imagem não chegou em um "
-                "formato que eu consigo analisar. Pode me descrever em texto "
-                "o que você precisa?"
-            ),
-        }
-
-    if not env.GEMINI_API_KEY:
-        logger.warning("analyze_inbound_image: GEMINI_API_KEY não configurada")
-        return {
-            "status": "deferred",
-            "error": "GEMINI_API_KEY ausente",
-            "suggested_reply_pt_br": (
-                "Recebi sua imagem! Por enquanto, pode descrever em texto?"
-            ),
-        }
-
-    client = genai.Client(api_key=env.GEMINI_API_KEY)
-    mime = _mime_from_extension(file_extension)
-    try:
-        response = await client.aio.models.generate_content(
-            model=_VISION_MODEL,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(text=_ANALYSIS_PROMPT_PT_BR),
-                        types.Part(
-                            inline_data=types.Blob(mime_type=mime, data=image_bytes)
-                        ),
-                    ],
-                )
-            ],
-        )
-    except Exception as e:
-        logger.error(f"analyze_inbound_image: Gemini falhou: {e}")
-        return {
-            "status": "error",
-            "error": f"{type(e).__name__}: {e}",
-            "suggested_reply_pt_br": (
-                "Recebi sua imagem, mas tive um problema pra analisar agora. "
-                "Pode descrever em texto o que precisa?"
-            ),
-        }
-
-    raw_text = (response.text or "").strip()
-    analysis = _parse_analysis(raw_text)
-
-    suggested_reply = _build_reply_from_analysis(analysis)
-
-    logger.info(
-        f"analyze_inbound_image: user_number={user_number} "
-        f"categoria={analysis.get('categoria')!r} "
-        f"workflow={analysis.get('workflow_sugerido')!r} "
-        f"confianca={analysis.get('confianca')!r} "
-        f"message_id={message_id} content_version_id={content_version_id}"
-    )
-
-    return {
-        "status": "analyzed",
-        "analysis": analysis,
-        "suggested_reply_pt_br": suggested_reply,
-    }
 
 
 def _build_reply_from_analysis(analysis: Dict[str, Any]) -> str:
@@ -487,3 +165,101 @@ def _build_reply_from_analysis(analysis: Dict[str, Any]) -> str:
         "Esse tipo de problema ainda não tenho um fluxo automático — "
         "pode me descrever em texto pra eu te encaminhar?"
     )
+
+
+async def analyze_inbound_image(
+    user_number: str,
+    file_extension: Optional[str] = None,
+    local_image_path: Optional[str] = None,
+    image_bytes_base64: Optional[str] = None,
+    salesforce_download_path: Optional[str] = None,
+    meta_media_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    content_version_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Analisa imagem inbound via Gemini Vision e classifica problema reportado.
+
+    Ver docstring do módulo pra fontes de bytes em ordem de preferência. A
+    bulk da lógica vive em `src.utils.inbound_media_shared` — este wrapper
+    só passa config + chama helpers.
+    """
+    source = await resolve_inbound_bytes(
+        tool_name="analyze_inbound_image",
+        meta_media_id=meta_media_id,
+        salesforce_download_path=salesforce_download_path,
+        content_version_id=content_version_id,
+        local_path=local_image_path,
+        bytes_base64=image_bytes_base64,
+        file_extension=file_extension,
+        accepted_extensions=_ACCEPTED_EXTENSIONS,
+        mime_to_extension=_MIME_TO_EXT,
+        max_bytes=_MAX_BYTES,
+        media_domain="image",
+        local_path_reader=_read_image_bytes,
+    )
+    if source.error_response is not None:
+        return source.error_response
+    image_bytes = source.image_bytes
+    file_extension = source.file_extension
+
+    if not image_bytes:
+        return deferred_no_bytes("image")
+
+    # Anti-hallucination: magic bytes batem com tipo declarado?
+    # Sem isso, Gemini com bytes errados (OGG enviado como image/jpeg via
+    # Apex correlation race) pode alucinar análise visual plausível.
+    from src.utils.media_sniff import detect_media_subtype, matches_expected_extension
+
+    if not matches_expected_extension(image_bytes, file_extension):
+        detected_subtype = detect_media_subtype(image_bytes) or "unknown"
+        logger.warning(
+            f"analyze_inbound_image: subtype dos magic bytes não bate com a "
+            f"extension declarada (detected_subtype={detected_subtype!r}, "
+            f"declared file_extension={file_extension!r}, "
+            f"first_bytes={image_bytes[:8]!r}, message_id={message_id}, "
+            f"content_version_id={content_version_id})"
+        )
+        return rejected_subtype_mismatch(
+            detected=detected_subtype,
+            declared=file_extension or "",
+            message_id=message_id,
+            media_domain="image",
+        )
+
+    if not env.GEMINI_API_KEY:
+        logger.warning("analyze_inbound_image: GEMINI_API_KEY não configurada")
+        return deferred_no_gemini_key()
+
+    client = genai.Client(api_key=env.GEMINI_API_KEY)
+    mime = _mime_from_extension(file_extension)
+    gemini_result = await call_gemini_with_blob(
+        client=client,
+        model=_VISION_MODEL,
+        prompt_text=_ANALYSIS_PROMPT_PT_BR,
+        mime_type=mime,
+        blob_bytes=image_bytes,
+        tool_name="analyze_inbound_image",
+    )
+    if gemini_result.text is None:
+        return error_gemini_failed(
+            gemini_result.error_detail or "Gemini call failed", "image"
+        )
+
+    analysis = parse_analysis_json(
+        gemini_result.text, tool_name="analyze_inbound_image"
+    )
+    suggested_reply = _build_reply_from_analysis(analysis)
+
+    logger.info(
+        f"analyze_inbound_image: user_number={user_number} "
+        f"categoria={analysis.get('categoria')!r} "
+        f"workflow={analysis.get('workflow_sugerido')!r} "
+        f"confianca={analysis.get('confianca')!r} "
+        f"message_id={message_id} content_version_id={content_version_id}"
+    )
+
+    return {
+        "status": "analyzed",
+        "analysis": analysis,
+        "suggested_reply_pt_br": suggested_reply,
+    }

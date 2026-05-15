@@ -96,6 +96,14 @@ def audio_module(monkeypatch, tmp_path):
     _ensure_package("src.tools", PROJECT_ROOT / "src" / "tools")
     _ensure_package("src.utils", PROJECT_ROOT / "src" / "utils")
 
+    # Force fresh re-import do shared (ele importa logger no top-level, então
+    # se sobrou de fixture anterior, logger aponta pro real loguru).
+    for _stale_mod in (
+        "src.utils.inbound_media_shared",
+        "src.utils.meta_cdn_client",
+    ):
+        sys.modules.pop(_stale_mod, None)
+
     spec = importlib.util.spec_from_file_location(
         "src.tools.inbound_media_audio",
         PROJECT_ROOT / "src" / "tools" / "inbound_media_audio.py",
