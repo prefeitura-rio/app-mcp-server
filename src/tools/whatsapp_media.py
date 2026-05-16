@@ -30,6 +30,8 @@ _VALID_TYPES = {
     "location",
     "contacts",
     "interactive",
+    "template",
+    "reaction",
 }
 
 _UPLOAD_TYPES = {"audio", "image", "video", "document", "sticker"}
@@ -48,6 +50,9 @@ def build_whatsapp_media_envelope(
     address: Optional[str] = None,
     contacts: Optional[list[Any]] = None,
     interactive: Optional[dict[str, Any]] = None,
+    template: Optional[dict[str, Any]] = None,
+    reaction_to_message_id: Optional[str] = None,
+    emoji: Optional[str] = None,
 ) -> dict[str, Any]:
     """Valida os args e retorna envelope canônico que Mule consome.
 
@@ -115,6 +120,32 @@ def build_whatsapp_media_envelope(
             "status": "error",
             "error": "type=interactive requer `interactive` object não-vazio",
         }
+    if type == "template" and (not template or not template.get("name")):
+        return {
+            "status": "error",
+            "error": (
+                "type=template requer `template` object com pelo menos "
+                "`name` (do template aprovado no Meta Business Manager) e "
+                "`language` (e.g. {code: 'pt_BR'})."
+            ),
+        }
+    if type == "reaction":
+        if not reaction_to_message_id:
+            return {
+                "status": "error",
+                "error": (
+                    "type=reaction requer `reaction_to_message_id` "
+                    "(wamid da mensagem inbound do cidadão que será reagida)."
+                ),
+            }
+        if not emoji:
+            return {
+                "status": "error",
+                "error": (
+                    "type=reaction requer `emoji` (string Unicode com 1 "
+                    "emoji, e.g. '👍' '❤️'). Vazio = remove reação existente."
+                ),
+            }
 
     envelope: dict[str, Any] = {"status": "ok", "type": type}
     if base64:
@@ -139,4 +170,10 @@ def build_whatsapp_media_envelope(
         envelope["contacts"] = contacts
     if interactive is not None:
         envelope["interactive"] = interactive
+    if template is not None:
+        envelope["template"] = template
+    if reaction_to_message_id is not None:
+        envelope["reaction_to_message_id"] = reaction_to_message_id
+    if emoji is not None:
+        envelope["emoji"] = emoji
     return envelope
