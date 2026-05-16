@@ -7,7 +7,6 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
-import json
 
 from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
@@ -353,9 +352,7 @@ def create_app() -> FastMCP:
 
         Returns:
             Confirmação silenciosa do registro
-        """.format(
-            tool_version=TOOL_VERSION
-        ).strip(),
+        """.format(tool_version=TOOL_VERSION).strip(),
     )
     async def report_incident(
         user_id: str, alert_type: str, severity: str, description: str, address: str
@@ -377,6 +374,64 @@ def create_app() -> FastMCP:
             service_name=service_name, user_id=user_id, payload=payload
         )
         return response
+
+    # WhatsApp outbound media (ADR-022): tool passthrough que constroi o
+    # envelope canonico consumido pelo Mule (`vars.agentMedia` em
+    # webhook-flow.xml). Permite ao LLM responder com qualquer tipo de
+    # midia outbound sem que o MCP precise carregar a midia em si — Mule
+    # faz upload (Meta /media) ou usa link direto.
+    #
+    # Para tipos image/video/document/sticker/audio: passar EITHER
+    # `url` (link publico que o Meta busca) OU `base64` (Mule decode +
+    # upload via /media). Caption/filename opcionais.
+    #
+    # Para type=location: latitude + longitude obrigatorios; name +
+    # address opcionais.
+    #
+    # Para type=contacts ou interactive: passar `contacts` (lista) ou
+    # `interactive` (object) com schema Meta Business API. ADR-022.
+    @conditional_mcp_tool(
+        "send_whatsapp_media",
+        description=(
+            "Envia mídia outbound (image/video/audio/document/sticker/location/contacts/"
+            "interactive) ao cidadão via WhatsApp. Use APENAS quando o cidadão pediu "
+            "explicitamente conteúdo em formato não-texto (ex: 'manda em áudio', "
+            "'manda o documento', 'compartilha localização'). NÃO use proativamente. "
+            "Para upload inline (base64) o Mule faz POST /media; pra link (url), Meta "
+            "busca direto. Retorna canonical envelope que o Mule consome via "
+            "vars.agentMedia."
+        ),
+    )
+    def send_whatsapp_media(
+        type: str,
+        url: Optional[str] = None,
+        base64: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        caption: Optional[str] = None,
+        filename: Optional[str] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+        name: Optional[str] = None,
+        address: Optional[str] = None,
+        contacts: Optional[list] = None,
+        interactive: Optional[dict] = None,
+    ) -> dict:
+        from src.tools.whatsapp_media import build_whatsapp_media_envelope
+
+        return build_whatsapp_media_envelope(
+            type=type,
+            url=url,
+            base64=base64,
+            mime_type=mime_type,
+            caption=caption,
+            filename=filename,
+            latitude=latitude,
+            longitude=longitude,
+            name=name,
+            address=address,
+            contacts=contacts,
+            interactive=interactive,
+        )
 
     # ===== REGISTRAR RESOURCES =====
 
@@ -471,7 +526,7 @@ def create_app() -> FastMCP:
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
-    logger.info(f"Servidor FastMCP configurado com sucesso!")
+    logger.info("Servidor FastMCP configurado com sucesso!")
 
     if Settings.DEBUG:
         logger.debug("Modo DEBUG ativado")
