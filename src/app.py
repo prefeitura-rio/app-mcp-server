@@ -1153,6 +1153,98 @@ def create_app() -> FastMCP:
             interactive=interactive,
         )
 
+    # WhatsApp Flow outbound helper (ADR-024): constrói o objeto
+    # `interactive` Meta sem que o LLM precise saber o schema completo.
+    # Retorna canonical envelope que o Mule consome via vars.agentMedia.
+    @conditional_mcp_tool(
+        "send_whatsapp_flow",
+        description=(
+            "Envia WhatsApp Flow (formulário interativo Meta-approved) ao "
+            "cidadão. Use quando o atendimento requer coleta estruturada de "
+            "campos (ex: reportar luminária quebrada, abrir chamado de poda, "
+            "consultar IPTU). Passe `flow_id` (do Meta Business Manager), "
+            "`body` (texto de introdução), `flow_token` (UUID que o bot gera "
+            "pra correlacionar a submissão do cidadão). Opcional: `cta` "
+            "(rótulo do botão, default 'Abrir formulário'), `header`/`footer`, "
+            "`flow_action_payload` (initial screen + data)."
+        ),
+    )
+    def send_whatsapp_flow(
+        flow_id: str,
+        body: str,
+        flow_token: str,
+        cta: str = "Abrir formulário",
+        header: Optional[str] = None,
+        footer: Optional[str] = None,
+        flow_action: str = "navigate",
+        flow_action_payload: Optional[dict] = None,
+    ) -> dict:
+        from src.tools.whatsapp_interactive import build_flow_envelope
+
+        return build_flow_envelope(
+            flow_id=flow_id,
+            body=body,
+            flow_token=flow_token,
+            cta=cta,
+            header=header,
+            footer=footer,
+            flow_action=flow_action,
+            flow_action_payload=flow_action_payload,
+        )
+
+    # WhatsApp interactive buttons (ADR-022): até 3 botões de resposta rápida.
+    # Útil pra menu binário ("Sim/Não/Outro").
+    @conditional_mcp_tool(
+        "send_whatsapp_buttons",
+        description=(
+            "Envia botões de resposta rápida ao cidadão (até 3). Use quando "
+            "o cidadão precisa escolher entre poucas opções discretas. "
+            "Passe `body` (pergunta) e `buttons` lista de "
+            "[{id: 'snake_case', title: 'Texto Visível'}]. Resposta do "
+            "cidadão volta como interactive.button_reply.id no inbound."
+        ),
+    )
+    def send_whatsapp_buttons(
+        body: str,
+        buttons: list,
+        header: Optional[str] = None,
+        footer: Optional[str] = None,
+    ) -> dict:
+        from src.tools.whatsapp_interactive import build_buttons_envelope
+
+        return build_buttons_envelope(
+            body=body, buttons=buttons, header=header, footer=footer
+        )
+
+    # WhatsApp interactive list (ADR-022): lista numerada com seções.
+    # Até 10 rows totais (Meta limit). Útil pra "Escolha um serviço/bairro/etc".
+    @conditional_mcp_tool(
+        "send_whatsapp_list",
+        description=(
+            "Envia lista numerada ao cidadão (até 10 opções organizadas em "
+            "seções). Use quando há mais de 3 opções (acima de 3, buttons "
+            "lota a tela). Passe `body` (pergunta) e `sections` lista de "
+            "[{title, rows: [{id, title, description?}]}]. Resposta do "
+            "cidadão volta como interactive.list_reply.id no inbound."
+        ),
+    )
+    def send_whatsapp_list(
+        body: str,
+        sections: list,
+        button_label: str = "Ver opções",
+        header: Optional[str] = None,
+        footer: Optional[str] = None,
+    ) -> dict:
+        from src.tools.whatsapp_interactive import build_list_envelope
+
+        return build_list_envelope(
+            body=body,
+            sections=sections,
+            button_label=button_label,
+            header=header,
+            footer=footer,
+        )
+
     # ===== REGISTRAR RESOURCES =====
 
     # Resource com lista de bairros
