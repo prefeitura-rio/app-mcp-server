@@ -129,6 +129,22 @@ def test_base64_without_mime_type_returns_error():
     assert "mime_type" in env["error"]
 
 
+def test_http_url_returns_error():
+    env = build_whatsapp_media_envelope(
+        type="image", url="http://insecure.example/img.jpg"
+    )
+    assert env["status"] == "error"
+    assert "HTTPS" in env["error"]
+
+
+def test_https_url_accepted():
+    env = build_whatsapp_media_envelope(
+        type="image", url="https://secure.example/img.jpg"
+    )
+    assert env["status"] == "ok"
+    assert env["url"] == "https://secure.example/img.jpg"
+
+
 def test_url_and_base64_simultaneously_returns_error():
     env = build_whatsapp_media_envelope(
         type="image", url="https://x.y/img.jpg", base64="iVBORw0K..."
