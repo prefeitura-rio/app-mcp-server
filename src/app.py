@@ -1163,19 +1163,19 @@ def create_app() -> FastMCP:
     # `interactive` Meta sem que o LLM precise saber o schema completo.
     # Retorna canonical envelope que o Mule consome via vars.agentMedia.
     @conditional_mcp_tool(
-        "send_whatsapp_flow",
+        "build_whatsapp_flow_envelope",
         description=(
-            "Envia WhatsApp Flow (formulário interativo Meta-approved) ao "
-            "cidadão. Use quando o atendimento requer coleta estruturada de "
-            "campos (ex: reportar luminária quebrada, abrir chamado de poda, "
-            "consultar IPTU). Passe `flow_id` (do Meta Business Manager), "
+            "Constrói envelope de WhatsApp Flow (formulário interativo) com parâmetros manuais. "
+            "IMPORTANTE: Para serviços (luminária, poda, etc), use send_whatsapp_flow. "
+            "Use esta tool apenas se precisar controle total sobre flow_id, flow_action_payload, etc. "
+            "Passe `flow_id` (do Meta Business Manager), "
             "`body` (texto de introdução), `flow_token` (UUID que o bot gera "
             "pra correlacionar a submissão do cidadão). Opcional: `cta` "
             "(rótulo do botão, default 'Abrir formulário'), `header`/`footer`, "
             "`flow_action_payload` (initial screen + data)."
         ),
     )
-    def send_whatsapp_flow(
+    def build_whatsapp_flow_envelope(
         flow_id: str,
         body: str,
         flow_token: str,
