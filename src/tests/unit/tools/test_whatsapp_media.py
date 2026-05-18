@@ -173,61 +173,6 @@ def test_interactive_omitted_returns_error():
     assert env["status"] == "error"
 
 
-def test_template_happy_path():
-    env = build_whatsapp_media_envelope(
-        type="template",
-        template={
-            "name": "appointment_reminder",
-            "language": {"code": "pt_BR"},
-            "components": [
-                {"type": "body", "parameters": [{"type": "text", "text": "João"}]}
-            ],
-        },
-    )
-    assert env["status"] == "ok"
-    assert env["type"] == "template"
-    assert env["template"]["name"] == "appointment_reminder"
-
-
-def test_template_missing_name_returns_error():
-    env = build_whatsapp_media_envelope(
-        type="template", template={"language": {"code": "pt_BR"}}
-    )
-    assert env["status"] == "error"
-    assert "name" in env["error"]
-
-
-def test_template_omitted_returns_error():
-    env = build_whatsapp_media_envelope(type="template")
-    assert env["status"] == "error"
-
-
-def test_reaction_happy_path():
-    env = build_whatsapp_media_envelope(
-        type="reaction",
-        reaction_to_message_id="wamid.abc123",
-        emoji="👍",
-    )
-    assert env["status"] == "ok"
-    assert env["type"] == "reaction"
-    assert env["reaction_to_message_id"] == "wamid.abc123"
-    assert env["emoji"] == "👍"
-
-
-def test_reaction_missing_message_id_returns_error():
-    env = build_whatsapp_media_envelope(type="reaction", emoji="❤️")
-    assert env["status"] == "error"
-    assert "reaction_to_message_id" in env["error"]
-
-
-def test_reaction_missing_emoji_returns_error():
-    env = build_whatsapp_media_envelope(
-        type="reaction", reaction_to_message_id="wamid.x"
-    )
-    assert env["status"] == "error"
-    assert "emoji" in env["error"]
-
-
 def test_empty_optionals_not_included():
     env = build_whatsapp_media_envelope(
         type="audio",

@@ -415,9 +415,6 @@ def create_app() -> FastMCP:
         address: Optional[str] = None,
         contacts: Optional[list] = None,
         interactive: Optional[dict] = None,
-        template: Optional[dict] = None,
-        reaction_to_message_id: Optional[str] = None,
-        emoji: Optional[str] = None,
     ) -> dict:
         from src.tools.whatsapp_media import build_whatsapp_media_envelope
 
@@ -434,9 +431,6 @@ def create_app() -> FastMCP:
             address=address,
             contacts=contacts,
             interactive=interactive,
-            template=template,
-            reaction_to_message_id=reaction_to_message_id,
-            emoji=emoji,
         )
 
     # ===== REGISTRAR RESOURCES =====
