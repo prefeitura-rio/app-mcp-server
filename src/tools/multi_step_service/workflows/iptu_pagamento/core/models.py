@@ -69,6 +69,17 @@ class EscolhaAnoPayload(BaseModel):
         return ano_clean
 
 
+class ProximaConsultaIPTUPayload(BaseModel):
+    """Payload para informar outro ano ou outra inscrição imobiliária."""
+
+    ano_exercicio: Optional[Union[int, str]] = Field(
+        default=None, description="Outro ano de exercício para consulta do IPTU"
+    )
+    inscricao_imobiliaria: Optional[str] = Field(
+        default=None, description="Outra inscrição imobiliária para consulta do IPTU"
+    )
+
+
 class EscolhaGuiasIPTUPayload(BaseModel):
     """Payload para escolher qual guia de IPTU o usuário quer pagar."""
 

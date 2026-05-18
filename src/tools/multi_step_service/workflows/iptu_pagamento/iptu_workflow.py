@@ -19,6 +19,7 @@ from src.tools.multi_step_service.core import (
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     InscricaoImobiliariaPayload,
     EscolhaAnoPayload,
+    ProximaConsultaIPTUPayload,
     EscolhaGuiasIPTUPayload,
     EscolhaCotasParceladasPayload,
     EscolhaFormatoDarmPayload,
@@ -318,6 +319,7 @@ class IPTUWorkflow(BaseWorkflow):
                     exercicio=exercicio,
                     divida_ativa_info=divida_ativa_info,
                 ),
+                payload_schema=ProximaConsultaIPTUPayload.model_json_schema(),
             )
             return state
 

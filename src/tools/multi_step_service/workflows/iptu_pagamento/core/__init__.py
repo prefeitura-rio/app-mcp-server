@@ -7,6 +7,7 @@ Contém modelos, validadores e constantes.
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     InscricaoImobiliariaPayload,
     EscolhaAnoPayload,
+    ProximaConsultaIPTUPayload,
     EscolhaGuiasIPTUPayload,
     EscolhaCotasParceladasPayload,
     EscolhaFormatoDarmPayload,
@@ -35,6 +36,7 @@ __all__ = [
     # Models - Payloads
     "InscricaoImobiliariaPayload",
     "EscolhaAnoPayload",
+    "ProximaConsultaIPTUPayload",
     "EscolhaGuiasIPTUPayload",
     "EscolhaCotasParceladasPayload",
     "EscolhaFormatoDarmPayload",
