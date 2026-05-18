@@ -75,18 +75,6 @@ def build_whatsapp_media_envelope(
                     "no mesmo envelope."
                 ),
             }
-        if url and not url.startswith("https://"):
-            # Meta Graph API requer URLs HTTPS pra media. http:// é rejeitado
-            # com erro 100 (parameter invalid). Bloquear no tool-call evita
-            # surprise downstream no Mule.
-            return {
-                "status": "error",
-                "error": (
-                    f"type={type} com `url` requer protocolo HTTPS. "
-                    f"Recebido: '{url[:60]}{'…' if len(url) > 60 else ''}'. "
-                    "Meta Graph API rejeita HTTP."
-                ),
-            }
         if base64 and not mime_type:
             # Mule meta-upload-media-sub-flow tem defaults por tipo, mas guess
             # errado quebra o upload Meta (mime declarado != content). Codex
