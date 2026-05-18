@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+from src.tools.luminaria_entity_extractor import decode_flow_token
 from src.utils.log import logger
 
 # Tipos visuais: mostram pergunta 2 (qty_pattern)
@@ -87,13 +88,35 @@ def _encrypt_response(data: dict, aes_key: bytes, iv: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _handle_init() -> dict:
+def _handle_init(payload: dict) -> dict:
+    """
+    Handler INIT: retorna tela inicial com pre-fill das entidades extraídas.
+
+    Se flow_token contém entidades (formato: uuid|defect_type=X|qty_pattern=Y),
+    os campos são pré-preenchidos.
+    """
+    flow_token = payload.get("flow_token", "")
+    entities = decode_flow_token(flow_token)
+
+    defect_type = entities.get("defect_type")
+    qty_pattern = entities.get("qty_pattern")
+    location = entities.get("location")
+
+    # Determina visibilidade inicial baseado no pre-fill
+    is_visual = defect_type in _VISUAL if defect_type else False
+    has_defect = defect_type is not None
+
     return {
         "version": "3.0",
         "screen": "MAIN",
         "data": {
-            "show_qty_pattern": False,
-            "show_location": False,
+            # Pre-fill dos campos
+            "defect_type_prefill": defect_type,
+            "qty_pattern_prefill": qty_pattern,
+            "location_prefill": location,
+            # Visibilidade condicional
+            "show_qty_pattern": is_visual and has_defect,
+            "show_location": has_defect and (not is_visual or qty_pattern is not None),
         },
     }
 
@@ -150,7 +173,7 @@ async def process_flow_request(body: dict, private_key_pem: str) -> str:
         response = {"data": {"status": "active"}}
 
     elif action == "INIT":
-        response = _handle_init()
+        response = _handle_init(payload)
 
     elif action == "data_exchange":
         trigger = data.get("trigger")
