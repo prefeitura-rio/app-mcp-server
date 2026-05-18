@@ -7,6 +7,7 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
+import json
 
 from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
@@ -352,7 +353,9 @@ def create_app() -> FastMCP:
 
         Returns:
             Confirmação silenciosa do registro
-        """.format(tool_version=TOOL_VERSION).strip(),
+        """.format(
+            tool_version=TOOL_VERSION
+        ).strip(),
     )
     async def report_incident(
         user_id: str, alert_type: str, severity: str, description: str, address: str
@@ -374,162 +377,6 @@ def create_app() -> FastMCP:
             service_name=service_name, user_id=user_id, payload=payload
         )
         return response
-
-    # WhatsApp outbound media (ADR-022): tool passthrough que constroi o
-    # envelope canonico consumido pelo Mule (`vars.agentMedia` em
-    # webhook-flow.xml). Permite ao LLM responder com qualquer tipo de
-    # midia outbound sem que o MCP precise carregar a midia em si — Mule
-    # faz upload (Meta /media) ou usa link direto.
-    #
-    # Para tipos image/video/document/sticker/audio: passar EITHER
-    # `url` (link publico que o Meta busca) OU `base64` (Mule decode +
-    # upload via /media). Caption/filename opcionais.
-    #
-    # Para type=location: latitude + longitude obrigatorios; name +
-    # address opcionais.
-    #
-    # Para type=contacts ou interactive: passar `contacts` (lista) ou
-    # `interactive` (object) com schema Meta Business API. ADR-022.
-    @conditional_mcp_tool(
-        "send_whatsapp_media",
-        description=(
-            "Envia mídia outbound (image/video/audio/document/sticker/location/contacts/"
-            "interactive) ao cidadão via WhatsApp. Use APENAS quando o cidadão pediu "
-            "explicitamente conteúdo em formato não-texto (ex: 'manda em áudio', "
-            "'manda o documento', 'compartilha localização'). NÃO use proativamente. "
-            "Para upload inline (base64) o Mule faz POST /media; pra link (url), Meta "
-            "busca direto. Retorna canonical envelope que o Mule consome via "
-            "vars.agentMedia."
-        ),
-    )
-    def send_whatsapp_media(
-        type: str,
-        url: Optional[str] = None,
-        base64: Optional[str] = None,
-        mime_type: Optional[str] = None,
-        caption: Optional[str] = None,
-        filename: Optional[str] = None,
-        latitude: Optional[float] = None,
-        longitude: Optional[float] = None,
-        name: Optional[str] = None,
-        address: Optional[str] = None,
-        contacts: Optional[list] = None,
-        interactive: Optional[dict] = None,
-        template: Optional[dict] = None,
-        reaction_to_message_id: Optional[str] = None,
-        emoji: Optional[str] = None,
-    ) -> dict:
-        from src.tools.whatsapp_media import build_whatsapp_media_envelope
-
-        return build_whatsapp_media_envelope(
-            type=type,
-            url=url,
-            base64=base64,
-            mime_type=mime_type,
-            caption=caption,
-            filename=filename,
-            latitude=latitude,
-            longitude=longitude,
-            name=name,
-            address=address,
-            contacts=contacts,
-            interactive=interactive,
-            template=template,
-            reaction_to_message_id=reaction_to_message_id,
-            emoji=emoji,
-        )
-
-    # WhatsApp Flow outbound helper (ADR-024): constrói o objeto
-    # `interactive` Meta sem que o LLM precise saber o schema completo.
-    # Retorna canonical envelope que o Mule consome via vars.agentMedia.
-    @conditional_mcp_tool(
-        "send_whatsapp_flow",
-        description=(
-            "Envia WhatsApp Flow (formulário interativo Meta-approved) ao "
-            "cidadão. Use quando o atendimento requer coleta estruturada de "
-            "campos (ex: reportar luminária quebrada, abrir chamado de poda, "
-            "consultar IPTU). Passe `flow_id` (do Meta Business Manager), "
-            "`body` (texto de introdução), `flow_token` (UUID que o bot gera "
-            "pra correlacionar a submissão do cidadão). Opcional: `cta` "
-            "(rótulo do botão, default 'Abrir formulário'), `header`/`footer`, "
-            "`flow_action_payload` (initial screen + data)."
-        ),
-    )
-    def send_whatsapp_flow(
-        flow_id: str,
-        body: str,
-        flow_token: str,
-        cta: str = "Abrir formulário",
-        header: Optional[str] = None,
-        footer: Optional[str] = None,
-        flow_action: str = "navigate",
-        flow_action_payload: Optional[dict] = None,
-    ) -> dict:
-        from src.tools.whatsapp_interactive import build_flow_envelope
-
-        return build_flow_envelope(
-            flow_id=flow_id,
-            body=body,
-            flow_token=flow_token,
-            cta=cta,
-            header=header,
-            footer=footer,
-            flow_action=flow_action,
-            flow_action_payload=flow_action_payload,
-        )
-
-    # WhatsApp interactive buttons (ADR-022): até 3 botões de resposta rápida.
-    # Útil pra menu binário ("Sim/Não/Outro").
-    @conditional_mcp_tool(
-        "send_whatsapp_buttons",
-        description=(
-            "Envia botões de resposta rápida ao cidadão (até 3). Use quando "
-            "o cidadão precisa escolher entre poucas opções discretas. "
-            "Passe `body` (pergunta) e `buttons` lista de "
-            "[{id: 'snake_case', title: 'Texto Visível'}]. Resposta do "
-            "cidadão volta como interactive.button_reply.id no inbound."
-        ),
-    )
-    def send_whatsapp_buttons(
-        body: str,
-        buttons: list,
-        header: Optional[str] = None,
-        footer: Optional[str] = None,
-    ) -> dict:
-        from src.tools.whatsapp_interactive import build_buttons_envelope
-
-        return build_buttons_envelope(
-            body=body, buttons=buttons, header=header, footer=footer
-        )
-
-    # WhatsApp interactive list (ADR-022): lista numerada com seções.
-    # Até 10 rows totais (Meta limit). Útil pra "Escolha um serviço/bairro/etc".
-    @conditional_mcp_tool(
-        "send_whatsapp_list",
-        description=(
-            "Envia lista numerada ao cidadão (até 10 opções organizadas em "
-            "seções). Use quando há mais de 3 opções (acima de 3, buttons "
-            "lota a tela). Passe `body` (pergunta) e `sections` lista de "
-            "[{title, rows: [{id, title, description?}]}]. Resposta do "
-            "cidadão volta como interactive.list_reply.id no inbound."
-        ),
-    )
-    def send_whatsapp_list(
-        body: str,
-        sections: list,
-        button_label: str = "Ver opções",
-        header: Optional[str] = None,
-        footer: Optional[str] = None,
-    ) -> dict:
-        from src.tools.whatsapp_interactive import build_list_envelope
-
-        return build_list_envelope(
-            body=body,
-            sections=sections,
-            button_label=button_label,
-            header=header,
-            footer=footer,
-        )
 
     # ===== REGISTRAR RESOURCES =====
 
@@ -624,7 +471,7 @@ def create_app() -> FastMCP:
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
-    logger.info("Servidor FastMCP configurado com sucesso!")
+    logger.info(f"Servidor FastMCP configurado com sucesso!")
 
     if Settings.DEBUG:
         logger.debug("Modo DEBUG ativado")
