@@ -6,12 +6,13 @@ de dados do cidadão antes de iniciar workflows conversacionais.
 """
 
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 from loguru import logger
 
 from src.config import env
+from src.tools.luminaria_entity_extractor import encode_flow_token
 
 
 class WhatsAppFlowSender:
@@ -137,6 +138,7 @@ async def send_flow_by_service(
     service_type: str,
     user_number: str,
     flow_token: str | None = None,
+    prefill_data: Dict[str, Optional[str]] | None = None,
 ) -> Dict[str, Any]:
     """
     Dispara WhatsApp Flow apropriado para um tipo de serviço.
@@ -145,9 +147,26 @@ async def send_flow_by_service(
         service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
         user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
         flow_token: Token opcional de rastreamento da sessão
+        prefill_data: Dados extraídos pelo agente para pre-fill do formulário.
+            Para reparo_luminaria, aceita:
+            - defect_type: "Apagada" | "Piscando" | "Acesa de dia" | "Pendurada" | "Danificada" | "Com ruído"
+            - qty_pattern: "uma" | "bloco" | "intercaladas"
+            - location: "Calçada" | "Fachada" | "Monumento" | "Parque" | "Praça" | "Quadra de esportes"
 
     Returns:
         Resultado do envio com message_id e flow_token
+
+    Example:
+        # Agente extrai entidades da mensagem "tem uma luminaria pendurada na minha rua"
+        await send_flow_by_service(
+            service_type="reparo_luminaria",
+            user_number="5521999999999",
+            prefill_data={
+                "defect_type": "Pendurada",
+                "qty_pattern": "uma",
+                "location": None  # usuário não especificou
+            }
+        )
     """
     flow_id = FLOW_TEMPLATES.get(service_type)
 
@@ -158,6 +177,15 @@ async def send_flow_by_service(
             "error": f"Flow não cadastrado para service_type='{service_type}'",
             "message": f"Flow disponível apenas para: {available}",
         }
+
+    # Gerar token base se não foi fornecido
+    if not flow_token:
+        flow_token = str(uuid.uuid4())
+
+    # Pre-fill: codificar entidades extraídas pelo agente no flow_token
+    if prefill_data:
+        flow_token = encode_flow_token(flow_token, prefill_data)
+        logger.info(f"Pre-fill do flow com dados do agente: {prefill_data}")
 
     sender = WhatsAppFlowSender()
 
@@ -190,6 +218,9 @@ async def send_flow_by_service(
 async def send_luminaria_flow(
     user_number: str,
     flow_token: str | None = None,
+    prefill_data: Dict[str, Optional[str]] | None = None,
 ) -> Dict[str, Any]:
     """Wrapper para compatibilidade. Use send_flow_by_service."""
-    return await send_flow_by_service("reparo_luminaria", user_number, flow_token)
+    return await send_flow_by_service(
+        "reparo_luminaria", user_number, flow_token, prefill_data
+    )

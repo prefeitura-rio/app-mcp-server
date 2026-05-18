@@ -720,9 +720,9 @@ def create_app() -> FastMCP:
         return add_tool_version(response)
 
     @conditional_mcp_tool(
-        "send_whatsapp_flow",
+        "send_service_flow",
         description=f"""
-        Envia formulário interativo (WhatsApp Flow) para coleta estruturada de dados.
+        Envia formulário interativo (WhatsApp Flow) para coleta estruturada de dados de serviços.
 
         QUANDO USAR:
         - Quando o cidadão solicitar um serviço que tem Flow disponível
@@ -731,24 +731,53 @@ def create_app() -> FastMCP:
 
         FLOWS DISPONÍVEIS: {", ".join(FLOW_TEMPLATES.keys())}
 
+        PRE-FILL INTELIGENTE (reparo_luminaria):
+        Você DEVE extrair entidades da mensagem do usuário para pré-preencher o formulário.
+        Analise a mensagem e identifique:
+
+        - defect_type: tipo de defeito mencionado
+          Valores: "Apagada" | "Piscando" | "Acesa de dia" | "Pendurada" | "Danificada" | "Com ruído"
+          Exemplos: "apagada" → "Apagada", "piscando" → "Piscando", "pendurada" → "Pendurada"
+
+        - qty_pattern: quantidade ou padrão de luminárias afetadas
+          Valores: "uma" | "bloco" | "intercaladas"
+          Exemplos: "uma luminária" → "uma", "todas as luminárias" → "bloco",
+                    "várias intercaladas" → "intercaladas"
+
+        - location: localização específica da luminária
+          Valores: "Calçada" | "Fachada" | "Monumento" | "Parque" | "Praça" | "Quadra de esportes"
+          Exemplos: "na calçada" → "Calçada", "na fachada" → "Fachada"
+          IMPORTANTE: Se o usuário só disse "na rua", NÃO assuma localização (use null)
+
         FLUXO:
         1. Detectar solicitação de serviço que tem Flow
-        2. Chamar send_whatsapp_flow com o número do usuário e service_type
-        3. Informar ao cidadão que o formulário foi enviado
-        4. Aguardar resposta do flow (dados virão automaticamente via webhook)
-        5. Workflow continuará com dados pré-preenchidos
+        2. EXTRAIR entidades da mensagem do usuário por compreensão semântica
+        3. Chamar send_service_flow com prefill_data contendo entidades extraídas
+        4. Informar ao cidadão que o formulário foi enviado (mencionando o que foi pré-preenchido)
+        5. Aguardar resposta do flow (dados virão automaticamente via webhook)
+        6. Workflow continuará com dados do formulário
 
         Args:
             user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
             service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
+            prefill_data: Entidades extraídas da mensagem para pre-fill (dict com defect_type, qty_pattern, location)
 
         Returns:
             Confirmação de envio com message_id e instruções para o cidadão
+
+        Exemplo:
+            Mensagem: "tem uma luminaria pendurada na minha rua"
+            Chamada: send_service_flow(
+                user_number="5521999999999",
+                service_type="reparo_luminaria",
+                prefill_data={{"defect_type": "Pendurada", "qty_pattern": "uma", "location": null}}
+            )
         """,
     )
-    async def send_whatsapp_flow(
+    async def send_service_flow(
         user_number: str,
         service_type: str,
+        prefill_data: dict | None = None,
     ) -> dict:
         """Envia WhatsApp Flow para coleta estruturada de dados."""
         # Verificar se há flow cadastrado para este serviço
@@ -763,6 +792,7 @@ def create_app() -> FastMCP:
         result = await send_flow_by_service(
             service_type=service_type,
             user_number=user_number,
+            prefill_data=prefill_data,
         )
 
         if result.get("success"):
