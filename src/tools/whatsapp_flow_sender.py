@@ -14,6 +14,20 @@ from loguru import logger
 from src.config import env
 
 
+def _redact_flow_token(flow_token: str | None) -> str:
+    """
+    Mascara flow_token pra logs. Tokens `v1:*` carregam prefill JSON
+    encoded em base64url, podendo conter PII (endereço, CPF, etc.).
+    Retorna marker + length, nunca o conteúdo do payload encoded.
+    """
+    if not isinstance(flow_token, str):
+        return "<none>"
+    if flow_token.startswith("v1:"):
+        return f"v1:<redacted len={len(flow_token) - 3}>"
+    # Tokens opacos (uuid) não são sensíveis — mostra prefixo curto pra correlação
+    return f"{flow_token[:8]}…" if len(flow_token) > 12 else flow_token
+
+
 class WhatsAppFlowSender:
     """Cliente para enviar templates do WhatsApp Business com Flow buttons."""
 
@@ -62,9 +76,12 @@ class WhatsAppFlowSender:
         # Remove + se vier no número
         recipient = recipient.replace("+", "")
 
+        # Token v1:* pode carregar prefill JSON com PII (endereço, CPF, etc).
+        # Log só o prefix pra correlação + comprimento, nunca o valor cru.
+        logged_token = _redact_flow_token(flow_token)
         logger.info(
             f"Enviando WhatsApp Flow | recipient={recipient} | "
-            f"flow_id={flow_id} | flow_token={flow_token}"
+            f"flow_id={flow_id} | flow_token={logged_token}"
         )
 
         payload = {
@@ -111,7 +128,7 @@ class WhatsAppFlowSender:
             message_id = result.get("messages", [{}])[0].get("id")
 
             logger.success(
-                f"WhatsApp Flow enviado | message_id={message_id} | flow_token={flow_token}"
+                f"WhatsApp Flow enviado | message_id={message_id} | flow_token={logged_token}"
             )
 
             return {

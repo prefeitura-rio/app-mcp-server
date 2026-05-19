@@ -11,6 +11,7 @@ Tipos de `action` recebidos:
 """
 
 import base64
+import binascii
 import json
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -87,36 +88,83 @@ def _encrypt_response(data: dict, aes_key: bytes, iv: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _handle_init(incoming_data: dict | None = None) -> dict:
+def _decode_prefill_token(flow_token: str | None) -> dict:
+    """
+    Decodifica prefill data encoded no `flow_token`.
+
+    Pra Flow dinâmico (`data_api_version` setado), o cliente WhatsApp ignora
+    `flow_action_payload.data` do envio — o `data` que chega no INIT request
+    decriptado é `None`/vazio. Então o canal pra passar prefill ao endpoint
+    server é o `flow_token`, que é arbitrário e controlado pelo bot.
+
+    Convenção:
+      flow_token = "v1:" + base64url(json.dumps(prefill_dict))
+
+    Bot envia ex.: `"v1:eyJzaG93X3F0eV9wYXR0ZXJuIjp0cnVlfQ"` →
+    decode → `{"show_qty_pattern": true}`.
+
+    Tokens sem prefix `v1:` ou que falhem decode são tratados como tokens
+    opacos (sem prefill) — back-compat com bot pré-fix.
+    """
+    if not isinstance(flow_token, str) or not flow_token.startswith("v1:"):
+        return {}
+    encoded = flow_token[3:]
+    try:
+        # base64url tolerante a padding ausente
+        padded = encoded + "=" * (-len(encoded) % 4)
+        decoded_bytes = base64.urlsafe_b64decode(padded)
+        decoded = json.loads(decoded_bytes.decode("utf-8"))
+        if not isinstance(decoded, dict):
+            logger.warning(
+                f"luminaria_flow: flow_token prefill payload não é dict ({type(decoded).__name__})"
+            )
+            return {}
+        return decoded
+    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+        logger.warning(f"luminaria_flow: flow_token prefill decode falhou: {e}")
+        return {}
+
+
+def _handle_init(
+    incoming_data: dict | None = None, flow_token: str | None = None
+) -> dict:
     """
     Resposta ao INIT request do WhatsApp Flow.
 
-    `incoming_data` vem do `flow_action_payload.data` que o bot serializou
-    no envio da mensagem Flow. Antes deste fix, `_handle_init` ignorava esse
-    payload e sempre retornava `show_qty_pattern=False, show_location=False`,
-    o que impedia prefill pra Flow dinâmico (`data_api_version: 3.0`).
+    Pra Flow dinâmico, Meta envia o INIT com `data` tipicamente vazio (não
+    propaga o `flow_action_payload.data` do envio do bot ao endpoint server).
+    Pra passar prefill nesse cenário, bot encoda dados no `flow_token`
+    (`v1:base64url(json)`) e endpoint decodifica aqui.
 
-    Comportamento agora:
-    - Mantém defaults conservadores (`False`, `False`) se nada vier do bot.
-    - Aceita override via payload pros campos hoje declarados no Flow JSON
-      (`show_qty_pattern`, `show_location`).
-    - Faz pass-through de keys adicionais que o bot envie — Meta ignora se
-      não houver binding no Flow JSON; quando novas keys forem adicionadas
-      ao schema (`endereco_prefill`, etc.), elas funcionam automaticamente
-      sem novo deploy.
+    Fontes de prefill, em ordem de precedência (última ganha):
+    1. Defaults conservadores (`show_qty_pattern=False`, `show_location=False`)
+    2. `incoming_data` (caso Meta passe a entregar `flow_action_payload.data`
+       no INIT pra Flow dinâmico — não acontece hoje, defensive).
+    3. Prefill decodificado do `flow_token` (canal autoritativo pra Flow
+       dinâmico).
     """
-    incoming = incoming_data or {}
-    base_data = {
+    base_data: dict = {
         "show_qty_pattern": False,
         "show_location": False,
     }
-    # Override só pra keys conhecidas + propagação livre de keys extras.
-    # Type-narrow show_* pra bool (Meta exige boolean estrito).
+
+    # Layer 2: data decriptado (vazio em Flow dinâmico hoje; reservado pra futuro)
+    incoming = incoming_data or {}
     for key in ("show_qty_pattern", "show_location"):
         if key in incoming:
             base_data[key] = bool(incoming[key])
     for key, value in incoming.items():
         if key not in base_data:
+            base_data[key] = value
+
+    # Layer 3: flow_token decoded — canal real pra prefill em Flow dinâmico.
+    # Última camada = autoritativa (last-wins). Sobrescreve qualquer valor
+    # vindo das Layers 1/2 — não só pras keys conhecidas.
+    token_data = _decode_prefill_token(flow_token)
+    for key, value in token_data.items():
+        if key in ("show_qty_pattern", "show_location"):
+            base_data[key] = bool(value)
+        else:
             base_data[key] = value
 
     return {
@@ -172,13 +220,20 @@ async def process_flow_request(body: dict, private_key_pem: str) -> str:
 
     action = payload.get("action")
     data = payload.get("data", {})
-    logger.info(f"luminaria_flow: action={action!r} data={data}")
+    flow_token = payload.get("flow_token")
+    # Log tipos pra debug — não logar valor do token (pode conter PII em
+    # base64 ou pelo menos ser sensível por correlação com a session).
+    logger.info(
+        f"luminaria_flow: action={action!r} data={data} "
+        f"flow_token_present={bool(flow_token)} "
+        f"flow_token_v1={isinstance(flow_token, str) and flow_token.startswith('v1:')}"
+    )
 
     if action == "ping":
         response = {"data": {"status": "active"}}
 
     elif action == "INIT":
-        response = _handle_init(data)
+        response = _handle_init(data, flow_token=flow_token)
 
     elif action == "data_exchange":
         trigger = data.get("trigger")
