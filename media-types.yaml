@@ -1,0 +1,209 @@
+# Media Types Registry — canonical source of truth
+#
+# Single source of truth pros tipos de mídia suportados pelo bot WhatsApp da
+# Prefeitura. Consumido por 3 camadas (MCP + Engine prompt modules + Mule
+# webhook-flow.xml) pra evitar drift cross-repo.
+#
+# Quando adicionar tipo novo:
+#   1. Adicionar entry aqui com schema completo
+#   2. Validar via `tools/validate_media_types_registry.py`
+#   3. Implementar consumers nas 3 camadas (Engine prompt + Mule branch + MCP tool extension)
+#   4. Smoke E2E via scripts/test-media-types.sh (study-sf)
+#
+# Schema completo em `media-types.schema.json`. Validação rodada em CI.
+#
+# Protocol versioning: bump `protocol_version` em breaking changes (ex:
+# remover field obrigatório de tipo existente). Consumers podem suportar
+# múltiplas versões.
+
+protocol_version: "1.0"
+
+# Conditional requirement (não-representável em pure JSON Schema):
+#   Pra tipos com builder_tool=send_whatsapp_media e required_fields contendo "url|base64",
+#   se o consumer escolher base64, deve TAMBÉM passar mime_type.
+#   build_whatsapp_media_envelope rejeita base64 sem mime_type em runtime.
+#   Validator strict mode (tools/validate_media_types_registry.py) checa essa regra
+#   cross-checking com src/tools/whatsapp_media.py.
+
+types:
+  # ────────────────────────────────────────────────────────────
+  # TEXT — baseline, não-mídia
+  # ────────────────────────────────────────────────────────────
+  text:
+    direction: both
+    meta_message_type: text
+    inbound:
+      analyzer_tool: null  # texto não tem analyzer, é a mensagem real
+    outbound:
+      builder_tool: null  # texto vai via send-via-meta-graph-flow direto no Mule
+      required_fields: []
+
+  # ────────────────────────────────────────────────────────────
+  # AUDIO — PTT WhatsApp + TTS outbound
+  # ────────────────────────────────────────────────────────────
+  audio:
+    direction: both
+    meta_message_type: audio
+    inbound:
+      analyzer_tool: analyze_inbound_audio
+      gemini_model: gemini-2.5-flash
+      accepted_mime_types:
+        - audio/ogg
+        - audio/mpeg
+        - audio/wav
+        - audio/aac
+        - audio/flac
+      accepted_extensions: [oga, ogg, mp3, wav, aac, flac, aiff, aif]
+      rejected_extensions: [m4a, amr]  # Gemini não suporta
+    outbound:
+      builder_tool: generate_audio_response  # TTS dedicado (não via send_whatsapp_media)
+      required_fields: [text]
+      caption_allowed: false
+      prelude_text_allowed: false  # áudio isolado — UX de voice msg quebra c/ texto prefix
+      # voice + mime_type não são args explícitos do tool — resolved server-side via env config
+
+  # ────────────────────────────────────────────────────────────
+  # IMAGE
+  # ────────────────────────────────────────────────────────────
+  image:
+    direction: both
+    meta_message_type: image
+    inbound:
+      analyzer_tool: analyze_inbound_image
+      gemini_model: gemini-2.5-flash
+      accepted_mime_types: [image/jpeg, image/png, image/webp]
+      max_size_mb: 5
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: ["url|base64"]
+      optional_fields: [caption, mime_type, filename]
+      caption_allowed: true
+      prelude_text_allowed: false  # image já tem caption nativa
+
+  # ────────────────────────────────────────────────────────────
+  # VIDEO
+  # ────────────────────────────────────────────────────────────
+  video:
+    direction: both
+    meta_message_type: video
+    inbound:
+      analyzer_tool: analyze_inbound_video
+      gemini_model: gemini-2.5-flash
+      accepted_mime_types: [video/mp4, video/3gpp]
+      max_size_mb: 16
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: ["url|base64"]
+      optional_fields: [caption, mime_type]
+      caption_allowed: true
+      prelude_text_allowed: false
+
+  # ────────────────────────────────────────────────────────────
+  # DOCUMENT
+  # ────────────────────────────────────────────────────────────
+  document:
+    direction: outbound
+    meta_message_type: document
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: ["url|base64"]
+      optional_fields: [caption, mime_type, filename]
+      caption_allowed: true
+      prelude_text_allowed: false
+
+  # ────────────────────────────────────────────────────────────
+  # STICKER
+  # ────────────────────────────────────────────────────────────
+  sticker:
+    direction: outbound
+    meta_message_type: sticker
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: ["url|base64"]
+      optional_fields: [mime_type]
+      caption_allowed: false
+      prelude_text_allowed: false  # sticker isolado é a UX correta
+
+  # ────────────────────────────────────────────────────────────
+  # LOCATION
+  # ────────────────────────────────────────────────────────────
+  location:
+    direction: both
+    meta_message_type: location
+    inbound:
+      # Cidadão compartilha localização via WhatsApp "anexo → localização".
+      # register_inbound_media com media_type=location aceita latitude/longitude.
+      analyzer_tool: register_inbound_media  # apenas registra, sem analyzer Gemini
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: [latitude, longitude]
+      optional_fields: [name, address]
+      caption_allowed: false
+      prelude_text_allowed: true  # texto antes pode ajudar contexto (ex: "Aqui está o posto:")
+
+  # ────────────────────────────────────────────────────────────
+  # CONTACTS — vCards
+  # ────────────────────────────────────────────────────────────
+  contacts:
+    direction: outbound
+    meta_message_type: contacts
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: [contacts]
+      caption_allowed: false
+      prelude_text_allowed: true
+
+  # ────────────────────────────────────────────────────────────
+  # INTERACTIVE — Flow, button, list
+  # ────────────────────────────────────────────────────────────
+  interactive:
+    direction: both
+    meta_message_type: interactive
+    inbound:
+      # interactive inbound é message_type=interactive com sub-shapes:
+      #   button_reply, list_reply, nfm_reply (Flow submission)
+      sub_types: [button_reply, list_reply, nfm_reply]
+    outbound:
+      builder_tool: send_whatsapp_media  # ou build_whatsapp_flow_envelope p/ Flow específico
+      required_fields: [interactive]
+      caption_allowed: false
+      prelude_text_allowed: true
+
+  # ────────────────────────────────────────────────────────────
+  # TEMPLATE — pré-aprovado Meta Business Manager
+  # ────────────────────────────────────────────────────────────
+  template:
+    direction: outbound
+    meta_message_type: template
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: [template]  # template.name obrigatório
+      optional_fields: []
+      caption_allowed: false
+      prelude_text_allowed: false
+      proactive: true  # único tipo que pode ser enviado fora da janela 24h
+
+  # ────────────────────────────────────────────────────────────
+  # REACTION — emoji em mensagem do cidadão
+  # ────────────────────────────────────────────────────────────
+  reaction:
+    direction: outbound
+    meta_message_type: reaction
+    outbound:
+      builder_tool: send_whatsapp_media
+      required_fields: [reaction_to_message_id, emoji]
+      caption_allowed: false
+      prelude_text_allowed: false
+
+  # ────────────────────────────────────────────────────────────
+  # LOCATION_REQUEST — pede pro cidadão compartilhar localização (Meta Cloud API)
+  # NÃO IMPLEMENTADO AINDA — exemplo de tipo novo a adicionar
+  # ────────────────────────────────────────────────────────────
+  # location_request:
+  #   direction: outbound
+  #   meta_message_type: interactive
+  #   outbound:
+  #     builder_tool: send_whatsapp_media
+  #     required_fields: [body]
+  #     interactive_sub_type: location_request_message
+  #     prelude_text_allowed: false
