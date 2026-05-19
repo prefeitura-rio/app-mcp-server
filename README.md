@@ -123,6 +123,31 @@ uv run pytest --cov=src --cov-report=term --cov-report=xml -q
 python3 src/tests/e2e/run_preview_e2e.py
 ```
 
+## Media Types Registry
+
+`media-types.yaml` (raiz do repo) é a **single source of truth** dos tipos de mídia (audio, image, video, location, document, sticker, contacts, interactive, template, reaction, text) suportados pelo bot WhatsApp da Prefeitura. Consumido por:
+
+- **MCP** (este repo) — tools `send_whatsapp_media` + analyzers
+- **Engine** (`app-eai-agent-engine`) — prompt modules per-type
+- **Mule** (`study-sf-whatsapp-poc1`) — webhook routing + body builder
+
+Schema em `media-types.schema.json`. Validador:
+
+```bash
+python tools/validate_media_types_registry.py
+python tools/validate_media_types_registry.py --strict   # verifica que tool names existem em src/app.py
+```
+
+CI roda automaticamente em PRs que tocam `media-types.yaml`, `src/app.py`, ou schema/validator (`.github/workflows/validate-media-types.yml`).
+
+**Pra adicionar tipo novo:**
+1. Adicionar entry em `media-types.yaml` com `direction`, `meta_message_type`, `inbound`/`outbound` specs
+2. Rodar `python tools/validate_media_types_registry.py --strict` localmente
+3. Implementar consumers nas 3 camadas (PR neste repo + Engine + Mule)
+4. Smoke E2E real via WhatsApp ou synthetic POST
+
+Plano completo de generalização em [`docs/proposals/media-generalization-v2.md`](docs/proposals/media-generalization-v2.md) (TBD).
+
 ## CI/CD
 
 ### PR Quality Gate

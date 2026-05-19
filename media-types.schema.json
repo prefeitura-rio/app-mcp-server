@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/prefeitura-rio/app-mcp-server/blob/staging/media-types.schema.json",
+  "title": "Media Types Registry",
+  "description": "Schema canonical pra media-types.yaml — consumido por MCP + Engine + Mule.",
+  "type": "object",
+  "required": ["protocol_version", "types"],
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Versão do protocolo (semver MAJOR.MINOR). Bump em breaking changes."
+    },
+    "types": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]{0,30}$": {
+          "$ref": "#/$defs/mediaType"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "mediaType": {
+      "type": "object",
+      "required": ["direction", "meta_message_type"],
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": ["inbound", "outbound", "both"],
+          "description": "Sentido suportado. `both` = pode ser inbound (cidadão envia) e outbound (bot envia)."
+        },
+        "meta_message_type": {
+          "type": "string",
+          "description": "Valor do campo `type` no payload Meta WhatsApp Cloud API (text, audio, image, video, document, sticker, location, contacts, interactive, template, reaction).",
+          "enum": ["text", "audio", "image", "video", "document", "sticker", "location", "contacts", "interactive", "template", "reaction"]
+        },
+        "inbound": {
+          "$ref": "#/$defs/inboundSpec"
+        },
+        "outbound": {
+          "$ref": "#/$defs/outboundSpec"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "direction": { "const": "inbound" } } },
+          "then": { "required": ["inbound"] }
+        },
+        {
+          "if": { "properties": { "direction": { "const": "outbound" } } },
+          "then": { "required": ["outbound"] }
+        },
+        {
+          "if": { "properties": { "direction": { "const": "both" } } },
+          "then": { "required": ["inbound", "outbound"] }
+        }
+      ]
+    },
+    "inboundSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "analyzer_tool": {
+          "type": ["string", "null"],
+          "description": "Nome da tool MCP que processa esse tipo inbound (e.g. analyze_inbound_audio). null = sem analyzer (e.g. text)."
+        },
+        "gemini_model": {
+          "type": "string",
+          "description": "Modelo Gemini usado pelo analyzer (informativo; tool sabe internamente)."
+        },
+        "accepted_mime_types": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z]+/[a-z0-9.+-]+$" }
+        },
+        "accepted_extensions": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9]+$" }
+        },
+        "rejected_extensions": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9]+$" }
+        },
+        "max_size_mb": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 100
+        },
+        "sub_types": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z_]+$" },
+          "description": "Sub-shapes do mesmo meta_message_type (e.g. interactive → button_reply, list_reply, nfm_reply)."
+        }
+      }
+    },
+    "outboundSpec": {
+      "type": "object",
+      "required": ["builder_tool"],
+      "additionalProperties": false,
+      "properties": {
+        "builder_tool": {
+          "type": ["string", "null"],
+          "description": "Nome da tool MCP que constrói o envelope outbound (e.g. send_whatsapp_media, generate_audio_response, build_whatsapp_flow_envelope). null = handled fora do MCP (e.g. text via Mule direto)."
+        },
+        "required_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Campos obrigatórios. Use 'a|b' pra denotar 'pelo menos um de'."
+        },
+        "optional_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "caption_allowed": {
+          "type": "boolean",
+          "description": "Se Meta API aceita field `caption` pra este tipo."
+        },
+        "prelude_text_allowed": {
+          "type": "boolean",
+          "description": "Se faz sentido (UX) enviar texto separado antes da mídia. Audio/sticker/image = false porque quebram UX nativa."
+        },
+        "proactive": {
+          "type": "boolean",
+          "description": "Se pode ser enviado fora da janela 24h (apenas `template`)."
+        },
+        "interactive_sub_type": {
+          "type": "string",
+          "description": "Sub-tipo Meta quando meta_message_type=interactive (e.g. location_request_message, address_message)."
+        }
+      }
+    }
+  }
+}
