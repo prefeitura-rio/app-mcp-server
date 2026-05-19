@@ -70,13 +70,13 @@ class EscolhaAnoPayload(BaseModel):
 
 
 class ProximaConsultaIPTUPayload(BaseModel):
-    """Payload para informar outro ano ou outra inscrição imobiliária."""
+    """Use APENAS para ano (ex: 2024) ou inscrição imobiliária (8 dígitos). NÃO use para CPF!"""
 
     ano_exercicio: Optional[Union[int, str]] = Field(
-        default=None, description="Outro ano de exercício para consulta do IPTU"
+        default=None, description="Ano (ex: 2024)"
     )
     inscricao_imobiliaria: Optional[str] = Field(
-        default=None, description="Outra inscrição imobiliária para consulta do IPTU"
+        default=None, description="Inscrição imobiliária (8 dígitos, ex: 0.585.671-1)."
     )
 
 

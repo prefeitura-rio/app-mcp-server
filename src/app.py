@@ -1022,13 +1022,7 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool("get_user_by_cpf")
     async def get_user_by_cpf(cpf: str) -> dict:
-        """
-        Consulta cadastro do cidadão por CPF válido no sistema da Prefeitura do Rio.
-        Use apenas quando o usuário informou explicitamente um CPF com 11 dígitos.
-        Antes de chamar, remova pontuação e confirme que sobraram exatamente 11 dígitos.
-        Não use para inscrição imobiliária, número de protocolo, guia ou outros identificadores.
-        Retorna nome, e-mail e telefone se o cidadão estiver cadastrado.
-        """
+        """Consulta cadastro por CPF. Use apenas quando usuário pediu consulta por CPF."""
         import httpx
 
         try:

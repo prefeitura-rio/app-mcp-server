@@ -64,7 +64,7 @@ Para verificar se essa inscrição imobiliária está isenta de IPTU, se há gui
 __replace_divida_ativa__
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
-• Para consultar **outra inscrição imobiliária**, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o número da inscrição
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         if not divida_ativa_info or divida_ativa_info.tem_divida_ativa is False:
@@ -152,7 +152,7 @@ __replace_divida_ativa__
             texto += """
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
-• Para consultar **outra inscrição imobiliária**, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o número da inscrição
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar
             """
             return texto
@@ -185,7 +185,7 @@ __replace_divida_ativa__
             texto += f"• **{numero_cota}ª Cota** - Vencimento: {data_vencimento} - {formatar_valor_brl(valor_numerico)} - {status_icon} {status_text}\n"
 
         texto += f"\n• **Todas as cotas** - Total: {formatar_valor_brl(valor_total)}\n"
-        texto += "\n**Quais cotas você deseja pagar?**"
+        texto += "\n**Quais cotas você deseja pagar? Se quiser, posso emitir todas de uma vez.**"
 
         return texto
 
@@ -275,7 +275,7 @@ __replace_divida_ativa__
         texto += """🎉 **Consulta finalizada com sucesso!**
 
 🔄 **O que você deseja fazer agora?**
-• Para consultar **outra inscrição imobiliária** de IPTU, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o número da inscrição
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         return texto
