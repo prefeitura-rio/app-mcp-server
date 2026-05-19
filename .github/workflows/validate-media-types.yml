@@ -1,0 +1,42 @@
+name: Validate Media Types Registry
+
+# Sem inputs externos (issue titles, commit messages, etc) — só consome
+# artifacts do repo (yaml + schema + app.py) via checkout.
+
+on:
+  pull_request:
+    paths:
+      - 'media-types.yaml'
+      - 'media-types.schema.json'
+      - 'tools/validate_media_types_registry.py'
+      - 'src/app.py'
+      - '.github/workflows/validate-media-types.yml'
+  push:
+    branches: [staging, main]
+    paths:
+      - 'media-types.yaml'
+      - 'media-types.schema.json'
+      - 'src/app.py'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install deps
+        run: uv pip install --system pyyaml jsonschema
+
+      - name: Validate registry schema
+        run: python tools/validate_media_types_registry.py
+
+      - name: Validate cross-repo tool references (strict)
+        run: python tools/validate_media_types_registry.py --strict
