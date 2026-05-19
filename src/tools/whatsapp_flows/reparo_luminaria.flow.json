@@ -1,0 +1,102 @@
+{
+  "version": "7.3",
+  "routing_model": {"MAIN": []},
+  "screens": [
+    {
+      "id": "MAIN",
+      "title": "Defeito de luminária",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "defect_type_prefill": {"type": "string", "__example__": ""},
+        "qty_pattern_prefill": {"type": "string", "__example__": ""},
+        "location_prefill": {"type": "string", "__example__": ""},
+        "endereco_prefill": {"type": "string", "__example__": ""}
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "Confirme ou edite os dados abaixo:"
+          },
+          {
+            "type": "Form",
+            "name": "form",
+            "init-values": {
+              "defect_type": "${data.defect_type_prefill}",
+              "qty_pattern": "${data.qty_pattern_prefill}",
+              "location": "${data.location_prefill}",
+              "endereco": "${data.endereco_prefill}"
+            },
+            "children": [
+              {
+                "type": "TextInput",
+                "name": "endereco",
+                "label": "Endereço da luminária",
+                "input-type": "text",
+                "helper-text": "Rua, número e bairro",
+                "required": true
+              },
+              {
+                "type": "RadioButtonsGroup",
+                "label": "Qual é o defeito da luminária?",
+                "name": "defect_type",
+                "required": true,
+                "data-source": [
+                  {"id": "Apagada", "title": "Apagada"},
+                  {"id": "Piscando", "title": "Piscando"},
+                  {"id": "Acesa de dia", "title": "Acesa de dia"},
+                  {"id": "Pendurada", "title": "Pendurada"},
+                  {"id": "Danificada", "title": "Danificada"},
+                  {"id": "Com ruído", "title": "Com ruído"}
+                ]
+              },
+              {
+                "type": "RadioButtonsGroup",
+                "label": "Como está o defeito? (se aplicável)",
+                "name": "qty_pattern",
+                "required": false,
+                "data-source": [
+                  {"id": "uma", "title": "Uma luminária"},
+                  {"id": "bloco", "title": "Todas as do trecho apagadas"},
+                  {"id": "intercaladas", "title": "Algumas apagadas, outras não"}
+                ]
+              },
+              {
+                "type": "RadioButtonsGroup",
+                "label": "Onde está localizada?",
+                "name": "location",
+                "required": true,
+                "data-source": [
+                  {"id": "Calçada", "title": "Calçada"},
+                  {"id": "Fachada", "title": "Fachada"},
+                  {"id": "Monumento", "title": "Monumento"},
+                  {"id": "Parque", "title": "Parque"},
+                  {"id": "Praça", "title": "Praça"},
+                  {"id": "Quadra de esportes", "title": "Quadra de esportes"},
+                  {"id": "Rua", "title": "Rua"},
+                  {"id": "Não sei", "title": "Não sei"}
+                ]
+              },
+              {
+                "type": "Footer",
+                "label": "Concluir",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "_source": "whatsapp_flow",
+                    "endereco": "${form.endereco}",
+                    "defect_type": "${form.defect_type}",
+                    "qty_pattern": "${form.qty_pattern}",
+                    "location": "${form.location}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

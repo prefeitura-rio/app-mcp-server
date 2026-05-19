@@ -11,13 +11,13 @@ Tipos de `action` recebidos:
 """
 
 import base64
-import binascii
 import json
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+from src.tools.luminaria_entity_extractor import decode_flow_token
 from src.utils.log import logger
 
 # Tipos visuais: mostram pergunta 2 (qty_pattern)
@@ -88,41 +88,28 @@ def _encrypt_response(data: dict, aes_key: bytes, iv: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _decode_prefill_token(flow_token: str | None) -> dict:
+def _compute_visibility(
+    defect_type: str | None, qty_pattern: str | None
+) -> tuple[bool, bool]:
     """
-    Decodifica prefill data encoded no `flow_token`.
+    Smart visibility — replica a lógica original do `_handle_defect_type`
+    (transição via data_exchange) mas aplicada já no INIT quando temos
+    prefill de `defect_type`.
 
-    Pra Flow dinâmico (`data_api_version` setado), o cliente WhatsApp ignora
-    `flow_action_payload.data` do envio — o `data` que chega no INIT request
-    decriptado é `None`/vazio. Então o canal pra passar prefill ao endpoint
-    server é o `flow_token`, que é arbitrário e controlado pelo bot.
-
-    Convenção:
-      flow_token = "v1:" + base64url(json.dumps(prefill_dict))
-
-    Bot envia ex.: `"v1:eyJzaG93X3F0eV9wYXR0ZXJuIjp0cnVlfQ"` →
-    decode → `{"show_qty_pattern": true}`.
-
-    Tokens sem prefix `v1:` ou que falhem decode são tratados como tokens
-    opacos (sem prefill) — back-compat com bot pré-fix.
+    - Defeito visual (Apagada/Piscando/Acesa de dia): mostra qty_pattern,
+      esconde location (location aparece quando qty_pattern selecionada).
+    - Defeito não-visual (Pendurada/Danificada/Com ruído): vai direto
+      pra location.
+    - Sem defect_type: tudo escondido (defaults).
+    - Visual + qty_pattern já selecionada: mostra ambos (transição completa).
     """
-    if not isinstance(flow_token, str) or not flow_token.startswith("v1:"):
-        return {}
-    encoded = flow_token[3:]
-    try:
-        # base64url tolerante a padding ausente
-        padded = encoded + "=" * (-len(encoded) % 4)
-        decoded_bytes = base64.urlsafe_b64decode(padded)
-        decoded = json.loads(decoded_bytes.decode("utf-8"))
-        if not isinstance(decoded, dict):
-            logger.warning(
-                f"luminaria_flow: flow_token prefill payload não é dict ({type(decoded).__name__})"
-            )
-            return {}
-        return decoded
-    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
-        logger.warning(f"luminaria_flow: flow_token prefill decode falhou: {e}")
-        return {}
+    if not defect_type:
+        return False, False
+    is_visual = defect_type in _VISUAL
+    has_qty = bool(qty_pattern)
+    show_qty_pattern = is_visual
+    show_location = (not is_visual) or has_qty
+    return show_qty_pattern, show_location
 
 
 def _handle_init(
@@ -131,41 +118,64 @@ def _handle_init(
     """
     Resposta ao INIT request do WhatsApp Flow.
 
-    Pra Flow dinâmico, Meta envia o INIT com `data` tipicamente vazio (não
-    propaga o `flow_action_payload.data` do envio do bot ao endpoint server).
-    Pra passar prefill nesse cenário, bot encoda dados no `flow_token`
-    (`v1:base64url(json)`) e endpoint decodifica aqui.
-
-    Fontes de prefill, em ordem de precedência (última ganha):
-    1. Defaults conservadores (`show_qty_pattern=False`, `show_location=False`)
-    2. `incoming_data` (caso Meta passe a entregar `flow_action_payload.data`
-       no INIT pra Flow dinâmico — não acontece hoje, defensive).
-    3. Prefill decodificado do `flow_token` (canal autoritativo pra Flow
-       dinâmico).
+    Compõe `data` da response em camadas (última ganha):
+    1. Defaults conservadores (`show_*=False`, prefills=None).
+    2. `incoming_data` decriptado (vazio em Flow dinâmico hoje; defensive).
+    3. Prefill do `flow_token` decodificado via `decode_flow_token`
+       (v1:base64). Canal autoritativo pra Flow dinâmico.
+    4. Smart visibility: `show_qty_pattern` e `show_location` calculados
+       da combinação `defect_type` + `qty_pattern` resolvidos acima
+       (replica lógica do data_exchange original).
     """
+    # Layer 1: defaults
     base_data: dict = {
+        "defect_type_prefill": None,
+        "qty_pattern_prefill": None,
+        "location_prefill": None,
         "show_qty_pattern": False,
         "show_location": False,
     }
 
-    # Layer 2: data decriptado (vazio em Flow dinâmico hoje; reservado pra futuro)
+    # Layer 2: incoming_data decriptado (futuro-proof; vazio em dinâmico hoje)
     incoming = incoming_data or {}
-    for key in ("show_qty_pattern", "show_location"):
-        if key in incoming:
-            base_data[key] = bool(incoming[key])
     for key, value in incoming.items():
-        if key not in base_data:
-            base_data[key] = value
+        base_data[key] = value
 
-    # Layer 3: flow_token decoded — canal real pra prefill em Flow dinâmico.
-    # Última camada = autoritativa (last-wins). Sobrescreve qualquer valor
-    # vindo das Layers 1/2 — não só pras keys conhecidas.
-    token_data = _decode_prefill_token(flow_token)
+    # Layer 3: flow_token decodificado (canal real pra prefill)
+    token_data = decode_flow_token(flow_token)
     for key, value in token_data.items():
-        if key in ("show_qty_pattern", "show_location"):
-            base_data[key] = bool(value)
+        # `_session` é metadata de correlação inserida por `encode_flow_token`
+        # — não é prefill renderizável; mantém apenas pra audit se quiser.
+        if key.startswith("_"):
+            continue
+        # Aceita alias sem `_prefill` (compat com bot que envia
+        # `defect_type=X` direto) — normaliza pra key canônica.
+        canonical_key = (
+            key
+            if key.endswith("_prefill") or key.startswith("show_")
+            else f"{key}_prefill"
+        )
+        if canonical_key in ("show_qty_pattern", "show_location"):
+            base_data[canonical_key] = bool(value)
         else:
-            base_data[key] = value
+            base_data[canonical_key] = value
+
+    # Layer 4: smart visibility derivada dos prefills resolvidos.
+    # Só aplica se prefill veio (não sobrescreve override explícito do bot
+    # em incoming_data/token; mas se nenhum show_* foi setado, computa).
+    explicit_show = (
+        "show_qty_pattern" in incoming
+        or "show_qty_pattern" in token_data
+        or "show_location" in incoming
+        or "show_location" in token_data
+    )
+    if not explicit_show:
+        show_qty, show_loc = _compute_visibility(
+            base_data.get("defect_type_prefill"),
+            base_data.get("qty_pattern_prefill"),
+        )
+        base_data["show_qty_pattern"] = show_qty
+        base_data["show_location"] = show_loc
 
     return {
         "version": "3.0",

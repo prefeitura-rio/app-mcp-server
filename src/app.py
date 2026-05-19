@@ -800,14 +800,35 @@ def create_app() -> FastMCP:
 
         FLUXO:
         1. Detectar solicitação de serviço que tem Flow
-        2. Chamar send_whatsapp_flow com o número do usuário e service_type
-        3. Informar ao cidadão que o formulário foi enviado
-        4. Aguardar resposta do flow (dados virão automaticamente via webhook)
-        5. Workflow continuará com dados pré-preenchidos
+        2. Extrair entidades que o cidadão JÁ MENCIONOU na conversa (endereço,
+           tipo de defeito, etc.)
+        3. Chamar send_whatsapp_flow passando `prefill_data` com essas entidades
+        4. Informar ao cidadão que o formulário foi enviado
+        5. Aguardar resposta do flow (dados virão automaticamente via webhook)
+        6. Workflow continuará com dados pré-preenchidos
 
         Args:
             user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
-            service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
+            service_type: Tipo de serviço (ex: reparo_luminaria)
+            prefill_data: (OPCIONAL, PORÉM RECOMENDADO) Dict com dados que o
+                cidadão JÁ CONFIRMOU na conversa, para pré-preencher campos do
+                formulário. SEMPRE inclua quando você (LLM) já extraiu pelo
+                menos um campo no chat — evita o cidadão re-digitar dados que
+                já forneceu.
+
+                Para `service_type='reparo_luminaria'`, chaves aceitas:
+                  - `defect_type`: "Apagada" | "Piscando" | "Acesa de dia"
+                                  | "Pendurada" | "Danificada" | "Com ruído"
+                  - `qty_pattern`: "uma" | "bloco" | "intercaladas"
+                  - `location`: "Calçada" | "Fachada" | "Monumento" | "Parque"
+                                | "Praça" | "Quadra de esportes" | "Rua" | "Não sei"
+                  - `endereco`: endereço completo em texto (rua, número, bairro)
+
+                Exemplo:
+                  prefill_data={{
+                    "endereco": "Rua Guilhermina Guinle, 170 - Botafogo",
+                    "defect_type": "Pendurada"
+                  }}
 
         Returns:
             Confirmação de envio com message_id e instruções para o cidadão
@@ -816,8 +837,16 @@ def create_app() -> FastMCP:
     async def send_whatsapp_flow(
         user_number: str,
         service_type: str,
+        prefill_data: Optional[dict] = None,
     ) -> dict:
-        """Envia WhatsApp Flow para coleta estruturada de dados."""
+        """Envia WhatsApp Flow para coleta estruturada de dados.
+
+        prefill_data: dict com campos já confirmados pelo cidadão no chat
+        (ex: {"endereco": "Rua X, 100", "defect_type": "Apagada"}). Vai
+        pré-preencher os campos correspondentes do Flow — cidadão só
+        confirma/edita em vez de digitar tudo. Use SEMPRE quando você (LLM)
+        já extraiu entidades da conversa antes de chamar esta tool.
+        """
         # Verificar se há flow cadastrado para este serviço
         if service_type not in FLOW_TEMPLATES:
             available = ", ".join(FLOW_TEMPLATES.keys())
@@ -830,6 +859,7 @@ def create_app() -> FastMCP:
         result = await send_flow_by_service(
             service_type=service_type,
             user_number=user_number,
+            prefill_data=prefill_data,
         )
 
         if result.get("success"):
@@ -932,9 +962,13 @@ def create_app() -> FastMCP:
                     f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
                     f"service={service_name}, user={user_id}"
                 )
+                # `send_flow_by_service` normaliza payload internamente via
+                # `normalize_prefill_for_flow` — passamos raw, normalizer
+                # cuida do mapping per-service.
                 flow_result = await send_flow_by_service(
                     service_type=service_name,
                     user_number=user_id,
+                    prefill_data=payload or None,
                 )
 
                 if flow_result.get("success"):

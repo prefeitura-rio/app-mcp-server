@@ -160,11 +160,26 @@ class ReparoLuminariaWorkflow(
             ("Danificada", None, None): "Danificada",
             ("Com ruído", None, None): "Com ruído",
         }
-        key = (
-            state.data.get("luminaria_defeito"),
-            state.data.get("luminaria_quantidade"),
-            state.data.get("luminaria_intercaladas_bloco"),
-        )
+        # Defeitos non-visual (Pendurada/Danificada/Com ruído) só têm entrada
+        # no mapping com qty=None, intercaladas=None. Mas o WhatsApp Flow
+        # estático mostra qty_pattern sempre (não-condicional), então o
+        # cidadão pode preencher qty mesmo pra defect non-visual.
+        # Normaliza descartando qty/intercaladas pra non-visual antes do
+        # lookup; previne KeyError sem mudar UX do Flow.
+        defeito = state.data.get("luminaria_defeito")
+        if defeito in {"Pendurada", "Danificada", "Com ruído"}:
+            qty, intercaladas = None, None
+        else:
+            qty = state.data.get("luminaria_quantidade")
+            intercaladas = state.data.get("luminaria_intercaladas_bloco")
+        key = (defeito, qty, intercaladas)
+        if key not in mapping:
+            logger.warning(
+                f"_classifica_defeito: combinação inválida {key}, "
+                f"fallback pro próprio defect_type"
+            )
+            state.data["luminaria_defeito_classificado"] = defeito
+            return
         state.data["luminaria_defeito_classificado"] = mapping[key]
         logger.info(
             f"Defeito classificado: {state.data['luminaria_defeito_classificado']}"
