@@ -12,20 +12,10 @@ import httpx
 from loguru import logger
 
 from src.config import env
-
-
-def _redact_flow_token(flow_token: str | None) -> str:
-    """
-    Mascara flow_token pra logs. Tokens `v1:*` carregam prefill JSON
-    encoded em base64url, podendo conter PII (endereço, CPF, etc.).
-    Retorna marker + length, nunca o conteúdo do payload encoded.
-    """
-    if not isinstance(flow_token, str):
-        return "<none>"
-    if flow_token.startswith("v1:"):
-        return f"v1:<redacted len={len(flow_token) - 3}>"
-    # Tokens opacos (uuid) não são sensíveis — mostra prefixo curto pra correlação
-    return f"{flow_token[:8]}…" if len(flow_token) > 12 else flow_token
+from src.tools.luminaria_entity_extractor import (
+    redact_flow_token as _redact_flow_token,
+)
+from src.tools.whatsapp_flows.normalizers import normalize_prefill_for_flow
 
 
 class WhatsAppFlowSender:
@@ -54,6 +44,7 @@ class WhatsAppFlowSender:
         flow_id: str,
         flow_token: str | None = None,
         flow_cta: str = "Abrir",
+        prefill_data: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """
         Envia WhatsApp Flow interativo para um destinatário.
@@ -63,6 +54,11 @@ class WhatsAppFlowSender:
             flow_id: ID do flow cadastrado na Meta (ex: 4141008006029185)
             flow_token: Identificador único da sessão (default: UUID gerado)
             flow_cta: Texto do botão de CTA (default: "Abrir")
+            prefill_data: Valores pra pré-popular campos do Flow. Vão pra
+                `flow_action_payload.data` — caminho funcional pra Flow
+                ESTÁTICO (cliente WhatsApp consome direto via Form
+                `init-values: ${data.X_prefill}` no Flow JSON). Empiricamente
+                provado E2E em produção 2026-05-19.
 
         Returns:
             Resposta da API do WhatsApp com message_id
@@ -81,8 +77,26 @@ class WhatsAppFlowSender:
         logged_token = _redact_flow_token(flow_token)
         logger.info(
             f"Enviando WhatsApp Flow | recipient={recipient} | "
-            f"flow_id={flow_id} | flow_token={logged_token}"
+            f"flow_id={flow_id} | flow_token={logged_token} | "
+            f"prefill_keys={sorted(prefill_data.keys()) if prefill_data else []}"
         )
+
+        # Pra Flow estático: cliente WhatsApp aplica `data` direto nos
+        # Form `init-values`. Pra Flow dinâmico: Meta entrega esse data ao
+        # endpoint server no INIT — geralmente vazio em v3.0, mas defensive.
+        flow_action_payload: Dict[str, Any] = {"screen": "MAIN"}
+        if prefill_data:
+            # Normalização: convenção do Flow JSON é declarar
+            # `screen.data` com sufixo `_prefill` (ex: `endereco_prefill`)
+            # consumido em `init-values: ${data.endereco_prefill}`. Callers
+            # podem passar nome canônico do field (`endereco`) ou já com
+            # sufixo (`endereco_prefill`); aqui normalizamos pra sempre
+            # bater com o schema do Flow.
+            normalized: Dict[str, Any] = {}
+            for key, value in prefill_data.items():
+                canonical = key if key.endswith("_prefill") else f"{key}_prefill"
+                normalized[canonical] = value
+            flow_action_payload["data"] = normalized
 
         payload = {
             "messaging_product": "whatsapp",
@@ -99,7 +113,7 @@ class WhatsAppFlowSender:
                         "flow_token": flow_token,
                         "flow_cta": flow_cta,
                         "flow_action": "navigate",
-                        "flow_action_payload": {"screen": "MAIN"},
+                        "flow_action_payload": flow_action_payload,
                     },
                 },
             },
@@ -154,6 +168,7 @@ async def send_flow_by_service(
     service_type: str,
     user_number: str,
     flow_token: str | None = None,
+    prefill_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Dispara WhatsApp Flow apropriado para um tipo de serviço.
@@ -161,10 +176,21 @@ async def send_flow_by_service(
     Args:
         service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
         user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
-        flow_token: Token opcional de rastreamento da sessão
+        flow_token: Token opcional de rastreamento da sessão. Se ausente,
+            gera UUID. Pode ser sobrescrito pelo encoding quando há prefill.
+        prefill_data: Entidades extraídas do contexto da conversa pelo
+            agente, pra pré-preencher campos do formulário. Aceita qualquer
+            JSON-serializable. Ex pra reparo_luminaria:
+                {"defect_type": "Pendurada", "qty_pattern": "uma",
+                 "endereco": "Rua Tal, 100"}
+            Encodado em `flow_token` (formato v1:base64) e decoded no
+            endpoint MCP `_handle_init`. Chaves não-mapeadas pelo Flow JSON
+            são ignoradas silenciosamente pelo cliente WhatsApp.
 
     Returns:
-        Resultado do envio com message_id e flow_token
+        Resultado do envio com message_id e flow_token (token retornado é o
+        ENCODADO, não o base — guard contra log accidental do payload por
+        callers downstream).
     """
     flow_id = FLOW_TEMPLATES.get(service_type)
 
@@ -176,13 +202,34 @@ async def send_flow_by_service(
             "message": f"Flow disponível apenas para: {available}",
         }
 
+    # Token correlação SEMPRE UUID único (preserva rastreabilidade
+    # cross-session) — prefill vai pelo `flow_action_payload.data`, não
+    # encodado no token. Codex P2 review 2026-05-19.
+    session_token = flow_token or str(uuid.uuid4())
+
+    # Normalização CENTRALIZADA: aplica per-service mapping de chaves +
+    # valores (workflow internal → Flow JSON canonical IDs) antes do envio.
+    # Garantee que TODOS os callers (explicit `send_whatsapp_flow` tool,
+    # auto-flow no `multi_step_service`, ou wrapper `send_luminaria_flow`)
+    # recebem a mesma normalização. Codex P2 round 5: explicit path estava
+    # bypassing normalização e silenciosamente dropando keys workflow-shape.
+    normalized_prefill = normalize_prefill_for_flow(service_type, prefill_data)
+
+    if normalized_prefill:
+        # Log audit-friendly (keys only, sem valores — PII).
+        logger.info(
+            f"send_flow_by_service prefill_keys={sorted(normalized_prefill.keys())} "
+            f"flow_token={_redact_flow_token(session_token)}"
+        )
+
     sender = WhatsAppFlowSender()
 
     try:
         result = await sender.send_flow(
             recipient=user_number,
             flow_id=flow_id,
-            flow_token=flow_token,
+            flow_token=session_token,
+            prefill_data=normalized_prefill or None,
         )
 
         return result
@@ -207,6 +254,9 @@ async def send_flow_by_service(
 async def send_luminaria_flow(
     user_number: str,
     flow_token: str | None = None,
+    prefill_data: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Wrapper para compatibilidade. Use send_flow_by_service."""
-    return await send_flow_by_service("reparo_luminaria", user_number, flow_token)
+    return await send_flow_by_service(
+        "reparo_luminaria", user_number, flow_token, prefill_data
+    )
