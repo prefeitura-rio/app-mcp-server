@@ -87,14 +87,42 @@ def _encrypt_response(data: dict, aes_key: bytes, iv: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _handle_init() -> dict:
+def _handle_init(incoming_data: dict | None = None) -> dict:
+    """
+    Resposta ao INIT request do WhatsApp Flow.
+
+    `incoming_data` vem do `flow_action_payload.data` que o bot serializou
+    no envio da mensagem Flow. Antes deste fix, `_handle_init` ignorava esse
+    payload e sempre retornava `show_qty_pattern=False, show_location=False`,
+    o que impedia prefill pra Flow dinâmico (`data_api_version: 3.0`).
+
+    Comportamento agora:
+    - Mantém defaults conservadores (`False`, `False`) se nada vier do bot.
+    - Aceita override via payload pros campos hoje declarados no Flow JSON
+      (`show_qty_pattern`, `show_location`).
+    - Faz pass-through de keys adicionais que o bot envie — Meta ignora se
+      não houver binding no Flow JSON; quando novas keys forem adicionadas
+      ao schema (`endereco_prefill`, etc.), elas funcionam automaticamente
+      sem novo deploy.
+    """
+    incoming = incoming_data or {}
+    base_data = {
+        "show_qty_pattern": False,
+        "show_location": False,
+    }
+    # Override só pra keys conhecidas + propagação livre de keys extras.
+    # Type-narrow show_* pra bool (Meta exige boolean estrito).
+    for key in ("show_qty_pattern", "show_location"):
+        if key in incoming:
+            base_data[key] = bool(incoming[key])
+    for key, value in incoming.items():
+        if key not in base_data:
+            base_data[key] = value
+
     return {
         "version": "3.0",
         "screen": "MAIN",
-        "data": {
-            "show_qty_pattern": False,
-            "show_location": False,
-        },
+        "data": base_data,
     }
 
 
@@ -150,7 +178,7 @@ async def process_flow_request(body: dict, private_key_pem: str) -> str:
         response = {"data": {"status": "active"}}
 
     elif action == "INIT":
-        response = _handle_init()
+        response = _handle_init(data)
 
     elif action == "data_exchange":
         trigger = data.get("trigger")
