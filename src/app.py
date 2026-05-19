@@ -54,6 +54,11 @@ from src.tools.divida_ativa import (
     emitir_guia_regularizacao,
     consultar_debitos,
 )
+from src.tools.govbr_auth import (
+    govbr_auth_init,
+    govbr_auth_status,
+    govbr_logout,
+)
 from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
@@ -329,6 +334,68 @@ def create_app() -> FastMCP:
             Dict com confirmação de sucesso, timestamp e instruções para resposta
         """
         response = await store_user_feedback(user_id, feedback)
+        return response
+
+    @conditional_mcp_tool("govbr_auth_init")
+    async def govbr_init_auth(
+        user_number: str, service_context: str = "consulta_dados"
+    ) -> dict:
+        """
+        Inicia fluxo de autenticação gov.br via PKCE para um cidadão.
+
+        Esta tool deve ser chamada quando o cidadão precisa se autenticar para
+        acessar serviços restritos (ex: consultar IPTU, multas, processos).
+
+        Retorna URL de autenticação que o cidadão deve clicar. O callback é
+        tratado pelo Agent Gateway.
+
+        Args:
+            user_number: Número WhatsApp do cidadão no formato E.164 (ex: +5521999999999)
+            service_context: Contexto do serviço (ex: iptu, multas, consultas_gerais)
+
+        Returns:
+            Dict com status, auth_url, auth_id e expires_in
+
+        Security:
+            - Rate limit: 5 tentativas/hora
+            - State TTL: 5 minutos
+            - PKCE SHA256
+        """
+        response = await govbr_auth_init(user_number, service_context)
+        return response
+
+    @conditional_mcp_tool("govbr_auth_status")
+    async def govbr_check_auth_status(user_number: str) -> dict:
+        """
+        Verifica se cidadão possui autenticação gov.br válida.
+
+        Use esta tool ANTES de solicitar nova autenticação para evitar
+        pedir que o cidadão autentique novamente se já está autenticado.
+
+        Args:
+            user_number: Número WhatsApp do cidadão no formato E.164
+
+        Returns:
+            Dict com is_authenticated, token_valid, expires_in e user_info
+        """
+        response = await govbr_auth_status(user_number)
+        return response
+
+    @conditional_mcp_tool("govbr_logout")
+    async def govbr_logout_user(user_number: str) -> dict:
+        """
+        Faz logout do cidadão, revogando token de autenticação gov.br.
+
+        Use quando o cidadão solicitar desconexão ou em caso de
+        requisição para "esquecer" dados.
+
+        Args:
+            user_number: Número WhatsApp do cidadão no formato E.164
+
+        Returns:
+            Dict com status de sucesso/erro
+        """
+        response = await govbr_logout(user_number)
         return response
 
     @conditional_mcp_tool(

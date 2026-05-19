@@ -56,6 +56,29 @@ RMI_OAUTH_SCOPES = getenv_or_action(
     "RMI_OAUTH_SCOPES", default="profile email", action="ignore"
 )
 
+# Gov.br / Identidade Carioca OAuth2 + PKCE Configuration
+# Used for citizen authentication flow via WhatsApp
+GOVBR_CLIENT_ID = getenv_or_action("GOVBR_CLIENT_ID", action="ignore")
+GOVBR_CLIENT_SECRET = getenv_or_action("GOVBR_CLIENT_SECRET", action="ignore")
+GOVBR_REDIRECT_URI = getenv_or_action("GOVBR_REDIRECT_URI", action="ignore")
+GOVBR_AUTH_URL = getenv_or_action(
+    "GOVBR_AUTH_URL",
+    default="https://identidade.prefeitura.rio/auth",
+    action="ignore",
+)
+GOVBR_TOKEN_URL = getenv_or_action(
+    "GOVBR_TOKEN_URL",
+    default="https://identidade.prefeitura.rio/token",
+    action="ignore",
+)
+GOVBR_SCOPE = getenv_or_action(
+    "GOVBR_SCOPE", default="openid profile email cpf", action="ignore"
+)
+# TTL for auth state in Redis (seconds) - default 5 minutes
+GOVBR_AUTH_STATE_TTL = int(
+    getenv_or_action("GOVBR_AUTH_STATE_TTL", default="300", action="ignore")
+)
+
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
