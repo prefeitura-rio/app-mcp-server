@@ -57,6 +57,7 @@
                 "label": "Como está o defeito? (se aplicável)",
                 "name": "qty_pattern",
                 "required": false,
+                "visible": "${(form.defect_type == 'Apagada') || (form.defect_type == 'Piscando') || (form.defect_type == 'Acesa de dia')}",
                 "data-source": [
                   {"id": "uma", "title": "Uma luminária"},
                   {"id": "bloco", "title": "Todas as do trecho apagadas"},
@@ -68,6 +69,7 @@
                 "label": "Onde está localizada?",
                 "name": "location",
                 "required": true,
+                "visible": "${((form.defect_type == 'Pendurada') || (form.defect_type == 'Danificada') || (form.defect_type == 'Com ruído')) || ((form.defect_type != '') && ((form.defect_type == 'Apagada') || (form.defect_type == 'Piscando') || (form.defect_type == 'Acesa de dia')) && (form.qty_pattern != ''))}",
                 "data-source": [
                   {"id": "Calçada", "title": "Calçada"},
                   {"id": "Fachada", "title": "Fachada"},
