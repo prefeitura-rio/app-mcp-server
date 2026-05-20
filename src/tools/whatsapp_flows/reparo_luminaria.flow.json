@@ -58,7 +58,10 @@
                   "name": "data_exchange",
                   "payload": {
                     "trigger": "defect_type",
-                    "defect_type": "${form.defect_type}"
+                    "defect_type": "${form.defect_type}",
+                    "qty_pattern": "${form.qty_pattern}",
+                    "location": "${form.location}",
+                    "endereco": "${form.endereco}"
                   }
                 }
               },
@@ -77,7 +80,10 @@
                   "name": "data_exchange",
                   "payload": {
                     "trigger": "qty_pattern",
-                    "qty_pattern": "${form.qty_pattern}"
+                    "qty_pattern": "${form.qty_pattern}",
+                    "defect_type": "${form.defect_type}",
+                    "location": "${form.location}",
+                    "endereco": "${form.endereco}"
                   }
                 }
               },
