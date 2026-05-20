@@ -185,22 +185,36 @@ def _handle_init(
 
 
 def _handle_defect_type(defect_type: str) -> dict:
+    """
+    User selecionou novo defect_type. CRÍTICO: echo a seleção pra
+    `defect_type_prefill` no response data, senão Meta re-aplica
+    `init-values` do form (que aponta pra `${data.defect_type_prefill}`)
+    e o campo reverte pra valor original. Também limpa
+    `qty_pattern_prefill` (stale se defeito mudou).
+    """
     is_visual = defect_type in _VISUAL
     return {
         "version": "3.0",
         "screen": "MAIN",
         "data": {
+            "defect_type_prefill": defect_type,  # echo pra evitar revert via init-values
+            "qty_pattern_prefill": "",  # clear stale (defeito mudou)
             "show_qty_pattern": is_visual,
             "show_location": not is_visual,
         },
     }
 
 
-def _handle_qty_pattern() -> dict:
+def _handle_qty_pattern(qty_pattern: str = "") -> dict:
+    """
+    User selecionou qty_pattern. Echo seleção pra `qty_pattern_prefill`
+    (mesma razão do _handle_defect_type — evitar revert via init-values).
+    """
     return {
         "version": "3.0",
         "screen": "MAIN",
         "data": {
+            "qty_pattern_prefill": qty_pattern,  # echo pra evitar revert
             "show_qty_pattern": True,
             "show_location": True,
         },
@@ -250,7 +264,7 @@ async def process_flow_request(body: dict, private_key_pem: str) -> str:
         if trigger == "defect_type":
             response = _handle_defect_type(data.get("defect_type", ""))
         elif trigger == "qty_pattern":
-            response = _handle_qty_pattern()
+            response = _handle_qty_pattern(data.get("qty_pattern", ""))
         else:
             logger.warning(f"luminaria_flow: trigger desconhecido {trigger!r}")
             response = {"version": "3.0", "data": {}}
