@@ -54,7 +54,7 @@ from src.tools.divida_ativa import (
     emitir_guia_regularizacao,
     consultar_debitos,
 )
-from src.tools.govbr_auth import (
+from src.tools.auth import (
     govbr_auth_init,
     govbr_auth_status,
     govbr_logout,
