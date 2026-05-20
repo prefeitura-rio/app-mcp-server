@@ -184,41 +184,74 @@ def _handle_init(
     }
 
 
-def _handle_defect_type(defect_type: str) -> dict:
+def _preserved_prefills(flow_token: str | None) -> dict:
+    """
+    Decoda flow_token pra recuperar prefills ORIGINAIS sent by bot
+    (Engine via send_flow_by_service). Sem isso, data_exchange handlers
+    perderiam contexto que o bot já conhecia (e.g. bot sabia location
+    da conversa anterior, mas user troca defect_type → endpoint precisa
+    PRESERVAR location_prefill que o bot mandou).
+
+    Princípio: data_exchange handlers update apenas o campo que mudou
+    + visibility flags. Outros prefills vêm do token (canal autoritativo
+    do bot pra dados conhecidos da conversa).
+    """
+    token_data = decode_flow_token(flow_token)
+    out = {}
+    for key in (
+        "defect_type_prefill",
+        "qty_pattern_prefill",
+        "location_prefill",
+        "endereco_prefill",
+    ):
+        # Aceita ambas keys: canonical "X_prefill" e alias "X" (bot pode mandar qualquer)
+        canonical = token_data.get(key)
+        if canonical is None:
+            alias_key = key[: -len("_prefill")]
+            canonical = token_data.get(alias_key)
+        if canonical is not None:
+            out[key] = canonical
+    return out
+
+
+def _handle_defect_type(defect_type: str, flow_token: str | None = None) -> dict:
     """
     User selecionou novo defect_type. CRÍTICO: echo a seleção pra
     `defect_type_prefill` no response data, senão Meta re-aplica
     `init-values` do form (que aponta pra `${data.defect_type_prefill}`)
-    e o campo reverte pra valor original. Também limpa
-    `qty_pattern_prefill` (stale se defeito mudou).
+    e o campo reverte pra valor original.
+
+    Preserva `qty_pattern_prefill` e `location_prefill` ORIGINAIS do bot
+    (decoded do flow_token). Permite que campos condicionais que aparecem
+    após a troca venham pré-preenchidos se o bot já conhecia o valor —
+    e.g. bot enviou defect=Pendurada + location=Calçada + qty=uma;
+    user troca pra defect=Apagada → qty_pattern aparece com "Uma luminária".
     """
     is_visual = defect_type in _VISUAL
-    return {
-        "version": "3.0",
-        "screen": "MAIN",
-        "data": {
-            "defect_type_prefill": defect_type,  # echo pra evitar revert via init-values
-            "qty_pattern_prefill": "",  # clear stale (defeito mudou)
-            "show_qty_pattern": is_visual,
-            "show_location": not is_visual,
-        },
+    data = {
+        # Preserva prefills bot enviou (pra campos que ficam ou aparecem)
+        **_preserved_prefills(flow_token),
+        # User explicitamente trocou defect — overwrite
+        "defect_type_prefill": defect_type,
+        "show_qty_pattern": is_visual,
+        "show_location": not is_visual,
     }
+    return {"version": "3.0", "screen": "MAIN", "data": data}
 
 
-def _handle_qty_pattern(qty_pattern: str = "") -> dict:
+def _handle_qty_pattern(qty_pattern: str = "", flow_token: str | None = None) -> dict:
     """
     User selecionou qty_pattern. Echo seleção pra `qty_pattern_prefill`
     (mesma razão do _handle_defect_type — evitar revert via init-values).
+    Preserva defect_type_prefill + location_prefill do bot.
     """
-    return {
-        "version": "3.0",
-        "screen": "MAIN",
-        "data": {
-            "qty_pattern_prefill": qty_pattern,  # echo pra evitar revert
-            "show_qty_pattern": True,
-            "show_location": True,
-        },
+    data = {
+        **_preserved_prefills(flow_token),
+        "qty_pattern_prefill": qty_pattern,
+        "show_qty_pattern": True,
+        "show_location": True,
     }
+    return {"version": "3.0", "screen": "MAIN", "data": data}
 
 
 def _classify(defect_type: str, qty_pattern: str) -> str:
@@ -262,9 +295,13 @@ async def process_flow_request(body: dict, private_key_pem: str) -> str:
     elif action == "data_exchange":
         trigger = data.get("trigger")
         if trigger == "defect_type":
-            response = _handle_defect_type(data.get("defect_type", ""))
+            response = _handle_defect_type(
+                data.get("defect_type", ""), flow_token=flow_token
+            )
         elif trigger == "qty_pattern":
-            response = _handle_qty_pattern(data.get("qty_pattern", ""))
+            response = _handle_qty_pattern(
+                data.get("qty_pattern", ""), flow_token=flow_token
+            )
         else:
             logger.warning(f"luminaria_flow: trigger desconhecido {trigger!r}")
             response = {"version": "3.0", "data": {}}

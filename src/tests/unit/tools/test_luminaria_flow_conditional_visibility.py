@@ -145,6 +145,72 @@ def test_compute_visibility_visual_with_qty():
 # ─── JSON structure invariants ──────────────────────────────────────
 
 
+def test_data_exchange_preserves_other_prefills_from_token():
+    """
+    Bug reportado: user troca opção que estava prefilled → handlers
+    perdiam contexto de OUTROS prefills enviados pelo bot.
+
+    Cenário: bot envia defect=Pendurada + qty=uma + location=Calçada via
+    flow_token. User troca defect pra Apagada → qty_pattern aparece
+    (era hidden em non-visual). Deve estar PRE-PREENCHIDO com "uma".
+    """
+    from src.tools.luminaria_entity_extractor import encode_flow_token
+    from src.tools.luminaria_flow import _handle_defect_type
+
+    token = encode_flow_token(
+        "session-uuid-test",
+        {
+            "defect_type": "Pendurada",
+            "qty_pattern": "uma",
+            "location": "Calçada",
+            "endereco": "Rua X, 100",
+        },
+    )
+
+    # User troca defect_type pra "Apagada" (visual)
+    response = _handle_defect_type("Apagada", flow_token=token)
+    data = response["data"]
+
+    # Defect_type echo (user's selection)
+    assert data["defect_type_prefill"] == "Apagada"
+    # qty_pattern + location ORIGINAIS preservados (bot já sabia)
+    assert data["qty_pattern_prefill"] == "uma", (
+        "Regressão: qty_pattern_prefill foi limpo, perdendo contexto"
+    )
+    assert data["location_prefill"] == "Calçada"
+    # Visibility correto pro novo defect (visual)
+    assert data["show_qty_pattern"] is True
+    assert data["show_location"] is False  # qty_pattern ainda não foi user-confirmed
+
+
+def test_data_exchange_handle_qty_preserves_location_prefill():
+    """User troca qty_pattern → location_prefill original deve ficar."""
+    from src.tools.luminaria_entity_extractor import encode_flow_token
+    from src.tools.luminaria_flow import _handle_qty_pattern
+
+    token = encode_flow_token(
+        "session-uuid-test-2", {"defect_type": "Apagada", "location": "Calçada"}
+    )
+    response = _handle_qty_pattern("uma", flow_token=token)
+    data = response["data"]
+
+    assert data["qty_pattern_prefill"] == "uma"
+    assert data["location_prefill"] == "Calçada"
+    assert data["defect_type_prefill"] == "Apagada"
+
+
+def test_data_exchange_without_token_still_works():
+    """Defensive: sem flow_token, handlers ainda retornam estrutura válida."""
+    from src.tools.luminaria_flow import _handle_defect_type, _handle_qty_pattern
+
+    r1 = _handle_defect_type("Pendurada", flow_token=None)
+    assert r1["data"]["defect_type_prefill"] == "Pendurada"
+    assert r1["data"]["show_location"] is True
+
+    r2 = _handle_qty_pattern("bloco", flow_token=None)
+    assert r2["data"]["qty_pattern_prefill"] == "bloco"
+
+
 def test_init_values_preserved(flow_json):
     """Form init-values devem permanecer (prefill — ganho ADR-026 original)."""
     children = flow_json["screens"][0]["layout"]["children"]
