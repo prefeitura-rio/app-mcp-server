@@ -211,6 +211,49 @@ def test_data_exchange_without_token_still_works():
     assert r2["data"]["qty_pattern_prefill"] == "bloco"
 
 
+def test_qty_handler_uses_incoming_defect_not_token():
+    """
+    User troca defect_type Pendurada→Apagada, depois seleciona qty_pattern.
+    Handler qty_pattern recebe incoming com defect_type=Apagada (user's
+    atual). NÃO deve reverter pra Pendurada (token original).
+    """
+    from src.tools.luminaria_entity_extractor import encode_flow_token
+    from src.tools.luminaria_flow import _handle_qty_pattern
+
+    token = encode_flow_token(
+        "sess-revert-test", {"defect_type": "Pendurada", "location": "Calçada"}
+    )
+    incoming = {
+        "trigger": "qty_pattern",
+        "qty_pattern": "uma",
+        "defect_type": "Apagada",  # user trocou
+        "location": "Calçada",
+        "endereco": "Rua X",
+    }
+    response = _handle_qty_pattern("uma", incoming=incoming, flow_token=token)
+    data = response["data"]
+    assert data["defect_type_prefill"] == "Apagada", (
+        "Regressão: defect_type revertido pro token em qty trigger"
+    )
+
+
+def test_defect_handler_echoes_other_form_fields():
+    """User troca defect — campos atuais do form (location, endereco) preservados."""
+    from src.tools.luminaria_flow import _handle_defect_type
+
+    incoming = {
+        "trigger": "defect_type",
+        "defect_type": "Apagada",
+        "qty_pattern": "",
+        "location": "Praça",
+        "endereco": "Rua X",
+    }
+    response = _handle_defect_type("Apagada", incoming=incoming, flow_token=None)
+    data = response["data"]
+    assert data["location_prefill"] == "Praça"
+    assert data["endereco_prefill"] == "Rua X"
+
+
 def test_init_values_preserved(flow_json):
     """Form init-values devem permanecer (prefill — ganho ADR-026 original)."""
     children = flow_json["screens"][0]["layout"]["children"]

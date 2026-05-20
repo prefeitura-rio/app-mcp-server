@@ -214,40 +214,69 @@ def _preserved_prefills(flow_token: str | None) -> dict:
     return out
 
 
-def _handle_defect_type(defect_type: str, flow_token: str | None = None) -> dict:
+def _merge_current_form_state(incoming: dict, flow_token: str | None) -> dict:
     """
-    User selecionou novo defect_type. CRÍTICO: echo a seleção pra
-    `defect_type_prefill` no response data, senão Meta re-aplica
-    `init-values` do form (que aponta pra `${data.defect_type_prefill}`)
-    e o campo reverte pra valor original.
+    Compõe prefills usando CURRENT form state (do incoming payload) como
+    source of truth, com fallback pro token pra campos que user ainda não
+    interagiu.
 
-    Preserva `qty_pattern_prefill` e `location_prefill` ORIGINAIS do bot
-    (decoded do flow_token). Permite que campos condicionais que aparecem
-    após a troca venham pré-preenchidos se o bot já conhecia o valor —
-    e.g. bot enviou defect=Pendurada + location=Calçada + qty=uma;
-    user troca pra defect=Apagada → qty_pattern aparece com "Uma luminária".
+    Bug histórico: handler usava só token → reverter user's selections em
+    transições subsequentes. Fix: Meta on-select-action payload envia
+    TODOS os ${form.X}, então `incoming` tem estado atual. Token só
+    contribui pra campos que estão ausentes/vazios no incoming.
+
+    Princípio padrão pra Flows dinâmicos: never revert user input.
+    """
+    out = _preserved_prefills(flow_token)
+    for src_key, dst_key in (
+        ("defect_type", "defect_type_prefill"),
+        ("qty_pattern", "qty_pattern_prefill"),
+        ("location", "location_prefill"),
+        ("endereco", "endereco_prefill"),
+    ):
+        value = incoming.get(src_key)
+        if value:  # non-empty/truthy — user filled
+            out[dst_key] = value
+    return out
+
+
+def _handle_defect_type(
+    defect_type: str,
+    incoming: dict | None = None,
+    flow_token: str | None = None,
+) -> dict:
+    """
+    User selecionou novo defect_type. Echo TODO form state atual +
+    visibility flags.
+
+    on-select-action payload envia defect_type + qty_pattern + location +
+    endereco do form atual. Handler ecoa tudo pra evitar revert em
+    transições subsequentes.
     """
     is_visual = defect_type in _VISUAL
+    incoming = dict(incoming or {})
+    incoming["defect_type"] = defect_type
     data = {
-        # Preserva prefills bot enviou (pra campos que ficam ou aparecem)
-        **_preserved_prefills(flow_token),
-        # User explicitamente trocou defect — overwrite
-        "defect_type_prefill": defect_type,
+        **_merge_current_form_state(incoming, flow_token),
         "show_qty_pattern": is_visual,
         "show_location": not is_visual,
     }
     return {"version": "3.0", "screen": "MAIN", "data": data}
 
 
-def _handle_qty_pattern(qty_pattern: str = "", flow_token: str | None = None) -> dict:
+def _handle_qty_pattern(
+    qty_pattern: str = "",
+    incoming: dict | None = None,
+    flow_token: str | None = None,
+) -> dict:
     """
-    User selecionou qty_pattern. Echo seleção pra `qty_pattern_prefill`
-    (mesma razão do _handle_defect_type — evitar revert via init-values).
-    Preserva defect_type_prefill + location_prefill do bot.
+    User selecionou qty_pattern. Mesma lógica do _handle_defect_type:
+    echo TODO estado atual + visibility flags. Não revert nada.
     """
+    incoming = dict(incoming or {})
+    incoming["qty_pattern"] = qty_pattern
     data = {
-        **_preserved_prefills(flow_token),
-        "qty_pattern_prefill": qty_pattern,
+        **_merge_current_form_state(incoming, flow_token),
         "show_qty_pattern": True,
         "show_location": True,
     }
@@ -296,11 +325,11 @@ async def process_flow_request(body: dict, private_key_pem: str) -> str:
         trigger = data.get("trigger")
         if trigger == "defect_type":
             response = _handle_defect_type(
-                data.get("defect_type", ""), flow_token=flow_token
+                data.get("defect_type", ""), incoming=data, flow_token=flow_token
             )
         elif trigger == "qty_pattern":
             response = _handle_qty_pattern(
-                data.get("qty_pattern", ""), flow_token=flow_token
+                data.get("qty_pattern", ""), incoming=data, flow_token=flow_token
             )
         else:
             logger.warning(f"luminaria_flow: trigger desconhecido {trigger!r}")
