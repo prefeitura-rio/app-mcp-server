@@ -172,8 +172,9 @@ async def geocode_address(address: str) -> dict:
 
 @interceptor(
     source={"source": "mcp", "tool": "cor_alert"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id")
-    or (args[0] if args else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else "unknown")
+    ),
 )
 async def create_cor_alert(
     user_id: str,

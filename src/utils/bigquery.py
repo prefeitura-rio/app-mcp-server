@@ -116,8 +116,9 @@ async def save_response_in_bq_background(
 
 @interceptor(
     source={"source": "mcp", "tool": "bigquery"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id")
-    or (args[0] if args else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else "unknown")
+    ),
 )
 def save_feedback_in_bq(
     user_id: str,
@@ -201,8 +202,9 @@ async def save_feedback_in_bq_background(
 
 @interceptor(
     source={"source": "mcp", "tool": "bigquery"},
-    extract_user_id=lambda args, kwargs: kwargs.get("user_id")
-    or (args[1] if len(args) > 1 else "unknown"),
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[1] if len(args) > 1 else "unknown")
+    ),
 )
 def save_cor_alert_in_bq(
     alert_id: str,
