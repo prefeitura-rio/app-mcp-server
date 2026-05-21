@@ -64,25 +64,6 @@ def save_response_in_bq(
 
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando resposta no BigQuery: {table_full_name}")
-    schema = [
-        bigquery.SchemaField("datetime", "DATETIME", mode="NULLABLE"),
-        bigquery.SchemaField("endpoint", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("data", "JSON", mode="NULLABLE"),
-        bigquery.SchemaField("environment", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
-    ]
-
-    job_config = bigquery.LoadJobConfig(
-        schema=schema,
-        # Optionally, set the write disposition. BigQuery appends loaded rows
-        # to an existing table by default, but with WRITE_TRUNCATE write
-        # disposition it replaces the table with the loaded data.
-        write_disposition="WRITE_APPEND",
-        time_partitioning=bigquery.TimePartitioning(
-            type_=bigquery.TimePartitioningType.DAY,
-            field="data_particao",  # name of column to use for partitioning
-        ),
-    )
     datetime_to_save = get_datetime()
     data_to_save = {
         "datetime": datetime_to_save,
@@ -95,11 +76,9 @@ def save_response_in_bq(
     client = get_bigquery_client()
 
     try:
-        job = client.load_table_from_json(
-            json_data, table_full_name, job_config=job_config
-        )
-        job.result()
-        # logger.info(f"Resposta salva no BigQuery: {table_full_name}")
+        errors = client.insert_rows_json(table_full_name, json_data)
+        if errors:
+            raise Exception(errors)
     except Exception:
         raise Exception(json_data)
 
@@ -161,24 +140,6 @@ def save_feedback_in_bq(
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando feedback no BigQuery: {table_full_name}")
 
-    schema = [
-        bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("feedback", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("timestamp", "DATETIME", mode="REQUIRED"),
-        bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
-    ]
-
-    job_config = bigquery.LoadJobConfig(
-        schema=schema,
-        write_disposition="WRITE_APPEND",
-        create_disposition="CREATE_IF_NEEDED",
-        time_partitioning=bigquery.TimePartitioning(
-            type_=bigquery.TimePartitioningType.DAY,
-            field="data_particao",
-        ),
-    )
-
     data_to_save = {
         "user_id": user_id,
         "feedback": feedback,
@@ -191,10 +152,9 @@ def save_feedback_in_bq(
     client = get_bigquery_client()
 
     try:
-        job = client.load_table_from_json(
-            json_data, table_full_name, job_config=job_config
-        )
-        job.result()
+        errors = client.insert_rows_json(table_full_name, json_data)
+        if errors:
+            raise Exception(errors)
         logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
     except Exception as e:
         logger.error(f"Erro ao salvar feedback no BigQuery: {str(e)}")
@@ -273,30 +233,6 @@ def save_cor_alert_in_bq(
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando alerta COR no BigQuery: {table_full_name}")
 
-    schema = [
-        bigquery.SchemaField("alert_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("alert_type", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("severity", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("description", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("address", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
-        bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
-        bigquery.SchemaField("created_at", "DATETIME", mode="REQUIRED"),
-        bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
-    ]
-
-    job_config = bigquery.LoadJobConfig(
-        schema=schema,
-        write_disposition="WRITE_APPEND",
-        create_disposition="CREATE_IF_NEEDED",
-        time_partitioning=bigquery.TimePartitioning(
-            type_=bigquery.TimePartitioningType.DAY,
-            field="data_particao",
-        ),
-    )
-
     data_to_save = {
         "alert_id": alert_id,
         "user_id": user_id,
@@ -315,10 +251,9 @@ def save_cor_alert_in_bq(
     client = get_bigquery_client()
 
     try:
-        job = client.load_table_from_json(
-            json_data, table_full_name, job_config=job_config
-        )
-        job.result()
+        errors = client.insert_rows_json(table_full_name, json_data)
+        if errors:
+            raise Exception(errors)
         logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
     except Exception as e:
         logger.error(f"Erro ao salvar alerta COR no BigQuery: {str(e)}")
@@ -383,31 +318,6 @@ async def save_cor_alert_in_bq_background(
 
     def _save_alert_with_neighborhood():
         table_full_name = f"rj-iplanrio.{dataset_id}.{table_id}"
-        schema = [
-            bigquery.SchemaField("alert_id", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("alert_type", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("severity", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("description", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("address", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
-            bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
-            bigquery.SchemaField("bairro_raw", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("bairro_normalizado", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("created_at", "DATETIME", mode="REQUIRED"),
-            bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
-        ]
-        job_config = bigquery.LoadJobConfig(
-            schema=schema,
-            write_disposition="WRITE_APPEND",
-            create_disposition="CREATE_IF_NEEDED",
-            schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
-            time_partitioning=bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY,
-                field="data_particao",
-            ),
-        )
         payload = [
             {
                 "alert_id": alert_id,
@@ -426,10 +336,9 @@ async def save_cor_alert_in_bq_background(
             }
         ]
         client = get_bigquery_client()
-        job = client.load_table_from_json(
-            payload, table_full_name, job_config=job_config
-        )
-        job.result()
+        errors = client.insert_rows_json(table_full_name, payload)
+        if errors:
+            raise Exception(errors)
         logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
 
     try:
@@ -488,36 +397,6 @@ def save_cor_alert_to_queue(
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando alerta COR na fila: {table_full_name}")
 
-    schema = [
-        bigquery.SchemaField("alert_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("user_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("alert_type", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("severity", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("description", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("address", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
-        bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
-        bigquery.SchemaField("bairro_raw", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("bairro_normalizado", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("created_at", "DATETIME", mode="REQUIRED"),
-        bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("aggregation_group_id", "STRING", mode="NULLABLE"),
-        bigquery.SchemaField("sent_at", "DATETIME", mode="NULLABLE"),
-        bigquery.SchemaField("environment", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("data_particao", "DATE", mode="NULLABLE"),
-    ]
-
-    job_config = bigquery.LoadJobConfig(
-        schema=schema,
-        write_disposition="WRITE_APPEND",
-        create_disposition="CREATE_IF_NEEDED",
-        schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
-        time_partitioning=bigquery.TimePartitioning(
-            type_=bigquery.TimePartitioningType.DAY,
-            field="data_particao",
-        ),
-    )
-
     data_to_save = {
         "alert_id": alert_id,
         "user_id": user_id,
@@ -541,10 +420,9 @@ def save_cor_alert_to_queue(
     client = get_bigquery_client()
 
     try:
-        job = client.load_table_from_json(
-            json_data, table_full_name, job_config=job_config
-        )
-        job.result()
+        errors = client.insert_rows_json(table_full_name, json_data)
+        if errors:
+            raise Exception(errors)
         logger.info(f"Alerta COR salvo na fila: {alert_id}")
     except Exception as e:
         logger.error(f"Erro ao salvar alerta COR na fila: {str(e)}")
