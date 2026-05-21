@@ -14,11 +14,41 @@ from src.tools.multi_step_service.core.orchestrator import Orchestrator
 
 DESCRIPTION = """
     Sistema de serviços multi-step com gerenciamento de estado e navegação não-linear.
-    
+
+    **🚨 PRIORIDADE MÁXIMA — ROTEAMENTO OBRIGATÓRIO 🚨**
+
+    Quando a mensagem do cidadão expressa intenção de **abrir solicitação ao serviço
+    público municipal** (verbos: `solicitar`, `abrir chamado`, `iniciar reparo`,
+    `iniciar atendimento`, `pedir reparo`, `pedir poda`, `emitir guia`, `pagar IPTU`)
+    + um dos termos abaixo, você **DEVE chamar esta tool IMEDIATAMENTE**:
+
+    - "luminária pública" / "poste apagado" / "iluminação pública" / "lâmpada da rua/poste"
+      → service_name="reparo_luminaria"
+    - "pagar IPTU" / "emitir guia IPTU" / "consultar débitos IPTU"
+      → service_name="iptu_pagamento"
+    - "podar árvore (da via pública/calçada/rua)" / "solicitar poda"
+      → service_name="poda_de_arvore"
+
+    **NÃO chame** esta tool (use `google_search` ou responda informacionalmente) quando:
+    - Mensagem for informacional ("quero saber o calendário do IPTU", "como funciona a poda")
+    - Termo for sobre questão privada ("trocar lâmpada da minha casa", "podar árvore do meu quintal")
+    - Mensagem for vaga sem intenção clara de abrir solicitação
+
+    Verifique a lista de workflows registrados abaixo antes de chamar; use exatamente
+    os `service_name` da seção "serviços disponíveis" listada mais abaixo.
+
+    **PROIBIDO:**
+    - Usar `google_search` antes desta tool quando a mensagem bater com termos acima.
+    - Responder texto sobre canais 1746 / Carioca Digital quando há workflow disponível aqui.
+    - Dizer ao cidadão que "não consigo fazer essa solicitação" — esta tool consegue.
+
+    Se a tool retornar `error_message` indicando serviço indisponível, aí sim use
+    fallback (`google_search`).
+
     **IMPORTANTE!! Esta tool funciona APENAS para os seguintes serviços:**
-    
+
     __replace__available_services__
-    
+
     Args:
         service_name: Nome do serviço (ex: "bank_account")
         payload: Dicionário com campos solicitados no payload_schema.
