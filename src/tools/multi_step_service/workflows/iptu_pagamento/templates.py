@@ -198,8 +198,8 @@ __replace_divida_ativa__
         """Mensagem para escolha do formato de boleto."""
         return """📋 **Como deseja gerar os boletos?**
 
-• **Boleto único** para todas as cotas selecionadas.
-• **Um boleto para cada cota** selecionada.
+1. **Boleto único** para todas as cotas selecionadas.
+2. **Um boleto para cada cota** selecionada.
 """
 
     # --- Confirmação ---
