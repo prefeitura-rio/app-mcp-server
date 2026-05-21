@@ -9,8 +9,7 @@ from src.tools.equipments.utils import (
 from src.config import env as config
 from src.utils.bigquery import get_bigquery_client
 from src.utils.error_interceptor import interceptor
-
-# from src.utils.log import logger
+from src.utils.log import logger
 
 
 def get_bigquery_result(query: str):
@@ -48,7 +47,6 @@ async def get_pluscode_coords_equipments(
                     t.plus8 as plus8_grid,
                     eq.plus8,
                     eq.plus10,
-                    eq.plus11,
                     cast(eq.distancia_metros as int64) as distancia_metros,
                     t.secretaria_responsavel,
                     t.categoria,
@@ -90,11 +88,10 @@ async def get_pluscode_coords_equipments(
             ),
             
             equipamentos_territorio as (
-                SELECT 
+                SELECT
                     CAST(NULL as STRING) as plus8_grid,
                     eq.plus8,
                     eq.plus10,
-                    eq.plus11,
                     CAST(st_distance(ST_GEOGPOINT(eq.longitude,eq.latitude), ST_GEOGPOINT({longitude}, {latitude})) AS INT64) as distancia_metros,
                     t.secretaria_responsavel,
                     t.categoria,
@@ -180,7 +177,7 @@ async def get_pluscode_coords_equipments(
             "data": data,
         }
     except Exception as e:
-        # logger.error(f"Erro no request do bigquery: {e}")
+        logger.error(f"Erro no request do bigquery: {e}")
         return {
             "error": "Erro no request do bigquery",
             "message": str(e),
