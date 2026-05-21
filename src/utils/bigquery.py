@@ -68,19 +68,23 @@ def save_response_in_bq(
     data_to_save = {
         "datetime": datetime_to_save,
         "endpoint": endpoint,
-        "data": data,
+        "data": json.dumps(data),  # Serialize JSON field to string
         "environment": env_value,
         "data_particao": datetime_to_save.split("T")[0],
     }
-    json_data = json.loads(json.dumps([data_to_save]))
+    json_data = [data_to_save]
     client = get_bigquery_client()
 
     try:
         errors = client.insert_rows_json(table_full_name, json_data)
         if errors:
-            raise Exception(errors)
-    except Exception:
-        raise Exception(json_data)
+            error_msgs = [
+                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+            ]
+            raise Exception(f"Erro ao inserir no BigQuery: {'; '.join(error_msgs)}")
+    except Exception as e:
+        logger.error(f"Erro ao salvar resposta no BigQuery: {str(e)}")
+        raise
 
 
 async def save_response_in_bq_background(
@@ -153,11 +157,16 @@ def save_feedback_in_bq(
     try:
         errors = client.insert_rows_json(table_full_name, json_data)
         if errors:
-            raise Exception(errors)
+            error_msgs = [
+                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+            ]
+            raise Exception(
+                f"Erro ao inserir feedback no BigQuery: {'; '.join(error_msgs)}"
+            )
         logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
     except Exception as e:
         logger.error(f"Erro ao salvar feedback no BigQuery: {str(e)}")
-        raise Exception(f"Failed to save feedback: {str(e)}")
+        raise
 
 
 async def save_feedback_in_bq_background(
@@ -251,11 +260,16 @@ def save_cor_alert_in_bq(
     try:
         errors = client.insert_rows_json(table_full_name, json_data)
         if errors:
-            raise Exception(errors)
+            error_msgs = [
+                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+            ]
+            raise Exception(
+                f"Erro ao inserir alerta COR no BigQuery: {'; '.join(error_msgs)}"
+            )
         logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
     except Exception as e:
         logger.error(f"Erro ao salvar alerta COR no BigQuery: {str(e)}")
-        raise Exception(f"Failed to save COR alert: {str(e)}")
+        raise
 
 
 async def save_cor_alert_in_bq_background(
@@ -336,7 +350,12 @@ async def save_cor_alert_in_bq_background(
         client = get_bigquery_client()
         errors = client.insert_rows_json(table_full_name, payload)
         if errors:
-            raise Exception(errors)
+            error_msgs = [
+                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+            ]
+            raise Exception(
+                f"Erro ao inserir alerta COR no BigQuery: {'; '.join(error_msgs)}"
+            )
         logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
 
     try:
@@ -420,11 +439,16 @@ def save_cor_alert_to_queue(
     try:
         errors = client.insert_rows_json(table_full_name, json_data)
         if errors:
-            raise Exception(errors)
+            error_msgs = [
+                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+            ]
+            raise Exception(
+                f"Erro ao inserir alerta COR na fila: {'; '.join(error_msgs)}"
+            )
         logger.info(f"Alerta COR salvo na fila: {alert_id}")
     except Exception as e:
         logger.error(f"Erro ao salvar alerta COR na fila: {str(e)}")
-        raise Exception(f"Failed to save COR alert to queue: {str(e)}")
+        raise
 
 
 async def save_cor_alert_to_queue_background(
