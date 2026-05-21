@@ -466,14 +466,10 @@ def test_bigquery_save_functions(monkeypatch):
 
     saved_payloads = []
 
-    class FakeJob:
-        def result(self):
-            return None
-
     class FakeClient:
-        def load_table_from_json(self, payload, table_name, job_config=None):
-            saved_payloads.append((payload, table_name, job_config))
-            return FakeJob()
+        def insert_rows_json(self, table_name, payload):
+            saved_payloads.append((payload, table_name))
+            return []  # No errors
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: FakeClient())
     monkeypatch.setattr(module, "get_datetime", lambda: "2026-04-08T10:00:00.000000")
@@ -486,7 +482,7 @@ def test_bigquery_save_functions(monkeypatch):
         project_id="proj-x",
         environment="staging",
     )
-    payload, table_name, _job_config = saved_payloads[-1]
+    payload, table_name = saved_payloads[-1]
     assert table_name == "proj-x.dataset.responses"
     assert payload[0]["environment"] == "staging"
     assert payload[0]["data_particao"] == "2026-04-08"
@@ -500,7 +496,7 @@ def test_bigquery_save_functions(monkeypatch):
         table_id="feedback",
         project_id="proj-y",
     )
-    payload, table_name, _job_config = saved_payloads[-1]
+    payload, table_name = saved_payloads[-1]
     assert table_name == "proj-y.dataset.feedback"
     assert payload[0]["feedback"] == "ótimo"
 
@@ -519,7 +515,7 @@ def test_bigquery_save_functions(monkeypatch):
         table_id="cor_alerts",
         project_id="proj-z",
     )
-    payload, table_name, _job_config = saved_payloads[-1]
+    payload, table_name = saved_payloads[-1]
     assert table_name == "proj-z.dataset.cor_alerts"
     assert payload[0]["alert_type"] == "alagamento"
 
@@ -540,7 +536,7 @@ def test_bigquery_save_functions(monkeypatch):
         table_id="queue",
         project_id="proj-q",
     )
-    payload, table_name, _job_config = saved_payloads[-1]
+    payload, table_name = saved_payloads[-1]
     assert table_name == "proj-q.dataset.queue"
     assert payload[0]["status"] == "pending"
     assert payload[0]["bairro_normalizado"] == "jardim america"
@@ -620,14 +616,10 @@ async def test_bigquery_background_helpers(monkeypatch):
 
     saved_payloads = []
 
-    class FakeJob:
-        def result(self):
-            return None
-
     class FakeClient:
-        def load_table_from_json(self, payload, table_name, job_config=None):
-            saved_payloads.append((payload, table_name, job_config))
-            return FakeJob()
+        def insert_rows_json(self, table_name, payload):
+            saved_payloads.append((payload, table_name))
+            return []  # No errors
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: FakeClient())
 
@@ -664,7 +656,7 @@ async def test_bigquery_background_helpers(monkeypatch):
         dataset_id="dataset",
         table_id="alerts",
     )
-    payload, table_name, _job_config = saved_payloads[-1]
+    payload, table_name = saved_payloads[-1]
     assert table_name == "rj-iplanrio.dataset.alerts"
     assert payload[0]["bairro_normalizado"] == "jardim america"
     assert payload[0]["bairro_raw"] == "jardim america"
