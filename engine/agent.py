@@ -462,7 +462,7 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         if not time_filtered_messages:
             # If all messages are filtered out, keep at least the last message
             logger.warning(
-                f"[Short-Term Memory] All messages filtered by time limit, keeping last message"
+                "[Short-Term Memory] All messages filtered by time limit, keeping last message"
             )
             time_filtered_messages = [non_system_messages[-1]]
         else:

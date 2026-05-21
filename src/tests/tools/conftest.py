@@ -5,7 +5,6 @@ Este conftest fornece fixtures compartilhadas para testar as tools do MCP Server
 """
 
 import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,7 +17,9 @@ os.environ.setdefault("TYPESENSE_HUB_SEARCH_URL", "https://test.typesense.local/
 os.environ.setdefault("TYPESENSE_PARAMETERS", "none")
 os.environ.setdefault("GMAPS_API_TOKEN", "test-gmaps-token")
 os.environ.setdefault("GOOGLE_MAPS_API_KEY", "test-google-key")
-os.environ.setdefault("GOOGLE_MAPS_API_URL", "https://maps.googleapis.com/maps/api/geocode/json")
+os.environ.setdefault(
+    "GOOGLE_MAPS_API_URL", "https://maps.googleapis.com/maps/api/geocode/json"
+)
 os.environ.setdefault("NOMINATIM_API_URL", "https://nominatim.openstreetmap.org/search")
 os.environ.setdefault("GOOGLE_BIGQUERY_PAGE_SIZE", "100")
 os.environ.setdefault("RMI_API_URL", "https://test.rmi.local/api")
@@ -37,7 +38,7 @@ os.environ.setdefault("MEMORY_API_URL", "https://test.memory.local/api")
 os.environ.setdefault("MEMORY_API_TOKEN", "test-memory-token")
 
 # Configura pytest-asyncio
-pytest_plugins = ('pytest_asyncio',)
+pytest_plugins = ("pytest_asyncio",)
 
 
 @pytest.fixture(autouse=True)

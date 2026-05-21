@@ -11,7 +11,7 @@ import asyncio
 import sys
 
 # Usa os módulos carregados pelo conftest
-error_interceptor = sys.modules['src.utils.error_interceptor']
+error_interceptor = sys.modules["src.utils.error_interceptor"]
 interceptor = error_interceptor.interceptor
 send_general_error = error_interceptor.send_general_error
 
@@ -148,7 +148,10 @@ class TestInterceptorDecoratorAsync:
 
         @interceptor(
             source={"source": "mcp", "tool": "test_tool"},
-            extract_source=lambda args, kwargs, base: {**base, "inscricao": kwargs.get("inscricao")},
+            extract_source=lambda args, kwargs, base: {
+                **base,
+                "inscricao": kwargs.get("inscricao"),
+            },
         )
         async def failing_function(inscricao: str):
             raise Exception("Falha na consulta")
@@ -341,25 +344,32 @@ class TestSerializeSource:
     def test_send_api_error_uses_serialize_source(self):
         """Verifica que send_api_error chama serialize_source para gerar o flowname."""
         import asyncio
-        from unittest.mock import AsyncMock, patch, call
+        from unittest.mock import AsyncMock, patch
 
         source = {"source": "mcp", "tool": "search"}
 
-        with patch.object(
-            error_interceptor, "serialize_source", wraps=error_interceptor.serialize_source
-        ) as mock_serialize, patch.object(
-            error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
-        ) as mock_send:
+        with (
+            patch.object(
+                error_interceptor,
+                "serialize_source",
+                wraps=error_interceptor.serialize_source,
+            ) as mock_serialize,
+            patch.object(
+                error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
+            ) as mock_send,
+        ):
             mock_send.return_value = True
 
-            asyncio.run(error_interceptor.send_api_error(
-                user_id="test_user",
-                source=source,
-                api_endpoint="https://api.example.com/test",
-                request_body={},
-                status_code=500,
-                error_message="Error",
-            ))
+            asyncio.run(
+                error_interceptor.send_api_error(
+                    user_id="test_user",
+                    source=source,
+                    api_endpoint="https://api.example.com/test",
+                    request_body={},
+                    status_code=500,
+                    error_message="Error",
+                )
+            )
 
             mock_serialize.assert_called_once_with(source)
 
@@ -370,18 +380,25 @@ class TestSerializeSource:
 
         source = {"source": "mcp", "tool": "search"}
 
-        with patch.object(
-            error_interceptor, "serialize_source", wraps=error_interceptor.serialize_source
-        ) as mock_serialize, patch.object(
-            error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
-        ) as mock_send:
+        with (
+            patch.object(
+                error_interceptor,
+                "serialize_source",
+                wraps=error_interceptor.serialize_source,
+            ) as mock_serialize,
+            patch.object(
+                error_interceptor, "send_error_to_interceptor", new_callable=AsyncMock
+            ) as mock_send,
+        ):
             mock_send.return_value = True
 
-            asyncio.run(error_interceptor.send_general_error(
-                user_id="test_user",
-                source=source,
-                error_type="ValueError",
-                error_message="Test error",
-            ))
+            asyncio.run(
+                error_interceptor.send_general_error(
+                    user_id="test_user",
+                    source=source,
+                    error_type="ValueError",
+                    error_message="Test error",
+                )
+            )
 
             mock_serialize.assert_called_once_with(source)

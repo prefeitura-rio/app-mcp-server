@@ -6,7 +6,7 @@ Fornece fixtures e funções utilitárias reutilizáveis para testes.
 
 import os
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 # Dados de teste reutilizáveis
