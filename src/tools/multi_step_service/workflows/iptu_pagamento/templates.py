@@ -22,7 +22,9 @@ class IPTUMessageTemplates:
     @staticmethod
     def solicitar_inscricao() -> str:
         """Mensagem solicitando inscrição imobiliária."""
-        return "📋 Para consultar o IPTU, informe a **inscrição imobiliária** do seu imóvel."
+        return """📋 Para consultar o IPTU, informe a **inscrição imobiliária** do seu imóvel.
+        
+        É um número que tem até 8 dígitos. Você encontra ele no seu carnê do IPTU ou em documentos antigos do imóvel."""
 
     @staticmethod
     def escolher_ano(
