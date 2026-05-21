@@ -48,7 +48,6 @@ async def get_pluscode_coords_equipments(
                     t.plus8 as plus8_grid,
                     eq.plus8,
                     eq.plus10,
-                    eq.plus11,
                     cast(eq.distancia_metros as int64) as distancia_metros,
                     t.secretaria_responsavel,
                     t.categoria,
@@ -90,11 +89,10 @@ async def get_pluscode_coords_equipments(
             ),
             
             equipamentos_territorio as (
-                SELECT 
+                SELECT
                     CAST(NULL as STRING) as plus8_grid,
                     eq.plus8,
                     eq.plus10,
-                    eq.plus11,
                     CAST(st_distance(ST_GEOGPOINT(eq.longitude,eq.latitude), ST_GEOGPOINT({longitude}, {latitude})) AS INT64) as distancia_metros,
                     t.secretaria_responsavel,
                     t.categoria,
