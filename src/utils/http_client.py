@@ -133,18 +133,8 @@ class InterceptedHTTPClient:
         """Envia erro para o interceptor de forma síncrona."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(send_api_error(
-                user_id=self.user_id,
-                source=self.source,
-                api_endpoint=str(url),
-                request_body=request_body,
-                status_code=status_code,
-                error_message=error_message,
-                traceback=traceback_str,
-            ))
-        except RuntimeError:
-            try:
-                asyncio.run(send_api_error(
+            loop.create_task(
+                send_api_error(
                     user_id=self.user_id,
                     source=self.source,
                     api_endpoint=str(url),
@@ -152,7 +142,21 @@ class InterceptedHTTPClient:
                     status_code=status_code,
                     error_message=error_message,
                     traceback=traceback_str,
-                ))
+                )
+            )
+        except RuntimeError:
+            try:
+                asyncio.run(
+                    send_api_error(
+                        user_id=self.user_id,
+                        source=self.source,
+                        api_endpoint=str(url),
+                        request_body=request_body,
+                        status_code=status_code,
+                        error_message=error_message,
+                        traceback=traceback_str,
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Falha ao enviar erro para interceptor: {e}")
 
@@ -188,7 +192,11 @@ class InterceptedHTTPClient:
         try:
             response = await self._client.request(method, url, **kwargs)
 
-            if intercept_errors and error_status_codes and response.status_code in error_status_codes:
+            if (
+                intercept_errors
+                and error_status_codes
+                and response.status_code in error_status_codes
+            ):
                 try:
                     response_text = response.text[:500] if response.text else ""
                 except Exception:
@@ -267,7 +275,11 @@ class InterceptedHTTPClient:
         try:
             response = self._client.request(method, url, **kwargs)
 
-            if intercept_errors and error_status_codes and response.status_code in error_status_codes:
+            if (
+                intercept_errors
+                and error_status_codes
+                and response.status_code in error_status_codes
+            ):
                 try:
                     response_text = response.text[:500] if response.text else ""
                 except Exception:

@@ -114,11 +114,11 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
             - NÃO insista ou peça novamente o endereço
             - Forneça orientações gerais (ligar para 199, ir para local alto e seguro)
             - **NUNCA use a ferramenta `report_incident` neste caso** (sem endereço não é possível usar a ferramenta)
-        """)
+        """
+        )
 
     has_cras = any(
-        eq.get("categoria") in social_assistance_categories
-        for eq in equipments_data
+        eq.get("categoria") in social_assistance_categories for eq in equipments_data
     )
 
     if has_cras:
@@ -127,7 +127,6 @@ def get_instructions_for_equipments(equipments_data: List[dict]) -> str:
         Por telefone: Ligue para a Central 1746 ou para (21) 3460-1746.
         Como confirmar: Após agendar, o cidadão pode confirmar o status acessando http://cadunico.rio e inserindo o CPF.
         """)
-                                  
 
     # Se houver instruções específicas, retorná-las combinadas
     if instructions_parts:
@@ -162,7 +161,10 @@ async def get_equipments_with_instructions(
         from src.tools.equipments.utils import get_coords_from_google_maps_api
         from src.utils.http_client import InterceptedHTTPClient
         from src.config.env import GOOGLE_MAPS_API_URL, GOOGLE_MAPS_API_KEY
-        from src.tools.cor_alert_tools import _extract_google_neighborhood, normalize_neighborhood
+        from src.tools.cor_alert_tools import (
+            _extract_google_neighborhood,
+            normalize_neighborhood,
+        )
 
         coords = get_coords_from_google_maps_api(address)
 
@@ -172,10 +174,17 @@ async def get_equipments_with_instructions(
             # Fallback: se não encontrou bairro no forward geocoding, tenta reverse geocoding
             if not bairro_normalizado and GOOGLE_MAPS_API_KEY:
                 try:
-                    params = {"latlng": f"{coords['lat']},{coords['lng']}", "key": GOOGLE_MAPS_API_KEY}
+                    params = {
+                        "latlng": f"{coords['lat']},{coords['lng']}",
+                        "key": GOOGLE_MAPS_API_KEY,
+                    }
                     with InterceptedHTTPClient(
                         user_id="unknown",
-                        source={"source": "mcp", "tool": "equipments", "function": "reverse_geocode"},
+                        source={
+                            "source": "mcp",
+                            "tool": "equipments",
+                            "function": "reverse_geocode",
+                        },
                         sync=True,
                         timeout=10.0,
                     ) as client:
@@ -188,13 +197,20 @@ async def get_equipments_with_instructions(
                             bairro_raw = _extract_google_neighborhood(result)
                             if bairro_raw:
                                 bairro_normalizado = normalize_neighborhood(bairro_raw)
-                                logger.info(f"Bairro encontrado via reverse geocoding: {bairro_raw} -> {bairro_normalizado}")
+                                logger.info(
+                                    f"Bairro encontrado via reverse geocoding: {bairro_raw} -> {bairro_normalizado}"
+                                )
                                 break
                 except Exception as e:
-                    logger.warning(f"Erro ao fazer reverse geocoding para PONTOS_DE_APOIO: {str(e)}")
+                    logger.warning(
+                        f"Erro ao fazer reverse geocoding para PONTOS_DE_APOIO: {str(e)}"
+                    )
 
             # Verificar se bairro está na whitelist
-            if not bairro_normalizado or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO:
+            if (
+                not bairro_normalizado
+                or bairro_normalizado not in ALLOWED_NEIGHBORHOODS_PONTOS_APOIO
+            ):
                 # Bairro não permitido - retornar mensagem específica
                 return {
                     "instructions": (
@@ -245,7 +261,6 @@ async def get_equipments_categories() -> dict:
 async def get_equipments(
     address: str, categories: Optional[List[str]] = None
 ) -> List[dict]:
-
     if categories is None:
         categories = []
 

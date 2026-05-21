@@ -268,7 +268,6 @@ def _clean_malformed_messages(messages: Sequence[BaseMessage]) -> List[BaseMessa
     cleaned_messages = []
 
     for message in messages:
-
         # Verifica se é uma AIMessage com problemas
         if isinstance(message, AIMessage):
             # Verifica se tem conteúdo vazio E tool_calls vazio
