@@ -253,15 +253,14 @@ def _handle_defect_type(
     endereco do form atual. Handler ecoa tudo pra evitar revert em
     transições subsequentes.
     """
+    is_visual = defect_type in _VISUAL
     incoming = dict(incoming or {})
     incoming["defect_type"] = defect_type
-    merged = _merge_current_form_state(incoming, flow_token)
-    # Usa _compute_visibility para preservar show_location quando qty já está
-    # preenchida (via prefill do token ou seleção anterior). Hardcodar
-    # "not is_visual" escondia localização mesmo com qty conhecida.
-    qty = merged.get("qty_pattern_prefill") or merged.get("qty_pattern")
-    show_qty, show_loc = _compute_visibility(defect_type, qty)
-    data = {**merged, "show_qty_pattern": show_qty, "show_location": show_loc}
+    data = {
+        **_merge_current_form_state(incoming, flow_token),
+        "show_qty_pattern": is_visual,
+        "show_location": not is_visual,
+    }
     return {"version": "3.0", "screen": "MAIN", "data": data}
 
 
