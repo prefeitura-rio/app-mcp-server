@@ -57,4 +57,5 @@ where = ["."]
 [dependency-groups]
 dev = [
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.1.0",
 ]
