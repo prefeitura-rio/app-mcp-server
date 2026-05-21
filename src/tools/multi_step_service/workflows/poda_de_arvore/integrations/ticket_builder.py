@@ -17,6 +17,7 @@ def build_requester(state: ServiceState) -> Requester:
         phones=phones,
     )
 
+
 def build_address(state: ServiceState) -> Address:
     address_data = state.data.get("address", {})
 
@@ -26,26 +27,24 @@ def build_address(state: ServiceState) -> Address:
     if not street_number:
         street_number = "1"
 
-    ponto_ref = (
-        state.data.get("ponto_referencia", "")
-        or address_data.get("ponto_referencia", "")
+    ponto_ref = state.data.get("ponto_referencia", "") or address_data.get(
+        "ponto_referencia", ""
     )
 
     return Address(
         street=address_data.get(
-            "logradouro_nome_ipp",
-            address_data.get("logradouro", "")
+            "logradouro_nome_ipp", address_data.get("logradouro", "")
         ),
         street_code=address_data.get("logradouro_id_ipp", ""),
         neighborhood=address_data.get(
-            "bairro_nome_ipp",
-            address_data.get("bairro", "")
+            "bairro_nome_ipp", address_data.get("bairro", "")
         ),
         neighborhood_code=address_data.get("bairro_id_ipp", ""),
         number=street_number,
         locality=ponto_ref,
         zip_code=address_data.get("cep", ""),
     )
+
 
 def build_ticket_payload(state: ServiceState) -> Tuple[Address, Requester, str]:
     address = build_address(state)

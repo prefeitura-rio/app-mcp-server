@@ -50,7 +50,15 @@ def test_datetime_tools_get_current_time_serializes_payload(monkeypatch):
     [("09:30:00", "Bom dia"), ("15:30:00", "Boa tarde"), ("21:30:00", "Boa noite")],
 )
 def test_datetime_tools_format_greeting_by_hour(monkeypatch, hour, expected):
-    monkeypatch.setattr(datetime_tools, "get_current_rio_time", lambda: {"time": hour})
+    monkeypatch.setattr(
+        datetime_tools,
+        "get_current_rio_time",
+        lambda: {
+            "time": hour,
+            "weekday_pt": "Segunda-feira",
+            "date_br": "01/01/2024",
+        },
+    )
 
     result = datetime_tools.format_greeting()
 

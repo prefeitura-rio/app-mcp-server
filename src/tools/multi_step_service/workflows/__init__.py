@@ -14,9 +14,6 @@ from src.tools.multi_step_service.workflows.iptu_pagamento import IPTUWorkflow
 from src.tools.multi_step_service.workflows.equipments.equipments_workflow import (
     EquipmentsWorkflow,
 )
-from src.tools.multi_step_service.workflows.equipments.equipments_workflow import (
-    EquipmentsWorkflow,
-)
 from src.tools.multi_step_service.workflows.poda_de_arvore.workflow import (
     PodaDeArvoreWorkflow,
 )
@@ -30,4 +27,4 @@ workflows = [
 ]
 
 # Lista de workflows disponíveis para import fácil
-__all__ = ["workflows"]
+__all__ = ["workflows", "BankAccountWorkflow", "EquipmentsWorkflow"]
