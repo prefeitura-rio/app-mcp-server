@@ -165,8 +165,16 @@ async def get_token(user_number: str) -> Optional[Dict[str, Any]]:
     redis = _get_redis_client()
     token_key = f"govbr_token:{sanitized_phone}"
 
+    logger.info(
+        f"[DEBUG] get_token | user={user_number} | sanitized={sanitized_phone} | key={token_key}"
+    )
+
     token_json = await redis.get(token_key)
     await redis.close()
+
+    logger.info(
+        f"[DEBUG] Redis response | key={token_key} | found={'YES' if token_json else 'NO'}"
+    )
 
     if not token_json:
         return None
