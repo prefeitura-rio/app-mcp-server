@@ -18,13 +18,17 @@ DESCRIPTION = """
     **🚨 PRIORIDADE MÁXIMA — ROTEAMENTO OBRIGATÓRIO 🚨**
 
     Quando a mensagem do cidadão expressa intenção de **abrir solicitação ao serviço
-    público municipal** (verbos: `solicitar`, `abrir chamado`, `iniciar reparo`,
-    `iniciar atendimento`, `pedir reparo`, `pedir poda`, `emitir guia`, `pagar IPTU`)
-    + um dos termos abaixo, você **DEVE chamar esta tool IMEDIATAMENTE**:
+    público municipal** com verbo + termo específico abaixo, você **DEVE chamar
+    esta tool IMEDIATAMENTE**.
+
+    Verbos de ação (`solicitar`, `abrir chamado`, `iniciar reparo`,
+    `iniciar atendimento`, `pedir reparo`, `pedir poda`, `pagar`, `emitir guia`,
+    `quero pagar`, `quero emitir`) + termo específico:
 
     - "luminária pública" / "poste apagado" / "iluminação pública" / "lâmpada da rua/poste"
       → service_name="reparo_luminaria"
-    - "pagar IPTU" / "emitir guia IPTU" / "consultar débitos IPTU"
+    - "pagar IPTU" / "emitir guia IPTU" / "consultar débitos IPTU" / "guia de IPTU"
+      (apenas IPTU — NÃO usar pra outras guias como ISS, ITBI, taxa de lixo)
       → service_name="iptu_pagamento"
     - "podar árvore (da via pública/calçada/rua)" / "solicitar poda"
       → service_name="poda_de_arvore"
