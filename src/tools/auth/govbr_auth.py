@@ -149,7 +149,8 @@ async def govbr_auth_init(
                 ],  # Gateway usa "state" em vez de "auth_id"
                 "expires_in": gateway_response["expires_in"],
                 "message": f"Para continuar com {service_context}, clique no link abaixo para "
-                f"autenticar com gov.br. O link expira em {gateway_response['expires_in'] // 60} minutos.",
+                f"autenticar com gov.br. O link expira em {gateway_response['expires_in'] // 60} minutos.\n\n"
+                f"Quando você terminar a autenticação, me avise!",
             }
 
     except httpx.TimeoutException:
