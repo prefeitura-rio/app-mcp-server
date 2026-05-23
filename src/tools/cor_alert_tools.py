@@ -15,6 +15,7 @@ from src.config.env import (
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
+from src.observability.audit_log import audit_log
 
 
 # Valid alert types and severities
@@ -170,6 +171,15 @@ async def geocode_address(address: str) -> dict:
     return coords
 
 
+@audit_log(
+    action_type="report_incident",
+    sensitivity="high",
+    # `create_cor_alert(user_id, ...)` -- user_id pode chegar posicional,
+    # entao o default conservador (so kwargs) falharia. Override explicito.
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else None)
+    ),
+)
 @interceptor(
     source={"source": "mcp", "tool": "cor_alert"},
     extract_user_id=lambda args, kwargs: (

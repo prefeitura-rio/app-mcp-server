@@ -10,6 +10,7 @@ from src.config.env import RMI_API_URL
 from src.utils.rmi_oauth2 import get_authorization_header, is_oauth2_configured
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
+from src.observability.audit_log import audit_log
 
 
 class MemoryType(Enum):
@@ -75,6 +76,15 @@ async def get_memories(
         return response.json()
 
 
+@audit_log(
+    action_type="upsert_user_memory",
+    sensitivity="medium",
+    # `upsert_memory(user_id, memory_bank)` -- user_id e o primeiro positional.
+    # Default conservador (so kwargs) nao pegaria; override explicito.
+    extract_user_id=lambda args, kwargs: (
+        kwargs.get("user_id") or (args[0] if args else None)
+    ),
+)
 @interceptor(
     source={"source": "mcp", "tool": "memory"},
     extract_user_id=lambda args, kwargs: (

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from src.observability.audit_log import audit_log
+
 # Limite Meta: header text até 60 chars, body até 1024, footer até 60,
 # button title até 20, list section title até 24, row title até 24,
 # row description até 72. Validamos os mais críticos pra evitar erro
@@ -37,6 +39,13 @@ def _err(msg: str) -> dict[str, Any]:
     return {"status": "error", "error": msg}
 
 
+# NOTA C4: builder passthrough, sem user_id direto -- ver comentario em
+# whatsapp_media.py. Audit fica com user_hash="unknown" by design.
+@audit_log(
+    action_type="send_whatsapp_flow",
+    sensitivity="medium",
+    extract_user_id=lambda args, kwargs: None,
+)
 def build_flow_envelope(
     flow_id: str,
     body: str,
@@ -113,6 +122,11 @@ def build_flow_envelope(
     return {"status": "ok", "type": "interactive", "interactive": interactive}
 
 
+@audit_log(
+    action_type="send_whatsapp_buttons",
+    sensitivity="low",
+    extract_user_id=lambda args, kwargs: None,
+)
 def build_buttons_envelope(
     body: str,
     buttons: list[dict[str, str]],
@@ -176,6 +190,11 @@ def build_buttons_envelope(
     return {"status": "ok", "type": "interactive", "interactive": interactive}
 
 
+@audit_log(
+    action_type="send_whatsapp_list",
+    sensitivity="low",
+    extract_user_id=lambda args, kwargs: None,
+)
 def build_list_envelope(
     body: str,
     sections: list[dict[str, Any]],

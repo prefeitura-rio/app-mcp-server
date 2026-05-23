@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from src.observability.audit_log import audit_log
+
 _VALID_TYPES = {
     "audio",
     "image",
@@ -37,6 +39,15 @@ _VALID_TYPES = {
 _UPLOAD_TYPES = {"audio", "image", "video", "document", "sticker"}
 
 
+# NOTA C4: o builder NAO recebe user_id -- e tool passthrough que constroi
+# o envelope, o destinatario e injetado pelo Mule downstream. Audit record
+# fica com `user_hash="unknown"` por design; correlacao com cidadao se da
+# via `trace_id` (OTel) ou via correlacao Mule-side com o turn que disparou.
+@audit_log(
+    action_type="send_whatsapp_media",
+    sensitivity="low",
+    extract_user_id=lambda args, kwargs: None,
+)
 def build_whatsapp_media_envelope(
     type: str,
     url: Optional[str] = None,

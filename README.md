@@ -201,6 +201,60 @@ kubectx rj-superapp-staging
 kubectl port-forward svc/mcp-redis -n mcp 6379:6379
 ```
 
+## Audit Log (C4 plano-bot-2026 Fase 0)
+
+Tools com side-effect emitem um audit record estruturado no logger
+dedicado `audit_logger` (loguru com `channel="audit"`). Schema canônico:
+`snowflake_id`, `timestamp_utc`, `action_type`, `tool_name`, `user_hash`
+(SHA256 dos últimos 8 dígitos), `input_summary`/`output_summary`
+(truncados + PII-redacted: CPF, CEP, telefone E.164, email),
+`success`, `sensitivity` (low/medium/high), `trace_id` (OTel se ativo).
+
+Tools atualmente decoradas com `@audit_log` (Fase 0 - first wave):
+
+| Tool / Função | `action_type` | Sensitivity |
+|---|---|---|
+| `create_cor_alert` (`cor_alert_tools.py`) | `report_incident` | high |
+| `upsert_memory` (`memory.py`) | `upsert_user_memory` | medium |
+| `build_whatsapp_media_envelope` (`whatsapp_media.py`) | `send_whatsapp_media` | low |
+| `build_flow_envelope` (`whatsapp_interactive.py`) | `send_whatsapp_flow` | medium |
+| `build_buttons_envelope` (`whatsapp_interactive.py`) | `send_whatsapp_buttons` | low |
+| `build_list_envelope` (`whatsapp_interactive.py`) | `send_whatsapp_list` | low |
+
+TODO Fase 0 follow-up (segunda wave, pendente PR separado):
+
+- `register_sgrc_ticket` → `open_complaint` (high) — wrappar `async_new_ticket`
+  call ou criar wrapper local antes de aplicar.
+- `process_flow_request` (luminária crypto) → `submit_luminaria_flow` (high) —
+  cuidado com side-effect de encripção; logar APÓS classificação, antes do
+  encrypt_response.
+- `emitir_guia_a_vista` / `emitir_guia_regularizacao` / `pagar_iptu_via_pix`
+  (`divida_ativa.py`) → `issue_payment_slip` / `pay_iptu_via_pix` (high).
+- `analyze_inbound_image` / `analyze_inbound_audio` / `analyze_inbound_video`
+  — read-only para o cidadão mas geram custo Gemini + ContentVersion download.
+  Sensitivity=low se quisermos só audit; pendente decisão.
+
+NÃO aplicar decorator em:
+
+- `google_search`, `dharma_search`, `web_search_surkai` — read-only.
+- `equipments_instructions`, `equipments_by_address`, `validate_address`,
+  `reverse_geocode_address` — read-only / lookups.
+- `get_user_memory`, `get_user_by_cpf` — read-only.
+- `calculator_*`, `time_current`, `greeting_format` — puros.
+
+**Sink em produção:** hoje herda o sink global (stdout). Para storage
+append-only segregado (BigQuery dataset `bot_audit`, retention >=5 anos),
+configurar `audit_logger.add(...)` num bootstrap separado — PR próxima.
+
+Variáveis de ambiente:
+
+- `AUDIT_USER_HASH_SALT` (default `"rio-bot-audit-v1"`) — salt usado no
+  SHA256 do hash de telefone. Rotacionar quebra correlação histórica;
+  só fazer se houver incidente de leak do salt.
+- `AUDIT_MACHINE_ID` (default `0`) — id de máquina (0-1023) usado no
+  snowflake gerado. Configurar único por pod/instância em prod pra evitar
+  colisões raras no mesmo ms.
+
 ## Pre-commit
 
 Para instalar os hooks:
