@@ -31,6 +31,7 @@ _LIST_SECTION_TITLE_MAX = 24
 _LIST_ROW_TITLE_MAX = 24
 _LIST_ROW_DESC_MAX = 72
 _LIST_BUTTON_MAX = 20  # "Veja opções"
+_CTA_URL_DISPLAY_MAX = 20  # "Entrar no Gov.BR"
 
 
 def _err(msg: str) -> dict[str, Any]:
@@ -265,6 +266,60 @@ def build_list_envelope(
         "type": "list",
         "body": {"text": body},
         "action": {"button": button_label, "sections": section_objs},
+    }
+    if header:
+        interactive["header"] = {"type": "text", "text": header}
+    if footer:
+        interactive["footer"] = {"text": footer}
+
+    return {"status": "ok", "type": "interactive", "interactive": interactive}
+
+
+def build_cta_url_envelope(
+    body: str,
+    url: str,
+    display_text: str = "Abrir link",
+    header: Optional[str] = None,
+    footer: Optional[str] = None,
+) -> dict[str, Any]:
+    """Constrói envelope pra CTA URL button (botão verde com link externo).
+
+    Args:
+        body:         Texto do corpo da mensagem (≤1024 chars).
+        url:          URL completa que o botão abre (deve começar com https://).
+        display_text: Texto exibido no botão (≤20 chars).
+        header:       Header opcional (≤60 chars).
+        footer:       Footer opcional (≤60 chars).
+
+    Retorna `{status, type: "interactive", interactive: {...}}`.
+    """
+    if not body:
+        return _err("body obrigatório.")
+    if len(body) > _BODY_MAX:
+        return _err(f"body excede {_BODY_MAX} chars.")
+    if not url:
+        return _err("url obrigatório.")
+    if not url.startswith("https://"):
+        return _err("url deve começar com https:// (Meta requer HTTPS).")
+    if not display_text:
+        return _err("display_text obrigatório (texto do botão).")
+    if len(display_text) > _CTA_URL_DISPLAY_MAX:
+        return _err(f"display_text excede {_CTA_URL_DISPLAY_MAX} chars.")
+    if header and len(header) > _HEADER_MAX:
+        return _err(f"header excede {_HEADER_MAX} chars.")
+    if footer and len(footer) > _FOOTER_MAX:
+        return _err(f"footer excede {_FOOTER_MAX} chars.")
+
+    interactive: dict[str, Any] = {
+        "type": "cta_url",
+        "body": {"text": body},
+        "action": {
+            "name": "cta_url",
+            "parameters": {
+                "display_text": display_text,
+                "url": url,
+            },
+        },
     }
     if header:
         interactive["header"] = {"type": "text", "text": header}

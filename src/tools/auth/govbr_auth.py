@@ -30,6 +30,85 @@ from src.config import env
 from src.utils.govbr_token import is_authenticated, get_token_metadata, revoke_token
 
 
+async def _send_cta_url_button(
+    recipient: str,
+    body: str,
+    url: str,
+    display_text: str,
+) -> Dict[str, Any]:
+    """
+    Envia mensagem interativa com CTA URL button via Meta API.
+
+    Args:
+        recipient: Número do destinatário sem + (ex: 5521999999999)
+        body: Texto da mensagem
+        url: URL que o botão abre (deve começar com https://)
+        display_text: Texto do botão (máx 20 chars)
+
+    Returns:
+        {"success": bool, "message_id": str} ou {"success": False, "error": str}
+    """
+    # Remove + se vier no número
+    recipient = recipient.replace("+", "")
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": recipient,
+        "type": "interactive",
+        "interactive": {
+            "type": "cta_url",
+            "body": {"text": body},
+            "action": {
+                "name": "cta_url",
+                "parameters": {
+                    "display_text": display_text,
+                    "url": url,
+                },
+            },
+        },
+    }
+
+    headers = {
+        "Authorization": f"Bearer {env.WA_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    base_url = f"https://graph.facebook.com/v20.0/{env.WA_PHONE_NUMBER_ID}/messages"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(base_url, json=payload, headers=headers)
+
+            if response.status_code != 200:
+                error_data = response.json() if response.text else {}
+                logger.error(
+                    f"Erro ao enviar CTA URL button: {response.status_code} - {error_data}"
+                )
+                return {
+                    "success": False,
+                    "error": f"WhatsApp API error: {response.status_code}",
+                }
+
+            result = response.json()
+            message_id = result.get("messages", [{}])[0].get("id")
+
+            logger.info(
+                f"CTA URL button enviado | recipient={recipient[:5]}*** | message_id={message_id}"
+            )
+
+            return {
+                "success": True,
+                "message_id": message_id,
+            }
+
+    except httpx.HTTPError as e:
+        logger.error(f"Erro HTTP ao enviar CTA URL button: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
 async def govbr_auth_init(
     user_number: str, service_context: str = "consulta_dados"
 ) -> Dict[str, Any]:
@@ -141,16 +220,31 @@ async def govbr_auth_init(
             # Sucesso - adapta resposta do Gateway para formato esperado
             gateway_response = response.json()
 
+            # Envia mensagem com botão CTA URL via WhatsApp
+            send_result = await _send_cta_url_button(
+                recipient=phone_number,
+                body="Para continuar, toque no botão abaixo para fazer login com sua conta gov.br.\n\n"
+                "É rápido e seguro!",
+                url=gateway_response["auth_url"],
+                display_text="Entrar no Gov.BR",
+            )
+
+            if not send_result.get("success"):
+                logger.error(
+                    f"Failed to send auth button | error={send_result.get('error')}"
+                )
+                return {
+                    "status": "error",
+                    "error": "message_send_failed",
+                    "message": "Erro ao enviar link de autenticação. Tente novamente.",
+                }
+
             return {
                 "status": "ok",
-                "auth_url": gateway_response["auth_url"],
-                "auth_id": gateway_response[
-                    "state"
-                ],  # Gateway usa "state" em vez de "auth_id"
+                "message_id": send_result["message_id"],
+                "auth_id": gateway_response["state"],
                 "expires_in": gateway_response["expires_in"],
-                "message": f"Para continuar com {service_context}, clique no link abaixo para "
-                f"autenticar com gov.br. O link expira em {gateway_response['expires_in'] // 60} minutos.\n\n"
-                f"Quando você terminar a autenticação, me avise!",
+                "message": "Quando terminar de autenticar, me envie uma mensagem para continuar.",
             }
 
     except httpx.TimeoutException:
