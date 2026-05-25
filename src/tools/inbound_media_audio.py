@@ -77,7 +77,7 @@ comentários) com EXATAMENTE este schema:
 
 {
   "transcricao": "<transcrição literal em PT-BR, sem editar gírias>",
-  "resumo": "<resumo objetivo do pedido em 1-2 frases, max 240 chars>",
+  "resumo": "<resumo objetivo e conciso, em 3ª pessoa, max 100 chars>",
   "idioma_detectado": "<pt-br|pt-pt|es|en|outro>",
   "intencao_detectada": <true|false>,
   "categoria": "<um de: luminaria_publica | poda_arvore | buraco_via | lixo_irregular | iluminacao_publica | sinalizacao | endereco | duvida_geral | outro | nao_aplica>",
@@ -89,6 +89,7 @@ comentários) com EXATAMENTE este schema:
 REGRAS:
 - Transcreva exatamente o que ouvir. Não traduza. Se o áudio estiver
   ininteligível ou for ruído, use transcricao="" e intencao_detectada=false.
+- RESUMO: escreva em 3ª pessoa, objetivo e curto.
 - Se o áudio relata luminária com problema (apagada, quebrada, queimada),
   workflow_sugerido="reparo_luminaria".
 - Se relata árvore (galho caído, ameaçando fios, precisa podar),
@@ -175,33 +176,27 @@ def _build_reply_from_analysis(analysis: Dict[str, Any]) -> str:
             "Pode tentar de novo, ou me descrever em texto?"
         )
     workflow = analysis.get("workflow_sugerido", "nenhum")
-    resumo = analysis.get("resumo") or transcricao[:200]
+    resumo = (analysis.get("resumo") or "").strip()
     endereco = (analysis.get("endereco_mencionado") or "").strip()
+    entendimento = f"Entendi que {resumo.lower()}" if resumo else "Entendi"
     if workflow == "reparo_luminaria":
         if endereco:
             return (
-                f"Ouvi seu áudio: {resumo}. Vou abrir o chamado de reparo de "
-                f"luminária no endereço que você mencionou ({endereco}) — "
-                "confirma?"
+                f"{entendimento}. Você deseja abrir um chamado de reparo"
+                f"de luminária no endereço {endereco}?"
             )
-        return (
-            f"Ouvi seu áudio: {resumo}. "
-            "Vou te ajudar a abrir um chamado de reparo de luminária — "
-            "você confirma que quer prosseguir? Me passa o endereço (rua, "
-            "número, bairro)."
-        )
+        return f"{entendimento}. Você deseja abrir um chamado de reparo de luminária?"
     if workflow == "poda_de_arvore":
         if endereco:
             return (
-                f"Ouvi seu áudio: {resumo}. Vou abrir a solicitação de poda no "
-                f"endereço que você mencionou ({endereco}) — confirma?"
+                f"{entendimento}. Você deseja abrir uma solicitação de poda de árvore"
+                f"no endereço {endereco}?"
             )
-        return (
-            f"Ouvi seu áudio: {resumo}. "
-            "Vou te ajudar a abrir uma solicitação de poda de árvore — "
-            "você confirma? Me passa o endereço (rua, número, bairro)."
-        )
-    return f"Ouvi seu áudio: {resumo}. Vou seguir a partir disso."
+        return f"{entendimento}. Você deseja abrir uma solicitação de poda de árvore?"
+    if resumo:
+        return f"Entendi que {resumo.lower()}. Como posso te ajudar?"
+
+    return "Entendi! Como posso te ajudar?"
 
 
 async def analyze_inbound_audio(

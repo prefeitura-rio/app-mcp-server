@@ -64,7 +64,7 @@ problema de serviço público. Analise a foto e responda em JSON estrito
   "descricao": "<descrição objetiva do que a foto mostra, max 200 chars>",
   "problema_detectado": <true|false>,
   "categoria": "<um de: luminaria_publica | poda_arvore | buraco_via | lixo_irregular | iluminacao_publica | sinalizacao | outro | nao_aplica>",
-  "detalhes": "<o que especificamente parece estar errado, max 250 chars; vazio se problema_detectado=false>",
+  "detalhes": "<resumo objetivo e conciso do problema em 3ª pessoa, max 100 chars; vazio se problema_detectado=false>",
   "workflow_sugerido": "<um de: reparo_luminaria | poda_de_arvore | nenhum>",
   "confianca": "<alta|media|baixa>"
 }
@@ -79,6 +79,7 @@ REGRAS:
   workflow_sugerido="poda_de_arvore".
 - Pra outros problemas (buraco, lixo, sinalização) sem workflow MCP existente,
   use workflow_sugerido="nenhum" e ainda assim preencha categoria.
+- DETALHES: escreva em 3ª pessoa, objetivo e curto.
 - Confiança "alta" se você tem certeza visual; "baixa" se a foto é
   ambígua/escura/cropada.
 """
@@ -147,23 +148,21 @@ def _build_reply_from_analysis(analysis: Dict[str, Any]) -> str:
             "serviço público nela. Pode me descrever em texto o que precisa?"
         )
     workflow = analysis.get("workflow_sugerido", "nenhum")
-    descricao = analysis.get("detalhes") or analysis.get("descricao") or ""
+    detalhes = (analysis.get("detalhes") or "").strip()
+    entendimento = f"Entendi que {detalhes.lower()}" if detalhes else "Entendi"
+
     if workflow == "reparo_luminaria":
-        return (
-            f"Recebi sua foto. Pelo que consegui ver: {descricao}. "
-            "Vou te ajudar a abrir um chamado de reparo de luminária — "
-            "você confirma que quer prosseguir?"
-        )
+        return f"{entendimento}. Você deseja abrir um chamado de reparo de luminária?"
     if workflow == "poda_de_arvore":
+        return f"{entendimento}. Você deseja abrir uma solicitação de poda de árvore?"
+    if detalhes:
         return (
-            f"Recebi sua foto. Pelo que consegui ver: {descricao}. "
-            "Vou te ajudar a abrir uma solicitação de poda de árvore — "
-            "você confirma que quer prosseguir?"
+            f"{entendimento}. Esse tipo de problema ainda não tenho um fluxo "
+            "automático — pode me descrever em texto pra eu te encaminhar?"
         )
     return (
-        f"Recebi sua foto. Pelo que consegui ver: {descricao}. "
-        "Esse tipo de problema ainda não tenho um fluxo automático — "
-        "pode me descrever em texto pra eu te encaminhar?"
+        "Recebi sua foto. Esse tipo de problema ainda não tenho um fluxo "
+        "automático — pode me descrever em texto pra eu te encaminhar?"
     )
 
 

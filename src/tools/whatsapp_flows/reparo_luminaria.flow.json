@@ -5,14 +5,13 @@
   "screens": [
     {
       "id": "MAIN",
-      "title": "Defeito de luminária",
+      "title": "Reparo de Luminária",
       "terminal": true,
       "success": true,
       "data": {
         "defect_type_prefill": {"type": "string", "__example__": ""},
         "qty_pattern_prefill": {"type": "string", "__example__": ""},
         "location_prefill": {"type": "string", "__example__": ""},
-        "endereco_prefill": {"type": "string", "__example__": ""},
         "show_qty_pattern": {"type": "boolean", "__example__": false},
         "show_location": {"type": "boolean", "__example__": false}
       },
@@ -21,7 +20,7 @@
         "children": [
           {
             "type": "TextBody",
-            "text": "Confirme ou edite os dados abaixo:"
+            "text": "Confirme as informações abaixo:"
           },
           {
             "type": "Form",
@@ -29,18 +28,9 @@
             "init-values": {
               "defect_type": "${data.defect_type_prefill}",
               "qty_pattern": "${data.qty_pattern_prefill}",
-              "location": "${data.location_prefill}",
-              "endereco": "${data.endereco_prefill}"
+              "location": "${data.location_prefill}"
             },
             "children": [
-              {
-                "type": "TextInput",
-                "name": "endereco",
-                "label": "Endereço da luminária",
-                "input-type": "text",
-                "helper-text": "Rua, número e bairro",
-                "required": true
-              },
               {
                 "type": "RadioButtonsGroup",
                 "label": "Qual é o defeito da luminária?",
@@ -106,7 +96,6 @@
                   "name": "complete",
                   "payload": {
                     "_source": "whatsapp_flow",
-                    "endereco": "${form.endereco}",
                     "defect_type": "${form.defect_type}",
                     "qty_pattern": "${form.qty_pattern}",
                     "location": "${form.location}"

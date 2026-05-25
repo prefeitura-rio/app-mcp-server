@@ -68,8 +68,9 @@ este schema:
   "descricao": "<descrição objetiva do que o vídeo mostra, max 250 chars>",
   "problema_detectado": <true|false>,
   "categoria": "<um de: luminaria_publica | poda_arvore | buraco_via | lixo_irregular | iluminacao_publica | sinalizacao | enchente_alagamento | outro | nao_aplica>",
-  "detalhes": "<o que especificamente parece estar errado, max 300 chars; vazio se problema_detectado=false>",
+  "detalhes": "<resumo objetivo e conciso do problema em 3ª pessoa, max 100 chars; vazio se problema_detectado=false>",
   "transcricao_audio": "<se o cidadão fala no vídeo, transcreva fielmente em PT-BR, max 500 chars; vazio se sem áudio falado>",
+  "resumo_audio": "<se há áudio falado, resumo objetivo em 3ª pessoa, max 100 chars; vazio se sem áudio>",
   "workflow_sugerido": "<um de: reparo_luminaria | poda_de_arvore | nenhum>",
   "confianca": "<alta|media|baixa>"
 }
@@ -85,10 +86,12 @@ REGRAS:
 - Pra outros problemas (buraco, lixo, sinalização, enchente) sem
   workflow MCP existente, use workflow_sugerido="nenhum" e ainda assim
   preencha categoria.
+- DETALHES: escreva em 3ª pessoa, objetivo e curto.
+- RESUMO_AUDIO: se o cidadão fala no vídeo, resuma em 3ª pessoa o que foi dito.
 - Vídeos curtos (<3s) ou com baixa qualidade visual: confiança "baixa"
   e descreva o que conseguiu identificar.
-- Se há áudio falado, transcreva. Se for ruído/música/silêncio, deixe
-  transcricao_audio vazia.
+- Se há áudio falado, transcreva E resuma. Se for ruído/música/silêncio, deixe
+  transcricao_audio e resumo_audio vazios.
 """
 
 
@@ -162,35 +165,47 @@ def _build_reply_from_analysis(analysis: Dict[str, Any]) -> str:
             "serviço público nele. Pode me descrever em texto o que precisa?"
         )
     workflow = analysis.get("workflow_sugerido", "nenhum")
-    descricao = analysis.get("detalhes") or analysis.get("descricao") or ""
+    detalhes = (analysis.get("detalhes") or "").strip()
+    resumo_audio = (analysis.get("resumo_audio") or "").strip()
+
+    # Monta o entendimento combinando vídeo + áudio se houver
+    partes_entendimento = []
+    if detalhes:
+        partes_entendimento.append(detalhes.lower())
+    if resumo_audio:
+        partes_entendimento.append(resumo_audio.lower())
+
+    entendimento = ""
+    if partes_entendimento:
+        entendimento = f"Entendi que {' e '.join(partes_entendimento)}"
+
     if workflow == "reparo_luminaria":
-        return (
-            f"Recebi seu vídeo. Pelo que consegui observar: {descricao}. "
-            "Vou te ajudar a abrir um chamado de reparo de luminária — "
-            "você confirma que quer prosseguir?"
-        )
+        if entendimento:
+            return (
+                f"{entendimento}. Você deseja abrir um chamado de reparo de luminária?"
+            )
+        return "Você deseja abrir um chamado de reparo de luminária?"
+
     if workflow == "poda_de_arvore":
-        return (
-            f"Recebi seu vídeo. Pelo que consegui observar: {descricao}. "
-            "Vou te ajudar a abrir uma solicitação de poda de árvore — "
-            "você confirma que quer prosseguir?"
-        )
+        if entendimento:
+            return (
+                f"{entendimento}. Você deseja abrir uma solicitação de poda de árvore?"
+            )
+        return "Você deseja abrir uma solicitação de poda de árvore?"
+
     # workflow_sugerido='nenhum' mas problema_detectado=true: temos
-    # descricao + (eventual) transcricao do audio. Continuar atendimento
+    # descricao + (eventual) resumo_audio. Continuar atendimento
     # sem pedir pro cidadao repetir info já extraida (Codex P2 2026-05-15).
-    transcricao = (analysis.get("transcricao_audio") or "").strip()
-    if transcricao:
+    if entendimento:
         return (
-            f'Recebi seu vídeo. Você falou: "{transcricao}". '
-            f"E pelo que vi: {descricao}. Esse tipo de problema ainda não "
-            "tenho um fluxo automatizado — posso te encaminhar pra um "
-            "atendente humano ou continuar te ajudando por aqui?"
+            f"{entendimento}. Para esse tipo de problema ainda não tenho um fluxo "
+            "automatizado — posso te encaminhar pra um atendente humano ou "
+            "continuar te ajudando por aqui?"
         )
     return (
-        f"Recebi seu vídeo. Pelo que consegui observar: {descricao}. "
-        "Esse tipo de problema ainda não tenho um fluxo automatizado — "
-        "posso te encaminhar pra um atendente humano ou continuar te "
-        "ajudando por aqui?"
+        "Recebi seu vídeo. Para esse tipo de problema ainda não tenho um fluxo "
+        "automatizado — posso te encaminhar pra um atendente humano ou "
+        "continuar te ajudando por aqui?"
     )
 
 
