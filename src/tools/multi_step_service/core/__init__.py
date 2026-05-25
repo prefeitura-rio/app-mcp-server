@@ -17,17 +17,13 @@ DESCRIPTION = """
 
     **🚨 PRIORIDADE MÁXIMA — ROTEAMENTO OBRIGATÓRIO 🚨**
 
-    Quando a mensagem do cidadão expressa intenção de **abrir solicitação ao serviço
-    público municipal** (verbos: `solicitar`, `abrir chamado`, `iniciar reparo`,
-    `iniciar atendimento`, `pedir reparo`, `pedir poda`, `emitir guia`, `pagar IPTU`)
-    + um dos termos abaixo, você **DEVE chamar esta tool IMEDIATAMENTE**:
+    Quando a mensagem menciona os termos abaixo com intenção de ação (não apenas
+    informação), **CHAME esta tool IMEDIATAMENTE**:
 
-    - "luminária pública" / "poste apagado" / "iluminação pública" / "lâmpada da rua/poste"
-      → service_name="reparo_luminaria"
-    - "pagar IPTU" / "emitir guia IPTU" / "consultar débitos IPTU"
-      → service_name="iptu_pagamento"
-    - "podar árvore (da via pública/calçada/rua)" / "solicitar poda"
-      → service_name="poda_de_arvore"
+    - IPTU: "pagar IPTU", "emitir guia", "consultar débitos", ou número de 7-8 dígitos
+      após consulta de IPTU → service_name="iptu_pagamento"
+    - Luminária pública / poste / iluminação → service_name="reparo_luminaria"
+    - Poda de árvore (via pública) → service_name="poda_de_arvore"
 
     **NÃO chame** esta tool (use `google_search` ou responda informacionalmente) quando:
     - Mensagem for informacional ("quero saber o calendário do IPTU", "como funciona a poda")
@@ -53,6 +49,13 @@ DESCRIPTION = """
         service_name: Nome do serviço (ex: "bank_account")
         payload: Dicionário com campos solicitados no payload_schema.
         user_id: ID do agente, passar sempre 'agent'
+
+    **⚠️ IMPORTANTE - NÃO USE MEMÓRIA AUTOMATICAMENTE:**
+    - **NUNCA** preencha o payload inicial com dados de `get_user_memory` sem confirmar com o usuário
+    - Memórias podem estar desatualizadas ou de contextos diferentes
+    - **SEMPRE pergunte** ao usuário antes de usar dados salvos em memória
+    - Exemplo ERRADO: usuário diz "pagar IPTU" → você chama get_user_memory → preenche inscricao_imobiliaria automaticamente ❌
+    - Exemplo CORRETO: usuário diz "pagar IPTU" → você chama multi_step_service(payload={}) → sistema pede inscrição → usuário informa ✅
 
     COMO PREENCHER O PAYLOAD:
     Este sistema gerencia o estado da conversa. Sua decisão sobre o que enviar no `payload` define o comportamento do fluxo:

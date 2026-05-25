@@ -17,7 +17,7 @@ class InscricaoImobiliariaPayload(BaseModel):
 
     inscricao_imobiliaria: str = Field(
         ...,
-        description="Inscrição imobiliária do imóvel.",
+        description="Inscrição imobiliária do imóvel (aceita com ou sem formatação, ex: '0.000.001-8', '00000018' ou '18').",
         min_length=INSCRICAO_MIN_LENGTH,
         max_length=INSCRICAO_MAX_LENGTH,
     )
@@ -70,13 +70,14 @@ class EscolhaAnoPayload(BaseModel):
 
 
 class ProximaConsultaIPTUPayload(BaseModel):
-    """Use APENAS para ano (ex: 2024) ou inscrição imobiliária (8 dígitos). NÃO use para CPF!"""
+    """Use APENAS para ano (ex: 2024) ou inscrição imobiliária. NÃO use para CPF!"""
 
     ano_exercicio: Optional[Union[int, str]] = Field(
         default=None, description="Ano (ex: 2024)"
     )
     inscricao_imobiliaria: Optional[str] = Field(
-        default=None, description="Inscrição imobiliária (8 dígitos, ex: 0.585.671-1)."
+        default=None,
+        description="Inscrição imobiliária com ou sem formatação (ex: '0.000.001-8', '00000018', ou '18').",
     )
 
 
