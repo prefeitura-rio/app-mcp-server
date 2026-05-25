@@ -256,7 +256,7 @@ def test_happy_path_transcribed_with_reparo_luminaria(audio_module):
 
 
 def test_workflow_without_endereco_asks_for_address(audio_module):
-    """Workflow detectado mas sem endereco_mencionado → reply ainda pede."""
+    """Workflow detectado mas sem endereco_mencionado → reply pergunta se deseja abrir chamado."""
     audio_module._test_gemini_calls["response_text"] = (
         '{"transcricao": "minha rua tá com luminária queimada",'
         ' "resumo": "Reporte luminária",'
@@ -277,7 +277,11 @@ def test_workflow_without_endereco_asks_for_address(audio_module):
             content_version_id="0688800000NoAddr",
         )
     )
-    assert "rua, número, bairro" in out["suggested_reply_pt_br"]
+    # Nova mensagem não pede endereço detalhado, pergunta se deseja abrir chamado
+    assert (
+        "Você deseja abrir um chamado de reparo de luminária?"
+        in out["suggested_reply_pt_br"]
+    )
 
 
 def test_workflow_none_does_not_ask_to_retype(audio_module):

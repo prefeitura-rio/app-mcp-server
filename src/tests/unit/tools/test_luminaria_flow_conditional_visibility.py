@@ -69,11 +69,6 @@ def test_screen_data_declares_show_flags(flow_json):
 # ─── Field visibility expressions ───────────────────────────────────
 
 
-def test_endereco_always_visible(form_children):
-    """endereco sempre visível — primeira pergunta."""
-    assert "visible" not in form_children["endereco"]
-
-
 def test_defect_type_always_visible(form_children):
     """defect_type sempre visível — segunda pergunta."""
     assert "visible" not in form_children["defect_type"]
@@ -163,7 +158,6 @@ def test_data_exchange_preserves_other_prefills_from_token():
             "defect_type": "Pendurada",
             "qty_pattern": "uma",
             "location": "Calçada",
-            "endereco": "Rua X, 100",
         },
     )
 
@@ -228,7 +222,6 @@ def test_qty_handler_uses_incoming_defect_not_token():
         "qty_pattern": "uma",
         "defect_type": "Apagada",  # user trocou
         "location": "Calçada",
-        "endereco": "Rua X",
     }
     response = _handle_qty_pattern("uma", incoming=incoming, flow_token=token)
     data = response["data"]
@@ -238,20 +231,19 @@ def test_qty_handler_uses_incoming_defect_not_token():
 
 
 def test_defect_handler_echoes_other_form_fields():
-    """User troca defect — campos atuais do form (location, endereco) preservados."""
+    """User troca defect — campos atuais do form (location, qty_pattern) preservados."""
     from src.tools.luminaria_flow import _handle_defect_type
 
     incoming = {
         "trigger": "defect_type",
         "defect_type": "Apagada",
-        "qty_pattern": "",
+        "qty_pattern": "uma",
         "location": "Praça",
-        "endereco": "Rua X",
     }
     response = _handle_defect_type("Apagada", incoming=incoming, flow_token=None)
     data = response["data"]
     assert data["location_prefill"] == "Praça"
-    assert data["endereco_prefill"] == "Rua X"
+    assert data["qty_pattern_prefill"] == "uma"
 
 
 def test_init_values_preserved(flow_json):
@@ -259,5 +251,5 @@ def test_init_values_preserved(flow_json):
     children = flow_json["screens"][0]["layout"]["children"]
     form = next(c for c in children if c.get("type") == "Form")
     assert "init-values" in form
-    for field in ("defect_type", "qty_pattern", "location", "endereco"):
+    for field in ("defect_type", "qty_pattern", "location"):
         assert field in form["init-values"]
