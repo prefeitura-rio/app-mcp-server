@@ -36,8 +36,21 @@ jobs:
 
       - name: Check whether deploy needs a new image
         id: check-changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
         run: |
-          CHANGED_FILES=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          # `github.event.before` only exists on `push`. On workflow_dispatch it is
+          # empty, and on a new-branch push it is the all-zeros SHA — both make
+          # `git diff "$BEFORE_SHA" ...` fail with "ambiguous argument". Fall back to
+          # a full deploy instead of crashing when there is no usable prior SHA.
+          if [ -z "$BEFORE_SHA" ] || ! git rev-parse --verify --quiet "$BEFORE_SHA^{commit}" >/dev/null 2>&1; then
+            echo "k8s_only=false" >> "$GITHUB_OUTPUT"
+            echo "No usable 'before' SHA (manual dispatch or new branch) — running full deploy."
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")
           NON_DEPLOY_FILES=$(echo "$CHANGED_FILES" | grep -vE '^(k8s/|helm/)' || true)
 
           if [ -z "$CHANGED_FILES" ]; then
