@@ -132,6 +132,7 @@ def _handle_init(
         "defect_type_prefill": None,
         "qty_pattern_prefill": None,
         "location_prefill": None,
+        "endereco_prefill": None,
         "show_qty_pattern": False,
         "show_location": False,
     }

@@ -12,7 +12,7 @@ no WhatsApp Business Platform. Versionar em git habilita:
 
 | Arquivo | Flow ID Meta | Categoria | Tipo |
 |---|---|---|---|
-| `reparo_luminaria.flow.json` | `4141008006029185` | CUSTOMER_SUPPORT | static (sem `data_api_version`) |
+| `reparo_luminaria.flow.json` | `4141008006029185` | CUSTOMER_SUPPORT | dinâmico (`data_api_version: 3.0`); prefill via `flow_token` (defect/qty/location/endereco) |
 
 ## Como atualizar um Flow publicado
 

@@ -12,6 +12,7 @@
         "defect_type_prefill": {"type": "string", "__example__": ""},
         "qty_pattern_prefill": {"type": "string", "__example__": ""},
         "location_prefill": {"type": "string", "__example__": ""},
+        "endereco_prefill": {"type": "string", "__example__": ""},
         "show_qty_pattern": {"type": "boolean", "__example__": false},
         "show_location": {"type": "boolean", "__example__": false}
       },
@@ -28,7 +29,8 @@
             "init-values": {
               "defect_type": "${data.defect_type_prefill}",
               "qty_pattern": "${data.qty_pattern_prefill}",
-              "location": "${data.location_prefill}"
+              "location": "${data.location_prefill}",
+              "endereco": "${data.endereco_prefill}"
             },
             "children": [
               {
@@ -90,6 +92,14 @@
                 ]
               },
               {
+                "type": "TextInput",
+                "label": "Endereço (rua e número), se souber",
+                "name": "endereco",
+                "input-type": "text",
+                "required": false,
+                "visible": "${data.show_location}"
+              },
+              {
                 "type": "Footer",
                 "label": "Concluir",
                 "on-click-action": {
@@ -98,7 +108,8 @@
                     "_source": "whatsapp_flow",
                     "defect_type": "${form.defect_type}",
                     "qty_pattern": "${form.qty_pattern}",
-                    "location": "${form.location}"
+                    "location": "${form.location}",
+                    "endereco": "${form.endereco}"
                   }
                 }
               }
