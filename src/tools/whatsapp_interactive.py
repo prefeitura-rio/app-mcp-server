@@ -38,6 +38,35 @@ def _err(msg: str) -> dict[str, Any]:
     return {"status": "error", "error": msg}
 
 
+def encode_prefill_token(
+    flow_token: str,
+    prefill_data: Optional[dict[str, Any]] = None,
+    service_type: Optional[str] = None,
+) -> str:
+    """Encoda prefill no ``flow_token`` pra Flow dinâmico (data_api_version 3.0).
+
+    O canal de prefill de um Flow dinâmico é o ``flow_token``: o endpoint
+    ``_handle_init`` decoda os valores e os devolve no INIT response, abrindo o
+    formulário já pré-preenchido. ``service_type`` é OBRIGATÓRIO pra prefilar: o
+    normalizer do serviço mapeia os valores pros IDs canônicos do Flow (ex:
+    ``"apagada"`` → ``"Apagada"``) e — crucial — whitelista só os campos do
+    Flow, descartando qualquer chave fora dele (inclusive PII como CPF/endereço,
+    que NÃO deve ir no token).
+
+    Sem prefill, sem ``service_type``, ou após normalização vazia retorna o
+    ``flow_token`` original intacto (UUID opaco) — back-compat.
+    """
+    if not prefill_data or not service_type:
+        return flow_token
+    from src.tools.luminaria_entity_extractor import encode_flow_token
+    from src.tools.whatsapp_flows.normalizers import normalize_prefill_for_flow
+
+    normalized = normalize_prefill_for_flow(service_type, prefill_data)
+    if not normalized:
+        return flow_token
+    return encode_flow_token(flow_token, normalized)
+
+
 def build_flow_envelope(
     flow_id: str,
     body: str,

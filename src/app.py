@@ -1261,13 +1261,15 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool(
         "build_whatsapp_flow_envelope",
         description=(
-            "Constrói envelope de WhatsApp Flow (formulário interativo) com parâmetros manuais. "
-            "IMPORTANTE: Para serviços (luminária, poda, etc), use send_whatsapp_flow. "
-            "Use esta tool apenas se precisar controle total sobre flow_id, flow_action_payload, etc. "
+            "Constrói e entrega um envelope de WhatsApp Flow (formulário interativo) ao cidadão do thread atual (via Mule — não precisa user_number). "
+            "Use esta tool pra abrir um Flow de serviço (ex: reparo_luminaria). "
             "Passe `flow_id` (do Meta Business Manager), "
             "`body` (texto de introdução), `flow_token` (UUID que o bot gera "
-            "pra correlacionar a submissão do cidadão). Opcional: `cta` "
-            "(rótulo do botão, default 'Abrir formulário'), `header`/`footer`, "
+            "pra correlacionar a submissão do cidadão). "
+            "PRÉ-PREENCHIMENTO (recomendado): passe `prefill_data` com os campos que o cidadão JÁ mencionou na conversa "
+            "(ex: {'defect_type':'Apagada','location':'Rua'}) + `service_type` (ex: 'reparo_luminaria') — "
+            "os valores são encodados no flow_token e o formulário abre já preenchido. "
+            "Opcional: `cta` (rótulo do botão, default 'Abrir formulário'), `header`/`footer`, "
             "`flow_action_payload` (initial screen + data)."
         ),
     )
@@ -1280,8 +1282,19 @@ def create_app() -> FastMCP:
         footer: Optional[str] = None,
         flow_action: str = "navigate",
         flow_action_payload: Optional[dict] = None,
+        prefill_data: Optional[dict] = None,
+        service_type: Optional[str] = None,
     ) -> dict:
-        from src.tools.whatsapp_interactive import build_flow_envelope
+        from src.tools.whatsapp_interactive import (
+            build_flow_envelope,
+            encode_prefill_token,
+        )
+
+        # Pré-preenchimento (Flow dinâmico): encoda os valores extraídos da
+        # conversa no flow_token; `_handle_init` decoda e abre o form já
+        # preenchido. Entrega via Mule/envelope (não precisa user_number),
+        # então é o caminho seguro pro Engine prefilar.
+        flow_token = encode_prefill_token(flow_token, prefill_data, service_type)
 
         return build_flow_envelope(
             flow_id=flow_id,

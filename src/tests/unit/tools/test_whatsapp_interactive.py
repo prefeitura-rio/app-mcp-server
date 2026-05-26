@@ -1,10 +1,57 @@
 """Unit tests pros helpers de WhatsApp interactive (ADR-022 + ADR-024)."""
 
+from src.tools.luminaria_entity_extractor import decode_flow_token
 from src.tools.whatsapp_interactive import (
     build_buttons_envelope,
     build_flow_envelope,
     build_list_envelope,
+    encode_prefill_token,
 )
+
+
+# ===================== encode_prefill_token (prefill) =====================
+
+
+def test_encode_prefill_token_no_prefill_returns_original():
+    """Sem prefill → token UUID opaco intacto (back-compat)."""
+    assert encode_prefill_token("uuid-123", None) == "uuid-123"
+    assert encode_prefill_token("uuid-123", {}) == "uuid-123"
+
+
+def test_encode_prefill_token_encodes_and_normalizes():
+    """Com prefill + service_type: normaliza pros IDs do Flow e encoda no
+    token (v1:base64), decodável de volta pelo _handle_init."""
+    token = encode_prefill_token(
+        "uuid-123",
+        {"defect_type": "apagada", "luminaria_localizacao": "rua"},
+        service_type="reparo_luminaria",
+    )
+    assert token.startswith("v1:")
+    decoded = decode_flow_token(token)
+    assert decoded["defect_type"] == "Apagada"  # normalizado pro ID canônico
+    assert decoded["location"] == "Rua"
+    assert decoded["_session"] == "uuid-123"  # base token preservado
+
+
+def test_encode_prefill_token_requires_service_type():
+    """Prefill SEM service_type → token opaco. Sem o normalizer do serviço pra
+    whitelistar, qualquer PII (CPF/endereço) iria crua pro token — por isso o
+    prefill só acontece quando o serviço é informado."""
+    assert encode_prefill_token("uuid-7", {"defect_type": "Apagada"}) == "uuid-7"
+    assert (
+        encode_prefill_token("uuid-7", {"cpf": "12345678900", "endereco": "Rua X"})
+        == "uuid-7"
+    )
+
+
+def test_encode_prefill_token_drops_invalid_after_normalize():
+    """Se a normalização derruba tudo (valores inválidos), volta o token cru."""
+    assert (
+        encode_prefill_token(
+            "uuid-9", {"defect_type": "inexistente"}, service_type="reparo_luminaria"
+        )
+        == "uuid-9"
+    )
 
 
 # ===================== Flow =====================
