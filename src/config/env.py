@@ -20,6 +20,26 @@ GEMINI_MODEL = getenv_or_action(
     "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
 )
 
+# TTS (Text-to-Speech) — provider switchável.
+#   TTS_PROVIDER=google (default) → Google Cloud TTS (voz pt-BR-Neural2-A,
+#       OGG/Opus nativo, auth via GOOGLE_APPLICATION_CREDENTIALS / ADC).
+#   TTS_PROVIDER=gemini → Gemini TTS (gemini-2.5-flash-preview-tts), saída PCM
+#       s16le 24kHz mono convertida pra OGG/Opus via ffmpeg. Auth reusa
+#       GEMINI_API_KEY. Sotaque carioca é best-effort via style prompt (não
+#       há voz dedicada carioca; ver ADR-038).
+TTS_PROVIDER = getenv_or_action("TTS_PROVIDER", default="google", action="ignore")
+TTS_GEMINI_MODEL = getenv_or_action(
+    "TTS_GEMINI_MODEL", default="gemini-2.5-flash-preview-tts", action="ignore"
+)
+TTS_GEMINI_VOICE = getenv_or_action(
+    "TTS_GEMINI_VOICE", default="Sulafat", action="ignore"
+)
+TTS_GEMINI_STYLE_PROMPT = getenv_or_action(
+    "TTS_GEMINI_STYLE_PROMPT",
+    default="Fale em português do Brasil com sotaque carioca, tom acolhedor e natural.",
+    action="ignore",
+)
+
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
 GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
 

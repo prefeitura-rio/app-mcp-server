@@ -24,7 +24,12 @@ def _load_module_directly(module_name: str, file_path: str):
     return spec, module
 
 
-# Mock do módulo src.config.env antes de carregar qualquer coisa
+# Mock do módulo src.config.env antes de carregar qualquer coisa.
+# NOTA: este mock substitui sys.modules["src.config.env"] globalmente (linha
+# abaixo) e nunca é restaurado, então vaza pra outros módulos de teste que
+# importarem src.config.env depois deste conftest. Por isso MockEnv precisa
+# espelhar os atributos públicos de env.py que código sob teste lê em runtime
+# (ex: src.tools.tts lê env.TTS_*). Ver "Noticed improvements" no PR do TTS.
 class MockEnv:
     ENVIRONMENT = os.environ.get("ENVIRONMENT", "test")
     IS_LOCAL = os.environ.get("IS_LOCAL", "false") == "true"
@@ -32,6 +37,18 @@ class MockEnv:
         "ERROR_INTERCEPTOR_URL", "https://test.local/api"
     )
     ERROR_INTERCEPTOR_TOKEN = os.environ.get("ERROR_INTERCEPTOR_TOKEN", "test-token")
+    # TTS (espelha env.py — ver ADR-038). Necessário porque src.tools.tts
+    # importa src.config.env e, via vazamento deste mock, resolve pra MockEnv.
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+    TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "google")
+    TTS_GEMINI_MODEL = os.environ.get(
+        "TTS_GEMINI_MODEL", "gemini-2.5-flash-preview-tts"
+    )
+    TTS_GEMINI_VOICE = os.environ.get("TTS_GEMINI_VOICE", "Sulafat")
+    TTS_GEMINI_STYLE_PROMPT = os.environ.get(
+        "TTS_GEMINI_STYLE_PROMPT",
+        "Fale em português do Brasil com sotaque carioca, tom acolhedor e natural.",
+    )
 
 
 # Registra mocks para evitar imports problemáticos
