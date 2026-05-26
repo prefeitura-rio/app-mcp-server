@@ -38,11 +38,11 @@ def encode_flow_token(base_token: str, prefill: dict[str, Any] | None) -> str:
     Encoda prefill data no flow_token preservando o `base_token` (UUID)
     como identificador único de sessão dentro do payload encoded.
 
-    Hoje **NÃO é usado pelo path principal** — `send_flow_by_service` passa
-    prefill via `flow_action_payload.data` direto (caminho funcional pra
-    Flow estático). Esta função fica como utility pra:
-    - Defensive fallback se Flow voltar a ser dinâmico (`data_api_version: 3.0`)
-    - Compat com outros consumers que precisem encoded token
+    **USADO pelo path principal** `send_flow_by_service` desde 2026-05-26: o
+    Flow é dinâmico (`data_api_version: 3.0`), então o prefill VAI encodado
+    aqui no token — o cliente WhatsApp ignora `flow_action_payload.data` no
+    INIT e o endpoint `_handle_init` lê o prefill do token decodificado.
+    (`flow_action_payload.data` segue como fallback pro caso de Flow estático.)
 
     Payload encoded:
         {"_session": "<base_token>", **prefill_dict}
