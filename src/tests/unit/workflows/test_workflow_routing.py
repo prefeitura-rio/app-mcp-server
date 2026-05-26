@@ -421,7 +421,8 @@ async def test_poda_confirm_address_and_reference_point(
     )
     result = await workflow._confirm_address(state)
     assert result.data["address_confirmed"] is True
-    assert result.data["need_reference_point"] is True
+    # reference_point_required=False (poda) → não força ponto de referência.
+    assert result.data["need_reference_point"] is False
     assert result.agent_response is None
 
     state = service_models.ServiceState(
