@@ -132,7 +132,6 @@ def _handle_init(
         "defect_type_prefill": None,
         "qty_pattern_prefill": None,
         "location_prefill": None,
-        "endereco_prefill": None,
         "show_qty_pattern": False,
         "show_location": False,
     }
@@ -203,7 +202,6 @@ def _preserved_prefills(flow_token: str | None) -> dict:
         "defect_type_prefill",
         "qty_pattern_prefill",
         "location_prefill",
-        "endereco_prefill",
     ):
         # Aceita ambas keys: canonical "X_prefill" e alias "X" (bot pode mandar qualquer)
         canonical = token_data.get(key)
@@ -233,7 +231,6 @@ def _merge_current_form_state(incoming: dict, flow_token: str | None) -> dict:
         ("defect_type", "defect_type_prefill"),
         ("qty_pattern", "qty_pattern_prefill"),
         ("location", "location_prefill"),
-        ("endereco", "endereco_prefill"),
     ):
         value = incoming.get(src_key)
         if value:  # non-empty/truthy — user filled
@@ -250,9 +247,9 @@ def _handle_defect_type(
     User selecionou novo defect_type. Echo TODO form state atual +
     visibility flags.
 
-    on-select-action payload envia defect_type + qty_pattern + location +
-    endereco do form atual. Handler ecoa tudo pra evitar revert em
-    transições subsequentes.
+    on-select-action payload envia defect_type + qty_pattern + location
+    do form atual. Handler ecoa tudo pra evitar revert em transições
+    subsequentes.
     """
     is_visual = defect_type in _VISUAL
     incoming = dict(incoming or {})

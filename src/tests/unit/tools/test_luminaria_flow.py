@@ -121,9 +121,9 @@ def test_handle_init_explicit_show_overrides_smart_visibility():
 
 def test_handle_init_extra_keys_propagated():
     """Keys além de defect_type/qty/location/show_* viram <key>_prefill."""
-    token = encode_flow_token("x", {"endereco": "Rua X, 100"})
+    token = encode_flow_token("x", {"extra_field": "valor arbitrário"})
     r = _handle_init(None, token)
-    assert r["data"]["endereco_prefill"] == "Rua X, 100"
+    assert r["data"]["extra_field_prefill"] == "valor arbitrário"
 
 
 def test_handle_init_incoming_data_layer_applied():

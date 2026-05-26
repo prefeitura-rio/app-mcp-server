@@ -48,7 +48,6 @@ async def test_send_flow_by_service_encodes_prefill_into_token():
                 "defect_type": "apagada",
                 "luminaria_quantidade": "uma",
                 "luminaria_localizacao": "rua",
-                "endereco": "Rua X, 100",
             },
         )
 
@@ -60,7 +59,6 @@ async def test_send_flow_by_service_encodes_prefill_into_token():
     assert decoded["defect_type"] == "Apagada"
     assert decoded["qty_pattern"] == "uma"
     assert decoded["location"] == "Rua"
-    assert decoded["endereco"] == "Rua X, 100"
     assert "_session" in decoded  # correlação cross-session preservada
 
     # Round-trip: _handle_init renderiza o form pré-preenchido + visibilidade.
@@ -68,7 +66,6 @@ async def test_send_flow_by_service_encodes_prefill_into_token():
     assert init["defect_type_prefill"] == "Apagada"
     assert init["qty_pattern_prefill"] == "uma"
     assert init["location_prefill"] == "Rua"
-    assert init["endereco_prefill"] == "Rua X, 100"
     assert init["show_qty_pattern"] is True  # visual + qty → ambos visíveis
     assert init["show_location"] is True
 
