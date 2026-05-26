@@ -45,6 +45,28 @@ def make_workflow():
     return ReparoLuminariaWorkflow(use_fake_api=True)
 
 
+def test_blank_endereco_from_flow_not_aliased_to_address():
+    """Campo endereco OPCIONAL do Flow submetido em branco NÃO vira address=""
+    (que dispararia 'Endereço não pode estar vazio' em _collect_address);
+    preenchido é aliased normalmente pra address."""
+    workflow = make_workflow()
+
+    blank = make_state(
+        payload={
+            "_source": "whatsapp_flow",
+            "defect_type": "Pendurada",
+            "location": "Rua",
+            "endereco": "",
+        }
+    )
+    workflow._normalize_payload_aliases(blank)
+    assert "address" not in blank.payload
+
+    filled = make_state(payload={"_source": "whatsapp_flow", "endereco": "Rua X, 100"})
+    workflow._normalize_payload_aliases(filled)
+    assert filled.payload["address"] == "Rua X, 100"
+
+
 def test_reparo_luminaria_payload_validators_accept_aliases():
     assert (
         LuminariaDefeitoPayload.model_validate(

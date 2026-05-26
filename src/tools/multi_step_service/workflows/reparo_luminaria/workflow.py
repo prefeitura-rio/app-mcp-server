@@ -240,8 +240,13 @@ class ReparoLuminariaWorkflow(
         }
 
         for alias, canonical in aliases.items():
-            if alias in state.payload and canonical not in state.payload:
-                state.payload[canonical] = state.payload[alias]
+            value = state.payload.get(alias)
+            # Pula valores vazios — ex: o campo OPCIONAL `endereco` do Flow
+            # submetido em branco viria como "". Sem esse guard, `address=""`
+            # faria _collect_address tratar como tentativa de geocode e emitir
+            # "Endereço não pode estar vazio" em vez de pedir o endereço.
+            if value not in (None, "") and canonical not in state.payload:
+                state.payload[canonical] = value
 
     def _needs_quadra_question(self, state: ServiceState) -> bool:
         if state.data.get("reparo_luminaria_endereco_especial_executado"):
