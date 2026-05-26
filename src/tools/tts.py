@@ -6,14 +6,25 @@ o LLM chama esta tool com o texto da resposta. Retorna bytes OGG/Opus
 mono 16kHz — formato nativo de PTT do WhatsApp, máxima compatibilidade
 com o widget de voice message do app.
 
-Provider: Google Cloud Text-to-Speech. Auth via GOOGLE_APPLICATION_CREDENTIALS
-(mesma SA já usada pra Vertex AI / GCS / BigQuery).
+Provider switchável via env `TTS_PROVIDER` (ver ADR-038):
 
-Voz: pt-BR-Neural2-A (feminina, neural quality). Alternativas para
-configurar via env var TTS_VOICE_NAME:
-  - pt-BR-Neural2-A / B / C — neural (alta qualidade)
-  - pt-BR-Wavenet-A / B / C / D / E — wavenet (alta qualidade)
-  - pt-BR-Standard-A / B / C / D / E — standard (mais barato)
+  - `google` (default) → Google Cloud Text-to-Speech. Auth via
+    GOOGLE_APPLICATION_CREDENTIALS (mesma SA já usada pra Vertex AI /
+    GCS / BigQuery). Saída OGG/Opus nativa. Voz pt-BR-Neural2-A
+    (feminina, neural); override via env `TTS_VOICE_NAME`. Alternativas:
+      - pt-BR-Neural2-A / B / C — neural (alta qualidade)
+      - pt-BR-Wavenet-A / B / C / D / E — wavenet (alta qualidade)
+      - pt-BR-Standard-A / B / C / D / E — standard (mais barato)
+
+  - `gemini` → Gemini TTS (gemini-2.5-flash-preview-tts). Auth reusa
+    GEMINI_API_KEY. A saída do Gemini é PCM raw (s16le, 24kHz, mono, SEM
+    header), convertida pra OGG/Opus 16kHz via ffmpeg (subprocess). O
+    sotaque carioca é best-effort via style prompt (env
+    `TTS_GEMINI_STYLE_PROMPT`) — não há voz dedicada carioca no catálogo
+    Gemini. Voz default Sulafat; override via env `TTS_GEMINI_VOICE`.
+
+O contrato de retorno (`AudioResponseResult`) é idêntico entre providers,
+então Engine e Mule downstream permanecem provider-agnostic.
 
 Limites:
 - WhatsApp PTT inbox limit: 16MB
@@ -23,14 +34,21 @@ Limites:
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import os
 from dataclasses import dataclass
 from typing import Optional
 
+import src.config.env as env
 from src.utils.log import logger
 
 
 _MAX_TEXT_CHARS = 5000  # Google TTS API hard limit per request
+_GEMINI_PCM_SAMPLE_RATE = 24000  # Gemini TTS emite PCM s16le 24kHz mono
+_OUTPUT_SAMPLE_RATE = 16000  # OGG/Opus de saída — contrato PTT WhatsApp
+_OUTPUT_OPUS_BITRATE = "24k"  # bitrate Opus alvo (voz, não música)
+_SUPPORTED_PROVIDERS = ("google", "gemini")  # TTS_PROVIDER aceitos (ver ADR-038)
 
 
 @dataclass(frozen=True)
@@ -57,15 +75,175 @@ class AudioResponseResult:
         return out
 
 
+def _resolve_provider() -> str:
+    """Provider TTS ativo; default `google` (backward-compat)."""
+    return (env.TTS_PROVIDER or "").strip().lower() or "google"
+
+
 def _resolve_voice_name() -> str:
-    """Default `pt-BR-Neural2-A`; override via env TTS_VOICE_NAME."""
+    """Default `pt-BR-Neural2-A`; override via env TTS_VOICE_NAME (Google)."""
     return (os.environ.get("TTS_VOICE_NAME") or "").strip() or "pt-BR-Neural2-A"
+
+
+async def _synthesize_google(cleaned: str) -> tuple[bytes, str]:
+    """Sintetiza via Google Cloud TTS; retorna (ogg_bytes, voice_name)."""
+    # Import lazy — google-cloud-texttospeech só puxa quando a tool é
+    # de fato chamada. Evita peso de import desnecessário em todos os
+    # processos do MCP que nunca rodam TTS.
+    from google.cloud import texttospeech
+
+    voice_name = _resolve_voice_name()
+
+    # Cliente é fechado explicitamente após cada call. O SDK gerencia
+    # o gRPC channel internamente; sem close(), em processos
+    # long-lived (MCP server roda dias) os channels acumulam e
+    # eventualmente esgotam FDs / quota de conexões. Codex P2 2026-05-15.
+    client = texttospeech.TextToSpeechAsyncClient()
+
+    try:
+        synth_input = texttospeech.SynthesisInput(text=cleaned)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code="pt-BR",
+            name=voice_name,
+        )
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.OGG_OPUS,
+            sample_rate_hertz=_OUTPUT_SAMPLE_RATE,
+            # Speaking rate 1.0 = natural. Aumentar > 1.0 acelera.
+            speaking_rate=1.0,
+        )
+
+        response = await client.synthesize_speech(
+            input=synth_input,
+            voice=voice,
+            audio_config=audio_config,
+        )
+    finally:
+        # close() libera channels gRPC. Em google-cloud >= 2.0,
+        # AsyncClient expõe close() via transport.
+        try:
+            await client.transport.close()
+        except Exception:
+            # Defensivo: se transport API mudar entre versões, não
+            # quebra a síntese — apenas log warning.
+            logger.warning(
+                "generate_audio_response: nao foi possivel fechar "
+                "TextToSpeechAsyncClient (transport API drift)"
+            )
+
+    return response.audio_content, voice_name
+
+
+async def _pcm_to_ogg(pcm_bytes: bytes) -> bytes:
+    """
+    Converte PCM raw (s16le 24kHz mono) → OGG/Opus 16kHz via ffmpeg.
+
+    Usa `create_subprocess_exec` (não shell) com args em lista: nenhum
+    input do usuário entra na linha de comando — os bytes PCM vão por
+    stdin, então não há superfície de command injection. O Gemini TTS
+    entrega PCM sem header de container; ffmpeg precisa dos parâmetros
+    explícitos (-f s16le -ar 24000 -ac 1) pra interpretar o stream.
+    """
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "s16le",
+        "-ar",
+        str(_GEMINI_PCM_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-i",
+        "pipe:0",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        _OUTPUT_OPUS_BITRATE,
+        "-ar",
+        str(_OUTPUT_SAMPLE_RATE),
+        "-f",
+        "ogg",
+        "pipe:1",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate(input=pcm_bytes)
+
+    if process.returncode != 0:
+        detail = (stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"ffmpeg PCM->OGG falhou (rc={process.returncode}): {detail}"
+        )
+    if not stdout:
+        raise RuntimeError("ffmpeg PCM->OGG produziu saída vazia")
+
+    return stdout
+
+
+async def _synthesize_gemini(cleaned: str) -> tuple[bytes, str]:
+    """
+    Sintetiza via Gemini TTS; retorna (ogg_bytes, voice_name).
+
+    Gemini emite PCM raw — converte pra OGG/Opus via _pcm_to_ogg. Sotaque
+    carioca é best-effort prependando o style prompt ao texto.
+    """
+    # Import lazy — google-genai só puxa quando provider=gemini.
+    from google import genai
+    from google.genai import types
+
+    voice_name = env.TTS_GEMINI_VOICE
+    style_prompt = (env.TTS_GEMINI_STYLE_PROMPT or "").strip()
+    contents = f"{style_prompt}: {cleaned}" if style_prompt else cleaned
+
+    client = genai.Client(api_key=env.GEMINI_API_KEY)
+    config = types.GenerateContentConfig(
+        response_modalities=["AUDIO"],
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name=voice_name,
+                )
+            )
+        ),
+    )
+
+    # Fecha o async client após cada call. genai.Client().aio é um
+    # AsyncClient com aclose() (expõe aclose, não close); sem ele, em
+    # processos long-lived (MCP server roda dias) os httpx channels
+    # acumulam e esgotam FDs. Mesmo motivo do transport.close() no
+    # provider Google. Codex P2 2026-05-25.
+    try:
+        response = await client.aio.models.generate_content(
+            model=env.TTS_GEMINI_MODEL,
+            contents=contents,
+            config=config,
+        )
+
+        pcm_bytes = response.candidates[0].content.parts[0].inline_data.data
+        if not pcm_bytes:
+            raise RuntimeError("Gemini TTS retornou áudio vazio")
+    finally:
+        try:
+            await client.aio.aclose()
+        except Exception:
+            # Defensivo: se a API de close mudar entre versões do SDK,
+            # não quebra a síntese — apenas log warning.
+            logger.warning(
+                "generate_audio_response: nao foi possivel fechar "
+                "genai AsyncClient (aclose API drift)"
+            )
+
+    ogg_bytes = await _pcm_to_ogg(pcm_bytes)
+    return ogg_bytes, voice_name
 
 
 async def generate_audio_response(text: str) -> dict:
     """
     Sintetiza texto em audio OGG/Opus 16kHz mono pra responder cidadão por
-    voz no WhatsApp.
+    voz no WhatsApp. Provider escolhido via env TTS_PROVIDER (ver ADR-038).
 
     Args:
         text: Texto a ser sintetizado em PT-BR. Recomendado <=2000 chars
@@ -77,13 +255,13 @@ async def generate_audio_response(text: str) -> dict:
         - audio_base64: bytes do OGG codificados em base64 (se status=ok)
         - mime_type: "audio/ogg" (Opus codec)
         - duration_estimate_s: estimativa baseada em ~15 chars/seg
-        - voice_used: identificador da voz (ex: "pt-BR-Neural2-A")
+        - voice_used: identificador da voz (ex: "pt-BR-Neural2-A", "Sulafat")
         - error: descritivo se status != ok
 
     Erros comuns:
-    - GOOGLE_APPLICATION_CREDENTIALS não setada → status=deferred
+    - credenciais ausentes (Google ADC / GEMINI_API_KEY) → status=error
     - texto vazio ou >5000 chars → status=error
-    - quota/network → status=error (logger registra detalhe)
+    - quota/network/ffmpeg → status=error (logger registra detalhe)
     """
     cleaned = (text or "").strip()
     if not cleaned:
@@ -94,62 +272,29 @@ async def generate_audio_response(text: str) -> dict:
             error=f"texto excede {_MAX_TEXT_CHARS} chars (Google TTS API limit)",
         ).to_dict()
 
-    # NOTA: NÃO pre-checa GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_CLOUD_PROJECT
-    # porque ADC (Application Default Credentials) também funciona via
-    # metadata server (GKE/Cloud Run) ou ~/.config/gcloud/application_default
-    # sem nenhuma env var. Deixa o cliente Google falhar com auth error se
-    # nenhuma source de credentials estiver disponível — exception handler
-    # abaixo captura e retorna `status='error'` com detalhe. Codex P2
-    # 2026-05-15.
-
-    voice_name = _resolve_voice_name()
+    # NOTA: NÃO pre-checa credenciais (GOOGLE_APPLICATION_CREDENTIALS /
+    # GEMINI_API_KEY) porque o Google ADC também funciona via metadata
+    # server (GKE/Cloud Run) ou ~/.config/gcloud sem env var. Deixa o
+    # cliente falhar com auth error se nenhuma source estiver disponível —
+    # o exception handler abaixo captura e retorna status='error'. Codex P2.
+    provider = _resolve_provider()
+    if provider not in _SUPPORTED_PROVIDERS:
+        # Provider desconhecido é erro de configuração, não motivo pra
+        # cair silenciosamente no Google — o operador setou TTS_PROVIDER
+        # errado e precisa saber. Antes isto degradava pra google sem aviso.
+        return AudioResponseResult(
+            status="error",
+            error=(
+                f"TTS_PROVIDER inválido: {provider!r} "
+                f"(suportados: {', '.join(_SUPPORTED_PROVIDERS)})"
+            ),
+        ).to_dict()
 
     try:
-        # Import lazy — google-cloud-texttospeech só puxa quando a tool é
-        # de fato chamada. Evita peso de import desnecessário em todos os
-        # processos do MCP que nunca rodam TTS.
-        from google.cloud import texttospeech
-
-        # Cliente é fechado explicitamente após cada call. O SDK gerencia
-        # o gRPC channel internamente; sem close(), em processos
-        # long-lived (MCP server roda dias) os channels acumulam e
-        # eventualmente esgotam FDs / quota de conexões. Codex P2
-        # 2026-05-15.
-        client = texttospeech.TextToSpeechAsyncClient()
-
-        try:
-            synth_input = texttospeech.SynthesisInput(text=cleaned)
-            voice = texttospeech.VoiceSelectionParams(
-                language_code="pt-BR",
-                name=voice_name,
-            )
-            audio_config = texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.OGG_OPUS,
-                sample_rate_hertz=16000,
-                # Speaking rate 1.0 = natural. Aumentar > 1.0 acelera.
-                speaking_rate=1.0,
-            )
-
-            response = await client.synthesize_speech(
-                input=synth_input,
-                voice=voice,
-                audio_config=audio_config,
-            )
-        finally:
-            # close() é sync (libera channels gRPC). Em google-cloud
-            # >= 2.0, AsyncClient expõe close() sem async helper.
-            try:
-                await client.transport.close()
-            except Exception:
-                # Defensivo: se transport API mudar entre versões, não
-                # quebra a síntese — apenas log warning.
-                logger.warning(
-                    "generate_audio_response: nao foi possivel fechar "
-                    "TextToSpeechAsyncClient (transport API drift)"
-                )
-
-        audio_bytes = response.audio_content
-        import base64
+        if provider == "gemini":
+            audio_bytes, voice_name = await _synthesize_gemini(cleaned)
+        else:
+            audio_bytes, voice_name = await _synthesize_google(cleaned)
 
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
 
@@ -158,9 +303,9 @@ async def generate_audio_response(text: str) -> dict:
         duration = max(1.0, len(cleaned) / 15.0)
 
         logger.info(
-            f"generate_audio_response: text_len={len(cleaned)} "
-            f"audio_bytes={len(audio_bytes)} voice={voice_name} "
-            f"duration_est={duration:.1f}s"
+            f"generate_audio_response: provider={provider} "
+            f"text_len={len(cleaned)} audio_bytes={len(audio_bytes)} "
+            f"voice={voice_name} duration_est={duration:.1f}s"
         )
 
         return AudioResponseResult(
@@ -174,7 +319,7 @@ async def generate_audio_response(text: str) -> dict:
     except Exception as e:
         logger.exception(
             f"generate_audio_response: erro inesperado ao sintetizar "
-            f"({type(e).__name__}: {e})"
+            f"(provider={provider}, {type(e).__name__}: {e})"
         )
         return AudioResponseResult(
             status="error",
