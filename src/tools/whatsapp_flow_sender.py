@@ -13,6 +13,7 @@ from loguru import logger
 
 from src.config import env
 from src.tools.luminaria_entity_extractor import (
+    encode_flow_token,
     redact_flow_token as _redact_flow_token,
 )
 from src.tools.whatsapp_flows.normalizers import normalize_prefill_for_flow
@@ -177,7 +178,8 @@ async def send_flow_by_service(
         service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
         user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
         flow_token: Token opcional de rastreamento da sessão. Se ausente,
-            gera UUID. Pode ser sobrescrito pelo encoding quando há prefill.
+            gera um UUID. Vira a base (`_session`) do token v1:encoded
+            enviado ao Meta quando há prefill.
         prefill_data: Entidades extraídas do contexto da conversa pelo
             agente, pra pré-preencher campos do formulário. Aceita qualquer
             JSON-serializable. Ex pra reparo_luminaria:
@@ -188,9 +190,10 @@ async def send_flow_by_service(
             são ignoradas silenciosamente pelo cliente WhatsApp.
 
     Returns:
-        Resultado do envio com message_id e flow_token (token retornado é o
-        ENCODADO, não o base — guard contra log accidental do payload por
-        callers downstream).
+        Resultado do envio com message_id e flow_token. O flow_token
+        retornado é o UUID BASE de correlação — NÃO o token v1:encoded (que
+        pode conter PII como endereço e vai só pro payload do Meta). Evita
+        propagar o payload reversível por callers / tool-results downstream.
     """
     flow_id = FLOW_TEMPLATES.get(service_type)
 
@@ -202,10 +205,8 @@ async def send_flow_by_service(
             "message": f"Flow disponível apenas para: {available}",
         }
 
-    # Token correlação SEMPRE UUID único (preserva rastreabilidade
-    # cross-session) — prefill vai pelo `flow_action_payload.data`, não
-    # encodado no token. Codex P2 review 2026-05-19.
-    session_token = flow_token or str(uuid.uuid4())
+    # UUID base de correlação cross-session (== `_session` dentro do token).
+    base_token = flow_token or str(uuid.uuid4())
 
     # Normalização CENTRALIZADA: aplica per-service mapping de chaves +
     # valores (workflow internal → Flow JSON canonical IDs) antes do envio.
@@ -215,11 +216,20 @@ async def send_flow_by_service(
     # bypassing normalização e silenciosamente dropando keys workflow-shape.
     normalized_prefill = normalize_prefill_for_flow(service_type, prefill_data)
 
+    # Encoda o prefill NO flow_token (v1:base64). O Flow é dinâmico
+    # (data_api_version 3.0, restaurado 2026-05-20): o cliente WhatsApp
+    # ignora `flow_action_payload.data` no INIT e o endpoint `_handle_init`
+    # lê o prefill do flow_token decodificado (canal autoritativo). Sem
+    # isso o formulário abre em branco mesmo com prefill conhecido. O
+    # `flow_action_payload.data` (em send_flow) é mantido como fallback caso
+    # o Flow volte a ser estático. encode_flow_token é no-op se prefill vazio.
+    encoded_token = encode_flow_token(base_token, normalized_prefill)
+
     if normalized_prefill:
         # Log audit-friendly (keys only, sem valores — PII).
         logger.info(
             f"send_flow_by_service prefill_keys={sorted(normalized_prefill.keys())} "
-            f"flow_token={_redact_flow_token(session_token)}"
+            f"flow_token={_redact_flow_token(encoded_token)}"
         )
 
     sender = WhatsAppFlowSender()
@@ -228,9 +238,16 @@ async def send_flow_by_service(
         result = await sender.send_flow(
             recipient=user_number,
             flow_id=flow_id,
-            flow_token=session_token,
+            flow_token=encoded_token,
             prefill_data=normalized_prefill or None,
         )
+
+        # O token v1:encoded pode conter PII (ex: endereço) e vai SÓ pro
+        # payload do Meta. Pra callers / tool-results (src/app.py propaga
+        # flow_token sem redaction), retorna o UUID base de correlação —
+        # nunca o payload reversível. Codex P2 2026-05-26.
+        if isinstance(result, dict) and result.get("flow_token"):
+            result["flow_token"] = base_token
 
         return result
 

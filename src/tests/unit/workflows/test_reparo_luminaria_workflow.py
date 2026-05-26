@@ -304,13 +304,31 @@ async def test_reparo_workflow_collect_address_reference_and_confirmation():
     result = await workflow._confirm_address(result)
 
     assert result.data["address_confirmed"] is True
-    assert result.data["need_reference_point"] is True
+    # reference_point_required=False → não força ponto de referência (−1 turno).
+    assert result.data["need_reference_point"] is False
 
-    result.payload = {"ponto_referencia": "Em frente ao mercado"}
+    # _collect_reference_point passa direto, sem perguntar nada.
+    result.payload = {}
     result = await workflow._collect_reference_point(result)
+    assert result.agent_response is None
+    assert not result.data.get("reference_point_collected")
 
-    assert result.data["reference_point_collected"] is True
-    assert result.data["ponto_referencia"] == "Em frente ao mercado"
+
+@pytest.mark.asyncio
+async def test_reparo_reference_point_correction_reactivates_collection():
+    """reference_point_required=False remove a pergunta forçada, mas uma
+    correção explícita ('corrigir ponto de referência') reativa a coleta."""
+    workflow = make_workflow()
+    state = make_state(data={"correction_requested": "reference_point"})
+
+    asked = await workflow._collect_reference_point(state)
+    assert asked.data["need_reference_point"] is True
+    assert "ponto de referência" in asked.agent_response.description.lower()
+
+    asked.payload = {"ponto_referencia": "Ao lado da escola"}
+    collected = await workflow._collect_reference_point(asked)
+    assert collected.data["reference_point_collected"] is True
+    assert collected.data["ponto_referencia"] == "Ao lado da escola"
 
 
 @pytest.mark.asyncio

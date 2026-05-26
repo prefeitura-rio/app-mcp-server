@@ -111,7 +111,12 @@ class AddressFlowMixin:
                         state.data["address"] = addr
                         state.data["address_confirmed"] = True
                         state.data["address_validated"] = True
-                        state.data["need_reference_point"] = True
+                        # Só pede ponto de referência se o serviço o exige
+                        # (reference_point_required). Antes era sempre True,
+                        # forçando um turno extra mesmo com required=False.
+                        state.data["need_reference_point"] = (
+                            self.common_config.reference_point_required
+                        )
                         state.data.pop("address_temp", None)
                 else:
                     logger.info("[MEMÓRIA] Usuário recusou endereço anterior")
@@ -350,6 +355,11 @@ class AddressFlowMixin:
 
         if state.data.get("correction_requested") == "reference_point":
             state.data.pop("correction_requested", None)
+            # Correção explícita: o cidadão quer informar/alterar o ponto de
+            # referência mesmo que o serviço não o exija (reference_point_required
+            # = False). Reativa a coleta — senão o early-return abaixo descartaria
+            # a entrada explícita junto com a pergunta forçada que removemos.
+            state.data["need_reference_point"] = True
         elif state.data.get("correction_requested"):
             return state
 
@@ -442,7 +452,12 @@ class AddressFlowMixin:
                     state.data["address_confirmed"] = True
                     state.data["address_validated"] = True
                     state.data["address_needs_confirmation"] = False
-                    state.data["need_reference_point"] = True
+                    # Só pede ponto de referência se o serviço o exige
+                    # (reference_point_required). Antes era sempre True,
+                    # forçando um turno extra mesmo com required=False.
+                    state.data["need_reference_point"] = (
+                        self.common_config.reference_point_required
+                    )
 
                     logger.info("Endereço confirmado pelo usuário")
                     state.agent_response = None
