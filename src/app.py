@@ -822,12 +822,13 @@ def create_app() -> FastMCP:
                   - `qty_pattern`: "uma" | "bloco" | "intercaladas"
                   - `location`: "Calçada" | "Fachada" | "Monumento" | "Parque"
                                 | "Praça" | "Quadra de esportes" | "Rua" | "Não sei"
-                  - `endereco`: endereço completo em texto (rua, número, bairro)
+
+                (O endereço NÃO vai no Flow — é coletado depois, na conversa.)
 
                 Exemplo:
                   prefill_data={{
-                    "endereco": "Rua Guilhermina Guinle, 170 - Botafogo",
-                    "defect_type": "Pendurada"
+                    "defect_type": "Pendurada",
+                    "location": "Rua"
                   }}
 
         Returns:

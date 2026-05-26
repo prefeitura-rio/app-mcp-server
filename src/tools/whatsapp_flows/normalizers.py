@@ -94,7 +94,6 @@ def _normalize_luminaria(payload: dict[str, Any]) -> dict[str, Any]:
     Mapeamentos:
         luminaria_defeito | defect_type        → defect_type (se valid)
         luminaria_localizacao | location       → location    (se valid)
-        address | endereco                     → endereco    (string truthy)
         luminaria_quantidade='uma'             → qty_pattern='uma'
         luminaria_quantidade='grupo'
             + luminaria_intercaladas_bloco='X' → qty_pattern=X (bloco/intercaladas)
@@ -120,21 +119,6 @@ def _normalize_luminaria(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if location:
         out["location"] = location
-
-    # endereco (free-text — string truthy)
-    endereco = payload.get("endereco") or payload.get("address")
-    if isinstance(endereco, str) and endereco.strip():
-        out["endereco"] = endereco.strip()
-    elif isinstance(endereco, dict):
-        # workflow às vezes guarda endereço como dict {logradouro, numero, bairro}
-        parts = [
-            endereco.get("logradouro_nome_ipp") or endereco.get("logradouro"),
-            endereco.get("numero"),
-            endereco.get("bairro_nome_ipp") or endereco.get("bairro"),
-        ]
-        joined = ", ".join(str(p) for p in parts if p)
-        if joined:
-            out["endereco"] = joined
 
     # qty_pattern — caminho canônico (já era um dos IDs)
     qty_raw = payload.get("qty_pattern")

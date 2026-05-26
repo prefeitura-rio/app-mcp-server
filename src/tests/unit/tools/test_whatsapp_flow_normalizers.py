@@ -18,17 +18,15 @@ def test_luminaria_workflow_keys_translated():
     raw = {
         "luminaria_defeito": "Apagada",
         "luminaria_localizacao": "Rua",
-        "address": "Rua X, 100, Botafogo",
     }
     out = normalize_prefill_for_flow("reparo_luminaria", raw)
     assert out["defect_type"] == "Apagada"
     assert out["location"] == "Rua"
-    assert out["endereco"] == "Rua X, 100, Botafogo"
 
 
 def test_luminaria_canonical_keys_passthrough():
     """LLM passa keys canônicas direto — passa filtrado."""
-    raw = {"defect_type": "Piscando", "location": "Calçada", "endereco": "Rua Y, 50"}
+    raw = {"defect_type": "Piscando", "location": "Calçada"}
     out = normalize_prefill_for_flow("reparo_luminaria", raw)
     assert out == raw
 
@@ -118,22 +116,6 @@ def test_luminaria_qty_workflow_grupo_only_dropped():
     assert "qty_pattern" not in out
 
 
-def test_luminaria_endereco_dict_collapsed():
-    """endereco vindo do workflow como dict {logradouro, numero, bairro}."""
-    out = normalize_prefill_for_flow(
-        "reparo_luminaria",
-        {"address": {"logradouro": "Rua Z", "numero": "200", "bairro": "Botafogo"}},
-    )
-    assert out["endereco"] == "Rua Z, 200, Botafogo"
-
-
-def test_luminaria_endereco_empty_dropped():
-    out = normalize_prefill_for_flow("reparo_luminaria", {"endereco": ""})
-    assert "endereco" not in out
-    out = normalize_prefill_for_flow("reparo_luminaria", {"endereco": "   "})
-    assert "endereco" not in out
-
-
 def test_luminaria_full_workflow_payload():
     """Cenário realista: payload completo do workflow → tudo mapeado."""
     raw = {
@@ -142,13 +124,11 @@ def test_luminaria_full_workflow_payload():
         "luminaria_quantidade": "grupo",
         "luminaria_intercaladas_bloco": "bloco",
         "luminaria_localizacao": "Rua",
-        "address": "Av. Atlântica, 500 - Copacabana",
     }
     out = normalize_prefill_for_flow("reparo_luminaria", raw)
     assert out == {
         "defect_type": "Apagada",
         "location": "Rua",
-        "endereco": "Av. Atlântica, 500 - Copacabana",
         "qty_pattern": "bloco",
     }
 
