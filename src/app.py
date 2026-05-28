@@ -5,6 +5,7 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 # comment to trigger build
 
 import os
+import time
 
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
@@ -49,6 +50,7 @@ from src.tools.inbound_media_video import (
 )
 from src.tools.luminaria_flow import process_flow_request
 from src.tools.whatsapp_flow_sender import send_flow_by_service, FLOW_TEMPLATES
+from src.tools.whatsapp_message_status import check_message_read_status
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -1360,6 +1362,18 @@ def create_app() -> FastMCP:
             footer=footer,
         )
 
+    @conditional_mcp_tool(
+        "check_message_read_status",
+        description=(
+            "Verifica se uma mensagem do WhatsApp foi lida pelo cidadão (duplo "
+            "check azul). Recebe o message_id retornado ao enviar a mensagem e "
+            "consulta o status no Redis (populado via webhook). Retorna se foi "
+            "lida, entregue ou enviada. Status disponível por até 7 dias após envio."
+        ),
+    )
+    def whatsapp_check_message_read_status(message_id: str) -> dict:
+        return check_message_read_status(message_id)
+
     # ===== REGISTRAR RESOURCES =====
 
     # Resource com lista de bairros
@@ -1477,6 +1491,84 @@ def create_app() -> FastMCP:
         except Exception as e:
             logger.error(f"wa_flow_luminaria: erro inesperado: {e}")
             return JSONResponse(content={"error": "Erro interno"}, status_code=500)
+
+    @mcp.custom_route("/meta/webhook/status", methods=["POST"])
+    async def handle_message_status_webhook(request: Request):
+        """
+        Webhook de status de mensagens WhatsApp (sent/delivered/read).
+
+        Recebe notificações do Meta quando o status de uma mensagem muda.
+        Armazena no Redis pra consulta posterior (ex: verificar se foi lida).
+
+        Schema Meta:
+          {
+            "entry": [{
+              "changes": [{
+                "value": {
+                  "statuses": [{
+                    "id": "wamid.xxx",
+                    "status": "sent|delivered|read|failed",
+                    "timestamp": "1234567890",
+                    "recipient_id": "5521999999999"
+                  }]
+                }
+              }]
+            }]
+          }
+
+        Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/components#statuses-object
+        """
+        try:
+            body = await request.json()
+
+            for entry in body.get("entry", []):
+                for change in entry.get("changes", []):
+                    value = change.get("value", {})
+
+                    for status in value.get("statuses", []):
+                        message_id = status.get("id")
+                        status_type = status.get("status")
+                        timestamp = status.get("timestamp")
+                        recipient_id = status.get("recipient_id", "")
+
+                        if not message_id or not status_type:
+                            logger.warning(
+                                "webhook_status_incomplete",
+                                status_obj=status,
+                            )
+                            continue
+
+                        from src.utils.redis_client import get_redis_client
+
+                        redis = get_redis_client()
+                        key = f"msg_status:{message_id}"
+
+                        redis.hset(
+                            key,
+                            mapping={
+                                "status": status_type,
+                                "timestamp": timestamp or "",
+                                "recipient_id": recipient_id,
+                                "updated_at": str(int(time.time())),
+                            },
+                        )
+                        redis.expire(key, 7 * 24 * 60 * 60)
+
+                        logger.info(
+                            "message_status_received",
+                            message_id=message_id,
+                            status=status_type,
+                            recipient_id=recipient_id,
+                        )
+
+            return JSONResponse(content={"status": "ok"})
+
+        except Exception as e:
+            logger.error(f"webhook_status_error: {e}", exc_info=True)
+            return JSONResponse(
+                content={"status": "error", "message": str(e)},
+                status_code=500,
+            )
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
