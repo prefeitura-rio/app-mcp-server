@@ -12,7 +12,8 @@ durante o fluxo de solicitação de poda de árvore.
 def solicitar_endereco() -> str:
     """Mensagem solicitando endereço."""
     return (
-        "🌳 **Informe o endereço onde está localizada a árvore que precisa de poda:**\n\n"
+        "🌳 **Informe o endereço onde está localizada a árvore que precisa de poda.**\n\n"
+        "📍 **Se quiser, você pode enviar sua localização pelo WhatsApp (ícone de anexo 📎 > Localização).\n\n"
         "Por favor, inclua:\n"
         "• Nome da rua, avenida, praça ou estrada\n"
         "• Número (se souber)\n"

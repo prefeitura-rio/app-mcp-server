@@ -78,6 +78,7 @@ def localizacao_invalida() -> str:
 def solicitar_endereco() -> str:
     return (
         "Informe o endereço onde está localizada a luminária com defeito.\n\n"
+        "Se quiser, você pode enviar sua localização pelo WhatsApp (ícone de anexo 📎 > Localização).\n\n"
         "Inclua nome da rua, avenida ou praça, número se souber, e bairro.\n\n"
         "Exemplo: Rua Afonso Cavalcanti, 455, Cidade Nova"
     )
