@@ -1555,10 +1555,7 @@ def create_app() -> FastMCP:
                         redis.expire(key, 7 * 24 * 60 * 60)
 
                         logger.info(
-                            "message_status_received",
-                            message_id=message_id,
-                            status=status_type,
-                            recipient_id=recipient_id,
+                            f"message_status_received: wamid={message_id} status={status_type} recipient={recipient_id}"
                         )
 
             return JSONResponse(content={"status": "ok"})
