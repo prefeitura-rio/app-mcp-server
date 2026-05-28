@@ -59,6 +59,12 @@ MCP `_handle_init` decoda e retorna no INIT response. Detalhes em
   com Form. Use sempre `init-values` (plural) no Form parent.
 - Operadores `||`, `in` em `If`/`Switch` conditions → não aceitos como
   documentados. Single `==` funciona, OR exige Switch.
+- Condicional **client-side** em Flow estático: `visible: ${form.<campo>}`
+  resolve no cliente sem endpoint (renderiza em iOS/Android **e** Web/Desktop).
+  OR sobre domínio fechado vira AND-de-negações via De Morgan, usando só
+  `&&`/`!=` (contorna o veto a `||`). Ex.: mostrar campo pros defeitos visuais
+  `{A,B,C}` ⇒ `${(form.x != 'D') && (form.x != 'E') && (form.x != '') ...}`
+  sobre o complemento. Recupera o condicional sem `data_api_version`.
 - Switch com nomes de form components duplicados em múltiplos `cases` →
   rejeitado (`DUPLICATE_FORM_COMPONENT_NAMES`).
 - `data_api_version: 3.0` torna Flow dinâmico: cliente sobrescreve

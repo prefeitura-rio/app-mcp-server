@@ -1,7 +1,5 @@
 {
   "version": "7.3",
-  "data_api_version": "3.0",
-  "routing_model": {"MAIN": []},
   "screens": [
     {
       "id": "MAIN",
@@ -11,9 +9,7 @@
       "data": {
         "defect_type_prefill": {"type": "string", "__example__": ""},
         "qty_pattern_prefill": {"type": "string", "__example__": ""},
-        "location_prefill": {"type": "string", "__example__": ""},
-        "show_qty_pattern": {"type": "boolean", "__example__": false},
-        "show_location": {"type": "boolean", "__example__": false}
+        "location_prefill": {"type": "string", "__example__": ""}
       },
       "layout": {
         "type": "SingleColumnLayout",
@@ -43,41 +39,26 @@
                   {"id": "Pendurada", "title": "Pendurada"},
                   {"id": "Danificada", "title": "Danificada"},
                   {"id": "Com ruído", "title": "Com ruído"}
-                ],
-                "on-select-action": {
-                  "name": "data_exchange",
-                  "payload": {
-                    "trigger": "defect_type",
-                    "defect_type": "${form.defect_type}"
-                  }
-                }
+                ]
               },
               {
                 "type": "RadioButtonsGroup",
                 "label": "Como está o defeito? (se aplicável)",
                 "name": "qty_pattern",
                 "required": false,
-                "visible": "${data.show_qty_pattern}",
+                "visible": "${(form.defect_type != 'Pendurada') && (form.defect_type != 'Danificada') && (form.defect_type != 'Com ruído') && (form.defect_type != '')}",
                 "data-source": [
                   {"id": "uma", "title": "Uma luminária"},
                   {"id": "bloco", "title": "Todas as do trecho apagadas"},
                   {"id": "intercaladas", "title": "Algumas apagadas, outras não"}
-                ],
-                "on-select-action": {
-                  "name": "data_exchange",
-                  "payload": {
-                    "trigger": "qty_pattern",
-                    "qty_pattern": "${form.qty_pattern}",
-                    "defect_type": "${form.defect_type}"
-                  }
-                }
+                ]
               },
               {
                 "type": "RadioButtonsGroup",
                 "label": "Onde está localizada?",
                 "name": "location",
                 "required": true,
-                "visible": "${data.show_location}",
+                "visible": "${form.defect_type != ''}",
                 "data-source": [
                   {"id": "Calçada", "title": "Calçada"},
                   {"id": "Fachada", "title": "Fachada"},
