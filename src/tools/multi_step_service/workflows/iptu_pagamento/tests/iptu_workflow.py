@@ -41,7 +41,7 @@ class TestIPTUWorkflowHappyPath:
         self.user_id = f"test_user_{int(time.time() * 1000000)}"
         self.service_name = "iptu_pagamento"
         # Usa inscrição válida na API fake (veja api_service_fake.py:_get_mock_guias_data)
-        self.inscricao_valida = "01234567890123"
+        self.inscricao_valida = "12345678"
 
     def teardown_method(self):
         """Cleanup executado após cada teste."""
@@ -377,22 +377,22 @@ class TestIPTUWorkflowHappyPath:
         Testa que todas as inscrições da API fake retornam dados corretos.
 
         Inscrições disponíveis na API fake:
-        - 01234567890123: IPTU ORDINÁRIA + EXTRAORDINÁRIA
-        - 11111111111111: Apenas IPTU ORDINÁRIA
-        - 22222222222222: Apenas IPTU EXTRAORDINÁRIA
-        - 44444444444444: IPTU com valor alto
-        - 55555555555555: IPTU com valores baixos
-        - 66666666666666: Múltiplas guias EXTRAORDINÁRIAS
+        - 12345678: IPTU ORDINÁRIA + EXTRAORDINÁRIA
+        - 11111111: Apenas IPTU ORDINÁRIA
+        - 22222222: Apenas IPTU EXTRAORDINÁRIA
+        - 44444444: IPTU com valor alto
+        - 55555555: IPTU com valores baixos
+        - 66666666: Múltiplas guias EXTRAORDINÁRIAS
         """
         print("\n🧪 Teste: Todas as inscrições da API fake")
 
         inscricoes_validas = [
-            "01234567890123",
-            "11111111111111",
-            "22222222222222",
-            "44444444444444",
-            "55555555555555",
-            "66666666666666",
+            "12345678",
+            "11111111",
+            "22222222",
+            "44444444",
+            "55555555",
+            "66666666",
         ]
 
         for inscricao in inscricoes_validas:
@@ -441,7 +441,7 @@ class TestIPTUWorkflowHappyPath:
         print("\n🧪 Teste: Escolher outra guia do mesmo imóvel")
 
         # Usa inscrição com múltiplas guias
-        inscricao = "01234567890123"  # Tem ORDINÁRIA (00) e EXTRAORDINÁRIA (01)
+        inscricao = "12345678"  # Tem ORDINÁRIA (00) e EXTRAORDINÁRIA (01)
 
         # Etapa 1-3: Setup até escolher primeira guia
         await multi_step_service.ainvoke(
@@ -557,7 +557,7 @@ class TestIPTUWorkflowHappyPath:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "11111111111111"},
+                "payload": {"inscricao_imobiliaria": "11111111"},
             }
         )
 
@@ -645,7 +645,7 @@ class TestIPTUWorkflowHappyPath:
                     {
                         "service_name": self.service_name,
                         "user_id": self.user_id,
-                        "payload": {"inscricao_imobiliaria": "22222222222222"},
+                        "payload": {"inscricao_imobiliaria": "22222222"},
                     }
                 )
                 assert response_novo["error_message"] is None
@@ -664,16 +664,16 @@ class TestIPTUWorkflowValidacoes:
         setup_fake_api()
         self.user_id = f"test_user_{int(time.time() * 1000000)}"
         self.service_name = "iptu_pagamento"
-        self.inscricao_valida = "01234567890123"
+        self.inscricao_valida = "12345678"
 
     def teardown_method(self):
         """Cleanup executado após cada teste."""
         teardown_fake_api()
 
     # @pytest.mark.asyncio
-    async def test_inscricao_muito_curta(self):
-        """Testa que inscrição com menos de 8 dígitos é rejeitada."""
-        print("\n🧪 Teste: Inscrição muito curta")
+    async def test_inscricao_curta_preenchida_com_zeros(self):
+        """Testa que inscrição com menos de 8 dígitos é preenchida com zeros."""
+        print("\n🧪 Teste: Inscrição curta preenchida com zeros")
 
         response = await multi_step_service.ainvoke(
             {
@@ -683,21 +683,19 @@ class TestIPTUWorkflowValidacoes:
             }
         )
 
-        # Deve retornar erro de validação OU aceitar (depende da implementação)
-        # Como temos validação no Pydantic, deve retornar erro
-        assert response["error_message"] is not None, "Deve rejeitar inscrição curta"
-        print("✅ TESTE PASSOU: Inscrição curta rejeitada")
+        assert response["error_message"] is None, "Deve aceitar inscrição curta"
+        print("✅ TESTE PASSOU: Inscrição curta aceita")
 
     # @pytest.mark.asyncio
     async def test_inscricao_muito_longa(self):
-        """Testa que inscrição com mais de 15 dígitos é rejeitada."""
+        """Testa que inscrição com mais de 8 dígitos é rejeitada."""
         print("\n🧪 Teste: Inscrição muito longa")
 
         response = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "1234567890123456"},  # 16 dígitos
+                "payload": {"inscricao_imobiliaria": "123456789"},  # 9 dígitos
             }
         )
 
@@ -713,7 +711,7 @@ class TestIPTUWorkflowValidacoes:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "123.456.78-90"},
+                "payload": {"inscricao_imobiliaria": "123.456-78"},
             }
         )
 
@@ -732,7 +730,7 @@ class TestIPTUWorkflowValidacoes:
                 "service_name": self.service_name,
                 "user_id": self.user_id,
                 "payload": {
-                    "inscricao_imobiliaria": "99999999999999"
+                    "inscricao_imobiliaria": "99999999"
                 },  # Não existe na fake API
             }
         )
@@ -762,12 +760,12 @@ class TestIPTUWorkflowValidacoes:
         """Testa comportamento quando todas as guias estão quitadas."""
         print("\n🧪 Teste: Guias quitadas")
 
-        # Inscrição 33333333333333 tem todas as guias quitadas
+        # Inscrição 33333333 tem todas as guias quitadas
         response1 = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "33333333333333"},
+                "payload": {"inscricao_imobiliaria": "33333333"},
             }
         )
         assert response1["error_message"] is None
@@ -891,7 +889,7 @@ class TestIPTUWorkflowFluxosContinuidade:
         setup_fake_api()
         self.user_id = f"test_user_{int(time.time() * 1000000)}"
         self.service_name = "iptu_pagamento"
-        self.inscricao_valida = "01234567890123"
+        self.inscricao_valida = "12345678"
 
     def teardown_method(self):
         """Cleanup executado após cada teste."""
@@ -996,7 +994,7 @@ class TestIPTUWorkflowFluxosContinuidade:
     # @pytest.mark.asyncio
     async def test_fluxo_multiplas_guias_extraordinarias(self):
         """
-        Testa inscrição com múltiplas guias extraordinárias (66666666666666).
+        Testa inscrição com múltiplas guias extraordinárias (66666666).
 
         Cenário:
         - Guia 01 EXTRAORDINÁRIA
@@ -1005,12 +1003,12 @@ class TestIPTUWorkflowFluxosContinuidade:
         """
         print("\n🧪 Teste: Múltiplas guias extraordinárias")
 
-        # Inscrição 66666666666666 tem guias 01 e 02
+        # Inscrição 66666666 tem guias 01 e 02
         await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "66666666666666"},
+                "payload": {"inscricao_imobiliaria": "66666666"},
             }
         )
 
@@ -1047,7 +1045,7 @@ class TestIPTUWorkflowResetEstado:
         setup_fake_api()
         self.user_id = f"test_user_{int(time.time() * 1000000)}"
         self.service_name = "iptu_pagamento"
-        self.inscricao_valida = "01234567890123"
+        self.inscricao_valida = "12345678"
 
     def teardown_method(self):
         """Cleanup executado após cada teste."""
@@ -1106,7 +1104,7 @@ class TestIPTUWorkflowResetEstado:
                 "service_name": self.service_name,
                 "user_id": self.user_id,
                 "payload": {
-                    "inscricao_imobiliaria": "11111111111111"
+                    "inscricao_imobiliaria": "11111111"
                 },  # Outra inscrição válida
             }
         )
@@ -1124,7 +1122,7 @@ class TestIPTUWorkflowCasosEspeciais:
         setup_fake_api()
         self.user_id = f"test_user_{int(time.time() * 1000000)}"
         self.service_name = "iptu_pagamento"
-        self.inscricao_valida = "01234567890123"
+        self.inscricao_valida = "12345678"
 
     def teardown_method(self):
         """Cleanup executado após cada teste."""
@@ -1236,10 +1234,10 @@ class TestIPTUWorkflowCasosEspeciais:
         print("\n🧪 Teste: Diferentes tipos de guias")
 
         casos_teste = [
-            ("11111111111111", "00", "ORDINÁRIA"),
-            ("22222222222222", "01", "EXTRAORDINÁRIA"),
-            ("66666666666666", "01", "EXTRAORDINÁRIA"),
-            ("66666666666666", "02", "EXTRAORDINÁRIA"),
+            ("11111111", "00", "ORDINÁRIA"),
+            ("22222222", "01", "EXTRAORDINÁRIA"),
+            ("66666666", "01", "EXTRAORDINÁRIA"),
+            ("66666666", "02", "EXTRAORDINÁRIA"),
         ]
 
         for inscricao, numero_guia, tipo_esperado in casos_teste:
@@ -1304,7 +1302,7 @@ class TestIPTUWorkflowErrosAPI:
         Testa que APIUnavailableError é tratado corretamente ao consultar guias.
 
         Cenário:
-        1. Usuário informa inscrição que simula API indisponível (77777777777777)
+        1. Usuário informa inscrição que simula API indisponível (77777777)
         2. Tenta escolher ano
         3. Deve receber mensagem de API indisponível
         4. Dados devem ser mantidos para retry
@@ -1317,7 +1315,7 @@ class TestIPTUWorkflowErrosAPI:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "77777777777777"},
+                "payload": {"inscricao_imobiliaria": "77777777"},
             }
         )
 
@@ -1356,7 +1354,7 @@ class TestIPTUWorkflowErrosAPI:
         Testa que AuthenticationError é tratado corretamente.
 
         Cenário:
-        1. Usuário informa inscrição que simula erro de autenticação (88888888888888)
+        1. Usuário informa inscrição que simula erro de autenticação (88888888)
         2. Tenta escolher ano
         3. Deve receber mensagem de erro de autenticação
         """
@@ -1367,7 +1365,7 @@ class TestIPTUWorkflowErrosAPI:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "88888888888888"},
+                "payload": {"inscricao_imobiliaria": "88888888"},
             }
         )
 
@@ -1402,7 +1400,7 @@ class TestIPTUWorkflowErrosAPI:
         Testa que timeout é tratado como APIUnavailableError.
 
         Cenário:
-        1. Inscrição 99999999990000 simula timeout
+        1. Inscrição 99990000 simula timeout
         2. Deve receber mensagem apropriada de timeout
         """
         print("\n🧪 Teste: Timeout ao consultar guias")
@@ -1411,7 +1409,7 @@ class TestIPTUWorkflowErrosAPI:
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "99999999990000"},
+                "payload": {"inscricao_imobiliaria": "99990000"},
             }
         )
 
@@ -1440,11 +1438,11 @@ class TestIPTUWorkflowErrosAPI:
         """
         Testa diferença entre inscrição não existente e API indisponível.
 
-        Cenário 1: Inscrição não existente (99999999999999)
+        Cenário 1: Inscrição não existente (99999999)
         - Deve retornar mensagem de inscrição não encontrada
         - Após 3 tentativas com anos diferentes, deve pedir nova inscrição
 
-        Cenário 2: API indisponível (77777777777777)
+        Cenário 2: API indisponível (77777777)
         - Deve retornar mensagem de API indisponível
         - Deve manter dados para retry
         """
@@ -1459,7 +1457,7 @@ class TestIPTUWorkflowErrosAPI:
                 "service_name": self.service_name,
                 "user_id": user_id_1,
                 "payload": {
-                    "inscricao_imobiliaria": "99999999999999"
+                    "inscricao_imobiliaria": "99999999"
                 },  # Não existe na fake API
             }
         )
@@ -1495,7 +1493,7 @@ class TestIPTUWorkflowErrosAPI:
             {
                 "service_name": self.service_name,
                 "user_id": user_id_2,
-                "payload": {"inscricao_imobiliaria": "77777777777777"},
+                "payload": {"inscricao_imobiliaria": "77777777"},
             }
         )
 
@@ -1526,7 +1524,7 @@ class TestIPTUWorkflowErrosAPI:
         de erro correta é exibida e não é sobrescrita por mensagem genérica.
 
         Cenário:
-        1. Usuário informa inscrição 12345678
+        1. Usuário informa inscrição 87654321
         2. Tenta ano 2024 (sem guias)
         3. Deve receber mensagem: "Nenhuma guia encontrada para o ano 2024"
         4. Pode tentar ano 2025 (com guias) e conseguir continuar
@@ -1537,12 +1535,12 @@ class TestIPTUWorkflowErrosAPI:
         print("\n🧪 Teste: Nenhuma guia para ano específico (bug fix)")
 
         # Etapa 1: Informar inscrição
-        print("📝 Informando inscrição 12345678...")
+        print("📝 Informando inscrição 87654321...")
         response1 = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,
                 "user_id": self.user_id,
-                "payload": {"inscricao_imobiliaria": "12345678"},
+                "payload": {"inscricao_imobiliaria": "87654321"},
             }
         )
 
@@ -1795,7 +1793,7 @@ class TestIPTUWorkflowNonLinearNavigation:
         setup_fake_api()
         self.user_id = f"test_user_nav_{int(time.time() * 1000000)}"
         self.service_name = "iptu_pagamento"
-        self.inscricao_valida = "01234567890123"
+        self.inscricao_valida = "12345678"
 
     def teardown_method(self):
         """Cleanup executado após cada teste."""
@@ -1963,7 +1961,7 @@ class TestIPTUWorkflowNonLinearNavigation:
         )
 
         # Agora envia NOVA inscrição (volta para o início)
-        nova_inscricao = "98765432109876"
+        nova_inscricao = "98765432"
         response_nova = await multi_step_service.ainvoke(
             {
                 "service_name": self.service_name,

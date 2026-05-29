@@ -30,10 +30,10 @@ def validate_and_clean_inscricao(inscricao: str) -> str:
         ValueError: Se inscrição inválida
 
     Examples:
-        >>> validate_and_clean_inscricao("123.456.78-90")
-        '1234567890'
-        >>> validate_and_clean_inscricao("1234567890")
-        '1234567890'
+        >>> validate_and_clean_inscricao("123.456-78")
+        '12345678'
+        >>> validate_and_clean_inscricao("12345678")
+        '12345678'
     """
     # Remove todos os caracteres não numéricos
     clean_inscricao = re.sub(r"[^0-9]", "", inscricao)
@@ -71,7 +71,7 @@ def validate_ano_exercicio(ano: int) -> int:
         >>> validate_ano_exercicio(2019)
         Traceback (most recent call last):
         ...
-        ValueError: Ano deve estar entre 2020 e 2025
+        ValueError: Ano deve estar entre 2020 e 2026
     """
     if ano < ANO_MIN_VALIDO or ano > ANO_MAX_VALIDO:
         raise ValueError(f"Ano deve estar entre {ANO_MIN_VALIDO} e {ANO_MAX_VALIDO}")

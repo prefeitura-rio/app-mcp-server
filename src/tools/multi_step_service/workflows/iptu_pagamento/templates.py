@@ -22,7 +22,9 @@ class IPTUMessageTemplates:
     @staticmethod
     def solicitar_inscricao() -> str:
         """Mensagem solicitando inscrição imobiliária."""
-        return "📋 Para consultar o IPTU, informe a **inscrição imobiliária** do seu imóvel."
+        return """📋 Para consultar o IPTU, informe a **inscrição imobiliária** do seu imóvel.
+        
+        É um número que tem até 8 dígitos. Você encontra ele no seu carnê do IPTU ou em documentos antigos do imóvel."""
 
     @staticmethod
     def escolher_ano(
@@ -36,7 +38,7 @@ class IPTUMessageTemplates:
             msg += f"💼 **Contribuinte:** {proprietario}\n"
         if endereco:
             msg += f"📍 **Endereço:** {endereco}\n"
-        msg += "📅 Agora informe o **ano de exercício** para consulta do IPTU (ex: 2024, 2025)."
+        msg += "📅 Agora informe o **ano de exercício** para consulta do IPTU (ex: 2025, 2026)."
         return msg
 
     # --- Erros de Consulta ---
@@ -64,7 +66,7 @@ Para verificar se essa inscrição imobiliária está isenta de IPTU, se há gui
 __replace_divida_ativa__
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
-• Para consultar **outra inscrição imobiliária**, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o número da inscrição
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         if not divida_ativa_info or divida_ativa_info.tem_divida_ativa is False:
@@ -152,13 +154,15 @@ __replace_divida_ativa__
             texto += """
 🔄 **O que você deseja fazer?**
 • Para pesquisar **outro ano**, informe o ano desejado
-• Para consultar **outra inscrição imobiliária**, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o número da inscrição
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar
             """
             return texto
         else:
             # Lista os números das guias disponíveis
-            numeros_disponiveis = [guia.get("numero_guia", "N/A") for guia in guias]
+            numeros_disponiveis = [
+                guia.get("numero_guia", "N/A") for guia in guias_em_aberto
+            ]
             exemplos_reais = ", ".join([f'"{num}"' for num in numeros_disponiveis])
 
             texto += f"""🎯 **Para continuar com a **emissao do IPTU {exercicio}**, selecione a guia desejada:**
@@ -183,7 +187,7 @@ __replace_divida_ativa__
             texto += f"• **{numero_cota}ª Cota** - Vencimento: {data_vencimento} - {formatar_valor_brl(valor_numerico)} - {status_icon} {status_text}\n"
 
         texto += f"\n• **Todas as cotas** - Total: {formatar_valor_brl(valor_total)}\n"
-        texto += "\n**Quais cotas você deseja pagar?**"
+        texto += "\n**Quais cotas você deseja pagar? Se quiser, posso emitir todas de uma vez.**"
 
         return texto
 
@@ -194,8 +198,8 @@ __replace_divida_ativa__
         """Mensagem para escolha do formato de boleto."""
         return """📋 **Como deseja gerar os boletos?**
 
-• **Boleto único** para todas as cotas selecionadas.
-• **Um boleto para cada cota** selecionada.
+1. **Boleto único** para todas as cotas selecionadas.
+2. **Um boleto para cada cota** selecionada.
 """
 
     # --- Confirmação ---
@@ -264,13 +268,16 @@ __replace_divida_ativa__
             texto += f"**Valor:** {formatar_valor_brl(valor)}\n"
             texto += f"**Vencimento:** {guia['vencimento']}\n"
             texto += f"**Código de Barras:** {guia['codigo_barras']}\n"
+            # texto += f"**Pix copia-e-cola:** {guia.get('pix', 'Não disponível')}\n"
+            if guia.get("pix_url"):
+                texto += f"**Pagamento por Pix:** {guia['pix_url']}\n"
             # texto += f"**Linha Digitável:** {guia['linha_digitavel']}\n"
             texto += f"**PDF:** {guia.get('pdf', 'Não disponível')}\n\n"
 
         texto += """🎉 **Consulta finalizada com sucesso!**
 
 🔄 **O que você deseja fazer agora?**
-• Para consultar **outra inscrição imobiliária** de IPTU, informe o novo número
+• Para consultar **outra inscrição imobiliária**, informe o número da inscrição
 • Para **outra dúvida** não relacionada ao IPTU, pode me perguntar"""
 
         return texto

@@ -19,6 +19,7 @@ from src.tools.multi_step_service.core import (
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     InscricaoImobiliariaPayload,
     EscolhaAnoPayload,
+    ProximaConsultaIPTUPayload,
     EscolhaGuiasIPTUPayload,
     EscolhaCotasParceladasPayload,
     EscolhaFormatoDarmPayload,
@@ -34,6 +35,7 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.api.api_service_fake 
 from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import (
     APIUnavailableError,
     AuthenticationError,
+    DataNotFoundError,
     InvalidInscricaoError,
 )
 from src.tools.multi_step_service.workflows.iptu_pagamento.templates import (
@@ -317,10 +319,12 @@ class IPTUWorkflow(BaseWorkflow):
                     exercicio=exercicio,
                     divida_ativa_info=divida_ativa_info,
                 ),
+                payload_schema=ProximaConsultaIPTUPayload.model_json_schema(),
             )
             return state
 
         # Se chegou aqui, encontrou guias
+        await self._filtrar_guias_sem_cotas_pagaveis(dados_guias)
         state.data["dados_guias"] = dados_guias.model_dump()
         state.internal[STATE_HAS_CONSULTED_GUIAS] = True
 
@@ -339,6 +343,40 @@ class IPTUWorkflow(BaseWorkflow):
             return state
 
         return state
+
+    async def _filtrar_guias_sem_cotas_pagaveis(self, dados_guias) -> None:
+        """Remove guias em aberto sem cotas pagáveis antes de oferecê-las ao usuário."""
+        guias_filtradas = []
+
+        for guia in dados_guias.guias:
+            if not guia.esta_em_aberto:
+                guias_filtradas.append(guia)
+                continue
+
+            try:
+                dados_cotas = await self.api_service.obter_cotas(
+                    inscricao_imobiliaria=dados_guias.inscricao_imobiliaria,
+                    exercicio=int(dados_guias.exercicio),
+                    numero_guia=guia.numero_guia,
+                    tipo_guia=guia.tipo,
+                )
+            except (APIUnavailableError, AuthenticationError) as e:
+                logger.warning(
+                    f"Falha ao validar cotas da guia {guia.numero_guia}: {str(e)}"
+                )
+                guias_filtradas.append(guia)
+                continue
+            except DataNotFoundError as e:
+                logger.info(
+                    f"Guia {guia.numero_guia} removida por não ter cotas pagáveis: {str(e)}"
+                )
+                continue
+
+            if dados_cotas and any(not cota.esta_paga for cota in dados_cotas.cotas):
+                guias_filtradas.append(guia)
+
+        dados_guias.guias = guias_filtradas
+        dados_guias.total_guias = len(guias_filtradas)
 
     @handle_errors
     async def _usuario_escolhe_guias_iptu(self, state: ServiceState) -> ServiceState:
@@ -423,7 +461,7 @@ class IPTUWorkflow(BaseWorkflow):
         # Faz consulta via API
         try:
             dados_cotas = await self.api_service.obter_cotas(
-                str(inscricao), int(exercicio or 2025), str(guia_escolhida)
+                str(inscricao), int(exercicio or 2026), str(guia_escolhida)
             )
         except APIUnavailableError as e:
             # API indisponível - volta para seleção de guias
@@ -764,6 +802,8 @@ class IPTUWorkflow(BaseWorkflow):
                         "vencimento": dados_darm.darm.data_vencimento,
                         "codigo_barras": dados_darm.darm.codigo_barras,
                         "linha_digitavel": dados_darm.darm.sequencia_numerica,
+                        "pix": dados_darm.darm.chave_pix,
+                        "pix_url": dados_darm.darm.pix_page_url,
                         "pdf": urls,
                     }
                 )

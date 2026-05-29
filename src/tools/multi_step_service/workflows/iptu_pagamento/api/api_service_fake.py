@@ -32,11 +32,11 @@ class IPTUAPIServiceFake:
     testes completos de todos os cenários possíveis.
 
     Suporta simulação de erros de API através de inscrições especiais:
-    - 77777777777777: Simula APIUnavailableError
-    - 88888888888888: Simula AuthenticationError
-    - 99999999990000: Simula timeout na consulta de guias
-    - 99999999990001: Simula erro 500 na consulta de cotas
-    - 99999999990002: Simula erro 503 na geração de DARM
+    - 77777777: Simula APIUnavailableError
+    - 88888888: Simula AuthenticationError
+    - 99990000: Simula timeout na consulta de guias
+    - 99990001: Simula erro 500 na consulta de cotas
+    - 99990002: Simula erro 503 na geração de DARM
     """
 
     def __init__(self, user_id: str = "unknown"):
@@ -95,14 +95,14 @@ class IPTUAPIServiceFake:
         Retorna dados mockados de guias baseados na inscrição e exercício.
 
         Cenários de teste baseados na inscrição:
-        - 01234567890123: IPTU ORDINÁRIA + EXTRAORDINÁRIA (ambas em aberto)
-        - 11111111111111: Apenas IPTU ORDINÁRIA em aberto
-        - 22222222222222: Apenas IPTU EXTRAORDINÁRIA em aberto
-        - 33333333333333: Todas as guias quitadas
-        - 44444444444444: IPTU ORDINÁRIA com valor alto (teste desconto à vista)
-        - 55555555555555: IPTU ORDINÁRIA com valores baixos
-        - 66666666666666: Múltiplas guias EXTRAORDINÁRIAS (01, 02)
-        - 12345678: Nenhuma guia para ano 2024 (lista vazia), tem guias em 2025
+        - 12345678: IPTU ORDINÁRIA + EXTRAORDINÁRIA (ambas em aberto)
+        - 11111111: Apenas IPTU ORDINÁRIA em aberto
+        - 22222222: Apenas IPTU EXTRAORDINÁRIA em aberto
+        - 33333333: Todas as guias quitadas
+        - 44444444: IPTU ORDINÁRIA com valor alto (teste desconto à vista)
+        - 55555555: IPTU ORDINÁRIA com valores baixos
+        - 66666666: Múltiplas guias EXTRAORDINÁRIAS (01, 02)
+        - 87654321: Nenhuma guia para ano 2024 (lista vazia), tem guias em 2025
         - 10000000: Nenhuma guia (migrado para dívida ativa - parcelamento)
         - 20000000: Nenhuma guia (migrado para dívida ativa - CDAs)
         - 30000000: Nenhuma guia (migrado para dívida ativa - EFs)
@@ -113,7 +113,7 @@ class IPTUAPIServiceFake:
             # Exercício fora do range válido
             return None
 
-        if inscricao_clean == "12345678":
+        if inscricao_clean == "87654321":
             # Cenário específico: Nenhuma guia para 2024, mas tem para 2025
             if exercicio == 2024:
                 return []  # Lista vazia (sem guias para este ano)
@@ -142,7 +142,7 @@ class IPTUAPIServiceFake:
                     }
                 ]
 
-        if inscricao_clean == "01234567890123":
+        if inscricao_clean == "12345678":
             # Cenário padrão: IPTU ORDINÁRIA + EXTRAORDINÁRIA
             return [
                 {
@@ -186,7 +186,7 @@ class IPTUAPIServiceFake:
                     "Deposito": "N",
                 },
             ]
-        elif inscricao_clean == "11111111111111":
+        elif inscricao_clean == "11111111":
             # Apenas IPTU ORDINÁRIA
             return [
                 {
@@ -210,7 +210,7 @@ class IPTUAPIServiceFake:
                     "Deposito": "N",
                 }
             ]
-        elif inscricao_clean == "22222222222222":
+        elif inscricao_clean == "22222222":
             # Apenas IPTU EXTRAORDINÁRIA
             return [
                 {
@@ -234,7 +234,7 @@ class IPTUAPIServiceFake:
                     "Deposito": "N",
                 }
             ]
-        elif inscricao_clean == "33333333333333":
+        elif inscricao_clean == "33333333":
             # Todas quitadas - filtradas fora, então retorna lista vazia
             return [
                 {
@@ -258,7 +258,7 @@ class IPTUAPIServiceFake:
                     "Deposito": "N",
                 }
             ]
-        elif inscricao_clean == "44444444444444":
+        elif inscricao_clean == "44444444":
             # IPTU ORDINÁRIA com valor alto (teste desconto)
             return [
                 {
@@ -282,7 +282,7 @@ class IPTUAPIServiceFake:
                     "Deposito": "N",
                 }
             ]
-        elif inscricao_clean == "55555555555555":
+        elif inscricao_clean == "55555555":
             # IPTU ORDINÁRIA com valores baixos
             return [
                 {
@@ -306,7 +306,7 @@ class IPTUAPIServiceFake:
                     "Deposito": "N",
                 }
             ]
-        elif inscricao_clean == "66666666666666":
+        elif inscricao_clean == "66666666":
             # Múltiplas guias EXTRAORDINÁRIAS (01, 02)
             return [
                 {
@@ -380,7 +380,7 @@ class IPTUAPIServiceFake:
             cotas = []
             for i in range(1, 33):
                 numero_cota = f"{i:02d}"
-                valor_cota = "89,44" if inscricao_clean == "01234567890123" else "46,88"
+                valor_cota = "89,44" if inscricao_clean == "12345678" else "46,88"
 
                 # Algumas cotas com situações diferentes para teste
                 if i <= 3:
@@ -419,11 +419,11 @@ class IPTUAPIServiceFake:
                 numero_cota = f"{i:02d}"
 
                 # Valores diferentes baseados na inscrição e número da guia
-                if inscricao_clean == "01234567890123":
+                if inscricao_clean == "12345678":
                     valor_cota = "86,67"
-                elif inscricao_clean == "66666666666666" and numero_guia == "01":
+                elif inscricao_clean == "66666666" and numero_guia == "01":
                     valor_cota = "75,00"
-                elif inscricao_clean == "66666666666666" and numero_guia == "02":
+                elif inscricao_clean == "66666666" and numero_guia == "02":
                     valor_cota = "63,33"
                 else:
                     valor_cota = "53,33"
@@ -508,6 +508,8 @@ class IPTUAPIServiceFake:
             "CreditoEmissao": "0,00",
             "ValorAPagar": valor_total_str,
             "SequenciaNumerica": sequencia_numerica,
+            "ChavePix": f"00020126580014br.gov.bcb.pix0136{inscricao_clean}{numero_guia}{int(valor_total * 100):08d}520400005303986540{valor_total:.2f}5802BR",
+            "QrCodePIX": "iVBORw0KGgo=",
             "DescricaoDARM": f"DARM por cota ref.cotas {','.join(cotas_selecionadas)}",
             "CodReceita": "310-7",
             "DesReceita": "RECEITA DE PAGAMENTO",
@@ -529,8 +531,8 @@ class IPTUAPIServiceFake:
             DadosGuias com informações do IPTU e guias disponíveis ou None se não encontrado
 
         Raises:
-            APIUnavailableError: Para inscrições 77777777777777 ou 99999999990000
-            AuthenticationError: Para inscrição 88888888888888
+            APIUnavailableError: Para inscrições 77777777 ou 99990000
+            AuthenticationError: Para inscrição 88888888
         """
         # Limpa inscrição removendo caracteres não numéricos
         inscricao_clean = self._limpar_inscricao(inscricao_imobiliaria)
@@ -540,19 +542,19 @@ class IPTUAPIServiceFake:
         )
 
         # Simulação de erros baseada em inscrições especiais
-        if inscricao_clean == "77777777777777":
+        if inscricao_clean == "77777777":
             logger.error("FAKE API: Simulating APIUnavailableError (generic)")
             raise APIUnavailableError(
                 "Serviço IPTU temporariamente indisponível (erro simulado)"
             )
 
-        if inscricao_clean == "88888888888888":
+        if inscricao_clean == "88888888":
             logger.error("FAKE API: Simulating AuthenticationError")
             raise AuthenticationError(
                 "Falha na autenticação do serviço IPTU (erro simulado)"
             )
 
-        if inscricao_clean == "99999999990000":
+        if inscricao_clean == "99990000":
             logger.error("FAKE API: Simulating APIUnavailableError (timeout)")
             raise APIUnavailableError(
                 "Serviço IPTU não respondeu no tempo esperado. Por favor, tente novamente. (erro simulado)"
@@ -635,7 +637,7 @@ class IPTUAPIServiceFake:
             DadosCotas com informações das cotas disponíveis ou None se não encontrado
 
         Raises:
-            APIUnavailableError: Para inscrição 99999999990001
+            APIUnavailableError: Para inscrição 99990001
         """
         # Limpa inscrição removendo caracteres não numéricos
         inscricao_clean = self._limpar_inscricao(inscricao_imobiliaria)
@@ -645,7 +647,7 @@ class IPTUAPIServiceFake:
         )
 
         # Simulação de erro 500 na consulta de cotas
-        if inscricao_clean == "99999999990001":
+        if inscricao_clean == "99990001":
             logger.error(
                 "FAKE API: Simulating APIUnavailableError (500) on obter_cotas"
             )
@@ -731,7 +733,7 @@ class IPTUAPIServiceFake:
             DadosDarm com dados do DARM ou None se não encontrar
 
         Raises:
-            APIUnavailableError: Para inscrição 99999999990002
+            APIUnavailableError: Para inscrição 99990002
         """
         # Limpa inscrição removendo caracteres não numéricos
         inscricao_clean = self._limpar_inscricao(inscricao_imobiliaria)
@@ -744,7 +746,7 @@ class IPTUAPIServiceFake:
         )
 
         # Simulação de erro 503 na geração de DARM
-        if inscricao_clean == "99999999990002":
+        if inscricao_clean == "99990002":
             logger.error(
                 "FAKE API: Simulating APIUnavailableError (503) on consultar_darm"
             )

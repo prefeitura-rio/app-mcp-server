@@ -36,6 +36,9 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import
     AuthenticationError,
     InvalidInscricaoError,
 )
+from src.tools.multi_step_service.workflows.iptu_pagamento.pix_page_service import (
+    IPTUPixPageService,
+)
 
 from loguru import logger
 from src.utils.http_client import InterceptedHTTPClient
@@ -414,6 +417,16 @@ class IPTUAPIService:
                     " ", ""
                 )
 
+            if darm.qr_code_pix:
+                try:
+                    pix_page_service = IPTUPixPageService(user_id=self.user_id)
+                    darm.pix_page_url = await pix_page_service.create_pix_copy_page_url(
+                        qr_code_pix=darm.qr_code_pix,
+                        pix_code=darm.chave_pix,
+                    )
+                except Exception as e:
+                    logger.warning(f"Falha ao gerar página do Pix: {str(e)}")
+
             # Cria DadosDarm
             dados_darm = DadosDarm(
                 inscricao_imobiliaria=inscricao_clean,
@@ -427,9 +440,7 @@ class IPTUAPIService:
             return dados_darm
 
         except Exception as e:
-            logger.error(
-                f"Error processing DARM data: {str(e)} - Data: {darm_response}"
-            )
+            logger.error(f"Error processing DARM data: {str(e)}")
             return None
 
     async def download_pdf_darm(
@@ -473,7 +484,15 @@ class IPTUAPIService:
             # Retorna apenas se não for uma página de erro HTML
             logger.info(f"PDF downloaded successfully for inscricao {inscricao_clean}")
             signed_url = await self.upload_base64_to_gcs(base64_content=pdf_base64)
-            shorted_url = await self.get_short_url(url=signed_url)
+            expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7)
+            shorted_url = await self.get_short_url(
+                url=signed_url,
+                title="PDF para pagamento de cotas do IPTU",
+                description="Documento para pagamento das cotas selecionadas do IPTU.",
+                expires_at=expires_at.replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            )
             return shorted_url
         else:
             logger.warning("PDF download failed or returned HTML error page")
@@ -735,7 +754,15 @@ class IPTUAPIService:
         info: dict = json.loads(base64.b64decode(env.WORKFLOWS_GCP_SERVICE_ACCOUNT))
         return service_account.Credentials.from_service_account_info(info)
 
-    async def get_short_url(self, url) -> Optional[str]:
+    async def get_short_url(
+        self,
+        url: str,
+        title: str = "PDF para pagamento de cotas do IPTU",
+        description: str = "Documento para pagamento das cotas selecionadas do IPTU.",
+        expires_at: Optional[str] = None,
+        image_url: Optional[str] = None,
+        short_path: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Envia uma URL para o endpoint de encurtamento de URL e retorna a URL encurtada.
 
@@ -750,10 +777,16 @@ class IPTUAPIService:
             "Content-Type": "application/json",
         }
         payload = {
-            "description": "Link for IPTU generated pdf",
+            "description": description,
             "destination": url,
-            "title": "IPTU EAI Workflow",
+            "title": title,
         }
+        if expires_at:
+            payload["expires_at"] = expires_at
+        if image_url:
+            payload["image_url"] = image_url
+        if short_path:
+            payload["short_path"] = short_path
 
         try:
             async with InterceptedHTTPClient(

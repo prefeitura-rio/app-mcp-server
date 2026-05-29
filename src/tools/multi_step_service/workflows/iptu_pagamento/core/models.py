@@ -3,8 +3,13 @@ Modelos Pydantic para validação do workflow IPTU Ano Vigente
 """
 
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, field_validator, ConfigDict
 import re
+
+from src.tools.multi_step_service.workflows.iptu_pagamento.core.constants import (
+    INSCRICAO_MAX_LENGTH,
+    INSCRICAO_MIN_LENGTH,
+)
 
 
 class InscricaoImobiliariaPayload(BaseModel):
@@ -12,9 +17,9 @@ class InscricaoImobiliariaPayload(BaseModel):
 
     inscricao_imobiliaria: str = Field(
         ...,
-        description="Inscrição imobiliária do imóvel.",
-        min_length=1,
-        max_length=15,
+        description="Inscrição imobiliária do imóvel (aceita com ou sem formatação, ex: '0.000.001-8', '00000018' ou '18').",
+        min_length=INSCRICAO_MIN_LENGTH,
+        max_length=INSCRICAO_MAX_LENGTH,
     )
 
     @field_validator(
@@ -31,11 +36,18 @@ class InscricaoImobiliariaPayload(BaseModel):
         # Remove todos os caracteres não numéricos
         clean_inscricao = re.sub(r"[^0-9]", "", v)
 
-        if len(clean_inscricao) < 8:
-            clean_inscricao = clean_inscricao.zfill(8)
+        if len(clean_inscricao) < INSCRICAO_MIN_LENGTH:
+            raise ValueError(
+                f"Inscrição imobiliária deve ter no mínimo {INSCRICAO_MIN_LENGTH} dígitos"
+            )
 
-        if len(clean_inscricao) > 15:
-            raise ValueError("Inscrição imobiliária não pode ter mais de 15 dígitos")
+        if len(clean_inscricao) < INSCRICAO_MAX_LENGTH:
+            clean_inscricao = clean_inscricao.zfill(INSCRICAO_MAX_LENGTH)
+
+        if len(clean_inscricao) > INSCRICAO_MAX_LENGTH:
+            raise ValueError(
+                f"Inscrição imobiliária não pode ter mais de {INSCRICAO_MAX_LENGTH} dígitos"
+            )
 
         return clean_inscricao
 
@@ -55,6 +67,18 @@ class EscolhaAnoPayload(BaseModel):
         if ano_clean < 2000 or ano_clean > 2100:
             raise ValueError("Ano de exercício inválido")
         return ano_clean
+
+
+class ProximaConsultaIPTUPayload(BaseModel):
+    """Use APENAS para ano (ex: 2024) ou inscrição imobiliária. NÃO use para CPF!"""
+
+    ano_exercicio: Optional[Union[int, str]] = Field(
+        default=None, description="Ano (ex: 2024)"
+    )
+    inscricao_imobiliaria: Optional[str] = Field(
+        default=None,
+        description="Inscrição imobiliária com ou sem formatação (ex: '0.000.001-8', '00000018', ou '18').",
+    )
 
 
 class EscolhaGuiasIPTUPayload(BaseModel):
@@ -209,6 +233,12 @@ class Darm(BaseModel):
     credito_emissao: str = Field(alias="CreditoEmissao")  # Formato brasileiro "0,00"
     valor_a_pagar: str = Field(alias="ValorAPagar")  # Formato brasileiro "261,44"
     sequencia_numerica: str = Field(alias="SequenciaNumerica")  # Linha digitável
+    chave_pix: Optional[str] = Field(default=None, alias="ChavePix")
+    qr_code_pix: Optional[str] = Field(
+        default=None,
+        alias="QrCodePIX",
+        validation_alias=AliasChoices("QrCodePIX", "QrCodePix"),
+    )
     descricao_darm: str = Field(
         alias="DescricaoDARM"
     )  # "DARM por cota ref.cotas 01,02,03"
@@ -220,6 +250,7 @@ class Darm(BaseModel):
     # Campos calculados/processados localmente
     valor_numerico: Optional[float] = None
     codigo_barras: Optional[str] = None  # Derivado da sequencia_numerica
+    pix_page_url: Optional[str] = None
 
     model_config = ConfigDict(validate_by_name=True)
 
