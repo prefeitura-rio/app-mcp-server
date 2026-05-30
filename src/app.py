@@ -1053,9 +1053,30 @@ def create_app() -> FastMCP:
         Returns:
             Dict com endereço estruturado (logradouro, número, bairro, CEP,
             cidade, estado, formatted_address) ou erro com campo 'valid: False'.
+
+        Nunca levanta exceção: qualquer falha (Google Maps indisponível, token
+        inválido, coordenada sem resultado, resposta malformada) é convertida em
+        `{"valid": False, ...}` para o agente cair no fallback de endereço por
+        texto, em vez de derrubar o turno (bug do pin de localização no fluxo de
+        luminária — Vitória, 2026-05-29).
         """
-        address_service = AddressAPIService()
-        return await address_service.reverse_geolocator(latitude, longitude)
+        try:
+            address_service = AddressAPIService()
+            return await address_service.reverse_geolocator(latitude, longitude)
+        except Exception as e:
+            logger.warning(
+                f"reverse_geocode_address falhou para ({latitude}, {longitude}): {e}",
+                exc_info=True,
+            )
+            return {
+                "valid": False,
+                "error": "geocode_failed",
+                "message": (
+                    "Não consegui converter essa localização em endereço agora. "
+                    "Peça ao cidadão o endereço por texto (rua/avenida, número se "
+                    "souber, e bairro)."
+                ),
+            }
 
     @conditional_mcp_tool("get_user_by_cpf")
     async def get_user_by_cpf(cpf: str) -> dict:
