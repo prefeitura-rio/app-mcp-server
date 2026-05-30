@@ -1054,11 +1054,18 @@ def create_app() -> FastMCP:
             Dict com endereço estruturado (logradouro, número, bairro, CEP,
             cidade, estado, formatted_address) ou erro com campo 'valid: False'.
 
-        Nunca levanta exceção: qualquer falha (Google Maps indisponível, token
-        inválido, coordenada sem resultado, resposta malformada) é convertida em
-        `{"valid": False, ...}` para o agente cair no fallback de endereço por
-        texto, em vez de derrubar o turno (bug do pin de localização no fluxo de
-        luminária — Vitória, 2026-05-29).
+        Nunca levanta exceção. Dois tipos de falha retornam `{"valid": False}`:
+        - **Falhas esperadas de negócio** (coordenada sem resultado, logradouro
+          não identificado, fora do município do RJ) já são tratadas dentro do
+          `reverse_geolocator`, que retorna `{"valid": False, "error": <texto>}`.
+        - **Exceções** (Google Maps indisponível, token inválido, resposta
+          malformada) são capturadas aqui e convertidas em
+          `{"valid": False, "error": "geocode_failed", "message": ...}`, com a
+          dica explícita de pedir o endereço por texto.
+
+        Em ambos os casos o agente cai no fallback de endereço por texto em vez
+        de derrubar o turno (bug do pin de localização no fluxo de luminária —
+        Vitória, 2026-05-29).
         """
         try:
             address_service = AddressAPIService()
