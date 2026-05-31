@@ -370,8 +370,21 @@ async def refresh_token(user_number: str) -> Optional[Dict[str, Any]]:
 
             if result is False:
                 # invalid_grant: apaga ATOMICAMENTE só se o registro ainda for o
-                # nosso (não apaga um login novo / logout concorrente).
-                await redis.eval(_CAS_DELETE_LUA, 1, token_key, cur_refresh)
+                # nosso. Se o CAS retornar 0, um login novo (re-auth concorrente) já
+                # substituiu o registro — não apaga E devolve o token novo se válido
+                # (senão reportaríamos "não autenticado" com um login válido no Redis).
+                deleted = await redis.eval(_CAS_DELETE_LUA, 1, token_key, cur_refresh)
+                if deleted == 0:
+                    raw_after = await redis.get(token_key)
+                    if raw_after:
+                        try:
+                            after = json.loads(raw_after)
+                            if int(datetime.now(timezone.utc).timestamp()) < after.get(
+                                "expires_at", 0
+                            ):
+                                return _token_view(after)
+                        except json.JSONDecodeError:
+                            pass
                 return None
             if not isinstance(result, dict):
                 return None  # transitório (None) — mantém registro p/ retry

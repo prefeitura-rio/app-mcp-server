@@ -182,6 +182,29 @@ async def test_refresh_invalid_grant_deletes_record(fake_redis, monkeypatch):
     assert key in fake_redis.deleted  # registro limpo → força reauth
 
 
+async def test_refresh_invalid_grant_during_reauth_returns_new_token(
+    fake_redis, monkeypatch
+):
+    """P2: invalid_grant no refresh antigo MAS re-auth concorrente já gravou um
+    token novo válido → não apaga (CAS) E devolve o login novo, não None."""
+    key = "govbr_token:5521999999999"
+    fake_redis.store[key] = json.dumps(_record(-10, 3600, refresh_token="rt-old"))
+
+    async def fake_post(_rt):
+        fresh = _record(300, 7200, refresh_token="rt-brandnew")
+        fresh["access_token"] = "at-fresh"
+        fake_redis.store[key] = json.dumps(fresh)  # re-auth concorrente
+        return False  # o refresh antigo foi rejeitado (invalid_grant)
+
+    monkeypatch.setattr(govbr_token, "_post_refresh", fake_post)
+    out = await govbr_token.refresh_token("+5521999999999")
+    assert out is not None
+    assert out["access_token"] == "at-fresh"  # devolve o login novo
+    assert key not in fake_redis.deleted  # NÃO apagou o login novo
+    stored = json.loads(fake_redis.store[key])
+    assert stored["access_token"] == "at-fresh"
+
+
 async def test_refresh_transient_error_keeps_record(fake_redis, monkeypatch):
     key = "govbr_token:5521999999999"
     fake_redis.store[key] = json.dumps(_record(-10, 3600))
