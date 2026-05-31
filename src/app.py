@@ -1071,9 +1071,15 @@ def create_app() -> FastMCP:
             address_service = AddressAPIService()
             return await address_service.reverse_geolocator(latitude, longitude)
         except Exception as e:
-            logger.warning(
-                f"reverse_geocode_address falhou para ({latitude}, {longitude}): {e}",
-                exc_info=True,
+            # Loguru: formatação posicional `{}` (não f-string + exc_info=True).
+            # Com kwarg extra o Loguru roda `.format()` na msg já interpolada e
+            # estoura KeyError se o texto da exceção tiver chaves (corpo JSON/dict)
+            # — o que derrotaria o próprio fallback. opt(exception=True) anexa o traceback.
+            logger.opt(exception=True).warning(
+                "reverse_geocode_address falhou para ({}, {}): {}",
+                latitude,
+                longitude,
+                e,
             )
             return {
                 "valid": False,
