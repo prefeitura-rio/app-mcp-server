@@ -72,8 +72,19 @@ class BaseWorkflow(ABC):
         # 1. Injeta payload no state - fonte única da verdade
         state.payload = payload or {}
 
-        # 2. Reset completo se payload vazio (comportamento global para todos os workflows)
-        if not payload or (isinstance(payload, dict) and len(payload) == 0):
+        # 2. Reset completo se workflow anterior foi finalizado com sucesso
+        if state.data.get("_reset_on_next_call"):
+            logger.info(
+                f"🔄 Reset completo do serviço '{self.service_name}' - workflow anterior finalizado"
+            )
+            state.data = {}
+            state.internal = {}
+            state.status = "progress"
+            state.agent_response = None
+            # Não resetamos metadata para preservar histórico de criação
+
+        # 3. Reset completo se payload vazio (comportamento global para todos os workflows)
+        elif not payload or (isinstance(payload, dict) and len(payload) == 0):
             logger.info(
                 f"🔄 Reset completo do serviço '{self.service_name}' - payload vazio detectado"
             )
@@ -83,7 +94,7 @@ class BaseWorkflow(ABC):
             state.agent_response = None
             # Não resetamos metadata para preservar histórico de criação
 
-        # 3. Reset automático para navegação não-linear (se habilitado)
+        # 4. Reset automático para navegação não-linear (se habilitado)
         elif self.automatic_resets and self.step_order and self.step_dependencies:
             state = self._auto_reset_for_previous_steps(state)
 
