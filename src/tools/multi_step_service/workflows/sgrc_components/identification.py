@@ -126,7 +126,7 @@ class IdentificationFlowMixin:
             logger.info("[GOVBR] Already authenticated via gov.br")
             return state
 
-        user_number = state.user_number
+        user_number = f"+{state.user_id}"
 
         status = await govbr_auth_status(user_number)
 
@@ -227,9 +227,7 @@ class IdentificationFlowMixin:
         if not state.data.get("govbr_auth_sent"):
             logger.info("[GOVBR] Initiating auth flow")
 
-            service_context = getattr(
-                self.common_config, "service_name", "multi_step_service"
-            )
+            service_context = getattr(self, "service_name", "multi_step_service")
 
             init_result = await govbr_auth_init(
                 user_number=user_number,
