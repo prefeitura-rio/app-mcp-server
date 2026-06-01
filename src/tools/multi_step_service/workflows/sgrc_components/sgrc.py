@@ -78,6 +78,24 @@ class SGRCTicketMixin:
 
         try:
             address, requester, description = self.build_ticket_payload(state)
+
+            # Guard: sem logradouro o ticket é inválido e o SGRC devolveria um
+            # erro não-mapeado (cai no catch-all genérico "erro ao abrir o
+            # chamado"). Falha cedo, com mensagem acionável, ANTES de montar
+            # specific_attributes ou chamar o SGRC. O getattr/None garante que o
+            # guard só dispara para um Address real com logradouro vazio.
+            street = getattr(address, "street", None)
+            if street is not None and not str(street).strip():
+                logger.warning(
+                    "[_open_ticket] endereço sem logradouro — abortando antes do SGRC"
+                )
+                return ticket_failed(
+                    state,
+                    error_code="endereco_ausente",
+                    description=self.templates.chamado_sem_endereco(),
+                    error_message="endereço sem logradouro",
+                )
+
             specific_attributes = self.build_specific_attributes(state)
 
             ticket = await self.new_ticket(
@@ -130,12 +148,18 @@ class SGRCTicketMixin:
             )
 
         except Exception as exc:
-            logger.exception(exc)
+            # logger.exception anexa o traceback; o nome da classe vai explícito
+            # (posicional, brace-safe) pra triagem rápida no Signoz, e entra no
+            # error_message do estado pra parar de mascarar a causa real.
+            logger.exception(
+                "[_open_ticket] erro não-mapeado ao abrir chamado: {}",
+                type(exc).__name__,
+            )
             return ticket_failed(
                 state,
                 error_code="erro_geral",
                 description=self.templates.erro_geral_chamado(),
-                error_message=str(exc),
+                error_message=f"{type(exc).__name__}: {exc}",
             )
 
     def build_ticket_payload(self, state: ServiceState):

@@ -133,6 +133,14 @@ def erro_geral_chamado() -> str:
     return "Houve um erro ao abrir o chamado.\n\nPor favor, tente novamente mais tarde."
 
 
+def chamado_sem_endereco() -> str:
+    """Endereço ausente/incompleto no momento de abrir o chamado."""
+    return (
+        "Não consegui identificar o endereço para abrir o chamado.\n\n"
+        "Por favor, informe o endereço completo (rua/avenida, número se souber, e bairro)."
+    )
+
+
 def reiniciar_apos_erro(error_msg: str) -> str:
     """Mensagem ao reiniciar após erro."""
     return (

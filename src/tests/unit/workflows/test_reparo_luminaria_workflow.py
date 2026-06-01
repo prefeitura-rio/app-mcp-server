@@ -233,6 +233,33 @@ def test_reparo_ticket_builder_and_ticket_state_helpers():
 
 
 @pytest.mark.asyncio
+async def test_open_ticket_sem_logradouro_falha_cedo_sem_chamar_sgrc(monkeypatch):
+    """Endereço sem logradouro → falha acionável (chamado_sem_endereco) ANTES do
+    SGRC, em vez do catch-all genérico 'erro ao abrir o chamado' (bug do teste
+    real do Bruno, 2026-06-01)."""
+    workflow = make_workflow()
+    workflow.use_fake_api = False  # força o caminho real pra exercitar o guard
+
+    state = make_state(data={"address": {}})  # endereço sem logradouro
+
+    chamou_sgrc = False
+
+    async def _boom_new_ticket(*args, **kwargs):
+        nonlocal chamou_sgrc
+        chamou_sgrc = True
+        raise AssertionError("new_ticket não deve ser chamado com endereço vazio")
+
+    monkeypatch.setattr(workflow, "new_ticket", _boom_new_ticket)
+
+    result = await workflow._open_ticket(state)
+
+    assert chamou_sgrc is False
+    assert result.data["ticket_created"] is False
+    assert result.data["error"] == "endereco_ausente"
+    assert result.agent_response.description == rlu_tpl.chamado_sem_endereco()
+
+
+@pytest.mark.asyncio
 async def test_reparo_workflow_initializes_with_service_knowledge():
     workflow = make_workflow()
     workflow.service_knowledge = {
