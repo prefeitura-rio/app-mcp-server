@@ -20,8 +20,9 @@ DESCRIPTION = """
     Quando a mensagem menciona os termos abaixo com intenção de ação (não apenas
     informação), **CHAME esta tool IMEDIATAMENTE**:
 
-    - IPTU: "pagar IPTU", "emitir guia", "consultar débitos", ou número de 7-8 dígitos
-      após consulta de IPTU → service_name="iptu_pagamento"
+    - IPTU: "pagar IPTU", "emitir guia de IPTU", "guia de IPTU", "consultar débitos",
+      ou número de 7-8 dígitos após consulta de IPTU → service_name="iptu_pagamento"
+      (apenas IPTU — NÃO usar pra outras guias como ISS, ITBI, taxa de lixo)
     - Luminária pública / poste / iluminação → service_name="reparo_luminaria"
     - Poda de árvore (via pública) → service_name="poda_de_arvore"
 
