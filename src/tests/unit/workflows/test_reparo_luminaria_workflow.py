@@ -468,7 +468,14 @@ def test_reparo_workflow_specific_attributes_and_routes():
 
     assert workflow._route_after_luminaria_details(make_state()) == "collect_address"
     assert workflow._route_after_quadra(make_state()) == "collect_reference_point"
-    assert workflow._route_after_reference(make_state()) == "collect_cpf"
+    # Após o ponto de referência o fluxo passa pela escolha de método de
+    # identificação (gov.br vs CPF) antes do CPF — nó introduzido com a auth
+    # gov.br. O routing map de _route_after_reference só aceita
+    # "select_identification_method"/END (ver workflow.py), então o destino
+    # correto aqui é select_identification_method, não collect_cpf.
+    assert (
+        workflow._route_after_reference(make_state()) == "select_identification_method"
+    )
     assert (
         workflow._route_after_ticket_confirmation(
             make_state(data={"ticket_data_confirmed": True})
