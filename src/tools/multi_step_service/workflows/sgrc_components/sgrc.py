@@ -89,12 +89,40 @@ class SGRCTicketMixin:
                 logger.warning(
                     "[_open_ticket] endereço sem logradouro — abortando antes do SGRC"
                 )
-                return ticket_failed(
+                # O guard pode disparar DEPOIS da confirmação (endereço vazio que
+                # passou batido até o open_ticket). Sem limpar os flags de
+                # confirmação, a próxima mensagem com um novo endereço seria
+                # ignorada — `_collect_address` curto-circuita em
+                # `_has_valid_confirmed_address` e o fluxo voltaria direto pro
+                # open_ticket, re-disparando o guard num loop. Limpa o estado de
+                # endereço confirmado (como `_clear_address_data`) +
+                # `ticket_data_confirmed` pra a correção re-coletar de fato.
+                for _key in (
+                    "address",
+                    "address_temp",
+                    "address_confirmed",
+                    "address_validated",
+                    "address_needs_confirmation",
+                    "address_validation",
+                    "ticket_data_confirmed",
+                ):
+                    state.data.pop(_key, None)
+                failed = ticket_failed(
                     state,
                     error_code="endereco_ausente",
                     description=self.templates.chamado_sem_endereco(),
                     error_message="endereço sem logradouro",
                 )
+                # `ticket_failed` grava `data["error"]`, que TAMBÉM é gate em
+                # `_has_valid_confirmed_address` (address.py): mantê-lo setado faria
+                # o fluxo re-pedir endereço nos turnos seguintes mesmo após o
+                # cidadão corrigir e re-confirmar — o reset que o limparia
+                # (`_reset_previous_session_flags`) só roda em turno SEM payload, e a
+                # recuperação tem payload todo turno. Aqui a recuperação é esperada,
+                # então removemos o gate; o diagnóstico fica no log acima e em
+                # `agent_response.error_message`.
+                failed.data.pop("error", None)
+                return failed
 
             specific_attributes = self.build_specific_attributes(state)
 
