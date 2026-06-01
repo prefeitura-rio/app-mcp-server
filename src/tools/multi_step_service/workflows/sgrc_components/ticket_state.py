@@ -7,6 +7,8 @@ def ticket_opened(
     state.data["protocol_id"] = protocol_id
     state.data["ticket_created"] = True
     state.agent_response = AgentResponse(description=description)
+    state.data["_reset_on_next_call"] = True
+
     return state
 
 
@@ -23,4 +25,6 @@ def ticket_failed(
         description=description,
         error_message=error_message,
     )
+    state.data["_reset_on_next_call"] = True
+
     return state
