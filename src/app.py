@@ -806,7 +806,8 @@ def create_app() -> FastMCP:
         2. Extrair entidades que o cidadão JÁ MENCIONOU na conversa (endereço,
            tipo de defeito, etc.)
         3. Chamar send_whatsapp_flow passando `prefill_data` com essas entidades
-        4. Informar ao cidadão que o formulário foi enviado
+        4. NÃO escrever mensagem adicional confirmando o envio — o cartão do
+           formulário (com botão) já é auto-explicativo
         5. Aguardar resposta do flow (dados virão automaticamente via webhook)
         6. Workflow continuará com dados pré-preenchidos
 
@@ -869,12 +870,13 @@ def create_app() -> FastMCP:
         if result.get("success"):
             return {
                 "success": True,
-                "message": (
-                    "Enviei um formulário rápido no WhatsApp para você preencher os dados. "
-                    "Após preencher, eu continuo te ajudando com o restante."
-                ),
                 "flow_token": result.get("flow_token"),
                 "next_step": "wait_for_flow_completion",
+                "instruction": (
+                    "O cartão do formulário (com o botão de abrir) já foi enviado ao "
+                    "cidadão e é auto-explicativo. NÃO escreva nenhuma mensagem "
+                    "adicional confirmando o envio; apenas aguarde o preenchimento."
+                ),
             }
         else:
             return {
@@ -978,16 +980,15 @@ def create_app() -> FastMCP:
                 if flow_result.get("success"):
                     return {
                         "status": "flow_sent",
-                        "message": (
-                            "Enviei um formulário rápido no WhatsApp para você preencher os dados. "
-                            "Após preencher, eu continuo automaticamente com o atendimento."
-                        ),
                         "flow_token": flow_result.get("flow_token"),
                         "next_step": "await_flow_completion",
                         "instruction": (
-                            "IMPORTANTE: Informe ao cidadão que o formulário foi enviado. "
-                            "NÃO prossiga coletando dados manualmente. Aguarde o webhook "
-                            "com os dados preenchidos - o workflow será chamado automaticamente."
+                            "O cartão do formulário (com o botão de abrir) já foi "
+                            "enviado ao cidadão e é auto-explicativo. NÃO escreva "
+                            "nenhuma mensagem adicional confirmando o envio. NÃO "
+                            "prossiga coletando dados manualmente — aguarde o webhook "
+                            "com os dados preenchidos (o workflow será chamado "
+                            "automaticamente)."
                         ),
                     }
                 else:
