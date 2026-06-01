@@ -904,6 +904,29 @@ class ReparoLuminariaWorkflow(
     def _route_after_reference(self, state: ServiceState) -> str:
         if state.agent_response:
             return END
+        return "select_identification_method"
+
+    def _route_after_method_selection(self, state: ServiceState) -> str:
+        if state.agent_response:
+            return END
+
+        method = state.data.get("identification_method")
+        if method == "govbr":
+            return "authenticate_govbr"
+        else:
+            return "collect_cpf"
+
+    def _route_after_govbr_auth(self, state: ServiceState) -> str:
+        if state.data.get("govbr_authenticated"):
+            if not state.data.get("email"):
+                return "collect_email"
+            if not state.data.get("name"):
+                return "collect_name"
+            return "confirm_ticket_data"
+
+        if state.agent_response:
+            return END
+
         return "collect_cpf"
 
     def _route_after_cpf(self, state: ServiceState) -> str:
@@ -982,6 +1005,10 @@ class ReparoLuminariaWorkflow(
         graph.add_node("confirm_address", self._confirm_address)
         graph.add_node("collect_quadra_esportes", self._collect_quadra_esportes)
         graph.add_node("collect_reference_point", self._collect_reference_point)
+        graph.add_node(
+            "select_identification_method", self._select_identification_method
+        )
+        graph.add_node("authenticate_govbr", self._authenticate_govbr)
         graph.add_node("collect_cpf", self._collect_cpf)
         graph.add_node("collect_email", self._collect_email)
         graph.add_node("collect_name", self._collect_name)
@@ -1022,7 +1049,27 @@ class ReparoLuminariaWorkflow(
         graph.add_conditional_edges(
             "collect_reference_point",
             self._route_after_reference,
-            {"collect_cpf": "collect_cpf", END: END},
+            {"select_identification_method": "select_identification_method", END: END},
+        )
+        graph.add_conditional_edges(
+            "select_identification_method",
+            self._route_after_method_selection,
+            {
+                "authenticate_govbr": "authenticate_govbr",
+                "collect_cpf": "collect_cpf",
+                END: END,
+            },
+        )
+        graph.add_conditional_edges(
+            "authenticate_govbr",
+            self._route_after_govbr_auth,
+            {
+                "collect_cpf": "collect_cpf",
+                "collect_email": "collect_email",
+                "collect_name": "collect_name",
+                "confirm_ticket_data": "confirm_ticket_data",
+                END: END,
+            },
         )
         graph.add_conditional_edges(
             "collect_cpf",
