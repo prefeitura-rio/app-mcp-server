@@ -139,6 +139,11 @@ class IdentificationFlowMixin:
             govbr_nome = user_info.get("nome")
             govbr_email = user_info.get("email")
 
+            logger.info(f"[GOVBR] Raw user_info from token: {user_info}")
+            logger.info(
+                f"[GOVBR] Extracted - CPF: {govbr_cpf}, Nome: {govbr_nome}, Email: {govbr_email}"
+            )
+
             if not govbr_cpf:
                 logger.error("[GOVBR] Token missing CPF - cannot proceed")
                 state.agent_response = AgentResponse(
