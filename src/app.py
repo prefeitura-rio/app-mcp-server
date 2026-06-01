@@ -1037,10 +1037,20 @@ def create_app() -> FastMCP:
         # genérico para todas as tools), então o modelo não controla o alvo do
         # reset — mesma garantia do multi_step_service.
         result = await reset_session_state_impl(user_id)
-        result["instruction"] = (
-            "Atendimento encerrado e estado de workflow limpo. Despeça-se de forma "
-            "breve. NÃO retome o fluxo anterior — a próxima mensagem é nova e limpa."
-        )
+        if result.get("status") == "ok":
+            result["instruction"] = (
+                "Atendimento encerrado e estado de workflow limpo. Despeça-se de "
+                "forma breve. NÃO retome o fluxo anterior — a próxima mensagem é "
+                "nova e limpa."
+            )
+        else:
+            # Falha temporária na limpeza: NÃO afirmar que encerrou (o estado pode
+            # seguir vivo). Pedir nova tentativa — o reset é idempotente.
+            result["instruction"] = (
+                "Não consegui limpar o estado agora (falha temporária). Peça "
+                "desculpas brevemente e diga que o cidadão pode tentar encerrar de "
+                "novo. NÃO afirme que o atendimento foi encerrado."
+            )
         return result
 
     @conditional_mcp_tool("validate_address")

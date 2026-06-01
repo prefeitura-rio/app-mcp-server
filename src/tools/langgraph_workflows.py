@@ -1,5 +1,7 @@
 from typing import Any, Dict, Optional
 
+from loguru import logger
+
 from src.tools.multi_step_service.core import (
     Orchestrator,
     ServiceRequest,
@@ -52,10 +54,23 @@ async def reset_session_state(
     genérico para todas as tools e param ``user_id``/``user_number``), então o
     modelo NÃO controla o alvo do reset — mesma garantia do ``multi_step_service``.
     """
-    state_manager = StateManager(
-        user_id=user_id, backend_mode=backend_mode or BACKEND_MODE
-    )
-    cleared = await state_manager.remove_user_data()
+    # A construção do StateManager fica DENTRO do try: com backend Redis/BOTH, a
+    # criação do backend pode falhar (config inválida/dependência indisponível)
+    # antes mesmo do delete — sem isso a falha escaparia como ToolError em vez de
+    # degradar graciosamente.
+    try:
+        state_manager = StateManager(
+            user_id=user_id, backend_mode=backend_mode or BACKEND_MODE
+        )
+        cleared = await state_manager.remove_user_data()
+    except Exception as exc:
+        # Convenção do repo (Orchestrator / reverse_geocode_address): capturar e
+        # devolver erro estruturado em vez de propagar. Re-tentável no próximo
+        # turno — o reset é idempotente.
+        logger.opt(exception=True).warning(
+            "reset_session_state falhou ({}): {}", type(exc).__name__, exc
+        )
+        return {"status": "error", "cleared": False}
     return {"status": "ok", "cleared": bool(cleared)}
 
 

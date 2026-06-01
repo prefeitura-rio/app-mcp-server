@@ -45,3 +45,38 @@ async def test_reset_session_state_reports_noop_when_nothing_to_clear(monkeypatc
 
     out = await langgraph_workflows.reset_session_state("5521999998888")
     assert out == {"status": "ok", "cleared": False}
+
+
+@pytest.mark.asyncio
+async def test_reset_session_state_returns_error_on_backend_failure(monkeypatch):
+    """Falha do backend (ex.: blip do Redis em produção) vira erro ESTRUTURADO,
+    não exceção propagada — segue a convenção catch-and-degrade do repo, então o
+    encerramento não estoura ToolError pro modelo."""
+
+    class _FailingStateManager:
+        def __init__(self, user_id, backend_mode=None):
+            pass
+
+        async def remove_user_data(self):
+            raise RuntimeError("redis indisponível")
+
+    monkeypatch.setattr(langgraph_workflows, "StateManager", _FailingStateManager)
+
+    out = await langgraph_workflows.reset_session_state("5521999998888")
+    assert out == {"status": "error", "cleared": False}
+
+
+@pytest.mark.asyncio
+async def test_reset_session_state_handles_construction_failure(monkeypatch):
+    """A falha pode vir já na CONSTRUÇÃO do StateManager (backend Redis com config
+    inválida/indisponível), antes do delete — também deve degradar pra erro
+    estruturado, não propagar ToolError."""
+
+    class _ExplodingStateManager:
+        def __init__(self, user_id, backend_mode=None):
+            raise RuntimeError("backend Redis indisponível")
+
+    monkeypatch.setattr(langgraph_workflows, "StateManager", _ExplodingStateManager)
+
+    out = await langgraph_workflows.reset_session_state("5521999998888")
+    assert out == {"status": "error", "cleared": False}
