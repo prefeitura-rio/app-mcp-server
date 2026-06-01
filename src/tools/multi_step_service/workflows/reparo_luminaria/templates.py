@@ -177,5 +177,12 @@ def erro_geral_chamado() -> str:
     return "Houve um erro ao abrir o chamado. Tente novamente mais tarde."
 
 
+def chamado_sem_endereco() -> str:
+    return (
+        "Não consegui identificar o endereço para abrir o chamado. "
+        "Por favor, informe o endereço completo (rua/avenida, número se souber, e bairro)."
+    )
+
+
 def reiniciar_apos_erro(error_msg: str) -> str:
     return f"{error_msg}\n\nVamos tentar novamente. Informe o endereço da luminária:"

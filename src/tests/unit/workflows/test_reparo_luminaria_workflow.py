@@ -233,6 +233,59 @@ def test_reparo_ticket_builder_and_ticket_state_helpers():
 
 
 @pytest.mark.asyncio
+async def test_open_ticket_sem_logradouro_falha_cedo_sem_chamar_sgrc(monkeypatch):
+    """Endereço sem logradouro → falha acionável (chamado_sem_endereco) ANTES do
+    SGRC, em vez do catch-all genérico 'erro ao abrir o chamado' (bug do teste
+    real do Bruno, 2026-06-01)."""
+    workflow = make_workflow()
+    workflow.use_fake_api = False  # força o caminho real pra exercitar o guard
+
+    # Endereço vazio que chegou ao open_ticket JÁ "confirmado" (o cenário real:
+    # passou batido pela confirmação). Os flags abaixo simulam esse estado stale.
+    state = make_state(
+        data={
+            "address": {},
+            "address_confirmed": True,
+            "address_validated": True,
+            "ticket_data_confirmed": True,
+        }
+    )
+
+    chamou_sgrc = False
+
+    async def _boom_new_ticket(*args, **kwargs):
+        nonlocal chamou_sgrc
+        chamou_sgrc = True
+        raise AssertionError("new_ticket não deve ser chamado com endereço vazio")
+
+    monkeypatch.setattr(workflow, "new_ticket", _boom_new_ticket)
+
+    result = await workflow._open_ticket(state)
+
+    assert chamou_sgrc is False
+    assert result.data["ticket_created"] is False
+    assert result.agent_response.description == rlu_tpl.chamado_sem_endereco()
+    # Diagnóstico preservado no agent_response (telemetria), não em data["error"].
+    assert result.agent_response.error_message == "endereço sem logradouro"
+
+    # Recuperação: os flags de endereço confirmado E o gate `error` são limpos —
+    # senão a próxima mensagem com um novo endereço seria ignorada (curto-circuito
+    # em _has_valid_confirmed_address) e o guard re-dispararia num loop.
+    assert "address_confirmed" not in result.data
+    assert "address_validated" not in result.data
+    assert "ticket_data_confirmed" not in result.data
+    assert "error" not in result.data
+
+    # 2ª mensagem (recuperação real): com um novo endereço, _collect_address
+    # re-coleta de fato em vez de curto-circuitar — prova que o loop foi quebrado.
+    workflow.use_fake_api = True
+    result.payload = {"address": "Rua Nova 123, Centro"}
+    result.agent_response = None
+    recollected = await workflow._collect_address(result)
+    assert recollected.data.get("address_temp"), "novo endereço não foi re-coletado"
+
+
+@pytest.mark.asyncio
 async def test_reparo_workflow_initializes_with_service_knowledge():
     workflow = make_workflow()
     workflow.service_knowledge = {
