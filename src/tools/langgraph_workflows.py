@@ -6,6 +6,7 @@ from src.tools.multi_step_service.core import (
     StateMode,
     tools_description,
 )
+from src.tools.multi_step_service.core.state import StateManager
 
 from src.config import env
 
@@ -16,6 +17,7 @@ else:
 
 __all__ = [
     "multi_step_service",
+    "reset_session_state",
     "save_workflow_graphs",
     "save_single_workflow_graph",
     "tools_description",
@@ -36,6 +38,25 @@ async def multi_step_service(
 
     # Retorna resposta já formatada
     return response.model_dump()
+
+
+async def reset_session_state(
+    user_id: str, backend_mode: Optional[StateMode] = None
+) -> dict:
+    """Encerra o atendimento: limpa TODO o estado de workflow multi-step do
+    cidadão (luminária, poda, IPTU…) para o telefone do thread.
+
+    Segurança: o ``user_id`` que chega aqui é o do thread autenticado. O engine
+    sobrescreve qualquer ``user_id`` que o modelo passe na tool-call pelo
+    ``thread_id`` (ver ``engine/agent.py::_inject_thread_id_in_user_id_params``,
+    genérico para todas as tools e param ``user_id``/``user_number``), então o
+    modelo NÃO controla o alvo do reset — mesma garantia do ``multi_step_service``.
+    """
+    state_manager = StateManager(
+        user_id=user_id, backend_mode=backend_mode or BACKEND_MODE
+    )
+    cleared = await state_manager.remove_user_data()
+    return {"status": "ok", "cleared": bool(cleared)}
 
 
 def save_workflow_graphs():
