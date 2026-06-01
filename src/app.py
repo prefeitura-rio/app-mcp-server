@@ -63,6 +63,7 @@ from src.tools.auth import (
 )
 from src.tools.langgraph_workflows import (
     multi_step_service as mss,
+    reset_session_state as reset_session_state_impl,
     tools_description as mss_tools_description,
     BACKEND_MODE,
 )
@@ -1005,6 +1006,52 @@ def create_app() -> FastMCP:
             service_name=service_name, user_id=user_id, payload=payload
         )
         return response
+
+    @conditional_mcp_tool(
+        "reset_session_state",
+        description="""
+        Encerra o atendimento do cidadão: limpa TODO o estado de workflow
+        multi-step em andamento (luminária, poda, IPTU…) do thread atual.
+
+        QUANDO CHAMAR:
+        - O cidadão quer encerrar/recomeçar/voltar ao início: "sair", "menu",
+          "início", "recomeçar", "cancelar atendimento", "tchau", "era só isso",
+          "não preciso de mais nada".
+        - ANTES de iniciar um serviço novo quando havia um fluxo travado/antigo.
+
+        NÃO CHAMAR:
+        - No meio de um fluxo que o cidadão quer CONTINUAR.
+        - Para pedidos de serviço que só contêm a palavra (ex.: "cancelar a conta",
+          "sair da fila") — isso é serviço, não fim de sessão.
+
+        Passe `user_id` como nas demais tools (o sistema o substitui pelo telefone
+        autenticado da conversa — você não controla o alvo).
+
+        Após chamar, NÃO retome o fluxo anterior; a próxima mensagem do cidadão é
+        uma intenção nova e limpa.
+        """,
+    )
+    async def reset_session_state(user_id: str) -> dict:
+        # Segurança: o engine sobrescreve `user_id` pelo thread_id autenticado
+        # antes da execução (engine/agent.py::_inject_thread_id_in_user_id_params,
+        # genérico para todas as tools), então o modelo não controla o alvo do
+        # reset — mesma garantia do multi_step_service.
+        result = await reset_session_state_impl(user_id)
+        if result.get("status") == "ok":
+            result["instruction"] = (
+                "Atendimento encerrado e estado de workflow limpo. Despeça-se de "
+                "forma breve. NÃO retome o fluxo anterior — a próxima mensagem é "
+                "nova e limpa."
+            )
+        else:
+            # Falha temporária na limpeza: NÃO afirmar que encerrou (o estado pode
+            # seguir vivo). Pedir nova tentativa — o reset é idempotente.
+            result["instruction"] = (
+                "Não consegui limpar o estado agora (falha temporária). Peça "
+                "desculpas brevemente e diga que o cidadão pode tentar encerrar de "
+                "novo. NÃO afirme que o atendimento foi encerrado."
+            )
+        return result
 
     @conditional_mcp_tool("validate_address")
     async def validate_address(address: str) -> dict:
