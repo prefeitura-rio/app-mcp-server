@@ -1,11 +1,13 @@
 from loguru import logger
 
+from src.tools.auth.govbr_auth import govbr_auth_init, govbr_auth_status
 from src.tools.multi_step_service.core.base_workflow import handle_errors
 from src.tools.multi_step_service.core.models import AgentResponse, ServiceState
 from src.tools.multi_step_service.workflows.sgrc_components.models import (
     AddressConfirmationPayload,
     CPFPayload,
     EmailPayload,
+    IdentificationMethodPayload,
     NomePayload,
 )
 from src.tools.multi_step_service.workflows.sgrc_components import templates as tpl
@@ -33,13 +35,241 @@ class IdentificationFlowMixin:
             "nome_invalido",
             "nome_maximo_tentativas",
         }
+        simple_templates = {
+            "solicitar_metodo_identificacao",
+            "metodo_identificacao_invalido",
+            "govbr_autenticacao_iniciada",
+            "govbr_autenticacao_pendente",
+            "govbr_autenticacao_erro",
+            "govbr_dados_coletados",
+            "confirmar_dados_salvos",
+        }
+
+        if name in simple_templates:
+            return template_fn(*args)
         if name in required_aware:
             return template_fn(*args, required=self._identification_required())
         return template_fn(*args)
 
     @handle_errors
+    async def _select_identification_method(self, state: ServiceState) -> ServiceState:
+        """
+        First step in identification: let user choose CPF or Gov.br.
+
+        Sets state.data['identification_method'] to 'cpf' or 'govbr'.
+        """
+        logger.info("[ENTRADA] _select_identification_method")
+
+        if state.data.get("identification_method"):
+            logger.info(
+                f"[METHOD] Already selected: {state.data['identification_method']}"
+            )
+            return state
+
+        if state.data.get("cpf") or state.data.get("govbr_authenticated"):
+            logger.info("[METHOD] User already identified, skipping method selection")
+            return state
+
+        if state.payload and "identification_method" in state.payload:
+            try:
+                validated = IdentificationMethodPayload.model_validate(state.payload)
+                state.data["identification_method"] = validated.identification_method
+                logger.info(f"[METHOD] User chose: {validated.identification_method}")
+                state.agent_response = None
+                return state
+
+            except Exception as e:
+                attempts = self.increment_attempts(state, "method_attempts")
+                logger.info(f"[METHOD] Invalid choice, attempt {attempts}/3")
+
+                if attempts >= 3:
+                    logger.info("[METHOD] Max attempts reached, defaulting to CPF")
+                    state.data["identification_method"] = "cpf"
+                    state.agent_response = None
+                    return state
+
+                state.agent_response = AgentResponse(
+                    description=self._personal_data_template(
+                        "metodo_identificacao_invalido", attempts
+                    ),
+                    payload_schema=IdentificationMethodPayload.model_json_schema(),
+                    error_message=str(e),
+                )
+                return state
+
+        state.agent_response = AgentResponse(
+            description=self._personal_data_template("solicitar_metodo_identificacao"),
+            payload_schema=IdentificationMethodPayload.model_json_schema(),
+        )
+        return state
+
+    @handle_errors
+    async def _authenticate_govbr(self, state: ServiceState) -> ServiceState:
+        """
+        Handle Gov.br OAuth authentication flow.
+
+        Steps:
+        1. Check if already authenticated
+        2. If not, call govbr_auth_init to send auth button
+        3. Wait for user to complete authentication
+        4. Extract user_info (cpf, nome, email) from token
+        5. Call internal API with gov.br CPF to get phone number
+        6. Merge data: gov.br data + internal API phone
+        """
+        logger.info("[ENTRADA] _authenticate_govbr")
+
+        if state.data.get("identification_method") != "govbr":
+            logger.info("[GOVBR] Not using gov.br method, skipping")
+            return state
+
+        if state.data.get("govbr_authenticated"):
+            logger.info("[GOVBR] Already authenticated via gov.br")
+            return state
+
+        user_number = state.user_number
+
+        status = await govbr_auth_status(user_number)
+
+        if status.get("is_authenticated"):
+            logger.info("[GOVBR] User is authenticated, extracting data")
+
+            user_info = status.get("user_info", {})
+
+            govbr_cpf = user_info.get("cpf")
+            govbr_nome = user_info.get("nome")
+            govbr_email = user_info.get("email")
+
+            if not govbr_cpf:
+                logger.error("[GOVBR] Token missing CPF - cannot proceed")
+                state.agent_response = AgentResponse(
+                    description=self._personal_data_template("govbr_autenticacao_erro"),
+                )
+                state.data.pop("identification_method", None)
+                return state
+
+            logger.info(f"[GOVBR] Got CPF from token: {govbr_cpf}")
+
+            state.data["cpf"] = govbr_cpf
+            if govbr_nome:
+                state.data["name"] = govbr_nome
+            if govbr_email:
+                state.data["email"] = govbr_email
+
+            if not self.use_fake_api:
+                try:
+                    logger.info("[GOVBR] Fetching additional data from internal API")
+                    user_info_api = await self.api_service.get_user_info(govbr_cpf)
+
+                    if user_info_api.get("phones"):
+                        state.data["phone"] = (
+                            str(user_info_api["phones"][0]).strip()
+                            if user_info_api["phones"][0]
+                            else ""
+                        )
+                        logger.info("[GOVBR] Got phone from internal API")
+
+                    if not govbr_email and user_info_api.get("email"):
+                        state.data["email"] = user_info_api["email"].strip().lower()
+                    if not govbr_nome and user_info_api.get("name"):
+                        state.data["name"] = user_info_api["name"].strip()
+
+                    state.data["cadastro_verificado"] = True
+
+                except Exception as e:
+                    logger.info(
+                        f"[GOVBR] Internal API lookup failed (non-critical): {e}"
+                    )
+                    state.data["cadastro_verificado"] = False
+
+            state.data["govbr_authenticated"] = True
+
+            nome_display = (
+                state.data.get("name", "").split()[0]
+                if state.data.get("name")
+                else "usuário"
+            )
+            state.agent_response = AgentResponse(
+                description=self._personal_data_template(
+                    "govbr_dados_coletados", nome_display
+                ),
+            )
+
+            return state
+
+        if state.data.get("govbr_auth_sent"):
+            logger.info("[GOVBR] Auth link already sent, waiting for user")
+
+            user_input = (
+                str(state.payload.get("message", "")).lower() if state.payload else ""
+            )
+
+            if (
+                "tentar" in user_input
+                or "novamente" in user_input
+                or "novo link" in user_input
+            ):
+                logger.info("[GOVBR] User requested new auth link")
+                state.data.pop("govbr_auth_sent", None)
+            elif "cpf" in user_input:
+                logger.info("[GOVBR] User wants to switch to CPF method")
+                state.data["identification_method"] = "cpf"
+                state.data.pop("govbr_auth_sent", None)
+                state.agent_response = None
+                return state
+            else:
+                state.agent_response = AgentResponse(
+                    description=self._personal_data_template(
+                        "govbr_autenticacao_pendente"
+                    ),
+                )
+                return state
+
+        if not state.data.get("govbr_auth_sent"):
+            logger.info("[GOVBR] Initiating auth flow")
+
+            service_context = getattr(
+                self.common_config, "service_name", "multi_step_service"
+            )
+
+            init_result = await govbr_auth_init(
+                user_number=user_number,
+                service_context=service_context,
+            )
+
+            if init_result.get("status") != "ok":
+                logger.error(f"[GOVBR] Auth init failed: {init_result.get('error')}")
+                state.agent_response = AgentResponse(
+                    description=self._personal_data_template("govbr_autenticacao_erro"),
+                )
+                state.data.pop("identification_method", None)
+                return state
+
+            state.data["govbr_auth_sent"] = True
+            state.data["govbr_auth_id"] = init_result.get("auth_id")
+
+            logger.info(
+                f"[GOVBR] Auth link sent successfully, auth_id={init_result.get('auth_id')}"
+            )
+
+            state.agent_response = AgentResponse(
+                description=self._personal_data_template("govbr_autenticacao_iniciada"),
+            )
+
+            return state
+
+        return state
+
+    @handle_errors
     async def _collect_cpf(self, state: ServiceState) -> ServiceState:
         logger.info("[ENTRADA] _collect_cpf")
+
+        if state.data.get("identification_method") == "govbr":
+            logger.info("[CPF] Using gov.br method, skipping CPF collection")
+            return state
+
+        if state.data.get("govbr_authenticated"):
+            logger.info("[CPF] Already authenticated via gov.br")
+            return state
 
         if state.data.get("correction_requested") == "cpf":
             state.data.pop("cpf", None)

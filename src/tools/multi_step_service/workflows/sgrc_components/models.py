@@ -1,5 +1,5 @@
 import re
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -124,6 +124,40 @@ class AddressPayload(BaseModel):
 
 class AddressConfirmationPayload(BaseModel):
     confirmacao: bool = Field(..., description="Confirmação se os dados estão corretos")
+
+
+class IdentificationMethodPayload(BaseModel):
+    """Payload for choosing identification method (CPF or Gov.br)."""
+
+    identification_method: Literal["cpf", "govbr"] = Field(
+        ...,
+        description="Método de identificação: 'cpf' para CPF manual ou 'govbr' para autenticação gov.br",
+    )
+
+    @field_validator("identification_method", mode="before")
+    @classmethod
+    def normalize_method(cls, value: Optional[str]) -> str:
+        """Normalize user input to valid method choice."""
+        if not value:
+            raise ValueError("Método de identificação é obrigatório")
+
+        normalized = str(value).lower().strip()
+
+        mapping = {
+            "cpf": "cpf",
+            "gov.br": "govbr",
+            "govbr": "govbr",
+            "gov br": "govbr",
+            "gov": "govbr",
+            "governo": "govbr",
+            "1": "cpf",
+            "2": "govbr",
+        }
+
+        if normalized in mapping:
+            return mapping[normalized]
+
+        raise ValueError(f"Método inválido: '{value}'. Escolha 'CPF' ou 'Gov.br'")
 
 
 class AddressValidationState(BaseModel):

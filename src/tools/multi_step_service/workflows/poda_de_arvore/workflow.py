@@ -74,6 +74,8 @@ class PodaDeArvoreWorkflow(
         "initialize",
         "collect_address",
         "collect_reference_point",
+        "select_identification_method",
+        "authenticate_govbr",
         "collect_cpf",
         "collect_email",
         "collect_name",
@@ -85,7 +87,13 @@ class PodaDeArvoreWorkflow(
         "initialize": [],
         "collect_address": [],
         "collect_reference_point": ["collect_address"],
-        "collect_cpf": ["collect_email", "collect_name"],
+        "select_identification_method": ["collect_reference_point"],
+        "authenticate_govbr": ["select_identification_method"],
+        "collect_cpf": [
+            "select_identification_method",
+            "collect_email",
+            "collect_name",
+        ],
         "collect_email": [],
         "collect_name": [],
         "confirm_ticket_data": ["collect_address"],
@@ -420,6 +428,43 @@ class PodaDeArvoreWorkflow(
         if state.agent_response:
             return END
 
+        return "select_identification_method"
+
+    def _route_after_method_selection(self, state: ServiceState) -> str:
+        logger.info("[ROTEAMENTO] _route_after_method_selection")
+
+        if state.agent_response:
+            return END
+
+        method = state.data.get("identification_method")
+        logger.info(f"[ROUTE] Selected method: {method}")
+
+        if method == "govbr":
+            return "authenticate_govbr"
+        else:
+            return "collect_cpf"
+
+    def _route_after_govbr_auth(self, state: ServiceState) -> str:
+        logger.info("[ROTEAMENTO] _route_after_govbr_auth")
+
+        if state.data.get("govbr_authenticated"):
+            logger.info("[ROUTE] Gov.br auth completed")
+
+            if not state.data.get("email"):
+                logger.info("[ROUTE] Missing email, collecting")
+                return "collect_email"
+            if not state.data.get("name"):
+                logger.info("[ROUTE] Missing name, collecting")
+                return "collect_name"
+
+            logger.info("[ROUTE] All data collected, going to confirmation")
+            return "confirm_ticket_data"
+
+        if state.agent_response:
+            logger.info("[ROUTE] Waiting for user response")
+            return END
+
+        logger.info("[ROUTE] Falling back to CPF collection")
         return "collect_cpf"
 
     def _route_after_cpf(self, state: ServiceState) -> str:
@@ -540,10 +585,12 @@ class PodaDeArvoreWorkflow(
         Fluxo:
         1. Coleta endereço e confirma
         2. Coleta ponto de referência (opcional)
-        3. Coleta CPF (opcional) e verifica cadastro
-        4. Se não cadastrado ou faltando dados: coleta email e nome (opcionais)
-        5. Confirma todos os dados com o usuário
-        6. Abre chamado no SGRC
+        3. Seleciona método de identificação (CPF ou Gov.br)
+        4a. Se Gov.br: autentica via OAuth e extrai CPF/nome/email
+        4b. Se CPF: coleta CPF manualmente e verifica cadastro
+        5. Se não cadastrado ou faltando dados: coleta email e nome (opcionais)
+        6. Confirma todos os dados com o usuário
+        7. Abre chamado no SGRC
         """
         graph = StateGraph(ServiceState)
 
@@ -552,6 +599,10 @@ class PodaDeArvoreWorkflow(
         graph.add_node("collect_address", self._collect_address)
         graph.add_node("confirm_address", self._confirm_address)
         graph.add_node("collect_reference_point", self._collect_reference_point)
+        graph.add_node(
+            "select_identification_method", self._select_identification_method
+        )
+        graph.add_node("authenticate_govbr", self._authenticate_govbr)
         graph.add_node("collect_cpf", self._collect_cpf)
         graph.add_node("collect_email", self._collect_email)
         graph.add_node("collect_name", self._collect_name)
@@ -603,7 +654,29 @@ class PodaDeArvoreWorkflow(
             "collect_reference_point",
             self._route_after_reference,
             {
+                "select_identification_method": "select_identification_method",
+                "confirm_ticket_data": "confirm_ticket_data",
+                END: END,
+            },
+        )
+
+        graph.add_conditional_edges(
+            "select_identification_method",
+            self._route_after_method_selection,
+            {
+                "authenticate_govbr": "authenticate_govbr",
                 "collect_cpf": "collect_cpf",
+                END: END,
+            },
+        )
+
+        graph.add_conditional_edges(
+            "authenticate_govbr",
+            self._route_after_govbr_auth,
+            {
+                "collect_cpf": "collect_cpf",
+                "collect_email": "collect_email",
+                "collect_name": "collect_name",
                 "confirm_ticket_data": "confirm_ticket_data",
                 END: END,
             },

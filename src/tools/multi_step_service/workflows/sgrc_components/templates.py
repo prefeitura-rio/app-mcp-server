@@ -1,3 +1,56 @@
+def solicitar_metodo_identificacao() -> str:
+    """Prompt for identification method selection (CPF or Gov.br)."""
+    return (
+        "Como você gostaria de se identificar?\n\n"
+        "📋 *CPF* - Digite seu CPF para buscar seus dados\n"
+        "🔐 *Gov.br* - Autentique com sua conta gov.br (mais rápido e seguro)\n\n"
+        "Escolha uma opção."
+    )
+
+
+def metodo_identificacao_invalido(tentativa: int, max_tentativas: int = 3) -> str:
+    """Error message for invalid identification method."""
+    return (
+        f"Opção inválida. Tentativa {tentativa}/{max_tentativas}.\n\n"
+        f"Por favor, escolha:\n"
+        f"- *CPF* para identificar via CPF\n"
+        f"- *Gov.br* para autenticar com gov.br"
+    )
+
+
+def govbr_autenticacao_iniciada() -> str:
+    """Message after sending gov.br auth button."""
+    return (
+        "✅ Link de autenticação gov.br enviado!\n\n"
+        "Por favor, clique no botão acima para fazer login com sua conta gov.br.\n\n"
+        "Quando terminar, me envie uma mensagem para continuar."
+    )
+
+
+def govbr_autenticacao_pendente() -> str:
+    """Message when waiting for gov.br authentication to complete."""
+    return (
+        "⏳ Ainda estou aguardando você completar a autenticação gov.br.\n\n"
+        "Se você já autenticou, aguarde alguns segundos e me envie uma mensagem.\n\n"
+        "Se não recebeu o link, diga 'tentar novamente'."
+    )
+
+
+def govbr_autenticacao_erro() -> str:
+    """Error message when gov.br auth fails."""
+    return (
+        "❌ Não consegui completar a autenticação gov.br.\n\n"
+        "Você pode:\n"
+        "- Dizer 'tentar novamente' para receber um novo link\n"
+        "- Dizer 'usar CPF' para se identificar via CPF"
+    )
+
+
+def govbr_dados_coletados(nome: str) -> str:
+    """Confirmation message after successful gov.br auth."""
+    return f"✅ Autenticação gov.br concluída! Olá, {nome}!"
+
+
 def solicitar_cpf(required: bool = False) -> str:
     base = "Por favor, informe seu CPF para buscarmos seus dados cadastrais."
     if required:
