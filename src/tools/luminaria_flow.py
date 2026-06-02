@@ -298,12 +298,20 @@ def _handle_location(
     # Mostrar pergunta sobre quadra apenas se location for "Praça"
     show_quadra = location == "Praça"
 
+    logger.info(
+        f"[LUMINARIA_FLOW] _handle_location: location={location!r}, "
+        f"show_quadra={show_quadra}"
+    )
+
     data = {
         **_merge_current_form_state(incoming, flow_token),
         "show_qty_pattern": incoming.get("defect_type") in _VISUAL,
         "show_location": True,
         "show_quadra_question": show_quadra,
     }
+
+    logger.info(f"[LUMINARIA_FLOW] _handle_location retornando data={data}")
+
     return {"version": "3.0", "screen": "MAIN", "data": data}
 
 

@@ -1143,6 +1143,7 @@ class ReparoLuminariaWorkflow(
             {
                 "authenticate_govbr": "authenticate_govbr",
                 "collect_cpf": "collect_cpf",
+                "confirm_ticket_data": "confirm_ticket_data",
                 END: END,
             },
         )

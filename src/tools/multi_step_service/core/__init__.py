@@ -18,12 +18,16 @@ DESCRIPTION = """
     **🚨 PRIORIDADE MÁXIMA — ROTEAMENTO OBRIGATÓRIO 🚨**
 
     Quando a mensagem menciona os termos abaixo com intenção de ação (não apenas
-    informação), **CHAME esta tool IMEDIATAMENTE**:
+    informação), **CHAME esta tool IMEDIATAMENTE** e **SEMPRE extraia e passe os dados
+    mencionados pelo usuário no payload**:
 
     - IPTU: "pagar IPTU", "emitir guia de IPTU", "guia de IPTU", "consultar débitos",
       ou número de 7-8 dígitos após consulta de IPTU → service_name="iptu_pagamento"
       (apenas IPTU — NÃO usar pra outras guias como ISS, ITBI, taxa de lixo)
     - Luminária pública / poste / iluminação → service_name="reparo_luminaria"
+      **IMPORTANTE**: Se o usuário mencionou tipo de defeito (apagada, piscando, etc)
+      ou localização (praça, rua, etc), EXTRAIA e passe no payload inicial:
+      Ex: "tem uma luminária danificada na praça" → payload={"luminaria_defeito": "Danificada", "luminaria_localizacao": "Praça"}
     - Poda de árvore (via pública) → service_name="poda_de_arvore"
 
     **NÃO chame** esta tool (use `google_search` ou responda informacionalmente) quando:

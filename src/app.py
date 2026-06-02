@@ -974,13 +974,30 @@ def create_app() -> FastMCP:
                     f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
                     f"service={service_name}, user={user_id}"
                 )
+
+                # Construir prefill_data a partir do state salvo
+                # (payload atual só tem confirmacao_servico, dados originais estão no state)
+                prefill_from_state = {}
+                if existing_state and existing_state.data:
+                    state_data = existing_state.data
+                    # Para reparo_luminaria: mapear campos do state para campos do Flow
+                    if service_name == "reparo_luminaria":
+                        if state_data.get("luminaria_defeito"):
+                            prefill_from_state["defect_type"] = state_data[
+                                "luminaria_defeito"
+                            ]
+                        if state_data.get("luminaria_localizacao"):
+                            prefill_from_state["location"] = state_data[
+                                "luminaria_localizacao"
+                            ]
+
                 # `send_flow_by_service` normaliza payload internamente via
                 # `normalize_prefill_for_flow` — passamos raw, normalizer
                 # cuida do mapping per-service.
                 flow_result = await send_flow_by_service(
                     service_type=service_name,
                     user_number=user_id,
-                    prefill_data=payload or None,
+                    prefill_data=prefill_from_state or None,
                 )
 
                 if flow_result.get("success"):
