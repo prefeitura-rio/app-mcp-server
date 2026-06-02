@@ -216,17 +216,20 @@ class ReparoLuminariaWorkflow(
         if not state.payload:
             return
 
-        # WhatsApp Flow: processar qty_pattern antes dos aliases
-        if (
-            state.payload.get("_source") == "whatsapp_flow"
-            and "qty_pattern" in state.payload
-        ):
-            qty = state.payload["qty_pattern"]
-            if qty == "uma":
-                state.payload["luminaria_quantidade"] = "uma"
-            elif qty in ["bloco", "intercaladas"]:
-                state.payload["luminaria_quantidade"] = "grupo"
-                state.payload["luminaria_intercaladas_bloco"] = qty
+        # WhatsApp Flow: processar qty_pattern e is_quadra_esportes antes dos aliases
+        if state.payload.get("_source") == "whatsapp_flow":
+            # Processar qty_pattern
+            if "qty_pattern" in state.payload:
+                qty = state.payload["qty_pattern"]
+                if qty == "uma":
+                    state.payload["luminaria_quantidade"] = "uma"
+                elif qty in ["bloco", "intercaladas"]:
+                    state.payload["luminaria_quantidade"] = "grupo"
+                    state.payload["luminaria_intercaladas_bloco"] = qty
+
+            # Processar is_quadra_esportes: se sim, sobrescrever location
+            if state.payload.get("is_quadra_esportes") == "sim":
+                state.payload["location"] = "Quadra de esportes"
 
         aliases = {
             "endereco": "address",

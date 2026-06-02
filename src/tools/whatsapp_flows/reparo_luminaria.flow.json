@@ -13,7 +13,8 @@
         "qty_pattern_prefill": {"type": "string", "__example__": ""},
         "location_prefill": {"type": "string", "__example__": ""},
         "show_qty_pattern": {"type": "boolean", "__example__": false},
-        "show_location": {"type": "boolean", "__example__": false}
+        "show_location": {"type": "boolean", "__example__": false},
+        "show_quadra_question": {"type": "boolean", "__example__": false}
       },
       "layout": {
         "type": "SingleColumnLayout",
@@ -87,6 +88,26 @@
                   {"id": "Quadra de esportes", "title": "Quadra de esportes"},
                   {"id": "Rua", "title": "Rua"},
                   {"id": "Não sei", "title": "Não sei"}
+                ],
+                "on-select-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "trigger": "location",
+                    "location": "${form.location}",
+                    "defect_type": "${form.defect_type}",
+                    "qty_pattern": "${form.qty_pattern}"
+                  }
+                }
+              },
+              {
+                "type": "RadioButtonsGroup",
+                "label": "A luminária fica dentro de uma quadra de esportes?",
+                "name": "is_quadra_esportes",
+                "required": false,
+                "visible": "${data.show_quadra_question}",
+                "data-source": [
+                  {"id": "sim", "title": "Sim"},
+                  {"id": "nao", "title": "Não"}
                 ]
               },
               {
@@ -98,7 +119,8 @@
                     "_source": "whatsapp_flow",
                     "defect_type": "${form.defect_type}",
                     "qty_pattern": "${form.qty_pattern}",
-                    "location": "${form.location}"
+                    "location": "${form.location}",
+                    "is_quadra_esportes": "${form.is_quadra_esportes}"
                   }
                 }
               }

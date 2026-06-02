@@ -134,6 +134,7 @@ def _handle_init(
         "location_prefill": None,
         "show_qty_pattern": False,
         "show_location": False,
+        "show_quadra_question": False,
     }
 
     # Layer 2: incoming_data decriptado (futuro-proof; vazio em dinâmico hoje)
@@ -231,6 +232,7 @@ def _merge_current_form_state(incoming: dict, flow_token: str | None) -> dict:
         ("defect_type", "defect_type_prefill"),
         ("qty_pattern", "qty_pattern_prefill"),
         ("location", "location_prefill"),
+        ("is_quadra_esportes", "is_quadra_esportes"),
     ):
         value = incoming.get(src_key)
         if value:  # non-empty/truthy — user filled
@@ -277,6 +279,30 @@ def _handle_qty_pattern(
         **_merge_current_form_state(incoming, flow_token),
         "show_qty_pattern": True,
         "show_location": True,
+        "show_quadra_question": False,
+    }
+    return {"version": "3.0", "screen": "MAIN", "data": data}
+
+
+def _handle_location(
+    location: str = "",
+    incoming: dict | None = None,
+    flow_token: str | None = None,
+) -> dict:
+    """
+    User selecionou location. Se for "Praça", mostra pergunta sobre quadra de esportes.
+    """
+    incoming = dict(incoming or {})
+    incoming["location"] = location
+
+    # Mostrar pergunta sobre quadra apenas se location for "Praça"
+    show_quadra = location == "Praça"
+
+    data = {
+        **_merge_current_form_state(incoming, flow_token),
+        "show_qty_pattern": incoming.get("defect_type") in _VISUAL,
+        "show_location": True,
+        "show_quadra_question": show_quadra,
     }
     return {"version": "3.0", "screen": "MAIN", "data": data}
 
@@ -328,6 +354,10 @@ async def process_flow_request(body: dict, private_key_pem: str) -> str:
         elif trigger == "qty_pattern":
             response = _handle_qty_pattern(
                 data.get("qty_pattern", ""), incoming=data, flow_token=flow_token
+            )
+        elif trigger == "location":
+            response = _handle_location(
+                data.get("location", ""), incoming=data, flow_token=flow_token
             )
         else:
             logger.warning(f"luminaria_flow: trigger desconhecido {trigger!r}")
