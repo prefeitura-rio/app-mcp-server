@@ -947,32 +947,26 @@ def create_app() -> FastMCP:
             )
             existing_state = await state_manager.load_service_state(service_name)
 
-            # Se payload está vazio (exceto _source), é uma NOVA solicitação
-            # EXCETO se gov.br está em processo ou já autenticado
+            # Envia flow automaticamente se:
+            # 1. Payload está vazio (nova solicitação)
+            # 2. NÃO veio de whatsapp_flow completion
+            # 3. Workflow nunca foi iniciado (sem metadata.created_at)
             is_new_request = len(payload) == 0 or (
                 len(payload) == 1 and "_source" in payload
             )
 
-            # Se gov.br em andamento, não é nova requisição
-            if existing_state and existing_state.data:
-                govbr_in_progress = (
-                    existing_state.data.get("govbr_auth_sent")
-                    or existing_state.data.get("govbr_authenticated")
-                    or existing_state.data.get("identification_method") == "govbr"
-                )
-                if govbr_in_progress:
-                    is_new_request = False
-
-            # Só bloqueia envio do flow se:
-            # 1. Workflow estiver em progresso E
-            # 2. Payload NÃO está vazio (continuar workflow existente)
-            workflow_is_active = (
-                existing_state is not None
-                and existing_state.status == "progress"
-                and not is_new_request
+            # Não enviar Flow se workflow já foi iniciado anteriormente
+            workflow_ja_iniciado = (
+                existing_state
+                and existing_state.metadata
+                and existing_state.metadata.created_at
             )
 
-            if source != "whatsapp_flow" and not workflow_is_active:
+            if (
+                source != "whatsapp_flow"
+                and is_new_request
+                and not workflow_ja_iniciado
+            ):
                 # Envia flow se não veio de flow completion E não há workflow ativo
                 logger.info(
                     f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
@@ -1006,11 +1000,6 @@ def create_app() -> FastMCP:
                     logger.warning(
                         f"[AUTO_FLOW] Falha ao enviar flow: {flow_result.get('error')}"
                     )
-            elif workflow_is_active and source != "whatsapp_flow":
-                logger.info(
-                    f"[AUTO_FLOW] Workflow já ativo para service={service_name}, "
-                    f"user={user_id} - NÃO enviando flow novamente"
-                )
 
         # Prosseguir normalmente com o workflow
         response = await mss(

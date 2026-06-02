@@ -83,16 +83,26 @@ class BaseWorkflow(ABC):
             state.agent_response = None
             # Não resetamos metadata para preservar histórico de criação
 
-        # 3. Reset completo se payload vazio (comportamento global para todos os workflows)
+        # 3. Payload vazio: só reseta se workflow nunca foi salvo
+        # (Estado foi carregado do storage = workflow já iniciou)
         elif not payload or (isinstance(payload, dict) and len(payload) == 0):
-            logger.info(
-                f"🔄 Reset completo do serviço '{self.service_name}' - payload vazio detectado"
-            )
-            state.data = {}
-            state.internal = {}
-            state.status = "progress"
-            state.agent_response = None
-            # Não resetamos metadata para preservar histórico de criação
+            # Se metadata existe, workflow foi salvo anteriormente = em andamento
+            workflow_foi_iniciado = state.metadata and state.metadata.created_at
+
+            if workflow_foi_iniciado:
+                # Workflow já foi salvo: NÃO resetar
+                logger.info(
+                    f"⏭️  Payload vazio ignorado - workflow foi iniciado em {state.metadata.created_at}"
+                )
+            else:
+                # Workflow nunca foi salvo: pode resetar
+                logger.info(
+                    f"🔄 Reset completo do serviço '{self.service_name}' - payload vazio em workflow novo"
+                )
+                state.data = {}
+                state.internal = {}
+                state.status = "progress"
+                state.agent_response = None
 
         # 4. Reset automático para navegação não-linear (se habilitado)
         elif self.automatic_resets and self.step_order and self.step_dependencies:
