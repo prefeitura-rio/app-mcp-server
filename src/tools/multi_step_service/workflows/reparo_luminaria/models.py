@@ -44,8 +44,9 @@ class ConfirmacaoServicoPayload(BaseModel):
     confirmacao_servico: bool = Field(
         ...,
         description=(
-            "True se o usuário confirma que deseja este serviço (sim, quero, é isso mesmo, etc). "
-            "False se o usuário nega ou não é este serviço que precisa."
+            "IMPORTANT: Interpret user's response and convert to boolean. "
+            "Set to true for ANY affirmative response (sim, yes, isso, quero, ok, 👍, ✅). "
+            "Set to false for ANY negative response (não, nao, no, errado, 👎, ❌)."
         ),
     )
 

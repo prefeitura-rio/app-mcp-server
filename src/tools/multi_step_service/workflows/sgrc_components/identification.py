@@ -35,8 +35,14 @@ class IdentificationFlowMixin:
             "nome_invalido",
             "nome_maximo_tentativas",
         }
+        # solicitar_metodo_identificacao agora também precisa saber se é opcional
+        if name == "solicitar_metodo_identificacao":
+            identificacao_obrigatoria = getattr(
+                self.common_config, "identification_required", False
+            )
+            return template_fn(opcional=not identificacao_obrigatoria)
+
         simple_templates = {
-            "solicitar_metodo_identificacao",
             "metodo_identificacao_invalido",
             "govbr_autenticacao_iniciada",
             "govbr_autenticacao_pendente",
@@ -68,6 +74,21 @@ class IdentificationFlowMixin:
 
         if state.data.get("cpf") or state.data.get("govbr_authenticated"):
             logger.info("[METHOD] User already identified, skipping method selection")
+            return state
+
+        # Se identificação NÃO é obrigatória E payload vazio → usuário quer pular
+        identificacao_obrigatoria = state.data.get(
+            "identificacao_obrigatoria_1746", False
+        )
+        payload_vazio = not state.payload or len(state.payload) == 0
+
+        if not identificacao_obrigatoria and payload_vazio:
+            logger.info(
+                "[METHOD] Identificação opcional + payload vazio → pulando (anônimo)"
+            )
+            state.data["identification_method"] = "anonimo"
+            state.data["identificacao_recusada"] = True
+            state.agent_response = None
             return state
 
         if state.payload and "identification_method" in state.payload:

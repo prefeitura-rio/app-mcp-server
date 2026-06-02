@@ -1,11 +1,19 @@
-def solicitar_metodo_identificacao() -> str:
+def solicitar_metodo_identificacao(opcional: bool = False) -> str:
     """Prompt for identification method selection (CPF or Gov.br)."""
-    return (
+    base_text = (
         "Como você gostaria de se identificar?\n\n"
         "📋 *CPF* - Digite seu CPF para buscar seus dados\n"
         "🔐 *Gov.br* - Autentique com sua conta gov.br (mais rápido e seguro)\n\n"
-        "Escolha uma opção."
     )
+
+    if opcional:
+        base_text += (
+            "💡 A identificação é *opcional* para este serviço. "
+            "Se preferir, pode continuar sem se identificar.\n\n"
+        )
+
+    base_text += "Escolha uma opção."
+    return base_text
 
 
 def metodo_identificacao_invalido(tentativa: int, max_tentativas: int = 3) -> str:

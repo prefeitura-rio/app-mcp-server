@@ -987,7 +987,11 @@ class ReparoLuminariaWorkflow(
             return END
 
         method = state.data.get("identification_method")
-        if method == "govbr":
+
+        # Se usuário escolheu não se identificar (anônimo), pula para confirmação
+        if method == "anonimo":
+            return "confirm_ticket_data"
+        elif method == "govbr":
             return "authenticate_govbr"
         else:
             return "collect_cpf"

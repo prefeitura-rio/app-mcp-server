@@ -123,7 +123,14 @@ class AddressPayload(BaseModel):
 
 
 class AddressConfirmationPayload(BaseModel):
-    confirmacao: bool = Field(..., description="Confirmação se os dados estão corretos")
+    confirmacao: bool = Field(
+        ...,
+        description=(
+            "IMPORTANT: Interpret user's response and convert to boolean. "
+            "Set to true for ANY affirmative response (sim, yes, s, y, ok, correto, certo, 👍, ✅). "
+            "Set to false for ANY negative response (não, nao, no, n, errado, 👎, ❌)."
+        ),
+    )
 
 
 class IdentificationMethodPayload(BaseModel):
@@ -177,7 +184,11 @@ class PontoReferenciaPayload(BaseModel):
 class TicketDataConfirmationPayload(BaseModel):
     confirmacao: Optional[bool] = Field(
         None,
-        description="True se os dados estão corretos, False se precisam de correção",
+        description=(
+            "IMPORTANT: Interpret user's response and convert to boolean. "
+            "Set to true for ANY affirmative response (sim, yes, ok, correto, 👍, ✅). "
+            "Set to false for ANY negative response (não, no, errado, 👎, ❌)."
+        ),
     )
     correcao: Optional[str] = Field(
         None,
