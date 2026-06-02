@@ -435,7 +435,13 @@ async def test_reparo_workflow_collect_quadra_and_format_confirmation():
     formatted = workflow._format_ticket_confirmation_data(answered)
     assert "Reparo de luminária" in formatted
     assert "Maria Silva" in formatted
-    assert "123.456.789-09" in formatted
+    # CPF deve estar mascarado
+    assert "123.•••.•••-09" in formatted
+    assert "123.456.789-09" not in formatted  # Não deve mostrar CPF completo
+    # Email deve estar mascarado
+    assert "ma•••@example.com" in formatted
+    # Telefone deve estar mascarado
+    assert "(21) 9••••-9999" in formatted
 
 
 @pytest.mark.asyncio
