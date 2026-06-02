@@ -792,24 +792,18 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool(
         "send_whatsapp_flow",
         description=f"""
-        Envia formulário interativo (WhatsApp Flow) para coleta estruturada de dados.
+        ⚠️ USO INTERNO - NÃO CHAMAR DIRETAMENTE.
 
-        QUANDO USAR:
-        - Quando o cidadão solicitar um serviço que tem Flow disponível
-        - ANTES de iniciar multi_step_service para o serviço
-        - Apenas se o canal for WhatsApp (verificar contexto)
+        Esta tool é chamada AUTOMATICAMENTE pelo backend quando multi_step_service
+        confirma o serviço com o cidadão.
 
-        FLOWS DISPONÍVEIS: {", ".join(FLOW_TEMPLATES.keys())}
+        Para serviços estruturados (reparo_luminaria, poda_de_arvore, etc),
+        SEMPRE use multi_step_service — ele mostrará resumo do serviço,
+        confirmará com cidadão e enviará o Flow automaticamente.
 
-        FLUXO:
-        1. Detectar solicitação de serviço que tem Flow
-        2. Extrair entidades que o cidadão JÁ MENCIONOU na conversa (endereço,
-           tipo de defeito, etc.)
-        3. Chamar send_whatsapp_flow passando `prefill_data` com essas entidades
-        4. NÃO escrever mensagem adicional confirmando o envio — o cartão do
-           formulário (com botão) já é auto-explicativo
-        5. Aguardar resposta do flow (dados virão automaticamente via webhook)
-        6. Workflow continuará com dados pré-preenchidos
+        NÃO chame send_whatsapp_flow manualmente.
+
+        FLOWS DISPONÍVEIS (gerenciados automaticamente): {", ".join(FLOW_TEMPLATES.keys())}
 
         Args:
             user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
@@ -1352,8 +1346,12 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool(
         "build_whatsapp_flow_envelope",
         description=(
-            "Constrói e entrega um envelope de WhatsApp Flow (formulário interativo) ao cidadão do thread atual (via Mule — não precisa user_number). "
-            "Use esta tool pra abrir um Flow de serviço (ex: reparo_luminaria). "
+            "⚠️ USO INTERNO - NÃO CHAMAR DIRETAMENTE. Esta tool é chamada AUTOMATICAMENTE "
+            "pelo backend DEPOIS que multi_step_service confirmar o serviço com o cidadão. "
+            "Para serviços estruturados (reparo_luminaria, poda_de_arvore, etc), "
+            "SEMPRE use multi_step_service — ele mostrará resumo do serviço, "
+            "confirmará com cidadão e enviará o Flow no momento certo. "
+            "NÃO chame build_whatsapp_flow_envelope manualmente."
             "Passe `flow_id` (do Meta Business Manager), "
             "`body` (texto de introdução), `flow_token` (UUID que o bot gera "
             "pra correlacionar a submissão do cidadão). "
