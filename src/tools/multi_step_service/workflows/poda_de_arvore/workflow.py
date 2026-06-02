@@ -23,6 +23,11 @@ from src.tools.multi_step_service.workflows.poda_de_arvore import templates as t
 from src.tools.multi_step_service.workflows.poda_de_arvore.integrations import (
     build_ticket_payload,
 )
+from src.tools.multi_step_service.workflows.sgrc_components.formatters import (
+    mask_cpf,
+    mask_email,
+    mask_phone,
+)
 from src.tools.multi_step_service.workflows.sgrc_components.models import (
     CPFPayload,
     EmailPayload,
@@ -328,15 +333,14 @@ class PodaDeArvoreWorkflow(
         if state.data.get("name"):
             dados_pessoais.append(f"- Nome: {state.data['name']}")
         if state.data.get("cpf"):  # Se CPF não está vazio
-            cpf = state.data["cpf"]
-            cpf_formatado = (
-                f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}" if len(cpf) == 11 else cpf
-            )
-            dados_pessoais.append(f"- CPF: {cpf_formatado}")
+            cpf_mascarado = mask_cpf(state.data["cpf"])
+            dados_pessoais.append(f"- CPF: {cpf_mascarado}")
         if state.data.get("email"):
-            dados_pessoais.append(f"- Email: {state.data['email']}")
+            email_mascarado = mask_email(state.data["email"])
+            dados_pessoais.append(f"- Email: {email_mascarado}")
         if state.data.get("phone"):
-            dados_pessoais.append(f"- Telefone: {state.data['phone']}")
+            telefone_mascarado = mask_phone(state.data["phone"])
+            dados_pessoais.append(f"- Telefone: {telefone_mascarado}")
 
         if dados_pessoais:
             dados.append("\n👤 **DADOS DO SOLICITANTE:**")
