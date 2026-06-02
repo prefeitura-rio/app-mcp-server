@@ -111,12 +111,9 @@ class AddressFlowMixin:
                         state.data["address"] = addr
                         state.data["address_confirmed"] = True
                         state.data["address_validated"] = True
-                        # Só pede ponto de referência se o serviço o exige
-                        # (reference_point_required). Antes era sempre True,
-                        # forçando um turno extra mesmo com required=False.
-                        state.data["need_reference_point"] = (
-                            self.common_config.reference_point_required
-                        )
+                        # Sempre solicita ponto de referência (mesmo quando opcional)
+                        # para melhorar precisão da localização
+                        state.data["need_reference_point"] = True
                         state.data.pop("address_temp", None)
                 else:
                     logger.info("[MEMÓRIA] Usuário recusou endereço anterior")
@@ -313,6 +310,10 @@ class AddressFlowMixin:
                 validation_state.validated = True
                 state.data["address_validation"] = validation_state.model_dump()
 
+                # Sempre solicita ponto de referência (mesmo quando opcional)
+                # para melhorar precisão da localização
+                state.data["need_reference_point"] = True
+
                 logger.info(f"Endereço identificado: {address_text}")
                 state.agent_response = None
                 return state
@@ -452,12 +453,9 @@ class AddressFlowMixin:
                     state.data["address_confirmed"] = True
                     state.data["address_validated"] = True
                     state.data["address_needs_confirmation"] = False
-                    # Só pede ponto de referência se o serviço o exige
-                    # (reference_point_required). Antes era sempre True,
-                    # forçando um turno extra mesmo com required=False.
-                    state.data["need_reference_point"] = (
-                        self.common_config.reference_point_required
-                    )
+                    # Sempre solicita ponto de referência (mesmo quando opcional)
+                    # para melhorar precisão da localização
+                    state.data["need_reference_point"] = True
 
                     logger.info("Endereço confirmado pelo usuário")
                     state.agent_response = None
