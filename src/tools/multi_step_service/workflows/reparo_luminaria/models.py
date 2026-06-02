@@ -20,6 +20,7 @@ __all__ = [
     "AddressData",
     "AddressPayload",
     "AddressValidationState",
+    "ConfirmacaoServicoPayload",
     "CPFPayload",
     "EmailPayload",
     "NomePayload",
@@ -35,6 +36,18 @@ def _normalize_text(value: object) -> str:
         if not unicodedata.combining(char)
     )
     return re.sub(r"\s+", " ", text)
+
+
+class ConfirmacaoServicoPayload(BaseModel):
+    """Payload para confirmação se o usuário deseja prosseguir com o serviço."""
+
+    confirmacao_servico: bool = Field(
+        ...,
+        description=(
+            "True se o usuário confirma que deseja este serviço (sim, quero, é isso mesmo, etc). "
+            "False se o usuário nega ou não é este serviço que precisa."
+        ),
+    )
 
 
 class LuminariaDefeitoPayload(BaseModel):

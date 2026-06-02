@@ -948,26 +948,34 @@ def create_app() -> FastMCP:
             existing_state = await state_manager.load_service_state(service_name)
 
             # Envia flow automaticamente se:
-            # 1. Payload está vazio (nova solicitação)
-            # 2. NÃO veio de whatsapp_flow completion
-            # 3. Workflow nunca foi iniciado (sem metadata.created_at)
-            is_new_request = len(payload) == 0 or (
-                len(payload) == 1 and "_source" in payload
+            # 1. NÃO veio de whatsapp_flow completion
+            # 2. Serviço foi confirmado (service_confirmed=True no state)
+            # 3. Ainda não coletou dados do defeito (luminaria_defeito ausente)
+
+            # Detectar se acabou de confirmar o serviço (payload tem confirmacao_servico)
+            acabou_de_confirmar = payload.get("confirmacao_servico") is True
+
+            # Verificar se serviço já foi confirmado anteriormente
+            servico_ja_confirmado = (
+                existing_state and existing_state.data.get("service_confirmed") is True
             )
 
-            # Não enviar Flow se workflow já foi iniciado anteriormente
-            workflow_ja_iniciado = (
-                existing_state
-                and existing_state.metadata
-                and existing_state.metadata.created_at
+            # Verificar se já tem dados do defeito (Flow já foi preenchido)
+            ja_tem_dados_defeito = existing_state and existing_state.data.get(
+                "luminaria_defeito"
             )
 
-            if (
+            # Enviar Flow APENAS quando:
+            # - Acabou de confirmar o serviço OU serviço já estava confirmado
+            # - E ainda NÃO tem dados do defeito
+            should_send_flow = (
                 source != "whatsapp_flow"
-                and is_new_request
-                and not workflow_ja_iniciado
-            ):
-                # Envia flow se não veio de flow completion E não há workflow ativo
+                and (acabou_de_confirmar or servico_ja_confirmado)
+                and not ja_tem_dados_defeito
+            )
+
+            if should_send_flow:
+                # Envia flow após confirmação do serviço
                 logger.info(
                     f"[AUTO_FLOW] Enviando WhatsApp Flow automaticamente para "
                     f"service={service_name}, user={user_id}"

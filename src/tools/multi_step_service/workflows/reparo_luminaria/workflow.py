@@ -15,6 +15,7 @@ from src.tools.multi_step_service.workflows.reparo_luminaria.integrations import
     build_ticket_payload,
 )
 from src.tools.multi_step_service.workflows.reparo_luminaria.models import (
+    ConfirmacaoServicoPayload,
     LuminariaDefeitoPayload,
     LuminariaIntercaladasBlocoPayload,
     LuminariaLocalizacaoPayload,
@@ -322,6 +323,74 @@ class ReparoLuminariaWorkflow(
 
         state.agent_response = None
         return state
+
+    @handle_errors
+    async def _show_service_summary(self, state: ServiceState) -> ServiceState:
+        """
+        Exibe o resumo do serviço e pede confirmação antes de enviar o Flow.
+        """
+        logger.info("[ENTRADA] _show_service_summary")
+
+        # Se já confirmou, pula
+        if state.data.get("service_confirmed"):
+            return state
+
+        # Se veio do Flow, já foi confirmado implicitamente
+        if state.payload.get("_source") == "whatsapp_flow":
+            state.data["service_confirmed"] = True
+            return state
+
+        # Verificar se há confirmação no payload
+        confirmacao = state.payload.get("confirmacao_servico")
+        if confirmacao is not None:
+            if confirmacao is True or str(confirmacao).lower() in ["sim", "yes", "s"]:
+                state.data["service_confirmed"] = True
+                state.agent_response = None
+                return state
+            else:
+                # Usuário negou - encerrar workflow
+                state.status = "completed"
+                state.agent_response = AgentResponse(
+                    description="Entendi. Se precisar de outro serviço, estou à disposição!"
+                )
+                return state
+
+        # Primeira vez - mostrar resumo e pedir confirmação
+        service_info = state.data.get("service_info", {})
+        nome = service_info.get("nome", "Reparo de luminária")
+        resumo = service_info.get("resumo", "")
+        prazo = service_info.get("prazo", "")
+        nao_cobre = service_info.get("servico_nao_cobre", "")
+
+        description = f"📋 **{nome}**\n\n"
+        if resumo:
+            description += f"{resumo}\n\n"
+        if prazo:
+            description += f"⏱️ **Prazo:** {prazo}\n\n"
+        if nao_cobre:
+            description += f"⚠️ **Este serviço não cobre:** {nao_cobre}\n\n"
+
+        description += "É este serviço que você precisa?"
+
+        state.agent_response = AgentResponse(
+            description=description,
+            payload_schema=ConfirmacaoServicoPayload.model_json_schema(),
+        )
+
+        return state
+
+    def _route_after_service_summary(self, state: ServiceState) -> str:
+        """Roteamento após exibir resumo do serviço."""
+        # Se confirmou, continua para coletar dados
+        if state.data.get("service_confirmed"):
+            return "collect_luminaria_details"
+
+        # Se rejeitou, encerra
+        if state.status == "completed":
+            return END
+
+        # Ainda aguardando confirmação - pausa
+        return END
 
     @handle_errors
     async def _collect_defect(self, state: ServiceState) -> ServiceState:
@@ -1004,6 +1073,7 @@ class ReparoLuminariaWorkflow(
     def build_graph(self) -> StateGraph[ServiceState]:
         graph = StateGraph(ServiceState)
         graph.add_node("initialize", self._initialize_workflow)
+        graph.add_node("show_service_summary", self._show_service_summary)
         graph.add_node("collect_luminaria_details", self._collect_luminaria_details)
         graph.add_node("collect_address", self._collect_address)
         graph.add_node("confirm_address", self._confirm_address)
@@ -1020,7 +1090,12 @@ class ReparoLuminariaWorkflow(
         graph.add_node("open_ticket", self._open_ticket)
 
         graph.set_entry_point("initialize")
-        graph.add_edge("initialize", "collect_luminaria_details")
+        graph.add_edge("initialize", "show_service_summary")
+        graph.add_conditional_edges(
+            "show_service_summary",
+            self._route_after_service_summary,
+            {"collect_luminaria_details": "collect_luminaria_details", END: END},
+        )
         graph.add_conditional_edges(
             "collect_luminaria_details",
             self._route_after_luminaria_details,
