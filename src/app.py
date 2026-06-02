@@ -948,10 +948,20 @@ def create_app() -> FastMCP:
             existing_state = await state_manager.load_service_state(service_name)
 
             # Se payload está vazio (exceto _source), é uma NOVA solicitação
-            # Nesse caso, limpa state antigo e envia flow
+            # EXCETO se gov.br está em processo ou já autenticado
             is_new_request = len(payload) == 0 or (
                 len(payload) == 1 and "_source" in payload
             )
+
+            # Se gov.br em andamento, não é nova requisição
+            if existing_state and existing_state.data:
+                govbr_in_progress = (
+                    existing_state.data.get("govbr_auth_sent")
+                    or existing_state.data.get("govbr_authenticated")
+                    or existing_state.data.get("identification_method") == "govbr"
+                )
+                if govbr_in_progress:
+                    is_new_request = False
 
             # Só bloqueia envio do flow se:
             # 1. Workflow estiver em progresso E
