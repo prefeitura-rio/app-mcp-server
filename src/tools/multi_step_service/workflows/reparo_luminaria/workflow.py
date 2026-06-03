@@ -64,7 +64,13 @@ class ReparoLuminariaWorkflow(
 
     service_name = "reparo_luminaria"
     description = "Solicitação de reparo de luminária de iluminação pública."
-    automatic_resets = True
+    # Correção é feita explicitamente via `correction_requested` (setado em
+    # _confirm_ticket_data, consumido pelos _collect_*), NÃO pelo auto-reset
+    # genérico do StepNavigator. Esse mecanismo casa nomes de CAMPOS de dados no
+    # payload (como o IPTU: 'inscricao'/'ano'/...), não nomes de NÓS — e o
+    # step_order abaixo é de nós, então auto_reset seria no-op. Mantê-lo OFF
+    # também evita um 2º caminho de reset conflitante com correction_requested.
+    automatic_resets = False
     templates = tpl
     common_config = CommonWorkflowConfig(
         address_required=True,
@@ -72,7 +78,9 @@ class ReparoLuminariaWorkflow(
         identification_required=False,
     )
 
-    steps_order = [
+    # Ordem conceitual dos nós (referência). NÃO alimenta o auto-reset genérico
+    # (automatic_resets=False acima): aquele exige nomes de CAMPOS, não de nós.
+    step_order = [
         "initialize",
         "collect_luminaria_details",
         "collect_address",

@@ -743,3 +743,33 @@ def test_flow_quadra_esportes_sim_overrides_location():
     )
     asyncio.run(workflow._initialize_workflow(state))
     assert state.payload.get("location") == "Quadra de esportes"
+
+
+@pytest.mark.asyncio
+async def test_optional_identification_explicit_skip_goes_anonymous():
+    """Identificação opcional + recusa explícita ('anonimo'/'pular'/'nao quero')
+    NÃO cai no loop de 3 tentativas inválidas → vira anônimo direto (achado
+    2026-06-03). Cobre o _select_identification_method (usado por poda; aqui via
+    o mixin compartilhado no workflow de luminária)."""
+    workflow = make_workflow()
+    for token in ["anonimo", "pular", "nao quero", "não", "seguir sem"]:
+        state = make_state(
+            payload={"identification_method": token},
+            data={"identificacao_obrigatoria_1746": False},
+        )
+        out = await workflow._select_identification_method(state)
+        assert out.data["identification_method"] == "anonimo", token
+        assert out.data.get("identificacao_recusada") is True
+        assert out.agent_response is None  # sem re-pergunta nem erro
+
+
+@pytest.mark.asyncio
+async def test_optional_identification_valid_method_preserved():
+    """cpf/govbr explícito continua aceito (não confundido com skip)."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={"identification_method": "cpf"},
+        data={"identificacao_obrigatoria_1746": False},
+    )
+    out = await workflow._select_identification_method(state)
+    assert out.data["identification_method"] == "cpf"

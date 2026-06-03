@@ -91,6 +91,46 @@ class IdentificationFlowMixin:
             state.agent_response = None
             return state
 
+        # Identificação opcional: além do payload vazio, reconhecer a recusa
+        # EXPLÍCITA vinda no payload. O agente costuma mandar "anonimo"/"pular"/
+        # "nao" quando o cidadão diz que não quer se identificar; sem isto, a
+        # validação estrita cpf/govbr falhava 3x e caía em CPF, prendendo o
+        # cidadão num loop confuso (achado 2026-06-03). Só vale quando opcional.
+        if not identificacao_obrigatoria:
+            metodo_raw = (
+                str(state.payload.get("identification_method", "")).strip().lower()
+            )
+            _skip_tokens = {
+                "anonimo",
+                "anônimo",
+                "anonima",
+                "anônima",
+                "pular",
+                "skip",
+                "nao",
+                "não",
+                "nenhum",
+                "nenhuma",
+                "recusar",
+                "recuso",
+                "nao quero",
+                "não quero",
+                "nao quero me identificar",
+                "não quero me identificar",
+                "sem identificacao",
+                "sem identificação",
+                "seguir sem",
+                "continuar sem",
+            }
+            if metodo_raw in _skip_tokens:
+                logger.info(
+                    "[METHOD] Identificação opcional + recusa explícita → anônimo"
+                )
+                state.data["identification_method"] = "anonimo"
+                state.data["identificacao_recusada"] = True
+                state.agent_response = None
+                return state
+
         if state.payload and "identification_method" in state.payload:
             try:
                 validated = IdentificationMethodPayload.model_validate(state.payload)

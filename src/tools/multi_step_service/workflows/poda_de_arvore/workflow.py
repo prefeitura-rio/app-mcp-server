@@ -67,7 +67,11 @@ class PodaDeArvoreWorkflow(
 
     service_name = "poda_de_arvore"
     description = "Solicitação de poda de árvore com verificação de cadastro."
-    automatic_resets = True
+    # Correção é feita explicitamente via `correction_requested` (consumido pelos
+    # _collect_*), NÃO pelo auto-reset genérico do StepNavigator — que casa nomes
+    # de CAMPOS de dados no payload (como o IPTU), não nomes de NÓS como o
+    # step_order abaixo. Mantê-lo OFF evita um 2º caminho de reset conflitante.
+    automatic_resets = False
     templates = tpl
     common_config = CommonWorkflowConfig(
         address_required=True,
@@ -75,7 +79,9 @@ class PodaDeArvoreWorkflow(
         identification_required=False,
     )
 
-    steps_order = [
+    # Ordem conceitual dos nós (referência). NÃO alimenta o auto-reset genérico
+    # (automatic_resets=False acima): aquele exige nomes de CAMPOS, não de nós.
+    step_order = [
         "initialize",
         "collect_address",
         "collect_reference_point",
