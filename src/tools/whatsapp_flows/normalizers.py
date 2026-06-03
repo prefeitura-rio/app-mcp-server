@@ -14,7 +14,12 @@ Cada `service_name` tem normalizador próprio.
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+# Preposições PT comuns que o engine pode prefixar num local falado
+# ("na calçada", "no parque") — tiramos antes de casar o alias.
+_LEADING_PREP_RE = re.compile(r"^(?:na|no|em|de|da|do|a|o)\s+")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -34,19 +39,101 @@ _LUMINARIA_VALID_DEFECTS: set[str] = {
 # Aliases case-insensitive comuns → ID canônico. LLM/workflow podem produzir
 # variações ("apagada" lowercase, "Acesa durante o dia" forma humana).
 # Codex P2 round 7: sem isso, valores válidos workflow-side eram dropados.
+# 2026-06-03: estendido com linguagem natural (o engine extrai do chat e às
+# vezes manda a forma falada — "sem luz", "uma única" — em vez do ID canônico;
+# sem alias o normalizer dropava em silêncio → Flow abria vazio).
 _LUMINARIA_DEFECT_ALIASES: dict[str, str] = {
+    # Apagada — luminária não acende (o caso mais comum)
     "apagada": "Apagada",
+    "apagadas": "Apagada",
+    "apagado": "Apagada",
+    "apagados": "Apagada",
+    "sem luz": "Apagada",
+    "sem iluminação": "Apagada",
+    "sem iluminacao": "Apagada",
+    "luz apagada": "Apagada",
+    "não acende": "Apagada",
+    "nao acende": "Apagada",
+    "não está acendendo": "Apagada",
+    "nao esta acendendo": "Apagada",
+    "queimada": "Apagada",
+    "queimado": "Apagada",
+    "desligada": "Apagada",
+    # Piscando
     "piscando": "Piscando",
+    "pisca": "Piscando",
+    "piscante": "Piscando",
+    "intermitente": "Piscando",
+    "oscilando": "Piscando",
+    # Acesa de dia
     "acesa de dia": "Acesa de dia",
     "acesa durante o dia": "Acesa de dia",
     "acesa": "Acesa de dia",
+    "acende de dia": "Acesa de dia",
+    "ligada de dia": "Acesa de dia",
+    # Pendurada
     "pendurada": "Pendurada",
+    "pendurado": "Pendurada",
+    "caída": "Pendurada",
+    "caida": "Pendurada",
+    "solta": "Pendurada",
+    # Danificada
     "danificada": "Danificada",
+    "danificado": "Danificada",
+    "quebrada": "Danificada",
+    "quebrado": "Danificada",
+    "destruída": "Danificada",
+    "destruida": "Danificada",
+    "vandalizada": "Danificada",
+    "vandalizado": "Danificada",
+    "estragada": "Danificada",
+    # Com ruído
     "com ruído": "Com ruído",
     "com ruido": "Com ruído",
+    "com barulho": "Com ruído",
+    "fazendo barulho": "Com ruído",
+    "barulhenta": "Com ruído",
+    "zumbindo": "Com ruído",
 }
 
 _LUMINARIA_VALID_QTY: set[str] = {"uma", "bloco", "intercaladas"}
+
+# Aliases de linguagem natural pra qty_pattern → ID canônico. NOTA: "grupo"
+# NÃO entra aqui de propósito — no caminho workflow ele é ambíguo (bloco vs
+# intercaladas) e precisa do sub-campo `luminaria_intercaladas_bloco` pra
+# desambiguar (ver `_normalize_luminaria`).
+_LUMINARIA_QTY_ALIASES: dict[str, str] = {
+    # uma
+    "uma": "uma",
+    "uma única": "uma",
+    "uma unica": "uma",
+    "única": "uma",
+    "unica": "uma",
+    "só uma": "uma",
+    "so uma": "uma",
+    "uma só": "uma",
+    "uma so": "uma",
+    "apenas uma": "uma",
+    "somente uma": "uma",
+    "uma luminária": "uma",
+    "uma luminaria": "uma",
+    "1": "uma",
+    # bloco (várias contíguas)
+    "bloco": "bloco",
+    "em bloco": "bloco",
+    "um bloco": "bloco",
+    "quarteirão": "bloco",
+    "quarteirao": "bloco",
+    "fileira": "bloco",
+    "seguidas": "bloco",
+    "várias seguidas": "bloco",
+    "varias seguidas": "bloco",
+    # intercaladas (alternadas)
+    "intercaladas": "intercaladas",
+    "intercalada": "intercaladas",
+    "alternadas": "intercaladas",
+    "alternada": "intercaladas",
+}
 
 _LUMINARIA_VALID_LOCATIONS: set[str] = {
     "Calçada",
@@ -112,20 +199,27 @@ def _normalize_luminaria(payload: dict[str, Any]) -> dict[str, Any]:
     if defect:
         out["defect_type"] = defect
 
-    # location (case-insensitive + aliases)
+    # location (case-insensitive + aliases; tolera preposição "na/no/em …")
     location_raw = payload.get("location") or payload.get("luminaria_localizacao")
     location = _resolve_alias(
         location_raw, _LUMINARIA_LOCATION_ALIASES, _LUMINARIA_VALID_LOCATIONS
     )
+    if not location and isinstance(location_raw, str):
+        stripped = _LEADING_PREP_RE.sub("", location_raw.strip().lower())
+        location = _resolve_alias(
+            stripped, _LUMINARIA_LOCATION_ALIASES, _LUMINARIA_VALID_LOCATIONS
+        )
     if location:
         out["location"] = location
 
-    # qty_pattern — caminho canônico (já era um dos IDs)
-    qty_raw = payload.get("qty_pattern")
-    if isinstance(qty_raw, str) and qty_raw in _LUMINARIA_VALID_QTY:
-        out["qty_pattern"] = qty_raw
+    # qty_pattern — canônico OU alias de linguagem natural ("uma única" → "uma").
+    # "grupo" não é alias (ambíguo): cai no caminho workflow abaixo.
+    qty_raw = payload.get("qty_pattern") or payload.get("luminaria_quantidade")
+    qty = _resolve_alias(qty_raw, _LUMINARIA_QTY_ALIASES, _LUMINARIA_VALID_QTY)
+    if qty:
+        out["qty_pattern"] = qty
     else:
-        # Caminho workflow: luminaria_quantidade + luminaria_intercaladas_bloco
+        # Caminho workflow: luminaria_quantidade='grupo' + luminaria_intercaladas_bloco
         quantidade = payload.get("luminaria_quantidade")
         intercaladas = payload.get("luminaria_intercaladas_bloco")
         if quantidade == "uma":

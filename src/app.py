@@ -1396,11 +1396,33 @@ def create_app() -> FastMCP:
             encode_prefill_token,
         )
 
+        # `encode_prefill_token` exige `service_type` pra normalizar/whitelist.
+        # O engine às vezes manda `prefill_data` sem `service_type` → encode
+        # vira no-op e o form abre vazio. Inferimos pelo flow_id (reverse de
+        # FLOW_TEMPLATES) pra não perder o prefill por esse esquecimento.
+        if prefill_data and not service_type:
+            service_type = next(
+                (s for s, fid in FLOW_TEMPLATES.items() if fid == flow_id), None
+            )
+
         # Pré-preenchimento (Flow dinâmico): encoda os valores extraídos da
         # conversa no flow_token; `_handle_init` decoda e abre o form já
         # preenchido. Entrega via Mule/envelope (não precisa user_number),
         # então é o caminho seguro pro Engine prefilar.
         flow_token = encode_prefill_token(flow_token, prefill_data, service_type)
+
+        # Observabilidade: só as CHAVES (sem valores, pra não logar PII) +
+        # se o token virou `v1:` (prefill efetivamente encodado). Quando o
+        # Flow abre vazio, este log diz se foi o engine que não mandou prefill,
+        # se faltou service_type, ou se o normalizer dropou os valores.
+        logger.info(
+            "build_whatsapp_flow_envelope flow_id={} service_type={} "
+            "prefill_keys={} encoded_prefill={}",
+            flow_id,
+            service_type,
+            sorted((prefill_data or {}).keys()),
+            isinstance(flow_token, str) and flow_token.startswith("v1:"),
+        )
 
         return build_flow_envelope(
             flow_id=flow_id,

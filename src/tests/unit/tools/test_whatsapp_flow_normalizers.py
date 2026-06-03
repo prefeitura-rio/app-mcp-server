@@ -32,13 +32,17 @@ def test_luminaria_canonical_keys_passthrough():
 
 
 def test_luminaria_invalid_defect_dropped():
-    """defect_type não-whitelist é dropado (Meta dropa silencioso)."""
+    """defect_type não-whitelist (e sem alias) é dropado (Meta dropa silencioso).
+
+    NOTA 2026-06-03: "apagado" (masculino) virou alias VÁLIDO de "Apagada"
+    — "poste/refletor apagado" é o defeito Apagada. Aqui usamos valores que
+    não são defeito nenhum pra cobrir o drop."""
     out = normalize_prefill_for_flow("reparo_luminaria", {"luminaria_defeito": "1"})
     assert "defect_type" not in out
 
     out = normalize_prefill_for_flow(
-        "reparo_luminaria", {"defect_type": "Apagado"}
-    )  # typo
+        "reparo_luminaria", {"defect_type": "funcionando"}
+    )  # não é defeito
     assert "defect_type" not in out
 
 
@@ -136,6 +140,82 @@ def test_luminaria_full_workflow_payload():
 def test_luminaria_empty_returns_empty():
     assert normalize_prefill_for_flow("reparo_luminaria", None) == {}
     assert normalize_prefill_for_flow("reparo_luminaria", {}) == {}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Linguagem natural (2026-06-03): o engine extrai do chat e às vezes manda
+# a forma falada em vez do ID canônico. Sem alias o normalizer dropava em
+# silêncio → Flow abria vazio.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_luminaria_defect_natural_language():
+    for input_val, expected in [
+        ("sem luz", "Apagada"),
+        ("sem iluminação", "Apagada"),
+        ("luz apagada", "Apagada"),
+        ("não acende", "Apagada"),
+        ("queimada", "Apagada"),
+        ("intermitente", "Piscando"),
+        ("quebrada", "Danificada"),
+        ("com barulho", "Com ruído"),
+    ]:
+        out = normalize_prefill_for_flow("reparo_luminaria", {"defect_type": input_val})
+        assert out.get("defect_type") == expected, f"{input_val} → {expected}"
+
+
+def test_luminaria_qty_natural_language():
+    for input_val, expected in [
+        ("uma única", "uma"),
+        ("única", "uma"),
+        ("só uma", "uma"),
+        ("apenas uma", "uma"),
+        ("1", "uma"),
+        ("quarteirão", "bloco"),
+        ("seguidas", "bloco"),
+        ("alternadas", "intercaladas"),
+    ]:
+        out = normalize_prefill_for_flow("reparo_luminaria", {"qty_pattern": input_val})
+        assert out.get("qty_pattern") == expected, f"{input_val} → {expected}"
+
+
+def test_luminaria_qty_alias_does_not_break_grupo_workflow():
+    """Regressão: 'grupo' NÃO é alias de qty (precisa do sub-campo p/
+    desambiguar). 'grupo' sozinho continua dropado."""
+    out = normalize_prefill_for_flow(
+        "reparo_luminaria", {"luminaria_quantidade": "grupo"}
+    )
+    assert "qty_pattern" not in out
+
+
+def test_luminaria_location_strips_leading_preposition():
+    """'na calçada' / 'no parque' → noun casado (engine às vezes manda com
+    preposição)."""
+    for input_val, expected in [
+        ("na calçada", "Calçada"),
+        ("no parque", "Parque"),
+        ("na praça", "Praça"),
+        ("na rua", "Rua"),
+    ]:
+        out = normalize_prefill_for_flow("reparo_luminaria", {"location": input_val})
+        assert out.get("location") == expected, f"{input_val} → {expected}"
+
+
+def test_luminaria_spoken_payload_fully_mapped():
+    """Caso real que abria o Flow vazio: 'luminária sem luz, uma única na
+    calçada' — antes só `location` sobrevivia; agora os três mapeiam mesmo
+    com a preposição em 'na calçada'."""
+    raw = {
+        "defect_type": "sem luz",
+        "qty_pattern": "uma única",
+        "location": "na calçada",
+    }
+    out = normalize_prefill_for_flow("reparo_luminaria", raw)
+    assert out == {
+        "defect_type": "Apagada",
+        "qty_pattern": "uma",
+        "location": "Calçada",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────
