@@ -395,6 +395,80 @@ async def test_reparo_workflow_collect_address_reference_and_confirmation():
 
 
 @pytest.mark.asyncio
+async def test_endereco_confirmado_nao_reconfirma_em_turno_sem_payload():
+    """Regressão (bug real 2026-06-03): após confirmar o endereço e iniciar o
+    gov.br, o auto-resume do callback reinvoca o workflow com payload VAZIO. O
+    endereço já confirmado na sessão viva NÃO pode cair na re-pergunta de memória
+    (endereco_historico), pedindo confirmação do MESMO endereço uma 2ª vez.
+    _collect_address deve curto-circuitar e não emitir nada."""
+    workflow = make_workflow()
+    state = make_state(
+        # Turno de auto-resume pós-gov.br: chega sem payload.
+        payload={},
+        data={
+            "address": {
+                "logradouro": "Rua Guilhermina Guinle",
+                "numero": "170",
+                "bairro": "Botafogo",
+                "cidade": "Rio de Janeiro",
+                "estado": "RJ",
+            },
+            "address_validated": True,
+            "address_confirmed": True,
+            "govbr_auth_sent": True,
+        },
+    )
+
+    result = await workflow._collect_address(state)
+
+    # Curto-circuito: nada é perguntado de novo.
+    assert result.agent_response is None
+    # A re-pergunta de memória NÃO foi acionada.
+    assert not result.data.get("awaiting_address_memory_confirmation")
+    # O endereço confirmado é preservado intacto.
+    assert result.data["address_confirmed"] is True
+    assert result.data["address"]["numero"] == "170"
+
+
+def test_handle_address_from_memory_ignora_endereco_ja_confirmado():
+    """Defesa em profundidade (Edit 2): mesmo chamado diretamente, a re-pergunta
+    de memória não dispara para um endereço já confirmado na sessão viva — ainda
+    que o curto-circuito de _collect_address fosse contornado no futuro."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={},
+        data={
+            "address": {"logradouro": "Rua A", "numero": "10", "bairro": "Centro"},
+            "address_confirmed": True,
+            "address_validated": True,
+        },
+    )
+
+    handled = workflow._handle_address_from_memory(state)
+
+    assert handled is False
+    assert not state.data.get("awaiting_address_memory_confirmation")
+    assert state.agent_response is None
+
+
+def test_handle_address_from_memory_reconfirma_endereco_de_atendimento_anterior():
+    """Controle: o caso legítimo de memória (endereço de atendimento anterior, SEM
+    confirmação na sessão viva) AINDA dispara a re-pergunta endereco_historico."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={},
+        data={"address": {"logradouro": "Rua A", "numero": "10", "bairro": "Centro"}},
+    )
+
+    handled = workflow._handle_address_from_memory(state)
+
+    assert handled is True
+    assert state.data.get("awaiting_address_memory_confirmation") is True
+    assert state.agent_response is not None
+    assert "histórico" in state.agent_response.description
+
+
+@pytest.mark.asyncio
 async def test_reparo_reference_point_correction_reactivates_collection():
     """reference_point_required=False remove a pergunta forçada, mas uma
     correção explícita ('corrigir ponto de referência') reativa a coleta."""

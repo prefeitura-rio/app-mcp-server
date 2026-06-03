@@ -13,14 +13,21 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
 
 class AddressFlowMixin:
     def _has_valid_confirmed_address(self, state: ServiceState) -> bool:
-        return (
+        # NÃO condicionar a `state.payload`: um endereço já validado+confirmado
+        # continua válido num turno SEM payload — o auto-resume pós-gov.br
+        # reinvoca o workflow com payload vazio. O `and state.payload` antigo
+        # fazia o short-circuit falhar exatamente nesse turno, e o endereço caía
+        # na re-pergunta de memória (endereco_historico), pedindo confirmação do
+        # MESMO endereço uma 2ª vez. Um atendimento novo de fato não cai aqui:
+        # _reset_previous_session_flags já zera os flags quando o anterior fechou
+        # (ticket_created/error), então a confirmação de memória legítima segue.
+        return bool(
             state.data.get("address_validated")
             and state.data.get("address_confirmed")
             and not state.data.get("ticket_created")
             and not state.data.get("error")
             and not state.data.get("awaiting_user_memory_confirmation")
             and not state.data.get("awaiting_address_memory_confirmation")
-            and state.payload
         )
 
     def _clear_address_data(self, state: ServiceState) -> None:
@@ -134,6 +141,11 @@ class AddressFlowMixin:
         if (
             not state.payload
             and (state.data.get("address") or state.data.get("address_temp"))
+            # Defesa em profundidade: um endereço já confirmado na sessão viva
+            # NUNCA deve cair na re-pergunta de memória. Isso evita a 2ª
+            # confirmação do MESMO endereço quando o turno chega sem payload
+            # (auto-resume pós-gov.br), mesmo que o short-circuit anterior mude.
+            and not state.data.get("address_confirmed")
             and not state.data.get("awaiting_address_memory_confirmation")
             and not state.data.get("awaiting_user_memory_confirmation")
         ):
