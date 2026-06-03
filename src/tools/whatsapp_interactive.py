@@ -92,7 +92,7 @@ def build_flow_envelope(
                     "data_exchange" (Flow Endpoint custom).
         flow_action_payload: Para "navigate" usa
                     `{"screen": "<SCREEN_ID>", "data": {...}}`. Default
-                    "FIRST_SCREEN" sem data.
+                    "MAIN" (tela de entrada do Flow reparo_luminaria) sem data.
 
     Retorna `{status, type: "interactive", interactive: {...}}`.
     """
@@ -118,7 +118,12 @@ def build_flow_envelope(
             "Permitidos: 'navigate' (default) ou 'data_exchange'."
         )
 
-    payload: dict[str, Any] = flow_action_payload or {"screen": "FIRST_SCREEN"}
+    # Default screen = "MAIN" (tela de entrada do único Flow registrado, reparo_luminaria).
+    # NÃO usar "FIRST_SCREEN" (placeholder genérico): o Meta rejeita screen inexistente com
+    # 400 BAD_REQUEST e o card NÃO chega ao cidadão (validado 2026-06-03; era o motivo de o
+    # Flow não aparecer). Flow novo com outra tela inicial precisa passar
+    # flow_action_payload={"screen": "<entry_screen>"} explicitamente.
+    payload: dict[str, Any] = flow_action_payload or {"screen": "MAIN"}
 
     interactive: dict[str, Any] = {
         "type": "flow",
