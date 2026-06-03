@@ -18,41 +18,25 @@ from src.tools.luminaria_flow import _compute_visibility, _handle_init
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_visibility_visual_defect_shows_qty_pattern():
-    """Apagada/Piscando/Acesa de dia → mostra qty_pattern, esconde location
-    até qty selecionada."""
-    for visual in ("Apagada", "Piscando", "Acesa de dia"):
-        show_qty, show_loc = _compute_visibility(visual, None)
-        assert show_qty is True, f"{visual} deveria mostrar qty_pattern"
-        assert show_loc is False, f"{visual} sem qty: location escondida"
-
-
-def test_visibility_non_visual_defect_shows_location():
-    """Pendurada/Danificada/Com ruído → vai direto pra location, sem qty."""
-    for non_visual in ("Pendurada", "Danificada", "Com ruído"):
-        show_qty, show_loc = _compute_visibility(non_visual, None)
-        assert show_qty is False, f"{non_visual} não deveria mostrar qty"
-        assert show_loc is True, f"{non_visual} deveria mostrar location"
-
-
-def test_visibility_visual_with_qty_shows_both():
-    """Visual + qty_pattern selecionado → ambos visíveis (transição completa)."""
-    show_qty, show_loc = _compute_visibility("Apagada", "uma")
-    assert show_qty is True
-    assert show_loc is True
-
-
-def test_visibility_empty_defect_hides_all():
-    show_qty, show_loc = _compute_visibility(None, None)
-    assert show_qty is False
-    assert show_loc is False
-
-
-def test_visibility_empty_string_defect_hides_all():
-    """Defect_type string vazio é tratado como ausente."""
-    show_qty, show_loc = _compute_visibility("", None)
-    assert show_qty is False
-    assert show_loc is False
+def test_compute_visibility_always_visible():
+    """2026-06-03: qty_pattern + location SEMPRE visíveis — qualquer defeito
+    (visual/não-visual/vazio/None), com ou sem qty. Substitui o disclosure
+    condicional: o cidadão preenche TUDO no formulário, sem follow-up de texto
+    depois do submit (UX desconexa relatada em campo)."""
+    for defect in (
+        "Apagada",
+        "Piscando",
+        "Acesa de dia",
+        "Pendurada",
+        "Danificada",
+        "Com ruído",
+        None,
+        "",
+    ):
+        for qty in (None, "uma", "bloco"):
+            show_qty, show_loc = _compute_visibility(defect, qty)
+            assert show_qty is True, f"qty escondido pra {defect!r}/{qty!r}"
+            assert show_loc is True, f"location escondido pra {defect!r}/{qty!r}"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -61,7 +45,8 @@ def test_visibility_empty_string_defect_hides_all():
 
 
 def test_handle_init_no_token_returns_defaults():
-    """Sem flow_token → todos prefills None, show_* False."""
+    """Sem flow_token → prefills None, mas show_* sempre True (campos sempre
+    visíveis desde 2026-06-03)."""
     r = _handle_init(None, None)
     assert r["version"] == "3.0"
     assert r["screen"] == "MAIN"
@@ -69,32 +54,32 @@ def test_handle_init_no_token_returns_defaults():
     assert data["defect_type_prefill"] is None
     assert data["qty_pattern_prefill"] is None
     assert data["location_prefill"] is None
-    assert data["show_qty_pattern"] is False
-    assert data["show_location"] is False
+    assert data["show_qty_pattern"] is True
+    assert data["show_location"] is True
 
 
 def test_handle_init_opaque_token_returns_defaults():
-    """Token sem prefix v1: → tratado como opaco → defaults."""
+    """Token sem prefix v1: → opaco → prefills None, show_* True (sempre visível)."""
     r = _handle_init(None, "abc-123-uuid-opaco")
     assert r["data"]["defect_type_prefill"] is None
-    assert r["data"]["show_qty_pattern"] is False
+    assert r["data"]["show_qty_pattern"] is True
 
 
 def test_handle_init_with_visual_prefill():
-    """Prefill defect_type=Apagada → propaga prefill + show_qty_pattern=True."""
+    """Prefill defect_type=Apagada → propaga prefill; qty + location visíveis."""
     token = encode_flow_token("x", {"defect_type": "Apagada"})
     r = _handle_init(None, token)
     assert r["data"]["defect_type_prefill"] == "Apagada"
     assert r["data"]["show_qty_pattern"] is True
-    assert r["data"]["show_location"] is False
+    assert r["data"]["show_location"] is True
 
 
 def test_handle_init_with_non_visual_prefill():
-    """Prefill defect_type=Pendurada → location direto (não-visual)."""
+    """Prefill defect_type=Pendurada → qty + location visíveis (sempre)."""
     token = encode_flow_token("x", {"defect_type": "Pendurada"})
     r = _handle_init(None, token)
     assert r["data"]["defect_type_prefill"] == "Pendurada"
-    assert r["data"]["show_qty_pattern"] is False
+    assert r["data"]["show_qty_pattern"] is True
     assert r["data"]["show_location"] is True
 
 
@@ -142,13 +127,13 @@ def test_handle_init_token_overrides_incoming_data():
 
 
 def test_handle_init_location_prefill():
-    """Prefill location standalone (sem defect_type) → não computa show_*."""
+    """Prefill location standalone (sem defect_type) → location propaga + ambos
+    os campos visíveis (sempre, desde 2026-06-03)."""
     token = encode_flow_token("x", {"location": "Calçada"})
     r = _handle_init(None, token)
     assert r["data"]["location_prefill"] == "Calçada"
-    # sem defect_type, smart visibility → todos False
-    assert r["data"]["show_qty_pattern"] is False
-    assert r["data"]["show_location"] is False
+    assert r["data"]["show_qty_pattern"] is True
+    assert r["data"]["show_location"] is True
 
 
 def test_handle_init_response_shape_invariant():

@@ -92,24 +92,22 @@ def _compute_visibility(
     defect_type: str | None, qty_pattern: str | None
 ) -> tuple[bool, bool]:
     """
-    Smart visibility — replica a lógica original do `_handle_defect_type`
-    (transição via data_exchange) mas aplicada já no INIT quando temos
-    prefill de `defect_type`.
+    Visibilidade de `qty_pattern` + `location` no Flow — SEMPRE visíveis.
 
-    - Defeito visual (Apagada/Piscando/Acesa de dia): mostra qty_pattern,
-      esconde location (location aparece quando qty_pattern selecionada).
-    - Defeito não-visual (Pendurada/Danificada/Com ruído): vai direto
-      pra location.
-    - Sem defect_type: tudo escondido (defaults).
-    - Visual + qty_pattern já selecionada: mostra ambos (transição completa).
+    2026-06-03: antes era disclosure progressivo (qty só pra defeito visual;
+    location só após qty ser selecionada, via data_exchange). Resultado: campos
+    NÃO-prefillados ficavam ESCONDIDOS no formulário e o workflow os coletava por
+    TEXTO depois do submit — UX desconexa ("Recebi seu formulário! Esse defeito
+    ocorre em uma ou um grupo de luminárias?", relatado em campo). O cidadão
+    espera preencher TODOS os campos no próprio formulário, de uma vez.
+
+    Agora os dois ficam sempre visíveis (o `defect_type` já era sempre visível):
+    o formulário coleta defeito + quantidade + local junto, e o prefill só
+    pré-preenche os valores já mencionados. Params mantidos por back-compat de
+    assinatura (chamada pelos handlers de data_exchange `_handle_defect_type` /
+    `_handle_qty_pattern`, que continuam preservando os prefills).
     """
-    if not defect_type:
-        return False, False
-    is_visual = defect_type in _VISUAL
-    has_qty = bool(qty_pattern)
-    show_qty_pattern = is_visual
-    show_location = (not is_visual) or has_qty
-    return show_qty_pattern, show_location
+    return True, True
 
 
 def _handle_init(
@@ -253,13 +251,14 @@ def _handle_defect_type(
     do form atual. Handler ecoa tudo pra evitar revert em transições
     subsequentes.
     """
-    is_visual = defect_type in _VISUAL
     incoming = dict(incoming or {})
     incoming["defect_type"] = defect_type
+    # 2026-06-03: qty_pattern + location SEMPRE visíveis (ver _compute_visibility)
+    # — trocar o defeito não re-esconde campos; tudo fica no formulário.
     data = {
         **_merge_current_form_state(incoming, flow_token),
-        "show_qty_pattern": is_visual,
-        "show_location": not is_visual,
+        "show_qty_pattern": True,
+        "show_location": True,
     }
     return {"version": "3.0", "screen": "MAIN", "data": data}
 
@@ -305,7 +304,7 @@ def _handle_location(
 
     data = {
         **_merge_current_form_state(incoming, flow_token),
-        "show_qty_pattern": incoming.get("defect_type") in _VISUAL,
+        "show_qty_pattern": True,
         "show_location": True,
         "show_quadra_question": show_quadra,
     }

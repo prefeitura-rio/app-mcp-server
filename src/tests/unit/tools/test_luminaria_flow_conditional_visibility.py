@@ -111,30 +111,20 @@ def test_qty_pattern_triggers_data_exchange(form_children):
     assert action["payload"]["trigger"] == "qty_pattern"
 
 
-# ─── Endpoint logic still canonical ─────────────────────────────────
+# ─── Endpoint logic: campos sempre visíveis (2026-06-03) ────────────
 
 
-def test_compute_visibility_visual_no_qty():
-    """Lógica Python: visual sem qty → mostra qty, esconde location."""
-    for defect in _VISUAL:
-        show_qty, show_loc = _compute_visibility(defect, None)
-        assert show_qty is True
-        assert show_loc is False
-
-
-def test_compute_visibility_non_visual():
-    """Lógica Python: non-visual → esconde qty, mostra location."""
-    for defect in ["Pendurada", "Danificada", "Com ruído"]:
-        show_qty, show_loc = _compute_visibility(defect, None)
-        assert show_qty is False
-        assert show_loc is True
-
-
-def test_compute_visibility_visual_with_qty():
-    """Lógica Python: visual + qty selecionado → mostra ambos."""
-    show_qty, show_loc = _compute_visibility("Apagada", "uma")
-    assert show_qty is True
-    assert show_loc is True
+def test_compute_visibility_always_visible():
+    """qty_pattern + location SEMPRE visíveis — qualquer defeito (visual ou
+    não), com ou sem qty, e até sem defect_type. Substitui a visibilidade
+    condicional antiga: o cidadão preenche TUDO no formulário, sem follow-up
+    de texto depois do submit (UX desconexa relatada em campo)."""
+    defects = [*_VISUAL, "Pendurada", "Danificada", "Com ruído", None]
+    for defect in defects:
+        for qty in (None, "uma", "bloco"):
+            show_qty, show_loc = _compute_visibility(defect, qty)
+            assert show_qty is True, f"qty escondido pra {defect!r}/{qty!r}"
+            assert show_loc is True, f"location escondido pra {defect!r}/{qty!r}"
 
 
 # ─── JSON structure invariants ──────────────────────────────────────
@@ -172,9 +162,9 @@ def test_data_exchange_preserves_other_prefills_from_token():
         "Regressão: qty_pattern_prefill foi limpo, perdendo contexto"
     )
     assert data["location_prefill"] == "Calçada"
-    # Visibility correto pro novo defect (visual)
+    # Visibility: qty_pattern + location SEMPRE visíveis agora (2026-06-03)
     assert data["show_qty_pattern"] is True
-    assert data["show_location"] is False  # qty_pattern ainda não foi user-confirmed
+    assert data["show_location"] is True
 
 
 def test_data_exchange_handle_qty_preserves_location_prefill():
