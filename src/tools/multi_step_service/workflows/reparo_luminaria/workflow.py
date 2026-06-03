@@ -302,6 +302,38 @@ class ReparoLuminariaWorkflow(
     async def _initialize_workflow(self, state: ServiceState) -> ServiceState:
         logger.info("[ENTRADA] _initialize_workflow")
         self._normalize_payload_aliases(state)
+
+        # Semente de prefill do Flow (auto-send pós-confirmação): captura o que o
+        # agente extraiu da 1ª mensagem do cidadão (defeito/local/quantidade) numa
+        # chave DEDICADA `flow_prefill_seed`. Crucial: NÃO gravar em
+        # `luminaria_defeito` — isso dispararia `ja_tem_dados_defeito` no
+        # multi_step_service (app.py) e SUPRIMIRIA o envio do Flow. Sem este stash
+        # a extração inicial se perdia entre o "É este serviço?" e o auto-send
+        # (turn 1 pausa em _show_service_summary, antes de _collect_defect persistir)
+        # → o formulário abria vazio.
+        if state.payload and state.payload.get("_source") != "whatsapp_flow":
+            seed = dict(state.data.get("flow_prefill_seed") or {})
+            # Captura tanto os nomes internos (luminaria_*) quanto os canônicos do
+            # Flow (defect_type/location/qty_pattern) — o agente pode mandar
+            # qualquer um. `qty_pattern` NÃO é aliasado p/ luminaria_quantidade fora
+            # do source=whatsapp_flow (a conversão "bloco"→grupo+sub-campo não é
+            # alias simples), então capturamos cru; o normalizer (no envio) lê
+            # ambos os formatos.
+            for k in (
+                "luminaria_defeito",
+                "luminaria_localizacao",
+                "luminaria_quantidade",
+                "luminaria_intercaladas_bloco",
+                "defect_type",
+                "location",
+                "qty_pattern",
+            ):
+                v = state.payload.get(k)
+                if v not in (None, ""):
+                    seed[k] = v
+            if seed:
+                state.data["flow_prefill_seed"] = seed
+
         state.data.setdefault("servico_1746_descricao", "Reparo de luminária")
         state.data.setdefault("codigo_servico_1746", "18131")
         state.data.setdefault("identificacao_obrigatoria_1746", False)

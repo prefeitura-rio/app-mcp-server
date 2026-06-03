@@ -970,21 +970,31 @@ def create_app() -> FastMCP:
                     f"service={service_name}, user={user_id}"
                 )
 
-                # Construir prefill_data a partir do state salvo
-                # (payload atual só tem confirmacao_servico, dados originais estão no state)
+                # Construir prefill_data a partir do state salvo. O payload atual
+                # só tem confirmacao_servico; o que o cidadão disse na 1ª msg vive
+                # no `flow_prefill_seed` (semente capturada em _initialize_workflow,
+                # ver workflow.py) — sem ela o defeito/local/qtd se perdiam e o Flow
+                # abria vazio. Também lemos dados já coletados, se houver.
                 prefill_from_state = {}
                 if existing_state and existing_state.data:
                     state_data = existing_state.data
-                    # Para reparo_luminaria: mapear campos do state para campos do Flow
+                    # Para reparo_luminaria: passar as chaves luminaria_* cruas — o
+                    # normalizer (send_flow_by_service → normalize_prefill_for_flow)
+                    # mapeia defeito/local/quantidade pros IDs canônicos do Flow.
                     if service_name == "reparo_luminaria":
-                        if state_data.get("luminaria_defeito"):
-                            prefill_from_state["defect_type"] = state_data[
-                                "luminaria_defeito"
-                            ]
-                        if state_data.get("luminaria_localizacao"):
-                            prefill_from_state["location"] = state_data[
-                                "luminaria_localizacao"
-                            ]
+                        seed = state_data.get("flow_prefill_seed") or {}
+                        for src_key in (
+                            "luminaria_defeito",
+                            "luminaria_localizacao",
+                            "luminaria_quantidade",
+                            "luminaria_intercaladas_bloco",
+                            "defect_type",
+                            "location",
+                            "qty_pattern",
+                        ):
+                            val = state_data.get(src_key) or seed.get(src_key)
+                            if val:
+                                prefill_from_state[src_key] = val
 
                 # `send_flow_by_service` normaliza payload internamente via
                 # `normalize_prefill_for_flow` — passamos raw, normalizer

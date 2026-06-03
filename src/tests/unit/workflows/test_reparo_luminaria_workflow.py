@@ -1,5 +1,9 @@
+import asyncio
+
 import pytest
 
+from src.tools.luminaria_entity_extractor import encode_flow_token
+from src.tools.luminaria_flow import _handle_init
 from src.tools.multi_step_service.core.models import ServiceState
 from src.tools.multi_step_service.workflows.reparo_luminaria import templates as rlu_tpl
 from src.tools.multi_step_service.workflows.reparo_luminaria.integrations import (
@@ -30,6 +34,7 @@ from src.tools.multi_step_service.workflows.sgrc_components.ticket_state import 
     ticket_failed,
     ticket_opened,
 )
+from src.tools.whatsapp_flows.normalizers import normalize_prefill_for_flow
 
 
 def make_state(payload=None, data=None):
@@ -559,3 +564,131 @@ def test_reparo_workflow_specific_attributes_and_routes():
             )
             == route
         )
+
+
+# --------------------------------------------------------------------------- #
+# Prefill seed (2026-06-03): a extração inicial do agente (1ª msg) sobrevive
+# até o auto-send do Flow pós-confirmação. Bug: entidades normalizadas em
+# state.payload mas perdidas antes de should_send_flow (form abria vazio).
+# --------------------------------------------------------------------------- #
+def _build_prefill_from_seed(state_data):
+    """Replica a construção de prefill_from_state em app.py should_send_flow."""
+    prefill = {}
+    seed = state_data.get("flow_prefill_seed") or {}
+    for src_key in (
+        "luminaria_defeito",
+        "luminaria_localizacao",
+        "luminaria_quantidade",
+        "luminaria_intercaladas_bloco",
+        "defect_type",
+        "location",
+        "qty_pattern",
+    ):
+        val = state_data.get(src_key) or seed.get(src_key)
+        if val:
+            prefill[src_key] = val
+    return prefill
+
+
+def test_initialize_captures_prefill_seed_without_tripping_defect_guard():
+    """Entidades da 1ª msg vão pro flow_prefill_seed, NÃO pro luminaria_defeito
+    (que suprimiria o Flow via ja_tem_dados_defeito)."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={
+            "luminaria_defeito": "Apagada",
+            "luminaria_localizacao": "Calçada",
+            "luminaria_quantidade": "uma",
+        },
+        data={"knowledge_loaded": True},  # evita hub_search (rede)
+    )
+    asyncio.run(workflow._initialize_workflow(state))
+    seed = state.data.get("flow_prefill_seed")
+    assert seed == {
+        "luminaria_defeito": "Apagada",
+        "luminaria_localizacao": "Calçada",
+        "luminaria_quantidade": "uma",
+    }
+    # guard NÃO disparado: luminaria_defeito não vaza pro state.data
+    assert "luminaria_defeito" not in {
+        k: v for k, v in state.data.items() if k != "flow_prefill_seed"
+    }
+
+
+def test_initialize_seed_captures_flow_canonical_names():
+    """defect_type/location/qty_pattern (nomes do Flow): defect/location
+    aliasados p/ luminaria_*, qty_pattern capturado cru — o normalizer resolve
+    tudo no envio."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={"defect_type": "Apagada", "location": "Rua", "qty_pattern": "uma"},
+        data={"knowledge_loaded": True},
+    )
+    asyncio.run(workflow._initialize_workflow(state))
+    seed = state.data.get("flow_prefill_seed") or {}
+    assert seed.get("luminaria_defeito") == "Apagada"
+    assert seed.get("luminaria_localizacao") == "Rua"
+    assert seed.get("qty_pattern") == "uma"
+    normalized = normalize_prefill_for_flow(
+        "reparo_luminaria", _build_prefill_from_seed(state.data)
+    )
+    assert normalized == {
+        "defect_type": "Apagada",
+        "location": "Rua",
+        "qty_pattern": "uma",
+    }
+
+
+def test_seed_survives_confirmation_turn():
+    """Turn 2 (confirmacao_servico, sem entidades) NÃO apaga o seed do turn 1."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={"confirmacao_servico": True},
+        data={
+            "knowledge_loaded": True,
+            "flow_prefill_seed": {"luminaria_defeito": "Apagada"},
+        },
+    )
+    asyncio.run(workflow._initialize_workflow(state))
+    assert state.data["flow_prefill_seed"] == {"luminaria_defeito": "Apagada"}
+
+
+def test_prefill_seed_end_to_end_to_flow_init():
+    """Seed → prefill_from_state (app.py) → normalize → encode → _handle_init:
+    o formulário abre preenchido."""
+    seed_state = {
+        "flow_prefill_seed": {
+            "luminaria_defeito": "Apagada",
+            "luminaria_localizacao": "Calçada",
+            "luminaria_quantidade": "uma",
+        }
+    }
+    raw = _build_prefill_from_seed(seed_state)
+    normalized = normalize_prefill_for_flow("reparo_luminaria", raw)
+    assert normalized == {
+        "defect_type": "Apagada",
+        "location": "Calçada",
+        "qty_pattern": "uma",
+    }
+    token = encode_flow_token("uuid-x", normalized)
+    assert token.startswith("v1:")
+    data = _handle_init(flow_token=token)["data"]
+    assert data["defect_type_prefill"] == "Apagada"
+    assert data["location_prefill"] == "Calçada"
+    assert data["qty_pattern_prefill"] == "uma"
+
+
+def test_prefill_seed_grupo_bloco_qty():
+    """quantidade='grupo' + intercaladas='bloco' → qty_pattern='bloco' no Flow."""
+    seed_state = {
+        "flow_prefill_seed": {
+            "luminaria_defeito": "Danificada",
+            "luminaria_quantidade": "grupo",
+            "luminaria_intercaladas_bloco": "bloco",
+        }
+    }
+    normalized = normalize_prefill_for_flow(
+        "reparo_luminaria", _build_prefill_from_seed(seed_state)
+    )
+    assert normalized.get("qty_pattern") == "bloco"
+    assert normalized.get("defect_type") == "Danificada"
