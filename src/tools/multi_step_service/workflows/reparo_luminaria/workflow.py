@@ -227,9 +227,19 @@ class ReparoLuminariaWorkflow(
                     state.payload["luminaria_quantidade"] = "grupo"
                     state.payload["luminaria_intercaladas_bloco"] = qty
 
-            # Processar is_quadra_esportes: se sim, sobrescrever location
-            if state.payload.get("is_quadra_esportes") == "sim":
+            # Processar is_quadra_esportes (radio do Flow quando location=Praça):
+            # "sim" sobrescreve location pra Quadra de esportes; "nao" registra a
+            # resposta direto no state.data (persiste entre turnos — payload é
+            # efêmero) pra o workflow NÃO re-perguntar "está dentro de uma quadra?"
+            # em texto. _collect_quadra_esportes roda num turno POSTERIOR (após
+            # coleta/confirmação de endereço), quando o payload já foi limpo —
+            # por isso gravar em data, espelhando os caminhos do "sim"/Quadra.
+            iqe = state.payload.get("is_quadra_esportes")
+            if iqe == "sim":
                 state.payload["location"] = "Quadra de esportes"
+            elif iqe == "nao":
+                state.data["reparo_luminaria_quadra_esportes"] = False
+                state.data["reparo_luminaria_endereco_especial_executado"] = True
 
         aliases = {
             "endereco": "address",

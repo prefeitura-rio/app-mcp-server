@@ -692,3 +692,54 @@ def test_prefill_seed_grupo_bloco_qty():
     )
     assert normalized.get("qty_pattern") == "bloco"
     assert normalized.get("defect_type") == "Danificada"
+
+
+def test_flow_quadra_esportes_nao_persists_in_data_not_payload():
+    """Praça + is_quadra_esportes='nao' do Flow: a resposta é gravada em
+    state.data (persiste entre turnos), NÃO no payload efêmero — senão sumiria
+    antes do passo da quadra (que roda num turno posterior)."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={
+            "_source": "whatsapp_flow",
+            "location": "Praça",
+            "is_quadra_esportes": "nao",
+        },
+        data={"knowledge_loaded": True},
+    )
+    asyncio.run(workflow._initialize_workflow(state))
+    assert state.data.get("reparo_luminaria_quadra_esportes") is False
+    assert state.data.get("reparo_luminaria_endereco_especial_executado") is True
+
+
+def test_flow_quadra_esportes_nao_not_reasked_next_turn():
+    """Bug real (cross-turn): com a resposta em state.data, o passo da quadra
+    num turno POSTERIOR (payload já limpo, location=Praça) NÃO re-pergunta."""
+    workflow = make_workflow()
+    # estado já persistido do turno do Flow (data sobrevive; payload é novo)
+    state = make_state(
+        payload={},  # turno posterior: payload limpo (base_workflow reseta)
+        data={
+            "knowledge_loaded": True,
+            "luminaria_localizacao": "Praça",
+            "reparo_luminaria_quadra_esportes": False,
+            "reparo_luminaria_endereco_especial_executado": True,
+        },
+    )
+    asyncio.run(workflow._collect_quadra_esportes(state))
+    assert state.agent_response is None  # sem re-pergunta de texto
+
+
+def test_flow_quadra_esportes_sim_overrides_location():
+    """is_quadra_esportes='sim' continua sobrescrevendo location."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={
+            "_source": "whatsapp_flow",
+            "location": "Praça",
+            "is_quadra_esportes": "sim",
+        },
+        data={"knowledge_loaded": True},
+    )
+    asyncio.run(workflow._initialize_workflow(state))
+    assert state.payload.get("location") == "Quadra de esportes"
