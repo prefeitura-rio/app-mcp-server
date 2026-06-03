@@ -306,9 +306,18 @@ def test_navigate_inline_data_prefills_and_visibility():
     )
     assert token.startswith("v1:")
 
-    # composição inline do navigate (replica app.build_whatsapp_flow_envelope)
+    # composição inline do navigate (replica app.build_whatsapp_flow_envelope):
+    # filtra pras chaves do schema PUBLICADO no Meta (Meta valida estrito).
+    _published = {
+        "defect_type_prefill",
+        "qty_pattern_prefill",
+        "location_prefill",
+        "show_qty_pattern",
+        "show_location",
+    }
     init = _handle_init(flow_token=token)
-    fap = {"screen": init.get("screen", "MAIN"), "data": init.get("data") or {}}
+    data_in = {k: v for k, v in (init.get("data") or {}).items() if k in _published}
+    fap = {"screen": init.get("screen", "MAIN"), "data": data_in}
 
     env = build_flow_envelope(
         flow_id="4141008006029185",
@@ -325,8 +334,10 @@ def test_navigate_inline_data_prefills_and_visibility():
     # visibilidade smart (senão os campos prefillados ficariam escondidos)
     assert data["show_qty_pattern"] is True
     assert data["show_location"] is True
+    # NÃO vaza chave fora do schema publicado (senão o Meta rejeita o data)
+    assert "show_quadra_question" not in data
+    assert set(data.keys()) <= _published
     # token v1 segue no envelope (pros data_exchange on-select)
     assert params["flow_token"].startswith("v1:")
-    # e decodifica de volta pros valores certos
     decoded = decode_flow_token(params["flow_token"])
     assert decoded["defect_type"] == "Apagada"

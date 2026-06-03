@@ -1437,10 +1437,27 @@ def create_app() -> FastMCP:
             from src.tools.luminaria_flow import _handle_init
 
             _init = _handle_init(flow_token=flow_token)
-            flow_action_payload = {
-                "screen": _init.get("screen", "MAIN"),
-                "data": _init.get("data") or {},
+            # O Flow PUBLICADO no Meta declara no data model do MAIN só
+            # {defect_type_prefill, qty_pattern_prefill, location_prefill,
+            # show_qty_pattern, show_location}. `show_quadra_question` existe só no
+            # flow.json LOCAL (drift local↔Meta). O Meta valida o
+            # flow_action_payload.data ESTRITO contra o schema da tela — uma chave
+            # não-declarada faz ele REJEITAR o data inteiro → form vazio. Filtramos
+            # pras chaves do schema publicado. (Reconciliar de vez = republicar o
+            # Flow no Meta a partir do flow.json local.)
+            _PUBLISHED_MAIN_KEYS = {
+                "defect_type_prefill",
+                "qty_pattern_prefill",
+                "location_prefill",
+                "show_qty_pattern",
+                "show_location",
             }
+            _data = {
+                k: v
+                for k, v in (_init.get("data") or {}).items()
+                if k in _PUBLISHED_MAIN_KEYS
+            }
+            flow_action_payload = {"screen": _init.get("screen", "MAIN"), "data": _data}
 
         # Observabilidade: só as CHAVES (sem valores, pra não logar PII) + se o
         # token virou `v1:` + se o data inline foi montado. Diagnostica form vazio.
