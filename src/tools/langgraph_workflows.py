@@ -17,6 +17,18 @@ if env.IS_LOCAL:
 else:
     BACKEND_MODE = StateMode.REDIS
 
+# Identidades que NUNCA são alvo legítimo de reset: vazio e os placeholders que o
+# modelo aprende dos exemplos de docstring (`get_user_memory`/`upsert_user_memory`
+# usam `user_id: "default_user"`) e do prompt legado. O alvo real é sempre o
+# telefone autenticado do thread, injetado pelo engine
+# (`_inject_thread_id_in_user_id_params`). Um desses valores só chega aqui se a
+# injeção falhar OU o modelo alucinar o placeholder — limpar esse alvo apagaria o
+# estado errado (ou nenhum); rejeitamos pra não mascarar a falha. Ver
+# `plano-encerramento-sessao.md` §Componente 2 (segurança do alvo do reset).
+_UNTRUSTED_RESET_IDS = frozenset(
+    {"", "default_user", "unknown", "none", "null", "user"}
+)
+
 __all__ = [
     "multi_step_service",
     "reset_session_state",
@@ -53,7 +65,22 @@ async def reset_session_state(
     ``thread_id`` (ver ``engine/agent.py::_inject_thread_id_in_user_id_params``,
     genérico para todas as tools e param ``user_id``/``user_number``), então o
     modelo NÃO controla o alvo do reset — mesma garantia do ``multi_step_service``.
+    Defesa em profundidade: se a injeção falhar e chegar um placeholder
+    (``default_user`` etc.), rejeitamos em vez de apagar o estado errado.
     """
+    # Guard de identidade (defesa em profundidade): o alvo do reset é sempre o
+    # telefone autenticado do thread. Um placeholder só chega aqui se a injeção do
+    # engine falhar OU o modelo alucinar — limpar isso apagaria o estado errado (ou
+    # nenhum). Rejeitar deixa a falha VISÍVEL (status=error, re-tentável) em vez de
+    # mascarar com um "ok" enganoso. Telefones reais passam.
+    if (user_id or "").strip().lower() in _UNTRUSTED_RESET_IDS:
+        logger.warning(
+            "reset_session_state: identidade não-confiável (user_id={!r}) — o engine "
+            "deveria injetar o telefone do thread. No-op pra não apagar estado errado.",
+            user_id,
+        )
+        return {"status": "error", "cleared": False, "reason": "untrusted_identity"}
+
     # A construção do StateManager fica DENTRO do try: com backend Redis/BOTH, a
     # criação do backend pode falhar (config inválida/dependência indisponível)
     # antes mesmo do delete — sem isso a falha escaparia como ToolError em vez de

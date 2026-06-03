@@ -80,3 +80,44 @@ async def test_reset_session_state_handles_construction_failure(monkeypatch):
 
     out = await langgraph_workflows.reset_session_state("5521999998888")
     assert out == {"status": "error", "cleared": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bogus",
+    ["default_user", "", "   ", "DEFAULT_USER", "unknown", "none", "null", "user"],
+)
+async def test_reset_session_state_rejects_untrusted_identity(monkeypatch, bogus):
+    """Defesa em profundidade: um placeholder (ex.: `default_user`, que o modelo
+    aprende dos exemplos de docstring) só chega aqui se a injeção do engine falhar.
+    Limpar isso apagaria o estado errado/nenhum — rejeitamos sem nem construir o
+    StateManager, deixando a falha visível (status=error)."""
+
+    def _must_not_construct(*a, **k):
+        raise AssertionError(
+            "StateManager não pode ser construído com identidade não-confiável"
+        )
+
+    monkeypatch.setattr(langgraph_workflows, "StateManager", _must_not_construct)
+
+    out = await langgraph_workflows.reset_session_state(bogus)
+    assert out == {"status": "error", "cleared": False, "reason": "untrusted_identity"}
+
+
+@pytest.mark.asyncio
+async def test_reset_session_state_allows_real_phone(monkeypatch):
+    """O guard NÃO pode bloquear um telefone real (alvo legítimo do reset)."""
+    captured = {}
+
+    class _FakeStateManager:
+        def __init__(self, user_id, backend_mode=None):
+            captured["user_id"] = user_id
+
+        async def remove_user_data(self):
+            return True
+
+    monkeypatch.setattr(langgraph_workflows, "StateManager", _FakeStateManager)
+
+    out = await langgraph_workflows.reset_session_state("5521965850470")
+    assert captured["user_id"] == "5521965850470"
+    assert out == {"status": "ok", "cleared": True}
