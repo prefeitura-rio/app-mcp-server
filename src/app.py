@@ -1376,8 +1376,9 @@ def create_app() -> FastMCP:
             "DEPOIS que o cidadão submeter o Flow (inbound com _source='whatsapp_flow'). "
             "Encerre o turno logo após a tool call — não escreva texto depois (o body da "
             "tool já é a mensagem entregue; texto extra faz o interativo ser descartado). "
-            "Parâmetros: `flow_id` (do Meta Business Manager), `flow_token` (UUID NOVO por "
-            "turno, pra correlacionar a submissão), `body` (texto de introdução — como não há "
+            "Parâmetros: `flow_id` (do Meta Business Manager). NÃO passe `flow_token` nem tente "
+            "gerar um UUID (não escreva código tipo `import uuid`/`uuid.uuid4()`) — o sistema "
+            "gera um token único por turno SOZINHO. `body` (texto de introdução — como não há "
             "mais tela de confirmação separada, INCLUA aqui o aviso de que este serviço não "
             "cobre falta de energia / luzes de casas e semáforos apagados, caso em que o "
             "cidadão deve acionar a Light pelo 0800 0210196). "
@@ -1392,7 +1393,7 @@ def create_app() -> FastMCP:
     def build_whatsapp_flow_envelope(
         flow_id: str,
         body: str,
-        flow_token: str,
+        flow_token: Optional[str] = None,
         cta: str = "Abrir formulário",
         header: Optional[str] = None,
         footer: Optional[str] = None,
@@ -1401,10 +1402,21 @@ def create_app() -> FastMCP:
         prefill_data: Optional[dict] = None,
         service_type: Optional[str] = None,
     ) -> dict:
+        import uuid
+
         from src.tools.whatsapp_interactive import (
             build_flow_envelope,
             encode_prefill_token,
         )
+
+        # flow_token gerado PELO MCP (2026-06-03): pedir pro modelo "gerar um UUID"
+        # fazia o Gemini 2.5 Flash emitir `import uuid; uuid.uuid4()` como
+        # function-call malformada (finish_reason=MALFORMED_FUNCTION_CALL) → turno
+        # VAZIO, sem assistant_message, sem Flow → cidadão sem resposta. Tirando o
+        # fardo do modelo (param opcional + geração aqui) some o gatilho. Aceita um
+        # token vindo do modelo por back-compat, mas o normal é não vir.
+        if not flow_token:
+            flow_token = str(uuid.uuid4())
 
         # `encode_prefill_token` exige `service_type` pra normalizar/whitelist.
         # O engine às vezes manda `prefill_data` sem `service_type` → encode
