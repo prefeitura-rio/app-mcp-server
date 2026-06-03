@@ -1415,23 +1415,43 @@ def create_app() -> FastMCP:
                 (s for s, fid in FLOW_TEMPLATES.items() if fid == flow_id), None
             )
 
-        # Pré-preenchimento (Flow dinâmico): encoda os valores extraídos da
-        # conversa no flow_token; `_handle_init` decoda e abre o form já
-        # preenchido. Entrega via Mule/envelope (não precisa user_number),
-        # então é o caminho seguro pro Engine prefilar.
+        # Pré-preenchimento: encoda os valores extraídos da conversa no flow_token
+        # (canal pros data_exchange on-select, lido por _handle_init/_preserved_prefills).
         flow_token = encode_prefill_token(flow_token, prefill_data, service_type)
 
-        # Observabilidade: só as CHAVES (sem valores, pra não logar PII) +
-        # se o token virou `v1:` (prefill efetivamente encodado). Quando o
-        # Flow abre vazio, este log diz se foi o engine que não mandou prefill,
-        # se faltou service_type, ou se o normalizer dropou os valores.
+        # CRÍTICO (2026-06-03): com flow_action="navigate" o Meta NÃO chama o
+        # endpoint _handle_init — ele abre a tela usando o `flow_action_payload.data`
+        # INLINE. Então o token v1 sozinho deixa o form VAZIO (bug confirmado nos
+        # logs do engine: token v1 correto, form vazio). Computamos aqui o MESMO
+        # `data` que _handle_init devolveria (valores *_prefill + visibilidade
+        # smart show_*) a partir do token e injetamos inline. O whatsapp_flow_sender
+        # já injetava data inline (só os *_prefill); aqui vamos além incluindo os
+        # show_* (senão campos prefillados podiam ficar escondidos). Token segue no envelope.
+        if (
+            service_type == "reparo_luminaria"
+            and flow_action == "navigate"
+            and isinstance(flow_token, str)
+            and flow_token.startswith("v1:")
+            and not flow_action_payload
+        ):
+            from src.tools.luminaria_flow import _handle_init
+
+            _init = _handle_init(flow_token=flow_token)
+            flow_action_payload = {
+                "screen": _init.get("screen", "MAIN"),
+                "data": _init.get("data") or {},
+            }
+
+        # Observabilidade: só as CHAVES (sem valores, pra não logar PII) + se o
+        # token virou `v1:` + se o data inline foi montado. Diagnostica form vazio.
         logger.info(
             "build_whatsapp_flow_envelope flow_id={} service_type={} "
-            "prefill_keys={} encoded_prefill={}",
+            "prefill_keys={} encoded_prefill={} inline_data_keys={}",
             flow_id,
             service_type,
             sorted((prefill_data or {}).keys()),
             isinstance(flow_token, str) and flow_token.startswith("v1:"),
+            sorted((flow_action_payload or {}).get("data", {}).keys()),
         )
 
         return build_flow_envelope(

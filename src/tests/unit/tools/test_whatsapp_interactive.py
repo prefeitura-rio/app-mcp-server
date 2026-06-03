@@ -287,3 +287,46 @@ def test_list_button_label_too_long():
 def test_list_empty_sections():
     env = build_list_envelope(body="x", sections=[])
     assert env["status"] == "error"
+
+
+# ===== prefill inline no navigate (2026-06-03) =====
+# Bug: flow_action="navigate" NÃO chama o endpoint _handle_init — o Meta usa o
+# flow_action_payload.data INLINE. Token v1 sozinho = form vazio. build_whatsapp_
+# flow_envelope (app.py) computa o data inline via _handle_init. Aqui validamos
+# a composição (mesma lógica) ponta-a-ponta.
+def test_navigate_inline_data_prefills_and_visibility():
+    import uuid
+
+    from src.tools.luminaria_flow import _handle_init
+
+    token = encode_prefill_token(
+        str(uuid.uuid4()),
+        {"qty_pattern": "uma", "defect_type": "Apagada", "location": "Calçada"},
+        "reparo_luminaria",
+    )
+    assert token.startswith("v1:")
+
+    # composição inline do navigate (replica app.build_whatsapp_flow_envelope)
+    init = _handle_init(flow_token=token)
+    fap = {"screen": init.get("screen", "MAIN"), "data": init.get("data") or {}}
+
+    env = build_flow_envelope(
+        flow_id="4141008006029185",
+        body="x",
+        flow_token=token,
+        flow_action="navigate",
+        flow_action_payload=fap,
+    )
+    params = env["interactive"]["action"]["parameters"]
+    data = params["flow_action_payload"]["data"]
+    assert data["defect_type_prefill"] == "Apagada"
+    assert data["location_prefill"] == "Calçada"
+    assert data["qty_pattern_prefill"] == "uma"
+    # visibilidade smart (senão os campos prefillados ficariam escondidos)
+    assert data["show_qty_pattern"] is True
+    assert data["show_location"] is True
+    # token v1 segue no envelope (pros data_exchange on-select)
+    assert params["flow_token"].startswith("v1:")
+    # e decodifica de volta pros valores certos
+    decoded = decode_flow_token(params["flow_token"])
+    assert decoded["defect_type"] == "Apagada"
