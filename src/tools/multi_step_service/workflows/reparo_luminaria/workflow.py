@@ -309,7 +309,8 @@ class ReparoLuminariaWorkflow(
 
         # WhatsApp Flow: se veio do flow (_source="whatsapp_flow"), os dados de
         # defeito já vêm pré-preenchidos no payload. O agente é responsável por
-        # chamar send_whatsapp_flow ANTES de multi_step_service (via system prompt).
+        # chamar build_whatsapp_flow_envelope ANTES de multi_step_service (via
+        # system prompt — Design A, Flow-first).
 
         if not state.data.get("knowledge_loaded") and not self.service_knowledge:
             await self._load_service_knowledge()

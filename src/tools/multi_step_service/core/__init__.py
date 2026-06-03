@@ -24,10 +24,14 @@ DESCRIPTION = """
     - IPTU: "pagar IPTU", "emitir guia de IPTU", "guia de IPTU", "consultar débitos",
       ou número de 7-8 dígitos após consulta de IPTU → service_name="iptu_pagamento"
       (apenas IPTU — NÃO usar pra outras guias como ISS, ITBI, taxa de lixo)
-    - Luminária pública / poste / iluminação → service_name="reparo_luminaria"
-      **IMPORTANTE**: Se o usuário mencionou tipo de defeito (apagada, piscando, etc)
-      ou localização (praça, rua, etc), EXTRAIA e passe no payload inicial:
-      Ex: "tem uma luminária danificada na praça" → payload={"luminaria_defeito": "Danificada", "luminaria_localizacao": "Praça"}
+    - Luminária pública / poste / iluminação → reparo_luminaria.
+      ⚠️ EXCEÇÃO DE ORDEM: pra luminária, o PRIMEIRO passo NÃO é esta tool — chame
+      `build_whatsapp_flow_envelope` (Flow prefillado) ANTES; o Flow é a etapa de
+      confirmação dos dados (mande defeito/quantidade/local que o cidadão já disse no
+      `prefill_data`). Chame multi_step_service(service_name="reparo_luminaria") só
+      DEPOIS que o cidadão submeter o Flow (inbound com _source="whatsapp_flow"), pra
+      processar a submissão, coletar o endereço e abrir o chamado. Não deflexione pra
+      google_search nem diga "não consigo".
     - Poda de árvore (via pública) → service_name="poda_de_arvore"
 
     **NÃO chame** esta tool (use `google_search` ou responda informacionalmente) quando:

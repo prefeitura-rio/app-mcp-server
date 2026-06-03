@@ -792,18 +792,13 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool(
         "send_whatsapp_flow",
         description=f"""
-        ⚠️ USO INTERNO - NÃO CHAMAR DIRETAMENTE.
+        ⚠️ NÃO CHAMAR DIRETAMENTE — esta variante exige `user_number` (E.164), que o
+        LLM não tem de forma confiável (risco de alucinar o número). Pra abrir um Flow
+        proativamente (ex: reparo_luminaria), use `build_whatsapp_flow_envelope` — ela
+        entrega no thread atual e NÃO precisa de user_number. Esta variante existe pro
+        backend, que resolve o user_number do contexto.
 
-        Esta tool é chamada AUTOMATICAMENTE pelo backend quando multi_step_service
-        confirma o serviço com o cidadão.
-
-        Para serviços estruturados (reparo_luminaria, poda_de_arvore, etc),
-        SEMPRE use multi_step_service — ele mostrará resumo do serviço,
-        confirmará com cidadão e enviará o Flow automaticamente.
-
-        NÃO chame send_whatsapp_flow manualmente.
-
-        FLOWS DISPONÍVEIS (gerenciados automaticamente): {", ".join(FLOW_TEMPLATES.keys())}
+        FLOWS DISPONÍVEIS: {", ".join(FLOW_TEMPLATES.keys())}
 
         Args:
             user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
@@ -1363,20 +1358,25 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool(
         "build_whatsapp_flow_envelope",
         description=(
-            "⚠️ USO INTERNO - NÃO CHAMAR DIRETAMENTE. Esta tool é chamada AUTOMATICAMENTE "
-            "pelo backend DEPOIS que multi_step_service confirmar o serviço com o cidadão. "
-            "Para serviços estruturados (reparo_luminaria, poda_de_arvore, etc), "
-            "SEMPRE use multi_step_service — ele mostrará resumo do serviço, "
-            "confirmará com cidadão e enviará o Flow no momento certo. "
-            "NÃO chame build_whatsapp_flow_envelope manualmente."
-            "Passe `flow_id` (do Meta Business Manager), "
-            "`body` (texto de introdução), `flow_token` (UUID que o bot gera "
-            "pra correlacionar a submissão do cidadão). "
-            "PRÉ-PREENCHIMENTO (recomendado): passe `prefill_data` com os campos que o cidadão JÁ mencionou na conversa "
-            "(ex: {'defect_type':'Apagada','location':'Rua'}) + `service_type` (ex: 'reparo_luminaria') — "
-            "os valores são encodados no flow_token e o formulário abre já preenchido. "
+            "Envia um WhatsApp Flow (formulário estruturado) ao cidadão do thread atual. "
+            "USE PROATIVAMENTE para serviços que têm Flow registrado — hoje: reparo_luminaria. "
+            "Quando o cidadão relatar problema de luminária (apagada, piscando, danificada, "
+            "etc.), chame ESTA tool ANTES de qualquer outra coisa — o Flow é a etapa de "
+            "confirmação dos dados. NÃO chame multi_step_service primeiro; ele entra só "
+            "DEPOIS que o cidadão submeter o Flow (inbound com _source='whatsapp_flow'). "
+            "Encerre o turno logo após a tool call — não escreva texto depois (o body da "
+            "tool já é a mensagem entregue; texto extra faz o interativo ser descartado). "
+            "Parâmetros: `flow_id` (do Meta Business Manager), `flow_token` (UUID NOVO por "
+            "turno, pra correlacionar a submissão), `body` (texto de introdução — como não há "
+            "mais tela de confirmação separada, INCLUA aqui o aviso de que este serviço não "
+            "cobre falta de energia / luzes de casas e semáforos apagados, caso em que o "
+            "cidadão deve acionar a Light pelo 0800 0210196). "
+            "PRÉ-PREENCHIMENTO (sempre que der): passe `prefill_data` com os campos que o "
+            "cidadão JÁ mencionou (ex: {'defect_type':'Apagada','location':'Rua','qty_pattern':'uma'}) "
+            "+ `service_type` (ex: 'reparo_luminaria') — encodados no flow_token, o formulário "
+            "abre já preenchido. NUNCA ponha PII (CPF/endereço) no prefill. "
             "Opcional: `cta` (rótulo do botão, default 'Abrir formulário'), `header`/`footer`, "
-            "`flow_action_payload` (initial screen + data)."
+            "`flow_action_payload` (tela inicial + data)."
         ),
     )
     def build_whatsapp_flow_envelope(
