@@ -122,7 +122,32 @@ class IdentificationFlowMixin:
                 "seguir sem",
                 "continuar sem",
             }
-            if metodo_raw in _skip_tokens:
+            # Match exato cobre os tokens curtos; substring cobre as frases naturais
+            # que o agente repassa ("quero continuar sem me identificar", "seguir sem
+            # cpf", "não me identificar"...). Sem o substring, o exato falhava nelas e
+            # o cidadão caía na validação estrita cpf/govbr → erro "escolha CPF ou
+            # Gov.br", contradizendo o "é opcional" (achado 2026-06-04). Como a
+            # identificação é OPCIONAL aqui, interpretar recusa de forma liberal é
+            # seguro: input claro de cpf/govbr é normalizado antes de chegar aqui.
+            _skip_substrings = (
+                "sem ident",
+                "sem me ident",
+                "nao me ident",
+                "não me ident",
+                "sem se ident",
+                "continuar sem",
+                "seguir sem",
+                "nao quero",
+                "não quero",
+                "anonim",
+                "pular",
+                "recus",
+                "nenhum",
+                "sem cpf",
+            )
+            if metodo_raw in _skip_tokens or any(
+                s in metodo_raw for s in _skip_substrings
+            ):
                 logger.info(
                     "[METHOD] Identificação opcional + recusa explícita → anônimo"
                 )

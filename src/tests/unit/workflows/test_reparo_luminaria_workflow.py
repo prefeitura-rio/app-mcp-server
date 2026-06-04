@@ -821,12 +821,26 @@ def test_flow_quadra_esportes_sim_overrides_location():
 
 @pytest.mark.asyncio
 async def test_optional_identification_explicit_skip_goes_anonymous():
-    """Identificação opcional + recusa explícita ('anonimo'/'pular'/'nao quero')
-    NÃO cai no loop de 3 tentativas inválidas → vira anônimo direto (achado
-    2026-06-03). Cobre o _select_identification_method (usado por poda; aqui via
-    o mixin compartilhado no workflow de luminária)."""
+    """Identificação opcional + recusa explícita NÃO cai no loop de 3 tentativas
+    inválidas → vira anônimo direto (achado 2026-06-03). Inclui as FRASES naturais
+    que o agente repassa (achado 2026-06-04: o match exato falhava em "quero
+    continuar sem me identificar" → erro "escolha CPF ou Gov.br"; agora há match por
+    substring). Cobre o _select_identification_method (mixin compartilhado)."""
     workflow = make_workflow()
-    for token in ["anonimo", "pular", "nao quero", "não", "seguir sem"]:
+    for token in [
+        # tokens curtos (match exato)
+        "anonimo",
+        "pular",
+        "nao quero",
+        "não",
+        "seguir sem",
+        # frases naturais (match por substring — fix 2026-06-04)
+        "quero continuar sem me identificar",
+        "continuar sem me identificar",
+        "prefiro não me identificar",
+        "nao me identificar",
+        "quero seguir sem cpf",
+    ]:
         state = make_state(
             payload={"identification_method": token},
             data={"identificacao_obrigatoria_1746": False},
