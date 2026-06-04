@@ -16,14 +16,21 @@ def solicitar_metodo_identificacao(opcional: bool = False) -> str:
     return base_text
 
 
-def metodo_identificacao_invalido(tentativa: int, max_tentativas: int = 3) -> str:
+def metodo_identificacao_invalido(
+    tentativa: int, max_tentativas: int = 3, opcional: bool = False
+) -> str:
     """Error message for invalid identification method."""
-    return (
+    base = (
         f"Opção inválida. Tentativa {tentativa}/{max_tentativas}.\n\n"
         f"Por favor, escolha:\n"
         f"- *CPF* para identificar via CPF\n"
         f"- *Gov.br* para autenticar com gov.br"
     )
+    if opcional:
+        # Identificação opcional: NUNCA esconder a saída anônima no re-prompt
+        # (senão quem quer pular fica preso pedindo CPF/Gov.br — incidente 2026-06-04).
+        base += "\n- ou diga *continuar sem identificar* para seguir sem se identificar"
+    return base
 
 
 def govbr_autenticacao_iniciada() -> str:

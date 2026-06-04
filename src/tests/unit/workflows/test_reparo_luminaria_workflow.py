@@ -930,3 +930,16 @@ async def test_optional_identification_valid_method_preserved():
     )
     out = await workflow._select_identification_method(state)
     assert out.data["identification_method"] == "cpf"
+
+
+def test_metodo_invalido_mantem_opcao_de_pular_quando_opcional():
+    """Re-prompt de método inválido MANTÉM a saída anônima quando a identificação
+    é opcional (incidente 2026-06-04: o re-prompt removia a opção de pular e o
+    cidadão anônimo ficava preso pedindo CPF/Gov.br)."""
+    assert "continuar sem identificar" in sgrc_tpl.metodo_identificacao_invalido(
+        1, opcional=True
+    )
+    # Obrigatória: não oferece a saída anônima.
+    assert "continuar sem identificar" not in sgrc_tpl.metodo_identificacao_invalido(
+        1, opcional=False
+    )

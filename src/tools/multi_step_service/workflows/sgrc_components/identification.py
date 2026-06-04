@@ -35,15 +35,17 @@ class IdentificationFlowMixin:
             "nome_invalido",
             "nome_maximo_tentativas",
         }
-        # solicitar_metodo_identificacao agora também precisa saber se é opcional
-        if name == "solicitar_metodo_identificacao":
+        # solicitar_metodo_identificacao E metodo_identificacao_invalido precisam
+        # saber se é opcional pra MANTER a opção de pular visível — inclusive no
+        # re-prompt de erro (senão o cidadão anônimo fica preso pedindo CPF/Gov.br;
+        # incidente 2026-06-04). args é () pro solicitar e (tentativa,) pro inválido.
+        if name in ("solicitar_metodo_identificacao", "metodo_identificacao_invalido"):
             identificacao_obrigatoria = getattr(
                 self.common_config, "identification_required", False
             )
-            return template_fn(opcional=not identificacao_obrigatoria)
+            return template_fn(*args, opcional=not identificacao_obrigatoria)
 
         simple_templates = {
-            "metodo_identificacao_invalido",
             "govbr_autenticacao_iniciada",
             "govbr_autenticacao_pendente",
             "govbr_autenticacao_erro",
