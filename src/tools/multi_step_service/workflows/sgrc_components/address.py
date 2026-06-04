@@ -57,6 +57,10 @@ class AddressFlowMixin:
         if bairro:
             parts.append(f"- Bairro: {bairro}")
 
+        cep = address.get("cep")
+        if cep:
+            parts.append(f"- CEP: {cep}")
+
         parts.append(
             f"- Cidade: {address.get('cidade', 'Rio de Janeiro')}, "
             f"{address.get('estado', 'RJ')}"

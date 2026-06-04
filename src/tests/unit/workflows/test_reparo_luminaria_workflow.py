@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -235,6 +236,74 @@ def test_reparo_ticket_builder_and_ticket_state_helpers():
     assert failed.data["error"] == "erro"
     assert failed.agent_response.description == "Falhou"
     assert failed.agent_response.error_message == "boom"
+
+
+def test_ticket_failed_reset_workflow_flag():
+    """Erro RETRYABLE (reset_workflow=False) NÃO seta _reset_on_next_call → o
+    base_workflow preserva os dados já coletados/confirmados e o "tente novamente"
+    re-roda _open_ticket em vez de re-abrir o formulário do zero (incidente
+    2026-06-04: SGRC fora do ar caía no catch-all e descartava tudo). Default
+    (True) mantém o reset pros erros não-retryable (dados inválidos/duplicado)."""
+    # Default → reseta (comportamento legado p/ erros não-retryable)
+    s1 = make_state(data={"cpf": "12345678909", "logradouro": "Rua X"})
+    out1 = ticket_failed(s1, error_code="erro_interno", description="x")
+    assert out1.data.get("_reset_on_next_call") is True
+
+    # Retryable → NÃO reseta; dados sobrevivem p/ o retry
+    s2 = make_state(data={"cpf": "12345678909", "logradouro": "Rua X"})
+    out2 = ticket_failed(
+        s2, error_code="erro_geral", description="x", reset_workflow=False
+    )
+    assert "_reset_on_next_call" not in out2.data
+    assert out2.data["cpf"] == "12345678909"
+    assert out2.data["logradouro"] == "Rua X"
+    assert out2.data["ticket_created"] is False
+
+
+@pytest.mark.asyncio
+async def test_retryable_failure_preserves_state_for_retry(monkeypatch):
+    """Erro RETRYABLE (SGRC fora do ar → catch-all erro_geral): preserva TODO o
+    estado, LIMPA o gate `error` e NÃO agenda reset → o "tente novamente" re-roda
+    _open_ticket com os mesmos dados, sem re-pedir endereço nem re-abrir o form
+    (incidente 2026-06-04 + achado do code review: o gate `error` em
+    _has_valid_confirmed_address derailava o retry pro endereço)."""
+    workflow = ReparoLuminariaWorkflow(use_fake_api=False)
+    # payload pronto (address como string bypassa o guard de logradouro) +
+    # atributos vazios pra isolar o teste na lógica de retry.
+    monkeypatch.setattr(
+        workflow,
+        "build_ticket_payload",
+        lambda state: ("Rua das Luzes, 100", "requester", "descricao"),
+    )
+    monkeypatch.setattr(workflow, "build_specific_attributes", lambda state: {})
+
+    base = {
+        "address_validated": True,
+        "address_confirmed": True,
+        "ticket_data_confirmed": True,
+        "cpf": "12345678909",
+        "defect_type": "apagada",
+    }
+
+    async def _boom(**_):
+        raise RuntimeError("SGRC indisponível")
+
+    monkeypatch.setattr(workflow, "new_ticket", _boom)
+    failed = await workflow._open_ticket(make_state(data=dict(base)))
+    assert failed.data["ticket_created"] is False
+    assert "error" not in failed.data  # gate de endereço LIMPO
+    assert "_reset_on_next_call" not in failed.data  # estado NÃO será wipado
+    assert failed.data["cpf"] == "12345678909"  # dados preservados
+    # endereço segue válido → o retry NÃO re-pergunta endereço (era o bug do review)
+    assert workflow._has_valid_confirmed_address(failed) is True
+
+    async def _ok(**_):
+        return SimpleNamespace(protocol_id="PROTO-RETRY")
+
+    monkeypatch.setattr(workflow, "new_ticket", _ok)
+    retried = await workflow._open_ticket(failed)  # "tente novamente"
+    assert retried.data["ticket_created"] is True
+    assert retried.data["protocol_id"] == "PROTO-RETRY"
 
 
 @pytest.mark.asyncio
