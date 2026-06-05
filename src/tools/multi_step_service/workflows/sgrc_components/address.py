@@ -57,9 +57,9 @@ class AddressFlowMixin:
         if bairro:
             parts.append(f"- Bairro: {bairro}")
 
-        cep = address.get("cep")
-        if cep:
-            parts.append(f"- CEP: {cep}")
+        # CEP NÃO é exibido na confirmação: foi ponto de reclamação na POC2 (confunde
+        # o cidadão). Segue no payload do ticket, só não aparece pro usuário.
+        # (Feedback do Gabs / docs do Bruno, 2026-06-05.)
 
         parts.append(
             f"- Cidade: {address.get('cidade', 'Rio de Janeiro')}, "
