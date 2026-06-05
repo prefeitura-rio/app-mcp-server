@@ -79,6 +79,7 @@ metadata:
 spec:
   selector:
     app: mcp
+  sessionAffinity: ClientIP
   ports:
     - protocol: TCP
       port: 80
@@ -93,6 +94,7 @@ metadata:
 spec:
   selector:
     app: mcp
+  sessionAffinity: ClientIP
   ports:
     - protocol: TCP
       port: 80

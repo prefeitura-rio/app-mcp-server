@@ -18,6 +18,7 @@ REGULARIZACAO_PAYLOAD = os.environ.get("PREVIEW_REGULARIZACAO_PAYLOAD", "")
 DEFAULT_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_POST_TIMEOUT", "60"))
 DEFAULT_GET_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GET_TIMEOUT", "15"))
 GUIDE_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GUIDE_TIMEOUT", "90"))
+MCP_STREAM_TIMEOUT = int(os.environ.get("PREVIEW_E2E_MCP_STREAM_TIMEOUT", "5"))
 # Retries pros endpoints que dependem de APIs externas (Dívida Ativa).
 # Quando upstream retorna api_resposta_sucesso=false transitoriamente,
 # retry distingue infra glitch vs regressão real. Não usa exponential
@@ -104,6 +105,31 @@ def request_json(
         fail(f"{path}: request timed out or failed to connect", str(exc))
 
 
+def request_mcp_json(path: str, payload, token: str, headers=None):
+    url = f"{BASE_URL}{path}"
+    body = json.dumps(payload).encode("utf-8")
+    request_headers = {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
+
+    request = urllib.request.Request(
+        url, data=body, headers=request_headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=DEFAULT_POST_TIMEOUT) as response:
+            raw = response.read().decode("utf-8")
+            return response.status, raw, response.headers
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        return exc.code, raw, exc.headers
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+        fail(f"{path}: MCP request timed out or failed to connect", str(exc))
+
+
 def request_text(path: str, timeout: int = DEFAULT_GET_TIMEOUT):
     url = f"{BASE_URL}{path}"
     request = urllib.request.Request(url, method="GET")
@@ -156,6 +182,62 @@ def run_health_check() -> None:
     require_status(status, 200, "health", raw)
     if raw.strip().upper() != "OK":
         fail("health: unexpected body", raw)
+
+
+def run_mcp_streamable_http_check() -> None:
+    info("Checking MCP streamable HTTP session")
+    auth_token = get_auth_token()
+    initialize_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "preview-e2e", "version": "1"},
+        },
+    }
+    status, raw, headers = request_mcp_json("/mcp", initialize_payload, auth_token)
+    require_status(status, 200, "mcp initialize", raw)
+    session_id = headers.get("Mcp-Session-Id") or headers.get("mcp-session-id")
+    if not session_id:
+        fail("mcp initialize: missing Mcp-Session-Id", raw)
+
+    tools_payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+    status, raw, _ = request_mcp_json(
+        "/mcp", tools_payload, auth_token, {"Mcp-Session-Id": session_id}
+    )
+    require_status(status, 200, "mcp tools/list", raw)
+    if "build_whatsapp_flow_envelope" not in raw:
+        fail("mcp tools/list: expected build_whatsapp_flow_envelope tool", raw)
+
+    stream_request = urllib.request.Request(
+        f"{BASE_URL}/mcp",
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {auth_token}",
+            "Mcp-Session-Id": session_id,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(
+            stream_request, timeout=MCP_STREAM_TIMEOUT
+        ) as response:
+            require_status(response.status, 200, "mcp GET stream", "")
+            try:
+                response.read(1)
+            except (TimeoutError, socket.timeout):
+                # A quiet 200 stream is healthy; the engine keeps this channel
+                # open while POST requests deliver JSON-RPC messages.
+                pass
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        fail(f"mcp GET stream: expected HTTP 200, got {exc.code}", raw)
+    except (TimeoutError, socket.timeout):
+        fail("mcp GET stream: timed out before opening the stream")
+    except urllib.error.URLError as exc:
+        fail("mcp GET stream: failed to connect", str(exc))
 
 
 def require_authenticated_env() -> None:
@@ -364,6 +446,7 @@ def main() -> None:
     print(f"Running preview E2E checks against: {BASE_URL}")
     run_health_check()
     require_authenticated_env()
+    run_mcp_streamable_http_check()
     run_consulta_happy_path()
     run_consulta_invalid_input_check()
     run_emitir_guia_minimal_payload_checks()
