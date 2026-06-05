@@ -74,7 +74,12 @@ class ReparoLuminariaWorkflow(
     templates = tpl
     common_config = CommonWorkflowConfig(
         address_required=True,
-        reference_point_required=False,
+        # Pergunta o ponto de referência SEMPRE após o endereço (igual à POC2).
+        # Decisão de produto (Gabs/Bruno, 2026-06-05): re-habilitado após ter sido
+        # desligado pela turn-reduction (#224). Vale pra texto E GPS — o pino de
+        # GPS é impreciso, e a POC2 (referência) pede em todo caso. A infra do nó
+        # _collect_reference_point + routing já estava intacta; só a flag mudou.
+        reference_point_required=True,
         identification_required=False,
     )
 
