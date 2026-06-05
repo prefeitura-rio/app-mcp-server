@@ -14,13 +14,6 @@ from typing import Optional, List, Union
 from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
-
-# Efeito de import: completa a cadeia TLS incompleta do SGRC (seta SSL_CERT_FILE/
-# REQUESTS_CA_BUNDLE). Importado aqui, no topo, pra rodar ANTES de qualquer chamada
-# ao SGRC (o ssl/aiohttp lê SSL_CERT_FILE no momento da conexão). É só efeito de
-# import — sem statement no bloco (evita E402). Ver src/utils/sgrc_ca.py.
-import src.utils.sgrc_ca  # noqa: F401
-
 from src.config.settings import Settings
 from src.middleware.check_token import CheckTokenMiddleware
 from src.tools.calculator import (
