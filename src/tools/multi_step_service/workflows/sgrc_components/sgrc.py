@@ -173,9 +173,6 @@ class SGRCTicketMixin:
                 error_code="erro_sgrc",
                 description=self.templates.sistema_indisponivel(),
                 error_message="Sistema indisponível",
-                # SGRC fora do ar é transitório → preserva o estado p/ o cidadão
-                # poder "tentar novamente" sem refazer o formulário.
-                reset_workflow=False,
             )
 
         except Exception as exc:
@@ -191,10 +188,6 @@ class SGRCTicketMixin:
                 error_code="erro_geral",
                 description=self.templates.erro_geral_chamado(),
                 error_message=f"{type(exc).__name__}: {exc}",
-                # Erro não-mapeado é tratado como transitório → preserva o estado
-                # p/ "tentar novamente" sem refazer o formulário (incidente
-                # 2026-06-04: SGRC fora do ar caía aqui e re-abria o form do zero).
-                reset_workflow=False,
             )
 
     def build_ticket_payload(self, state: ServiceState):
