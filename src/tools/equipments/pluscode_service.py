@@ -1,31 +1,9 @@
-import json
 from typing import List, Optional
-from google.cloud.bigquery.table import Row
 
-from src.tools.equipments.utils import (
-    CustomJSONEncoder,
-    get_plus8_coords_from_address,
-)
-from src.config import env as config
-from src.utils.bigquery import get_bigquery_client
+from src.tools.equipments.utils import get_plus8_coords_from_address
+from src.utils.bigquery import get_bigquery_result
 from src.utils.error_interceptor import interceptor
 from src.utils.log import logger
-
-
-def get_bigquery_result(query: str):
-    bq_client = get_bigquery_client()
-    query_job = bq_client.query(query)
-    result = query_job.result(page_size=config.GOOGLE_BIGQUERY_PAGE_SIZE)
-    data = []
-    for page in result.pages:
-        for row in page:
-            row: Row
-            row_data = dict(row.items())
-            data.append(row_data)
-
-    data_str = json.dumps(data, cls=CustomJSONEncoder, indent=2, ensure_ascii=False)
-
-    return json.loads(data_str)
 
 
 @interceptor(source={"source": "mcp", "tool": "equipments"})
