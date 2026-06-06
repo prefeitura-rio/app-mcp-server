@@ -71,6 +71,16 @@ async def get_memories(
         user_id=user_id, source={"source": "mcp", "tool": "memory"}, timeout=120.0
     ) as client:
         response = await client.get(url, headers=headers)
+
+        # 404 = usuário ainda não tem memória salva — estado válido de negócio,
+        # não uma falha. raise_for_status() aqui viraria isError=True no cliente MCP.
+        if response.status_code == 404:
+            return (
+                []
+                if memory_name is None
+                else {"status": "not_found", "memory_name": memory_name}
+            )
+
         response.raise_for_status()
         return response.json()
 
@@ -127,7 +137,15 @@ async def upsert_memory(
                 response = await client.post(
                     url, headers=headers, json=validated_memory_bank
                 )
+                # 409 no POST = memória já existe com esse nome (race condition);
+                # tratar como upsert bem-sucedido para não explodir o turno.
+                if response.status_code == 409:
+                    return {"status": "skipped", "reason": "conflict"}
                 response.raise_for_status()
                 return response.json()
+            elif e.response.status_code == 409:
+                # PUT retornou 409 — memória existe mas update conflitou;
+                # não é falha crítica.
+                return {"status": "skipped", "reason": "conflict"}
             else:
                 raise

@@ -243,6 +243,7 @@ def iptu_workflow_module(monkeypatch, service_models):
         types.SimpleNamespace(
             APIUnavailableError=type("APIUnavailableError", (Exception,), {}),
             AuthenticationError=type("AuthenticationError", (Exception,), {}),
+            DataNotFoundError=type("DataNotFoundError", (Exception,), {}),
             InvalidInscricaoError=type("InvalidInscricaoError", (Exception,), {}),
         ),
     )
