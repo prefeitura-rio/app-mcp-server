@@ -201,7 +201,7 @@ async def get_category_equipments() -> dict:
                     TRIM(t.secretaria_responsavel) as secretaria_responsavel,
                     TRIM(t.categoria) as categoria
             FROM `rj-iplanrio.plus_codes.territorio` t
-            WHERE t.categoria IS NOT NULL and equipamentos.use = TRUE
+            WHERE t.categoria IS NOT NULL and t.equipamentos.use = TRUE
         )
 
     select *
