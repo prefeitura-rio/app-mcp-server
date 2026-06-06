@@ -37,6 +37,20 @@ from src.utils.error_interceptor import send_api_error
 DEFAULT_ERROR_STATUS_CODES: Set[int] = {400, 401, 403, 404, 500, 502, 503, 504}
 
 
+def raise_for_status_except(response: httpx.Response, skip_codes: Set[int]) -> None:
+    """Chama raise_for_status() ignorando status codes que representam estados válidos.
+
+    Use sempre que um código 4xx for semanticamente um "resultado vazio" e não uma
+    falha — caso contrário o FastMCP captura a exceção e retorna isError=True ao
+    cliente, que levanta ToolException e quebra o turno.
+
+    Exemplo:
+        raise_for_status_except(response, skip_codes={404})  # 404 nunca levanta
+    """
+    if response.status_code not in skip_codes:
+        response.raise_for_status()
+
+
 class InterceptedHTTPClient:
     """
     Cliente HTTP que automaticamente envia erros para o interceptor.
