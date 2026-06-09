@@ -240,6 +240,35 @@ async def _synthesize_gemini(cleaned: str) -> tuple[bytes, str]:
     return ogg_bytes, voice_name
 
 
+async def _synthesize_with_fallback(
+    provider: str, cleaned: str
+) -> tuple[bytes, str, str]:
+    """Sintetiza no provider configurado; retorna (ogg_bytes, voice, provider_efetivo).
+
+    Resiliência (POC1 acessibilidade): se o provider for ``gemini`` e ele falhar
+    (API/modelo/credencial/ffmpeg), cai automaticamente pra ``google`` — num
+    serviço público, entregar áudio com a voz padrão é melhor que não entregar
+    nada pra quem não lê. O fallback é só gemini→google (google é o default
+    robusto, sem dependência de ffmpeg); não volta pro gemini. Não mascara a
+    falha: loga warning com a causa, e o ``provider_efetivo`` retornado a
+    registra (ex.: ``google(fallback)``).
+    """
+    if provider == "gemini":
+        try:
+            audio_bytes, voice_name = await _synthesize_gemini(cleaned)
+            return audio_bytes, voice_name, "gemini"
+        except Exception as exc:
+            logger.warning(
+                "generate_audio_response: provider gemini falhou "
+                f"({type(exc).__name__}: {exc}); fallback pra google"
+            )
+            audio_bytes, voice_name = await _synthesize_google(cleaned)
+            return audio_bytes, voice_name, "google(fallback)"
+
+    audio_bytes, voice_name = await _synthesize_google(cleaned)
+    return audio_bytes, voice_name, "google"
+
+
 async def generate_audio_response(text: str) -> dict:
     """
     Sintetiza texto em audio OGG/Opus 16kHz mono pra responder cidadão por
@@ -291,10 +320,9 @@ async def generate_audio_response(text: str) -> dict:
         ).to_dict()
 
     try:
-        if provider == "gemini":
-            audio_bytes, voice_name = await _synthesize_gemini(cleaned)
-        else:
-            audio_bytes, voice_name = await _synthesize_google(cleaned)
+        audio_bytes, voice_name, provider_used = await _synthesize_with_fallback(
+            provider, cleaned
+        )
 
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
 
@@ -303,7 +331,7 @@ async def generate_audio_response(text: str) -> dict:
         duration = max(1.0, len(cleaned) / 15.0)
 
         logger.info(
-            f"generate_audio_response: provider={provider} "
+            f"generate_audio_response: provider={provider_used} "
             f"text_len={len(cleaned)} audio_bytes={len(audio_bytes)} "
             f"voice={voice_name} duration_est={duration:.1f}s"
         )

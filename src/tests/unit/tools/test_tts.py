@@ -132,6 +132,66 @@ def test_dispatch_gemini_when_provider_set():
     assert result["audio_base64"] == base64.b64encode(b"OGGGEMINI").decode("ascii")
 
 
+# --- Fallback gemini→google (resiliência de áudio, POC1 #303) ---------------
+
+
+def test_gemini_failure_falls_back_to_google():
+    """provider=gemini mas o Gemini falha → entrega áudio via Google (a voz
+    muda, mas o cidadão que não lê recebe áudio em vez de nada)."""
+
+    async def fake_google(_cleaned):
+        return b"OGGGOOGLE", "pt-BR-Neural2-A"
+
+    async def fake_gemini(_cleaned):
+        raise RuntimeError("Gemini TTS 503")
+
+    with (
+        patch("src.tools.tts.env.TTS_PROVIDER", "gemini"),
+        patch("src.tools.tts._synthesize_google", fake_google),
+        patch("src.tools.tts._synthesize_gemini", fake_gemini),
+    ):
+        result = asyncio.run(generate_audio_response(text="Olá cidadão"))
+    assert result["status"] == "ok"
+    assert result["voice_used"] == "pt-BR-Neural2-A"  # voz do Google (fallback)
+    assert result["audio_base64"] == base64.b64encode(b"OGGGOOGLE").decode("ascii")
+
+
+def test_gemini_and_google_both_fail_returns_error():
+    async def fake_google(_cleaned):
+        raise RuntimeError("Google TTS auth fail")
+
+    async def fake_gemini(_cleaned):
+        raise RuntimeError("Gemini TTS 503")
+
+    with (
+        patch("src.tools.tts.env.TTS_PROVIDER", "gemini"),
+        patch("src.tools.tts._synthesize_google", fake_google),
+        patch("src.tools.tts._synthesize_gemini", fake_gemini),
+    ):
+        result = asyncio.run(generate_audio_response(text="Olá cidadão"))
+    assert result["status"] == "error"
+    assert "Google TTS auth fail" in result["error"]  # a falha do fallback aparece
+
+
+def test_google_provider_failure_does_not_try_gemini():
+    """Fallback é só gemini→google; provider=google que falha não tenta gemini."""
+
+    async def fake_google(_cleaned):
+        raise RuntimeError("Google boom")
+
+    async def fake_gemini(_cleaned):
+        raise AssertionError("gemini não deve ser tentado quando provider=google")
+
+    with (
+        patch("src.tools.tts.env.TTS_PROVIDER", "google"),
+        patch("src.tools.tts._synthesize_google", fake_google),
+        patch("src.tools.tts._synthesize_gemini", fake_gemini),
+    ):
+        result = asyncio.run(generate_audio_response(text="Olá cidadão"))
+    assert result["status"] == "error"
+    assert "Google boom" in result["error"]
+
+
 # --- _pcm_to_ogg (conversão ffmpeg do PCM do Gemini) -----------------------
 
 
@@ -253,18 +313,26 @@ def test_gemini_full_path_ok():
     assert voice_cfg.prebuilt_voice_config.voice_name == "Sulafat"
 
 
-def test_gemini_ffmpeg_missing_returns_error():
+def test_gemini_ffmpeg_missing_falls_back_to_google():
+    """ffmpeg ausente faz o Gemini falhar → o fallback entrega o áudio via Google
+    (antes isto retornava error; agora a resiliência do #303 cobre o caso).
+    `_synthesize_google` é mockado pra o teste ficar hermético (sem rede)."""
     FakeClient, _generate = _make_fake_genai_client(pcm_data=b"RAWPCM24K")
 
     async def fake_exec(*_args, **_kwargs):
         raise FileNotFoundError("ffmpeg not found")
+
+    async def fake_google(_cleaned):
+        return b"OGGGOOGLE", "pt-BR-Neural2-A"
 
     with (
         patch("src.tools.tts.env.TTS_PROVIDER", "gemini"),
         patch("src.tools.tts.env.GEMINI_API_KEY", "fake-key"),
         patch("google.genai.Client", FakeClient),
         patch("asyncio.create_subprocess_exec", fake_exec),
+        patch("src.tools.tts._synthesize_google", fake_google),
     ):
         result = asyncio.run(generate_audio_response(text="Olá"))
-    assert result["status"] == "error"
-    assert "FileNotFoundError" in result["error"] or "ffmpeg" in result["error"].lower()
+    assert result["status"] == "ok"
+    assert result["voice_used"] == "pt-BR-Neural2-A"  # voz do Google (fallback)
+    assert result["audio_base64"] == base64.b64encode(b"OGGGOOGLE").decode("ascii")
