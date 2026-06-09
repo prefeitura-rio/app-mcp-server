@@ -690,9 +690,18 @@ def test_reparo_workflow_specific_attributes_and_routes():
     assert (
         workflow._route_after_reference(make_state()) == "select_identification_method"
     )
+    # open_ticket exige endereço validado+confirmado (guard POC1 #295-A); o caso
+    # anômalo sem endereço é coberto em
+    # test_route_after_ticket_confirmation_requires_confirmed_address.
     assert (
         workflow._route_after_ticket_confirmation(
-            make_state(data={"ticket_data_confirmed": True})
+            make_state(
+                data={
+                    "ticket_data_confirmed": True,
+                    "address_validated": True,
+                    "address_confirmed": True,
+                }
+            )
         )
         == "open_ticket"
     )
@@ -842,6 +851,61 @@ def test_prefill_seed_grupo_bloco_qty():
     )
     assert normalized.get("qty_pattern") == "bloco"
     assert normalized.get("defect_type") == "Danificada"
+
+
+def test_qty_pattern_normalized_in_text_path_not_only_flow():
+    """#283: qty_pattern fora do Flow (caminho TEXTO) também vira
+    luminaria_quantidade — antes só normalizava com _source=whatsapp_flow,
+    então a coleta por texto re-perguntava a quantidade já informada."""
+    workflow = make_workflow()
+
+    text_uma = make_state(payload={"qty_pattern": "uma"})
+    workflow._normalize_payload_aliases(text_uma)
+    assert text_uma.payload.get("luminaria_quantidade") == "uma"
+
+    text_bloco = make_state(payload={"qty_pattern": "bloco"})
+    workflow._normalize_payload_aliases(text_bloco)
+    assert text_bloco.payload.get("luminaria_quantidade") == "grupo"
+    assert text_bloco.payload.get("luminaria_intercaladas_bloco") == "bloco"
+
+    # is_quadra_esportes continua RESTRITO ao Flow (radio): no texto não age.
+    text_quadra = make_state(payload={"is_quadra_esportes": "nao"})
+    workflow._normalize_payload_aliases(text_quadra)
+    assert "reparo_luminaria_quadra_esportes" not in text_quadra.data
+
+    # Caminho Flow segue intacto.
+    flow_state = make_state(
+        payload={"_source": "whatsapp_flow", "qty_pattern": "intercaladas"}
+    )
+    workflow._normalize_payload_aliases(flow_state)
+    assert flow_state.payload.get("luminaria_quantidade") == "grupo"
+    assert flow_state.payload.get("luminaria_intercaladas_bloco") == "intercaladas"
+
+
+def test_route_after_ticket_confirmation_requires_confirmed_address():
+    """POC1 #295-A: nunca abrir chamado sem endereço validado+confirmado.
+    No happy path o endereço já está confirmado (abre); no estado anômalo do QA
+    (dados confirmados sem endereço) o guard devolve pra coleta."""
+    workflow = make_workflow()
+
+    anomalo = make_state(data={"ticket_data_confirmed": True})
+    assert workflow._route_after_ticket_confirmation(anomalo) == "collect_address"
+    # Limpa o flag pra a re-rota não cair em loop.
+    assert "ticket_data_confirmed" not in anomalo.data
+
+    parcial = make_state(
+        data={"ticket_data_confirmed": True, "address_validated": True}
+    )
+    assert workflow._route_after_ticket_confirmation(parcial) == "collect_address"
+
+    ok = make_state(
+        data={
+            "ticket_data_confirmed": True,
+            "address_validated": True,
+            "address_confirmed": True,
+        }
+    )
+    assert workflow._route_after_ticket_confirmation(ok) == "open_ticket"
 
 
 def test_flow_quadra_esportes_nao_persists_in_data_not_payload():

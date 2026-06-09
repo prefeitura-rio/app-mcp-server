@@ -13,6 +13,7 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     EmailPayload,
     NomePayload,
     TicketDataConfirmationPayload,
+    parse_affirmation,
 )
 
 __all__ = [
@@ -177,3 +178,11 @@ class QuadraEsportesPayload(BaseModel):
     reparo_luminaria_quadra_esportes: bool = Field(
         ..., description="True se o defeito esta dentro de uma quadra de esportes"
     )
+
+    @field_validator("reparo_luminaria_quadra_esportes", mode="before")
+    @classmethod
+    def _coerce_quadra(cls, v: object) -> bool:
+        parsed = parse_affirmation(v)
+        if parsed is None:
+            raise ValueError("Responda 'sim' ou 'não'.")
+        return parsed

@@ -79,7 +79,10 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service impor
     SGRCAPIService,
     AddressAPIService,
 )
-from src.tools.multi_step_service.workflows.sgrc_components.models import CPFPayload
+from src.tools.multi_step_service.workflows.sgrc_components.models import (
+    CPFPayload,
+    parse_affirmation,
+)
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -948,8 +951,12 @@ def create_app() -> FastMCP:
             # 2. Serviço foi confirmado (service_confirmed=True no state)
             # 3. Ainda não coletou dados do defeito (luminaria_defeito ausente)
 
-            # Detectar se acabou de confirmar o serviço (payload tem confirmacao_servico)
-            acabou_de_confirmar = payload.get("confirmacao_servico") is True
+            # Detectar se acabou de confirmar o serviço (payload tem confirmacao_servico).
+            # parse_affirmation reconhece "yes"/"👍"/"ok"/etc. (não só o bool True),
+            # pra o Flow auto-enviar no MESMO turno da confirmação natural (POC1 #297).
+            acabou_de_confirmar = (
+                parse_affirmation(payload.get("confirmacao_servico")) is True
+            )
 
             # Verificar se serviço já foi confirmado anteriormente
             servico_ja_confirmado = (
