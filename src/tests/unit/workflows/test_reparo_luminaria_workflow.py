@@ -160,8 +160,12 @@ def test_reparo_and_sgrc_templates_return_expected_texts():
     assert "não sei" in rlu_tpl.localizacao_invalida()
     assert "Afonso Cavalcanti" in rlu_tpl.solicitar_endereco()
     assert "tentativa 1/3" in rlu_tpl.endereco_nao_localizado(1, 3)
+    # POC1 #3: o re-prompt GUIA (pede número + bairro), não é só "não encontrei".
+    _nao_loc = rlu_tpl.endereco_nao_localizado(1, 3)
+    assert "número" in _nao_loc and "bairro" in _nao_loc
     assert "processar o endereço" in rlu_tpl.endereco_erro_processamento(1, 3)
     assert "3 tentativas" in rlu_tpl.endereco_maximo_tentativas()
+    assert "1746" in rlu_tpl.endereco_maximo_tentativas()
     assert "Rua A" in rlu_tpl.confirmar_endereco("Rua A")
     assert "histórico" in rlu_tpl.endereco_historico("Rua A")
     assert "sim ou não" in rlu_tpl.confirmar_resposta_invalida()
