@@ -85,9 +85,15 @@ def solicitar_endereco() -> str:
 
 
 def endereco_nao_localizado(tentativa: int, max_tentativas: int) -> str:
+    # POC1 #3 (Bruno): em vez de só "não encontrei", GUIA o cidadão a dar os
+    # detalhes que destravam o geocode (número + bairro) e oferece a localização.
     return (
-        "Endereço incorreto ou não encontrado. "
-        f"Verifique e informe novamente o endereço correto (tentativa {tentativa}/{max_tentativas})."
+        "Não consegui localizar esse endereço certinho. 🧐\n\n"
+        "Pra eu encontrar, me manda:\n"
+        "• A rua ou avenida *com o número*\n"
+        "• O bairro\n\n"
+        "Se for mais fácil, compartilhe sua localização pelo 📎 (anexo > Localização).\n\n"
+        f"(tentativa {tentativa}/{max_tentativas})"
     )
 
 
@@ -96,7 +102,14 @@ def endereco_erro_processamento(tentativa: int, max_tentativas: int) -> str:
 
 
 def endereco_maximo_tentativas() -> str:
-    return "Não foi possível validar o endereço após 3 tentativas. Seu atendimento está finalizado."
+    # Encerra graciosamente após 3 tentativas, mas com saída útil (re-tentar com
+    # endereço completo / localização, ou Central 1746) em vez de um "erro seco".
+    return (
+        "Não consegui validar o endereço depois de 3 tentativas. 😕\n\n"
+        "Você pode tentar de novo mandando o endereço completo (rua, *número* e "
+        "bairro) ou a sua localização pelo 📎, ou registrar pela Central 1746 "
+        "(https://www.1746.rio/)."
+    )
 
 
 def confirmar_endereco(endereco_formatado: str) -> str:
