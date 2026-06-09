@@ -690,9 +690,18 @@ def test_reparo_workflow_specific_attributes_and_routes():
     assert (
         workflow._route_after_reference(make_state()) == "select_identification_method"
     )
+    # open_ticket exige endereço validado+confirmado (guard POC1 #295-A); o caso
+    # anômalo sem endereço é coberto em
+    # test_route_after_ticket_confirmation_requires_confirmed_address.
     assert (
         workflow._route_after_ticket_confirmation(
-            make_state(data={"ticket_data_confirmed": True})
+            make_state(
+                data={
+                    "ticket_data_confirmed": True,
+                    "address_validated": True,
+                    "address_confirmed": True,
+                }
+            )
         )
         == "open_ticket"
     )
@@ -871,6 +880,32 @@ def test_qty_pattern_normalized_in_text_path_not_only_flow():
     workflow._normalize_payload_aliases(flow_state)
     assert flow_state.payload.get("luminaria_quantidade") == "grupo"
     assert flow_state.payload.get("luminaria_intercaladas_bloco") == "intercaladas"
+
+
+def test_route_after_ticket_confirmation_requires_confirmed_address():
+    """POC1 #295-A: nunca abrir chamado sem endereço validado+confirmado.
+    No happy path o endereço já está confirmado (abre); no estado anômalo do QA
+    (dados confirmados sem endereço) o guard devolve pra coleta."""
+    workflow = make_workflow()
+
+    anomalo = make_state(data={"ticket_data_confirmed": True})
+    assert workflow._route_after_ticket_confirmation(anomalo) == "collect_address"
+    # Limpa o flag pra a re-rota não cair em loop.
+    assert "ticket_data_confirmed" not in anomalo.data
+
+    parcial = make_state(
+        data={"ticket_data_confirmed": True, "address_validated": True}
+    )
+    assert workflow._route_after_ticket_confirmation(parcial) == "collect_address"
+
+    ok = make_state(
+        data={
+            "ticket_data_confirmed": True,
+            "address_validated": True,
+            "address_confirmed": True,
+        }
+    )
+    assert workflow._route_after_ticket_confirmation(ok) == "open_ticket"
 
 
 def test_flow_quadra_esportes_nao_persists_in_data_not_payload():

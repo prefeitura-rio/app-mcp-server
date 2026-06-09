@@ -1118,6 +1118,19 @@ class ReparoLuminariaWorkflow(
 
     def _route_after_ticket_confirmation(self, state: ServiceState) -> str:
         if state.data.get("ticket_data_confirmed") is True:
+            # Defesa em profundidade: nunca abrir chamado sem endereço
+            # validado+confirmado. No caminho normal isso já é sempre verdade (só
+            # se chega aqui depois de _confirm_address setar os dois flags, e
+            # _route_after_address barra a saída do nó de endereço sem eles), então
+            # o guard NÃO dispara no happy path — ele captura o estado anômalo do QA
+            # da POC1 ("confirmou os dados sem o endereço ter sido pedido"),
+            # devolvendo pra coleta em vez de abrir um chamado sem local.
+            if not (
+                state.data.get("address_validated")
+                and state.data.get("address_confirmed")
+            ):
+                state.data.pop("ticket_data_confirmed", None)
+                return "collect_address"
             return "open_ticket"
         correction = state.data.get("correction_requested")
         if correction == "defect":
