@@ -41,6 +41,7 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     NomePayload,
     PontoReferenciaPayload,
     TicketDataConfirmationPayload,
+    parse_affirmation,
 )
 from src.tools.multi_step_service.workflows.sgrc_components.sgrc import SGRCTicketMixin
 from src.utils.typesense_api import HubSearchRequest, hub_search, hub_search_by_id
@@ -229,24 +230,27 @@ class ReparoLuminariaWorkflow(
         if not state.payload:
             return
 
-        # WhatsApp Flow: processar qty_pattern e is_quadra_esportes antes dos aliases
-        if state.payload.get("_source") == "whatsapp_flow":
-            # Processar qty_pattern
-            if "qty_pattern" in state.payload:
-                qty = state.payload["qty_pattern"]
-                if qty == "uma":
-                    state.payload["luminaria_quantidade"] = "uma"
-                elif qty in ["bloco", "intercaladas"]:
-                    state.payload["luminaria_quantidade"] = "grupo"
-                    state.payload["luminaria_intercaladas_bloco"] = qty
+        # qty_pattern → luminaria_quantidade (+ intercaladas_bloco): vale para o
+        # WhatsApp Flow E para o caminho de TEXTO (#283 — "des-gatear qty"). Antes
+        # rodava só quando _source == "whatsapp_flow", então o fallback por texto
+        # que recebia qty_pattern (extraído da 1ª msg / seed) ficava sem
+        # normalizar → o workflow re-perguntava a quantidade. Fora do guard, o
+        # texto também aproveita o que já foi dito.
+        if "qty_pattern" in state.payload:
+            qty = state.payload["qty_pattern"]
+            if qty == "uma":
+                state.payload["luminaria_quantidade"] = "uma"
+            elif qty in ["bloco", "intercaladas"]:
+                state.payload["luminaria_quantidade"] = "grupo"
+                state.payload["luminaria_intercaladas_bloco"] = qty
 
-            # Processar is_quadra_esportes (radio do Flow quando location=Praça):
-            # "sim" sobrescreve location pra Quadra de esportes; "nao" registra a
-            # resposta direto no state.data (persiste entre turnos — payload é
-            # efêmero) pra o workflow NÃO re-perguntar "está dentro de uma quadra?"
-            # em texto. _collect_quadra_esportes roda num turno POSTERIOR (após
-            # coleta/confirmação de endereço), quando o payload já foi limpo —
-            # por isso gravar em data, espelhando os caminhos do "sim"/Quadra.
+        # is_quadra_esportes é específico do radio do Flow (só vem com
+        # _source == whatsapp_flow): "sim" sobrescreve location pra Quadra de
+        # esportes; "nao" registra direto no state.data (persiste entre turnos —
+        # payload é efêmero) pra o workflow NÃO re-perguntar "está dentro de uma
+        # quadra?" em texto. _collect_quadra_esportes roda num turno POSTERIOR
+        # (após coleta/confirmação de endereço), quando o payload já foi limpo.
+        if state.payload.get("_source") == "whatsapp_flow":
             iqe = state.payload.get("is_quadra_esportes")
             if iqe == "sim":
                 state.payload["location"] = "Quadra de esportes"
@@ -399,10 +403,13 @@ class ReparoLuminariaWorkflow(
             state.data["service_confirmed"] = True
             return state
 
-        # Verificar se há confirmação no payload
+        # Verificar se há confirmação no payload. parse_affirmation reconhece
+        # variações ("yes", "isso", "ok", "correto", "👍", ...) além de "sim",
+        # fechando o gap de QA. Resposta não-afirmativa preserva o comportamento
+        # atual de encerrar (negativa/ambígua → encerra).
         confirmacao = state.payload.get("confirmacao_servico")
         if confirmacao is not None:
-            if confirmacao is True or str(confirmacao).lower() in ["sim", "yes", "s"]:
+            if parse_affirmation(confirmacao) is True:
                 state.data["service_confirmed"] = True
                 state.agent_response = None
                 return state

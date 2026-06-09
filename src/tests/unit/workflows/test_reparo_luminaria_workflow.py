@@ -844,6 +844,35 @@ def test_prefill_seed_grupo_bloco_qty():
     assert normalized.get("defect_type") == "Danificada"
 
 
+def test_qty_pattern_normalized_in_text_path_not_only_flow():
+    """#283: qty_pattern fora do Flow (caminho TEXTO) também vira
+    luminaria_quantidade — antes só normalizava com _source=whatsapp_flow,
+    então a coleta por texto re-perguntava a quantidade já informada."""
+    workflow = make_workflow()
+
+    text_uma = make_state(payload={"qty_pattern": "uma"})
+    workflow._normalize_payload_aliases(text_uma)
+    assert text_uma.payload.get("luminaria_quantidade") == "uma"
+
+    text_bloco = make_state(payload={"qty_pattern": "bloco"})
+    workflow._normalize_payload_aliases(text_bloco)
+    assert text_bloco.payload.get("luminaria_quantidade") == "grupo"
+    assert text_bloco.payload.get("luminaria_intercaladas_bloco") == "bloco"
+
+    # is_quadra_esportes continua RESTRITO ao Flow (radio): no texto não age.
+    text_quadra = make_state(payload={"is_quadra_esportes": "nao"})
+    workflow._normalize_payload_aliases(text_quadra)
+    assert "reparo_luminaria_quadra_esportes" not in text_quadra.data
+
+    # Caminho Flow segue intacto.
+    flow_state = make_state(
+        payload={"_source": "whatsapp_flow", "qty_pattern": "intercaladas"}
+    )
+    workflow._normalize_payload_aliases(flow_state)
+    assert flow_state.payload.get("luminaria_quantidade") == "grupo"
+    assert flow_state.payload.get("luminaria_intercaladas_bloco") == "intercaladas"
+
+
 def test_flow_quadra_esportes_nao_persists_in_data_not_payload():
     """Praça + is_quadra_esportes='nao' do Flow: a resposta é gravada em
     state.data (persiste entre turnos), NÃO no payload efêmero — senão sumiria
