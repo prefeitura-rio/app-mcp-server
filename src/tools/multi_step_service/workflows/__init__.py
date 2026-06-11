@@ -16,12 +16,14 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.workflow import (
 from src.tools.multi_step_service.workflows.reparo_luminaria.workflow import (
     ReparoLuminariaWorkflow,
 )
+from src.tools.multi_step_service.workflows.divida_ativa import DividaAtivaWorkflow
 
 # Lista central de workflows (classes)
 workflows = [
     IPTUWorkflow,
     PodaDeArvoreWorkflow,
     ReparoLuminariaWorkflow,
+    DividaAtivaWorkflow,
 ]
 
 # Lista de workflows disponíveis para import fácil
