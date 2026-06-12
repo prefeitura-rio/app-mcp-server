@@ -41,7 +41,6 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     NomePayload,
     PontoReferenciaPayload,
     TicketDataConfirmationPayload,
-    parse_affirmation,
 )
 from src.tools.multi_step_service.workflows.sgrc_components.sgrc import SGRCTicketMixin
 from src.utils.typesense_api import HubSearchRequest, hub_search, hub_search_by_id
@@ -403,13 +402,10 @@ class ReparoLuminariaWorkflow(
             state.data["service_confirmed"] = True
             return state
 
-        # Verificar se há confirmação no payload. parse_affirmation reconhece
-        # variações ("yes", "isso", "ok", "correto", "👍", ...) além de "sim",
-        # fechando o gap de QA. Resposta não-afirmativa preserva o comportamento
-        # atual de encerrar (negativa/ambígua → encerra).
+        # Verificar se há confirmação no payload.
         confirmacao = state.payload.get("confirmacao_servico")
         if confirmacao is not None:
-            if parse_affirmation(confirmacao) is True:
+            if confirmacao is True:
                 state.data["service_confirmed"] = True
                 state.agent_response = None
                 return state

@@ -13,6 +13,7 @@ from src.tools.multi_step_service.workflows.divida_ativa.api_service import (
 from src.tools.multi_step_service.workflows.divida_ativa.models import (
     AcaoDebitosPayload,
     AnoAutoInfracaoPayload,
+    ConfirmacaoPayload,
     ItensPagamentoPayload,
     TipoConsultaPayload,
     ValorConsultaPayload,
@@ -32,6 +33,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         "valor_consulta",
         "acao",
         "itens_informados",
+        "confirmacao_debitos",
     ]
     step_dependencies = {
         "consulta_debitos": [
@@ -40,6 +42,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "consulta_resultado",
             "acao",
             "itens_informados",
+            "confirmacao_debitos",
             "guia_emitida",
         ],
         "anoAutoInfracao": [
@@ -47,16 +50,19 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "consulta_resultado",
             "acao",
             "itens_informados",
+            "confirmacao_debitos",
             "guia_emitida",
         ],
         "valor_consulta": [
             "consulta_resultado",
             "acao",
             "itens_informados",
+            "confirmacao_debitos",
             "guia_emitida",
         ],
-        "acao": ["itens_informados", "guia_emitida"],
-        "itens_informados": ["guia_emitida"],
+        "acao": ["itens_informados", "confirmacao_debitos", "guia_emitida"],
+        "itens_informados": ["confirmacao_debitos", "guia_emitida"],
+        "confirmacao_debitos": ["guia_emitida"],
     }
 
     def __init__(self):
@@ -281,6 +287,63 @@ class DividaAtivaWorkflow(BaseWorkflow):
         return state
 
     @handle_errors
+    async def _confirmar_debitos(self, state: ServiceState) -> ServiceState:
+        """Mostra débitos selecionados e pede confirmação antes de emitir guia."""
+        if "confirmacao_debitos" in state.data:
+            state.agent_response = None
+            return state
+
+        # Pega os débitos selecionados
+        consulta = state.data["consulta_resultado"]
+        itens_selecionados = state.data["itens_informados"]
+        acao = state.data["acao"]
+
+        # Constrói a lista de débitos com detalhes
+        debitos_detalhados = []
+        dict_itens = consulta.get("dicionario_itens", {})
+        debitos_msg = consulta.get("debitos_msg", [])
+
+        for idx in itens_selecionados:
+            # Encontra o débito correspondente na lista original
+            for debito in debitos_msg:
+                valor_debito = dict_itens.get(idx) or dict_itens.get(str(idx))
+                if (
+                    ("cda" in debito and str(debito["cda"]) == str(valor_debito))
+                    or ("ef" in debito and str(debito["ef"]) == str(valor_debito))
+                    or ("guia" in debito and str(debito["guia"]) == str(valor_debito))
+                ):
+                    debitos_detalhados.append(debito)
+                    break
+
+        # Pede confirmação
+        if "confirma" in state.payload:
+            payload = ConfirmacaoPayload.model_validate(state.payload)
+
+            if not payload.confirma:
+                # Usuário cancelou - volta para seleção de itens
+                state.data.pop("itens_informados", None)
+                state.agent_response = AgentResponse(
+                    description="Entendido. Vamos selecionar os débitos novamente.\n\n"
+                    + DividaAtivaTemplates.solicitar_itens(acao),
+                    payload_schema=ItensPagamentoPayload.model_json_schema(),
+                )
+                return state
+
+            # Usuário confirmou
+            state.data["confirmacao_debitos"] = True
+            state.agent_response = None
+            return state
+
+        # Mostra débitos e pede confirmação
+        state.agent_response = AgentResponse(
+            description=DividaAtivaTemplates.confirmar_debitos_selecionados(
+                debitos_detalhados, acao
+            ),
+            payload_schema=ConfirmacaoPayload.model_json_schema(),
+        )
+        return state
+
+    @handle_errors
     async def _emitir_guia(self, state: ServiceState) -> ServiceState:
         if "guia_emitida" in state.data:
             return state
@@ -370,6 +433,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         graph.add_node("escolher_acao", self._escolher_acao)
         graph.add_node("resolver_acao_informativa", self._resolver_acao_informativa)
         graph.add_node("coletar_itens", self._coletar_itens)
+        graph.add_node("confirmar_debitos", self._confirmar_debitos)
         graph.add_node("emitir_guia", self._emitir_guia)
 
         graph.set_entry_point("escolher_tipo_consulta")
@@ -405,6 +469,11 @@ class DividaAtivaWorkflow(BaseWorkflow):
         )
         graph.add_conditional_edges(
             "coletar_itens",
+            self._decide_after_node,
+            {"continue": "confirmar_debitos", END: END},
+        )
+        graph.add_conditional_edges(
+            "confirmar_debitos",
             self._decide_after_node,
             {"continue": "emitir_guia", END: END},
         )

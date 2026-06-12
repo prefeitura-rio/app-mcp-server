@@ -51,22 +51,22 @@ class DividaAtivaTemplates:
     @staticmethod
     def link_parcelamento() -> str:
         return (
-            "Para requerer o parcelamento de seus débitos, acesse o serviço "
-            "“Parcelamento em dívida ativa” no link abaixo:\n\n"
-            "https://carioca.rio/servicos/parcelamento-em-divida-ativa/"
+            "Para *parcelar seus débitos*, entre no site:\n"
+            "https://carioca.rio/servicos/parcelamento-em-divida-ativa/\n"
+            "Depois, clique em ACESSAR O SERVIÇO e siga as instruções."
         )
 
     @staticmethod
     def link_liquidacao() -> str:
         return (
-            "Para liquidar suas guias de parcelamento, acesse o link:\n\n"
+            "Para *liquidar* suas guias de *parcelamento*, entre no site:\n"
             "https://daminternet.rio.rj.gov.br/GuiaPagamento/liquidacao"
         )
 
     @staticmethod
     def link_segunda_via() -> str:
         return (
-            "Para emitir 2ª via de suas guias de pagamento, acesse o link:\n\n"
+            "Para *emitir 2ª via* das suas guias de pagamento, entre no site:\n"
             "https://daminternet.rio.rj.gov.br/GuiaPagamento/EmitirSegundaVia"
         )
 
@@ -74,17 +74,14 @@ class DividaAtivaTemplates:
     def solicitar_itens(acao: str) -> str:
         if acao == "pagar_a_vista":
             return (
-                "Se deseja liquidar todas as dívidas não parceladas, responda TODAS.\n"
-                "Se deseja pagar à vista algum débito específico, informe os "
-                "sequenciais associados à certidão ou à execução fiscal, separados "
-                "por vírgula.\n"
-                "Exemplo: 1, 2, 4."
+                "Quais débitos deseja pagar?\n\n"
+                "💡 Você pode responder *TODOS* para pagar tudo, ou informar os números específicos "
+                "separados por vírgula (exemplo: 1, 2, 4)."
             )
         return (
-            "Se deseja regularizar todas as parcelas em atraso, responda TODAS.\n"
-            "Se deseja regularizar algum parcelamento específico, informe o "
-            "sequencial relacionado à parcela para a qual deseja emitir a guia de "
-            "regularização, separando por vírgula."
+            "Quais débitos deseja regularizar?\n\n"
+            "💡 Você pode responder *TODOS* para regularizar tudo, ou informar os números específicos "
+            "separados por vírgula (exemplo: 1, 2, 4)."
         )
 
     @staticmethod
@@ -98,6 +95,25 @@ class DividaAtivaTemplates:
         if mensagem_consulta:
             return mensagem_consulta
         return "Não foram encontrados débitos para os dados informados."
+
+    @staticmethod
+    def confirmar_debitos_selecionados(debitos: list[dict[str, Any]], acao: str) -> str:
+        """Mostra os débitos selecionados e pede confirmação."""
+        if acao == "pagar_a_vista":
+            texto = "Os débitos escolhidos foram:\n\n"
+        else:
+            texto = "As parcelas escolhidas foram:\n\n"
+
+        for i, debito in enumerate(debitos, 1):
+            if "cda" in debito:
+                texto += f"{i}. CDA nº {debito['cda']} - Valor: {debito['valor']}\n"
+            elif "ef" in debito:
+                texto += f"{i}. EF nº {debito['ef']} - Valor: {debito['valor']}\n"
+            elif "guia" in debito:
+                texto += f"{i}. Guia nº {debito['guia']} - Data do Último Pagamento: {debito.get('data_ultimo_pagamento', 'N/A')}\n"
+
+        texto += "\nDeseja seguir para o pagamento?"
+        return texto
 
     @staticmethod
     def guia_emitida(resultado: dict[str, Any]) -> str:

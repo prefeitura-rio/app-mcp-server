@@ -305,3 +305,14 @@ class ItensPagamentoPayload(BaseModel):
         if not result:
             return None
         return result
+
+
+class ConfirmacaoPayload(BaseModel):
+    confirma: bool = Field(
+        ...,
+        description=(
+            "Interprete a resposta do usuário e converta para boolean. "
+            "True para qualquer resposta afirmativa (sim, claro, pode, ok, confirmo, beleza, 👍, etc). "
+            "False para qualquer resposta negativa (não, nao, cancela, volta, errado, 👎, etc)."
+        ),
+    )
