@@ -13,6 +13,8 @@ no WhatsApp Business Platform. Versionar em git habilita:
 | Arquivo | Flow ID Meta | Categoria | Tipo |
 |---|---|---|---|
 | `reparo_luminaria.flow.json` | `4141008006029185` | CUSTOMER_SUPPORT | dinâmico (`data_api_version: 3.0`); prefill via `flow_token` (defect/qty/location). Endereço NÃO vai no Flow — é coletado depois, conversacionalmente (`collect_address`). |
+| `divida_ativa_consulta.flow.json` | `2093327131246166` | CUSTOMER_SUPPORT | dinâmico (`data_api_version: 3.0`); coleta tipo de consulta e dados (CPF/CNPJ, Inscrição Imobiliária, Auto de Infração, CDA, Execução Fiscal). Tela dinâmica DADOS_CONSULTA ajusta labels e campos baseado no tipo escolhido. |
+| `divida_ativa_pagamento.flow.json` | `1907271999979393` | CUSTOMER_SUPPORT | estático; menu de ações após consulta (pagar à vista, parcelar, regularizar, liquidar, 2ª via, voltar). |
 
 ## Como atualizar um Flow publicado
 

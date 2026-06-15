@@ -159,6 +159,7 @@ class WhatsAppFlowSender:
 # Para adicionar novo flow: registrar no Meta, pegar o flow_id e adicionar aqui
 FLOW_TEMPLATES = {
     "reparo_luminaria": "4141008006029185",
+    "divida_ativa": "2093327131246166",
     # Adicionar novos flows aqui conforme forem criados na Meta
     # "poda_arvore": "FLOW_ID_AQUI",
     # "limpeza_urbana": "FLOW_ID_AQUI",
@@ -174,17 +175,24 @@ async def send_flow_by_service(
     """
     Dispara WhatsApp Flow apropriado para um tipo de serviço.
 
+    Flows suportados (configurados em FLOW_TEMPLATES):
+      - reparo_luminaria: Flow dinâmico de coleta de defeito de luminária
+      - divida_ativa: Flow dinâmico de consulta de dívida ativa
+
     Args:
-        service_type: Tipo de serviço (ex: reparo_luminaria, poda_arvore)
+        service_type: Tipo de serviço ("reparo_luminaria" | "divida_ativa")
         user_number: Número do usuário no formato E.164 sem + (ex: 5521999999999)
         flow_token: Token opcional de rastreamento da sessão. Se ausente,
             gera um UUID. Vira a base (`_session`) do token v1:encoded
             enviado ao Meta quando há prefill.
         prefill_data: Entidades extraídas do contexto da conversa pelo
             agente, pra pré-preencher campos do formulário. Aceita qualquer
-            JSON-serializable. Ex pra reparo_luminaria:
-                {"defect_type": "Pendurada", "qty_pattern": "uma",
-                 "endereco": "Rua Tal, 100"}
+            JSON-serializable.
+
+            Exemplos:
+              - reparo_luminaria: {"defect_type": "Pendurada", "qty_pattern": "uma"}
+              - divida_ativa: não usa prefill (dados coletados no flow)
+
             Encodado em `flow_token` (formato v1:base64) e decoded no
             endpoint MCP `_handle_init`. Chaves não-mapeadas pelo Flow JSON
             são ignoradas silenciosamente pelo cliente WhatsApp.
@@ -276,4 +284,15 @@ async def send_luminaria_flow(
     """Wrapper para compatibilidade. Use send_flow_by_service."""
     return await send_flow_by_service(
         "reparo_luminaria", user_number, flow_token, prefill_data
+    )
+
+
+async def send_divida_ativa_flow(
+    user_number: str,
+    flow_token: str | None = None,
+    prefill_data: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Wrapper para envio do flow de Dívida Ativa. Use send_flow_by_service."""
+    return await send_flow_by_service(
+        "divida_ativa", user_number, flow_token, prefill_data
     )

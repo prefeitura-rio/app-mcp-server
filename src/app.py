@@ -55,12 +55,18 @@ from src.tools.inbound_media_audio import (
 from src.tools.inbound_media_video import (
     analyze_inbound_video as analyze_inbound_video_impl,
 )
+<<<<<<< feat/divida_ativa_wpp_flow
 from src.flows.reparo_luminaria.handler import process_flow_request
 from src.flows.divida_ativa.handler import (
     process_flow_request as process_divida_ativa_flow_request,
 )
 from src.flows.divida_ativa.opcoes.handler import (
     process_flow_request as process_divida_ativa_opcoes_flow_request,
+=======
+from src.tools.luminaria_flow import process_flow_request
+from src.tools.divida_ativa_flow import (
+    process_divida_ativa_flow_request,
+>>>>>>> staging
 )
 from src.tools.whatsapp_flow_sender import send_flow_by_service, FLOW_TEMPLATES
 from src.tools.whatsapp_message_status import check_message_read_status
@@ -87,7 +93,6 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service impor
 )
 from src.tools.multi_step_service.workflows.sgrc_components.models import (
     CPFPayload,
-    parse_affirmation,
 )
 
 from src.resources.rio_info import (
@@ -958,11 +963,9 @@ def create_app() -> FastMCP:
             # 3. Ainda não coletou dados do defeito (luminaria_defeito ausente)
 
             # Detectar se acabou de confirmar o serviço (payload tem confirmacao_servico).
-            # parse_affirmation reconhece "yes"/"👍"/"ok"/etc. (não só o bool True),
+            # A LLM já converteu qualquer variação (sim/yes/👍/ok) para boolean,
             # pra o Flow auto-enviar no MESMO turno da confirmação natural (POC1 #297).
-            acabou_de_confirmar = (
-                parse_affirmation(payload.get("confirmacao_servico")) is True
-            )
+            acabou_de_confirmar = payload.get("confirmacao_servico") is True
 
             # Verificar se serviço já foi confirmado anteriormente
             servico_ja_confirmado = (
@@ -1679,9 +1682,15 @@ def create_app() -> FastMCP:
         """
         from fastapi.responses import Response
 
+<<<<<<< feat/divida_ativa_wpp_flow
         private_key = env.WA_FLOWS_PRIVATE_KEY
         if not private_key:
             logger.error("wa_flow_luminaria: WA_FLOWS_PRIVATE_KEY não configurada")
+=======
+        private_key = env.WA_PRIVATE_KEY
+        if not private_key:
+            logger.error("wa_flow_luminaria: WA_PRIVATE_KEY não configurada")
+>>>>>>> staging
             return JSONResponse(
                 content={"error": "Flow não configurado"}, status_code=503
             )
@@ -1700,6 +1709,7 @@ def create_app() -> FastMCP:
     @mcp.custom_route("/whatsapp-flow/divida-ativa", methods=["POST"])
     async def wa_flow_divida_ativa(request: Request):
         """
+<<<<<<< feat/divida_ativa_wpp_flow
         Endpoint do WhatsApp Flow de consulta fiscal (Dívida Ativa).
         Decripta o payload (RSA + AES-GCM), processa a action e devolve
         a resposta criptografada como bytes (exigido pelo protocolo Meta).
@@ -1709,6 +1719,19 @@ def create_app() -> FastMCP:
         private_key = env.WA_FLOWS_PRIVATE_KEY
         if not private_key:
             logger.error("wa_flow_divida_ativa: WA_FLOWS_PRIVATE_KEY não configurada")
+=======
+        Endpoint do WhatsApp Flow de consulta de Dívida Ativa.
+        Decripta o payload (RSA + AES-GCM), processa a action e devolve
+        a resposta criptografada como bytes (exigido pelo protocolo Meta).
+
+        Usa a mesma chave privada compartilhada entre flows (WA_PRIVATE_KEY).
+        """
+        from fastapi.responses import Response
+
+        private_key = env.WA_PRIVATE_KEY
+        if not private_key:
+            logger.error("wa_flow_divida_ativa: WA_PRIVATE_KEY não configurada")
+>>>>>>> staging
             return JSONResponse(
                 content={"error": "Flow não configurado"}, status_code=503
             )
@@ -1726,6 +1749,7 @@ def create_app() -> FastMCP:
             logger.error(f"wa_flow_divida_ativa: erro inesperado: {e}")
             return JSONResponse(content={"error": "Erro interno"}, status_code=500)
 
+<<<<<<< feat/divida_ativa_wpp_flow
     @mcp.custom_route("/whatsapp-flow/divida-ativa-opcoes", methods=["POST"])
     async def wa_flow_divida_ativa_opcoes(request: Request):
         """
@@ -1757,6 +1781,8 @@ def create_app() -> FastMCP:
             logger.error(f"wa_flow_divida_ativa_opcoes: erro inesperado: {e}")
             return JSONResponse(content={"error": "Erro interno"}, status_code=500)
 
+=======
+>>>>>>> staging
     @mcp.custom_route("/meta/webhook/status", methods=["POST"])
     async def handle_message_status_webhook(request: Request):
         """
