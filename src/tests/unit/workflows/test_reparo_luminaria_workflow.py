@@ -1018,3 +1018,64 @@ def test_metodo_invalido_mantem_opcao_de_pular_quando_opcional():
     assert "continuar sem identificar" not in sgrc_tpl.metodo_identificacao_invalido(
         1, opcional=False
     )
+
+
+# --- Confirmação por botões Sim/Não (camada-tool, ENABLE_INTERACTIVE_CONFIRM) ---
+
+
+def test_show_service_summary_sets_sim_nao_buttons():
+    """A primeira passada por _show_service_summary (sem confirmação no payload)
+    sinaliza botões Sim/Não no agent_response.interactive, mantendo o texto como
+    fallback."""
+    workflow = make_workflow()
+    state = (
+        make_state()
+    )  # fresh: sem service_confirmed, sem _source, sem confirmacao_servico
+
+    result = asyncio.run(workflow._show_service_summary(state))
+
+    interactive = result.agent_response.interactive
+    assert interactive is not None, "deveria sinalizar interactive na confirmação"
+    buttons = interactive["buttons"]
+    assert [b["id"] for b in buttons] == ["sim", "nao"]
+    assert [b["title"] for b in buttons] == ["Sim", "Não"]
+    # body presente e description (fallback) intactos.
+    assert "É este serviço" in interactive["body"]
+    assert "É este serviço" in result.agent_response.description
+
+
+def test_sim_nao_interactive_vira_envelope_valido_e_titulos_mapeiam():
+    """Os botões sinalizados formam um envelope Meta válido e seus títulos
+    (o que volta como texto no tap) mapeiam de volta determinístico via
+    parse_affirmation — o ganho central sobre o texto livre."""
+    from src.tools.whatsapp_interactive import build_buttons_envelope
+    from src.tools.multi_step_service.workflows.sgrc_components.models import (
+        parse_affirmation,
+    )
+
+    workflow = make_workflow()
+    spec = asyncio.run(
+        workflow._show_service_summary(make_state())
+    ).agent_response.interactive
+
+    env = build_buttons_envelope(body=spec["body"], buttons=spec["buttons"])
+    assert env["status"] == "ok", env.get("error")
+    assert env["interactive"]["type"] == "button"
+    # tap → title volta como texto → parse_affirmation resolve sem fuzzy.
+    assert parse_affirmation("Sim") is True
+    assert parse_affirmation("Não") is False
+
+
+def test_agent_response_interactive_no_model_dump():
+    """Contrato que o app.py consome: o campo `interactive` sobrevive ao
+    model_dump (mss retorna response.model_dump() e o app.py faz
+    response.pop('interactive')), e é None por default nos serviços que não
+    setam (back-compat — o pop devolve None e o caminho de texto segue)."""
+    from src.tools.multi_step_service.core.models import AgentResponse
+
+    spec = {"body": "q", "buttons": [{"id": "sim", "title": "Sim"}]}
+    dumped = AgentResponse(description="q", interactive=spec).model_dump()
+    assert dumped["interactive"]["buttons"][0]["id"] == "sim"
+
+    # Default None nos que não setam (app.py pop → None → ignora, sem efeito).
+    assert AgentResponse(description="x").model_dump()["interactive"] is None

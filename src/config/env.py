@@ -63,6 +63,17 @@ TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="
 WA_TOKEN = getenv_or_action("WA_TOKEN", action="ignore")
 WA_PHONE_NUMBER_ID = getenv_or_action("WA_PHONE_NUMBER_ID", action="ignore")
 
+# Gate pra renderizar a confirmação Sim/Não de serviços multi-step como WhatsApp
+# interactive buttons (em vez de pergunta em texto). POC1: cobre só a confirmação
+# do reparo_luminaria (_show_service_summary). O tap devolve "Sim"/"Não" limpo →
+# parse_affirmation resolve determinístico (aposenta a fragilidade do parser pro
+# caminho comum). Default OFF — ligar via env em staging só DEPOIS do eval. Lido
+# em import-time; toggling exige restart do pod MCP.
+ENABLE_INTERACTIVE_CONFIRM = (
+    getenv_or_action("ENABLE_INTERACTIVE_CONFIRM", default="false", action="ignore")
+    or "false"
+).strip().lower() == "true"
+
 # Error Interceptor Configuration
 ERROR_INTERCEPTOR_URL = getenv_or_action("ERROR_INTERCEPTOR_URL")
 ERROR_INTERCEPTOR_TOKEN = getenv_or_action("ERROR_INTERCEPTOR_TOKEN")
