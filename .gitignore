@@ -1,6 +1,9 @@
 # Project data
 src/tools/multi_step_service/data
 
+# Playwright MCP page dumps (gerados localmente, não versionar)
+.playwright-mcp/
+
 .venv/
 venv/
 ENV/

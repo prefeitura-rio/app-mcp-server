@@ -1,7 +1,156 @@
 import re
+import unicodedata
 from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
+
+
+def _normalize_confirmation_text(value: object) -> str:
+    """lower + strip de acentos + colapsa espaços, para casar tokens de sim/não."""
+    text = str(value if value is not None else "").strip().lower()
+    text = "".join(
+        ch
+        for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
+    return re.sub(r"\s+", " ", text)
+
+
+# Tokens textuais reconhecidos como confirmação afirmativa/negativa. Casamento é
+# EXATO (após normalização) para não dar falso-positivo com frases negadas
+# (ex.: "nao pode" não casa "pode"). Emojis de joinha são tratados à parte.
+_AFFIRMATIVE_TOKENS = {
+    "sim",
+    "s",
+    "yes",
+    "y",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "okey",
+    "oke",
+    "isso",
+    "isso mesmo",
+    "isso ai",
+    "exato",
+    "exatamente",
+    "correto",
+    "ta correto",
+    "esta correto",
+    "certo",
+    "ta certo",
+    "confere",
+    "confirmo",
+    "confirmado",
+    "confirma",
+    "claro",
+    "positivo",
+    "afirmativo",
+    "com certeza",
+    "perfeito",
+    "pode",
+    "pode sim",
+    "pode ser",
+    "pode confirmar",
+    "quero",
+    "concordo",
+    "aceito",
+    "blz",
+    "beleza",
+    "uhum",
+    "aham",
+}
+_NEGATIVE_TOKENS = {
+    "nao",
+    "n",
+    "no",
+    "nope",
+    "errado",
+    "incorreto",
+    "negativo",
+    "nao esta correto",
+    "esta errado",
+    "ta errado",
+    "nao confere",
+    "nao quero",
+    "nao concordo",
+    "discordo",
+}
+# Joinha pra cima / pra baixo (e equivalentes). Casamento por SUBSTRING porque
+# o emoji pode vir com modificador de tom de pele (👍🏽) ou junto de texto ("👍 isso").
+_THUMBS_UP = ("👍", "👌", "✅", "🆗", "✔")
+_THUMBS_DOWN = ("👎", "❌", "🚫")
+# Palavras de polaridade explícita usadas SÓ para vetar um emoji conflitante
+# (ex.: "não 👍" não deve confirmar). O lado caro é confirmar quando o cidadão
+# disse "não", então na dúvida o emoji cede para a palavra e a resposta vira
+# ambígua (None → re-pergunta).
+_NEGATION_WORDS = {
+    "nao",
+    "no",
+    "nope",
+    "nunca",
+    "jamais",
+    "nem",
+    "errado",
+    "incorreto",
+    "negativo",
+    "discordo",
+}
+_AFFIRMATION_WORDS = {
+    "sim",
+    "yes",
+    "yeah",
+    "yep",
+    "isso",
+    "correto",
+    "certo",
+    "ok",
+    "okay",
+    "claro",
+    "confirmo",
+    "confirmado",
+    "positivo",
+    "quero",
+    "concordo",
+    "exato",
+}
+
+
+def parse_affirmation(value: object) -> Optional[bool]:
+    """Interpreta uma resposta como confirmação afirmativa/negativa.
+
+    Retorna ``True``/``False`` quando reconhece o token; ``None`` quando é
+    ambíguo (cabe ao chamador decidir re-perguntar). ``bool`` passa direto.
+    Reconhece além de "sim"/"não": "yes", "isso", "ok", "correto", "👍", etc. —
+    fechando o gap de QA em que "yes" e "👍" não eram entendidos.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+
+    raw = str(value)
+    text = _normalize_confirmation_text(value)
+    words = set(text.split())
+    neg_in_text = bool(words & _NEGATION_WORDS) or text in _NEGATIVE_TOKENS
+    aff_in_text = bool(words & _AFFIRMATION_WORDS) or text in _AFFIRMATIVE_TOKENS
+
+    # Emoji decide SÓ quando não há palavra de polaridade oposta no texto.
+    has_up = any(emoji in raw for emoji in _THUMBS_UP)
+    has_down = any(emoji in raw for emoji in _THUMBS_DOWN)
+    if has_up and not has_down and not neg_in_text:
+        return True
+    if has_down and not has_up and not aff_in_text:
+        return False
+
+    if not text:
+        return None
+    if text in _AFFIRMATIVE_TOKENS:
+        return True
+    if text in _NEGATIVE_TOKENS:
+        return False
+    return None
 
 
 class NomePayload(BaseModel):
@@ -126,11 +275,19 @@ class AddressConfirmationPayload(BaseModel):
     confirmacao: bool = Field(
         ...,
         description=(
-            "Interprete a resposta do usuário e converta para boolean. "
-            "True para qualquer resposta afirmativa (sim, claro, pode, ok, confirmo, beleza, 👍, etc). "
-            "False para qualquer resposta negativa (não, nao, cancela, volta, errado, 👎, etc)."
+            "IMPORTANT: Interpret user's response and convert to boolean. "
+            "Set to true for ANY affirmative response (sim, yes, s, y, ok, correto, certo, 👍, ✅). "
+            "Set to false for ANY negative response (não, nao, no, n, errado, 👎, ❌)."
         ),
     )
+
+    @field_validator("confirmacao", mode="before")
+    @classmethod
+    def _coerce_confirmacao(cls, v: object) -> bool:
+        parsed = parse_affirmation(v)
+        if parsed is None:
+            raise ValueError("Responda 'sim' ou 'não' para confirmar o endereço.")
+        return parsed
 
 
 class IdentificationMethodPayload(BaseModel):
@@ -185,13 +342,29 @@ class TicketDataConfirmationPayload(BaseModel):
     confirmacao: Optional[bool] = Field(
         None,
         description=(
-            "Interprete a resposta do usuário e converta para boolean. "
-            "True para qualquer resposta afirmativa (sim, claro, pode, ok, confirmo, beleza, 👍, etc). "
-            "False para qualquer resposta negativa (não, nao, cancela, volta, errado, 👎, etc). "
-            "Use null se o usuário não respondeu sobre confirmação."
+            "IMPORTANT: Interpret user's response and convert to boolean. "
+            "Set to true for ANY affirmative response (sim, yes, ok, correto, 👍, ✅). "
+            "Set to false for ANY negative response (não, no, errado, 👎, ❌)."
         ),
     )
     correcao: Optional[str] = Field(
         None,
         description="Descrição do que precisa ser corrigido",
     )
+
+    @field_validator("confirmacao", mode="before")
+    @classmethod
+    def _coerce_confirmacao(cls, v: object) -> Optional[bool]:
+        # confirmacao é opcional aqui (o cidadão pode mandar só `correcao`):
+        # ausente/None segue None; string ambígua é rejeitada para re-perguntar.
+        if v is None:
+            return None
+        parsed = parse_affirmation(v)
+        if parsed is None:
+            raise ValueError("Responda 'sim' ou 'não' para confirmar os dados.")
+        return parsed
+
+    @field_validator("correcao", mode="after")
+    @classmethod
+    def validate_correcao(cls, v: Optional[str], info) -> Optional[str]:
+        return v
