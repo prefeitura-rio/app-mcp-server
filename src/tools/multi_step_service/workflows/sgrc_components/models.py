@@ -133,6 +133,14 @@ class AddressConfirmationPayload(BaseModel):
         ),
     )
 
+    @field_validator("confirmacao", mode="before")
+    @classmethod
+    def parse_bool_from_text(cls, v: object) -> bool:
+        result = parse_affirmation(v)
+        if result is None:
+            raise ValueError(f"Resposta ambígua: {v!r}. Use 'sim', 'não', 👍, etc.")
+        return result
+
 
 class IdentificationMethodPayload(BaseModel):
     """Payload for choosing identification method (CPF or Gov.br)."""
@@ -196,6 +204,13 @@ class TicketDataConfirmationPayload(BaseModel):
         None,
         description="Descrição do que precisa ser corrigido",
     )
+
+    @field_validator("confirmacao", mode="before")
+    @classmethod
+    def parse_optional_bool(cls, v: object) -> Optional[bool]:
+        if v is None:
+            return None
+        return parse_affirmation(v)
 
 
 # ─── parse_affirmation ────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     AddressConfirmationPayload,
     AddressData,
     AddressPayload,
+    parse_affirmation,
     AddressValidationState,
     CPFPayload,
     EmailPayload,
@@ -182,3 +183,11 @@ class QuadraEsportesPayload(BaseModel):
             "False se o defeito NÃO está em quadra de esportes (respostas negativas: não, nao, fora, 👎, etc)."
         ),
     )
+
+    @field_validator("reparo_luminaria_quadra_esportes", mode="before")
+    @classmethod
+    def parse_bool_from_text(cls, v: object) -> bool:
+        result = parse_affirmation(v)
+        if result is None:
+            raise ValueError(f"Resposta ambígua: {v!r}. Use 'sim', 'não', 👍, etc.")
+        return result
