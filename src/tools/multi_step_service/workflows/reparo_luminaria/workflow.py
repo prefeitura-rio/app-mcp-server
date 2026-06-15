@@ -441,6 +441,18 @@ class ReparoLuminariaWorkflow(
         state.agent_response = AgentResponse(
             description=description,
             payload_schema=ConfirmacaoServicoPayload.model_json_schema(),
+            # Confirmação por botões Sim/Não (camada-tool, gated em app.py por
+            # ENABLE_INTERACTIVE_CONFIRM). O tap volta como "Sim"/"Não" → o
+            # parse_affirmation de confirmacao_servico resolve determinístico.
+            # `description` segue como fallback (gate off, Flow indisponível, ou
+            # cidadão digita em vez de tocar).
+            interactive={
+                "body": description,
+                "buttons": [
+                    {"id": "sim", "title": "Sim"},
+                    {"id": "nao", "title": "Não"},
+                ],
+            },
         )
 
         return state

@@ -148,6 +148,9 @@ class BaseWorkflow(ABC):
             description=temp_agent_response.description,
             payload_schema=temp_agent_response.payload_schema,
             data=final_state.data,
+            # Propaga o sinal interativo (camada-tool): sem isso o campo era
+            # descartado nesta reconstrução e o app.py nunca enviava os botões.
+            interactive=temp_agent_response.interactive,
         )
 
         return final_state

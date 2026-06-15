@@ -87,6 +87,7 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service impor
 )
 from src.tools.multi_step_service.workflows.sgrc_components.models import (
     CPFPayload,
+    parse_affirmation,
 )
 
 from src.resources.rio_info import (
@@ -957,9 +958,14 @@ def create_app() -> FastMCP:
             # 3. Ainda não coletou dados do defeito (luminaria_defeito ausente)
 
             # Detectar se acabou de confirmar o serviço (payload tem confirmacao_servico).
-            # A LLM já converteu qualquer variação (sim/yes/👍/ok) para boolean,
-            # pra o Flow auto-enviar no MESMO turno da confirmação natural (POC1 #297).
-            acabou_de_confirmar = payload.get("confirmacao_servico") is True
+            # parse_affirmation aceita bool (LLM converteu) E string ("Sim"/"sim"): com a
+            # confirmação por botões (ENABLE_INTERACTIVE_CONFIRM) o tap volta como título
+            # "Sim", que pode chegar como string aqui — sem parsear, o auto-Flow não
+            # dispararia e o cidadão cairia na coleta manual. Consistente com o
+            # _show_service_summary, que também usa parse_affirmation (POC1 #297).
+            acabou_de_confirmar = (
+                parse_affirmation(payload.get("confirmacao_servico")) is True
+            )
 
             # Verificar se serviço já foi confirmado anteriormente
             servico_ja_confirmado = (
@@ -1046,6 +1052,70 @@ def create_app() -> FastMCP:
         response = await mss(
             service_name=service_name, user_id=user_id, payload=payload
         )
+
+        # Camada-tool: se o workflow sinalizou `interactive` (hoje só a confirmação
+        # Sim/Não do reparo_luminaria), renderiza como WhatsApp interactive enviado
+        # DIRETO pro cidadão (mesmo padrão do auto-Flow acima) e instrui o agente a
+        # não duplicar em texto. Gate ENABLE_INTERACTIVE_CONFIRM (default OFF). O
+        # sinal é SEMPRE removido do retorno: é interno, não conteúdo pro modelo.
+        interactive_spec = (
+            response.pop("interactive", None) if isinstance(response, dict) else None
+        )
+        if env.ENABLE_INTERACTIVE_CONFIRM and isinstance(interactive_spec, dict):
+            from src.tools.whatsapp_interactive import (
+                build_buttons_envelope,
+                build_list_envelope,
+            )
+            from src.tools.whatsapp_flow_sender import send_interactive_envelope
+
+            body = interactive_spec.get("body") or response.get("description") or ""
+            if interactive_spec.get("buttons"):
+                envelope = build_buttons_envelope(
+                    body=body, buttons=interactive_spec["buttons"]
+                )
+            elif interactive_spec.get("sections"):
+                envelope = build_list_envelope(
+                    body=body,
+                    sections=interactive_spec["sections"],
+                    button_label=interactive_spec.get("button_label", "Ver opções"),
+                )
+            else:
+                envelope = {
+                    "status": "error",
+                    "error": "interactive sem buttons/sections",
+                }
+
+            if envelope.get("status") == "ok":
+                send_result = await send_interactive_envelope(
+                    user_id, envelope["interactive"]
+                )
+                if send_result.get("success"):
+                    logger.info(
+                        f"[INTERACTIVE_CONFIRM] enviado | service={service_name} "
+                        f"| user={user_id} | msg_id={send_result.get('message_id')}"
+                    )
+                    return {
+                        "status": "interactive_sent",
+                        "next_step": "await_user_selection",
+                        "instruction": (
+                            "Os botões já foram enviados ao cidadão e são "
+                            "auto-explicativos. NÃO escreva nenhuma mensagem "
+                            "adicional repetindo a pergunta nem as opções. Aguarde "
+                            "o cidadão escolher; a resposta volta como texto e você "
+                            "deve chamar multi_step_service de novo com o campo "
+                            "correspondente no payload."
+                        ),
+                    }
+                logger.warning(
+                    f"[INTERACTIVE_CONFIRM] envio falhou ({send_result.get('error')}); "
+                    "fallback pra texto"
+                )
+            else:
+                logger.warning(
+                    f"[INTERACTIVE_CONFIRM] envelope inválido ({envelope.get('error')}); "
+                    "fallback pra texto"
+                )
+
         return response
 
     @conditional_mcp_tool(

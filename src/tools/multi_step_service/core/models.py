@@ -23,6 +23,13 @@ class AgentResponse(BaseModel):
     description: str = ""
     payload_schema: Optional[Dict[str, Any]] = None
     data: Dict[str, Any] = {}
+    # Sinal opcional pra camada-tool (app.py) renderizar esta resposta como
+    # WhatsApp interactive (buttons/list) em vez do menu de texto em `description`.
+    # Shape buttons: {"body": str, "buttons": [{"id": str, "title": str}]}.
+    # `id` é o reply_id estável; `title` é o que o cidadão vê (e volta como texto
+    # no tap → parse_affirmation resolve determinístico). Default None → zero
+    # efeito nos serviços que não setam (back-compat).
+    interactive: Optional[Dict[str, Any]] = None
 
 
 class ServiceMetadata(BaseModel):

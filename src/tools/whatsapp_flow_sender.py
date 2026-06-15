@@ -154,6 +154,57 @@ class WhatsAppFlowSender:
                 "flow_id": flow_id,
             }
 
+    async def send_interactive(
+        self, recipient: str, interactive: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Envia um objeto `interactive` genérico (button/list/cta) pro Meta.
+
+        Reusa auth/host de send_flow. `interactive` é o bloco já montado (ex:
+        saída de build_buttons_envelope()["interactive"]). NÃO levanta em erro
+        HTTP: retorna {"success": False, ...} pra o caller cair em fallback de
+        texto — a mensagem interativa é best-effort.
+        """
+        recipient = recipient.replace("+", "")
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": "interactive",
+            "interactive": interactive,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.base_url}/messages",
+                json=payload,
+                headers=headers,
+            )
+
+            if response.status_code != 200:
+                error_data = response.json() if response.text else {}
+                logger.error(
+                    f"Erro ao enviar interactive: {response.status_code} - {error_data}"
+                )
+                return {
+                    "success": False,
+                    "status_code": response.status_code,
+                    "error": error_data,
+                }
+
+            result = response.json()
+            message_id = result.get("messages", [{}])[0].get("id")
+            logger.success(
+                f"Interactive enviado | recipient={recipient} | message_id={message_id}"
+            )
+            return {
+                "success": True,
+                "message_id": message_id,
+                "recipient": recipient,
+            }
+
 
 # Mapeamento de service_type para flow_id cadastrado na Meta
 # Para adicionar novo flow: registrar no Meta, pegar o flow_id e adicionar aqui
@@ -296,3 +347,20 @@ async def send_divida_ativa_flow(
     return await send_flow_by_service(
         "divida_ativa", user_number, flow_token, prefill_data
     )
+
+
+async def send_interactive_envelope(
+    user_number: str, interactive: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Envia um envelope `interactive` (button/list) pro cidadão, best-effort.
+
+    Wrapper estável pros callers (app.py): instancia o sender, captura falha
+    de config/HTTP e SEMPRE retorna {"success": bool, ...} — nunca levanta, pra
+    o caller cair em fallback de texto.
+    """
+    try:
+        sender = WhatsAppFlowSender()
+        return await sender.send_interactive(user_number, interactive)
+    except Exception as e:
+        logger.error(f"Erro ao enviar interactive envelope: {e}")
+        return {"success": False, "error": str(e)}
