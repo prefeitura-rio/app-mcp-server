@@ -181,8 +181,8 @@ class QuadraEsportesPayload(BaseModel):
 
     @field_validator("reparo_luminaria_quadra_esportes", mode="before")
     @classmethod
-    def _coerce_quadra(cls, v: object) -> bool:
-        parsed = parse_affirmation(v)
-        if parsed is None:
-            raise ValueError("Responda 'sim' ou 'não'.")
-        return parsed
+    def parse_bool_from_text(cls, v: object) -> bool:
+        result = parse_affirmation(v)
+        if result is None:
+            raise ValueError(f"Resposta ambígua: {v!r}. Use 'sim', 'não', 👍, etc.")
+        return result

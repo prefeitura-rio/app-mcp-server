@@ -13,8 +13,8 @@ from unittest.mock import patch
 import pytest
 
 import src.tools.whatsapp_flow_sender as sender_mod
-from src.tools.luminaria_entity_extractor import decode_flow_token
-from src.tools.luminaria_flow import _handle_init
+from src.flows._token import decode_flow_token
+from src.flows.reparo_luminaria.handler import _handle_init
 from src.tools.whatsapp_flow_sender import send_flow_by_service
 
 

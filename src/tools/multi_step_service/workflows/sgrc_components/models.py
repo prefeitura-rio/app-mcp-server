@@ -283,11 +283,11 @@ class AddressConfirmationPayload(BaseModel):
 
     @field_validator("confirmacao", mode="before")
     @classmethod
-    def _coerce_confirmacao(cls, v: object) -> bool:
-        parsed = parse_affirmation(v)
-        if parsed is None:
-            raise ValueError("Responda 'sim' ou 'não' para confirmar o endereço.")
-        return parsed
+    def parse_bool_from_text(cls, v: object) -> bool:
+        result = parse_affirmation(v)
+        if result is None:
+            raise ValueError(f"Resposta ambígua: {v!r}. Use 'sim', 'não', 👍, etc.")
+        return result
 
 
 class IdentificationMethodPayload(BaseModel):
@@ -354,17 +354,7 @@ class TicketDataConfirmationPayload(BaseModel):
 
     @field_validator("confirmacao", mode="before")
     @classmethod
-    def _coerce_confirmacao(cls, v: object) -> Optional[bool]:
-        # confirmacao é opcional aqui (o cidadão pode mandar só `correcao`):
-        # ausente/None segue None; string ambígua é rejeitada para re-perguntar.
+    def parse_optional_bool(cls, v: object) -> Optional[bool]:
         if v is None:
             return None
-        parsed = parse_affirmation(v)
-        if parsed is None:
-            raise ValueError("Responda 'sim' ou 'não' para confirmar os dados.")
-        return parsed
-
-    @field_validator("correcao", mode="after")
-    @classmethod
-    def validate_correcao(cls, v: Optional[str], info) -> Optional[str]:
-        return v
+        return parse_affirmation(v)

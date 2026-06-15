@@ -9,7 +9,7 @@ Validam:
 - legacy tokens opacos (UUID) são tratados sem encoding
 """
 
-from src.tools.luminaria_entity_extractor import (
+from src.flows._token import (
     TOKEN_PREFIX,
     decode_flow_token,
     encode_flow_token,

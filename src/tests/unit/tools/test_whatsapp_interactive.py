@@ -1,6 +1,6 @@
 """Unit tests pros helpers de WhatsApp interactive (ADR-022 + ADR-024)."""
 
-from src.tools.luminaria_entity_extractor import decode_flow_token
+from src.flows._token import decode_flow_token
 from src.tools.whatsapp_interactive import (
     build_buttons_envelope,
     build_flow_envelope,
@@ -297,7 +297,7 @@ def test_list_empty_sections():
 def test_navigate_inline_data_prefills_and_visibility():
     import uuid
 
-    from src.tools.luminaria_flow import _handle_init
+    from src.flows.reparo_luminaria.handler import _handle_init
 
     token = encode_prefill_token(
         str(uuid.uuid4()),

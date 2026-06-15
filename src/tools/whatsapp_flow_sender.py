@@ -12,7 +12,7 @@ import httpx
 from loguru import logger
 
 from src.config import env
-from src.tools.luminaria_entity_extractor import (
+from src.flows._token import (
     encode_flow_token,
     redact_flow_token as _redact_flow_token,
 )

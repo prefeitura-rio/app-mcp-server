@@ -58,7 +58,7 @@ def encode_prefill_token(
     """
     if not prefill_data or not service_type:
         return flow_token
-    from src.tools.luminaria_entity_extractor import encode_flow_token
+    from src.flows._token import encode_flow_token
     from src.tools.whatsapp_flows.normalizers import normalize_prefill_for_flow
 
     normalized = normalize_prefill_for_flow(service_type, prefill_data)

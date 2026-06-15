@@ -2,6 +2,7 @@
 Ponto de entrada principal para o servidor FastMCP do Rio de Janeiro.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,4 +16,5 @@ if __name__ == "__main__":
     if env.IS_LOCAL:
         mcp.run()
     else:
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=80, path="/mcp")
+        port = int(os.environ.get("PORT", 80))
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=port, path="/mcp")
