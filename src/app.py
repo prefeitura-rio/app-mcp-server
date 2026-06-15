@@ -84,7 +84,6 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service impor
 )
 from src.tools.multi_step_service.workflows.sgrc_components.models import (
     CPFPayload,
-    parse_affirmation,
 )
 
 from src.resources.rio_info import (
@@ -955,11 +954,9 @@ def create_app() -> FastMCP:
             # 3. Ainda não coletou dados do defeito (luminaria_defeito ausente)
 
             # Detectar se acabou de confirmar o serviço (payload tem confirmacao_servico).
-            # parse_affirmation reconhece "yes"/"👍"/"ok"/etc. (não só o bool True),
+            # A LLM já converteu qualquer variação (sim/yes/👍/ok) para boolean,
             # pra o Flow auto-enviar no MESMO turno da confirmação natural (POC1 #297).
-            acabou_de_confirmar = (
-                parse_affirmation(payload.get("confirmacao_servico")) is True
-            )
+            acabou_de_confirmar = payload.get("confirmacao_servico") is True
 
             # Verificar se serviço já foi confirmado anteriormente
             servico_ja_confirmado = (
