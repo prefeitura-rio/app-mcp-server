@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.tools.luminaria_entity_extractor import encode_flow_token
-from src.tools.luminaria_flow import _handle_init
+from src.flows._token import encode_flow_token
+from src.flows.reparo_luminaria.handler import _handle_init
 from src.tools.multi_step_service.core.models import ServiceState
 from src.tools.multi_step_service.workflows.reparo_luminaria import templates as rlu_tpl
 from src.tools.multi_step_service.workflows.reparo_luminaria.integrations import (

@@ -1,0 +1,126 @@
+{
+  "version": "7.3",
+  "data_api_version": "3.0",
+  "routing_model": {
+    "TIPO_CONSULTA": ["DADOS_CONSULTA"],
+    "DADOS_CONSULTA": []
+  },
+  "screens": [
+    {
+      "id": "TIPO_CONSULTA",
+      "title": "Tipos de consulta",
+      "data": {
+        "tipo_consulta_prefill": {"type": "string", "__example__": ""}
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "form",
+            "init-values": {
+              "tipo_consulta": "${data.tipo_consulta_prefill}"
+            },
+            "children": [
+              {
+                "type": "RadioButtonsGroup",
+                "label": "Escolha uma opção",
+                "name": "tipo_consulta",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "cpf_cnpj",
+                    "title": "CPF/CNPJ",
+                    "description": "Consulte por pessoa física ou jurídica."
+                  },
+                  {
+                    "id": "inscricao_imobiliaria",
+                    "title": "Inscrição Imobiliária",
+                    "description": "Consulte pelo número da inscrição do imóvel."
+                  },
+                  {
+                    "id": "auto_infracao",
+                    "title": "Auto de infração",
+                    "description": "Consulte pelo ano e número do auto de infração."
+                  },
+                  {
+                    "id": "cda",
+                    "title": "CDA",
+                    "description": "Consulte pelo número da Certidão de Dívida Ativa (CDA)."
+                  },
+                  {
+                    "id": "execucao_fiscal",
+                    "title": "Execução Fiscal",
+                    "description": "Consulte processos em execução fiscal (EF)."
+                  }
+                ]
+              },
+              {
+                "type": "Footer",
+                "label": "Próximo",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "trigger": "tipo_consulta",
+                    "tipo_consulta": "${form.tipo_consulta}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "DADOS_CONSULTA",
+      "title": "Dados da consulta",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "tipo_consulta": {"type": "string", "__example__": "cpf_cnpj"},
+        "label_numero": {"type": "string", "__example__": "CPF/CNPJ do contribuinte"},
+        "show_ano": {"type": "boolean", "__example__": false},
+        "label_ano": {"type": "string", "__example__": "Ano do Auto de Infração"}
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "form",
+            "children": [
+              {
+                "type": "TextInput",
+                "label": "${data.label_ano}",
+                "name": "ano",
+                "input-type": "number",
+                "required": false,
+                "visible": "${data.show_ano}"
+              },
+              {
+                "type": "TextInput",
+                "label": "${data.label_numero}",
+                "name": "numero",
+                "input-type": "text",
+                "required": true
+              },
+              {
+                "type": "Footer",
+                "label": "Enviar",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "_source": "whatsapp_flow",
+                    "tipo_consulta": "${data.tipo_consulta}",
+                    "ano": "${form.ano}",
+                    "numero": "${form.numero}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

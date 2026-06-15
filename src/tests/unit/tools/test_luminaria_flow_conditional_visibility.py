@@ -21,13 +21,10 @@ import pathlib
 
 import pytest
 
-from src.tools.luminaria_flow import _VISUAL, _compute_visibility
+from src.flows.reparo_luminaria.handler import _VISUAL, _compute_visibility
 
 JSON_PATH = (
-    pathlib.Path(__file__).parents[3]
-    / "tools"
-    / "whatsapp_flows"
-    / "reparo_luminaria.flow.json"
+    pathlib.Path(__file__).parents[3] / "flows" / "reparo_luminaria" / "flow.json"
 )
 
 
@@ -139,8 +136,8 @@ def test_data_exchange_preserves_other_prefills_from_token():
     flow_token. User troca defect pra Apagada → qty_pattern aparece
     (era hidden em non-visual). Deve estar PRE-PREENCHIDO com "uma".
     """
-    from src.tools.luminaria_entity_extractor import encode_flow_token
-    from src.tools.luminaria_flow import _handle_defect_type
+    from src.flows._token import encode_flow_token
+    from src.flows.reparo_luminaria.handler import _handle_defect_type
 
     token = encode_flow_token(
         "session-uuid-test",
@@ -169,8 +166,8 @@ def test_data_exchange_preserves_other_prefills_from_token():
 
 def test_data_exchange_handle_qty_preserves_location_prefill():
     """User troca qty_pattern → location_prefill original deve ficar."""
-    from src.tools.luminaria_entity_extractor import encode_flow_token
-    from src.tools.luminaria_flow import _handle_qty_pattern
+    from src.flows._token import encode_flow_token
+    from src.flows.reparo_luminaria.handler import _handle_qty_pattern
 
     token = encode_flow_token(
         "session-uuid-test-2", {"defect_type": "Apagada", "location": "Calçada"}
@@ -185,7 +182,10 @@ def test_data_exchange_handle_qty_preserves_location_prefill():
 
 def test_data_exchange_without_token_still_works():
     """Defensive: sem flow_token, handlers ainda retornam estrutura válida."""
-    from src.tools.luminaria_flow import _handle_defect_type, _handle_qty_pattern
+    from src.flows.reparo_luminaria.handler import (
+        _handle_defect_type,
+        _handle_qty_pattern,
+    )
 
     r1 = _handle_defect_type("Pendurada", flow_token=None)
     assert r1["data"]["defect_type_prefill"] == "Pendurada"
@@ -201,8 +201,8 @@ def test_qty_handler_uses_incoming_defect_not_token():
     Handler qty_pattern recebe incoming com defect_type=Apagada (user's
     atual). NÃO deve reverter pra Pendurada (token original).
     """
-    from src.tools.luminaria_entity_extractor import encode_flow_token
-    from src.tools.luminaria_flow import _handle_qty_pattern
+    from src.flows._token import encode_flow_token
+    from src.flows.reparo_luminaria.handler import _handle_qty_pattern
 
     token = encode_flow_token(
         "sess-revert-test", {"defect_type": "Pendurada", "location": "Calçada"}
@@ -222,7 +222,7 @@ def test_qty_handler_uses_incoming_defect_not_token():
 
 def test_defect_handler_echoes_other_form_fields():
     """User troca defect — campos atuais do form (location, qty_pattern) preservados."""
-    from src.tools.luminaria_flow import _handle_defect_type
+    from src.flows.reparo_luminaria.handler import _handle_defect_type
 
     incoming = {
         "trigger": "defect_type",

@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
@@ -195,3 +196,138 @@ class TicketDataConfirmationPayload(BaseModel):
         None,
         description="Descrição do que precisa ser corrigido",
     )
+
+
+# ─── parse_affirmation ────────────────────────────────────────────────────────
+# Removida do commit 33e5b5c por engano — app.py e testes dependem dela.
+
+
+def _normalize_confirmation_text(value: object) -> str:
+    text = str(value if value is not None else "").strip().lower()
+    text = "".join(
+        ch
+        for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
+    return re.sub(r"\s+", " ", text)
+
+
+_AFFIRMATIVE_TOKENS = {
+    "sim",
+    "s",
+    "yes",
+    "y",
+    "yeah",
+    "yep",
+    "ok",
+    "okay",
+    "okey",
+    "oke",
+    "isso",
+    "isso mesmo",
+    "isso ai",
+    "exato",
+    "exatamente",
+    "correto",
+    "ta correto",
+    "esta correto",
+    "certo",
+    "ta certo",
+    "confere",
+    "confirmo",
+    "confirmado",
+    "confirma",
+    "claro",
+    "positivo",
+    "afirmativo",
+    "com certeza",
+    "perfeito",
+    "pode",
+    "pode sim",
+    "pode ser",
+    "pode confirmar",
+    "quero",
+    "concordo",
+    "aceito",
+    "blz",
+    "beleza",
+    "uhum",
+    "aham",
+}
+_NEGATIVE_TOKENS = {
+    "nao",
+    "n",
+    "no",
+    "nope",
+    "errado",
+    "incorreto",
+    "negativo",
+    "nao esta correto",
+    "esta errado",
+    "ta errado",
+    "nao confere",
+    "nao quero",
+    "nao concordo",
+    "discordo",
+}
+_THUMBS_UP = ("👍", "👌", "✅", "🆗", "✔")
+_THUMBS_DOWN = ("👎", "❌", "🚫")
+_NEGATION_WORDS = {
+    "nao",
+    "no",
+    "nope",
+    "nunca",
+    "jamais",
+    "nem",
+    "errado",
+    "incorreto",
+    "negativo",
+    "discordo",
+}
+_AFFIRMATION_WORDS = {
+    "sim",
+    "yes",
+    "yeah",
+    "yep",
+    "isso",
+    "correto",
+    "certo",
+    "ok",
+    "okay",
+    "claro",
+    "confirmo",
+    "confirmado",
+    "positivo",
+    "quero",
+    "concordo",
+    "exato",
+}
+
+
+def parse_affirmation(value: object) -> Optional[bool]:
+    """Interpreta resposta como confirmação afirmativa/negativa/ambígua (None)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+
+    raw = str(value)
+    text = _normalize_confirmation_text(value)
+    words = set(text.split())
+    neg_in_text = bool(words & _NEGATION_WORDS) or text in _NEGATIVE_TOKENS
+    aff_in_text = bool(words & _AFFIRMATION_WORDS) or text in _AFFIRMATIVE_TOKENS
+
+    has_up = any(emoji in raw for emoji in _THUMBS_UP)
+    has_down = any(emoji in raw for emoji in _THUMBS_DOWN)
+    if has_up and not has_down and not neg_in_text:
+        return True
+    if has_down and not has_up and not aff_in_text:
+        return False
+
+    if not text:
+        return None
+    if text in _AFFIRMATIVE_TOKENS:
+        return True
+    if text in _NEGATIVE_TOKENS:
+        return False
+    return None

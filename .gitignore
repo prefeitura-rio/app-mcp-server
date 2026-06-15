@@ -78,3 +78,5 @@ dmypy.json
 # Lock files (except uv.lock which we want to keep)
 # uv.lock is kept intentionally
 /skills/*
+
+test.py

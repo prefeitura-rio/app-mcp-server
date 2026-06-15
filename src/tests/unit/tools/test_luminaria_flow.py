@@ -9,8 +9,8 @@ Valida:
 - _compute_visibility com defect_type visual / non-visual / vazio
 """
 
-from src.tools.luminaria_entity_extractor import encode_flow_token
-from src.tools.luminaria_flow import _compute_visibility, _handle_init
+from src.flows._token import encode_flow_token
+from src.flows.reparo_luminaria.handler import _compute_visibility, _handle_init
 
 
 # ─────────────────────────────────────────────────────────────────────
