@@ -80,3 +80,4 @@ dmypy.json
 /skills/*
 
 test.py
+docs/wpp_flow_docs.html

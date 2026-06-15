@@ -1,5 +1,6 @@
 {
   "version": "7.3",
+  "data_api_version": "3.0",
   "routing_model": {
     "OPCOES": []
   },
@@ -9,6 +10,27 @@
       "title": "Lista de opções",
       "terminal": true,
       "success": true,
+      "data": {
+        "opcoes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id":          {"type": "string"},
+              "title":       {"type": "string"},
+              "description": {"type": "string"}
+            }
+          },
+          "__example__": [
+            {"id": "pagar_vista",  "title": "Pagar à vista",        "description": "Emitir guia para pagamento integral."},
+            {"id": "parcelar",     "title": "Parcelar débitos",      "description": "Simular e aderir ao parcelamento."},
+            {"id": "regularizar",  "title": "Regularizar débitos",   "description": "Ver alternativas para ficar em dia."},
+            {"id": "liquidar",     "title": "Liquidar parcelamento", "description": "Quitar o que falta do parcelamento."},
+            {"id": "segunda_via",  "title": "Emitir 2ª via",         "description": "Gerar segunda via de guia/parcela."},
+            {"id": "voltar",       "title": "Voltar",                "description": "Retornar ao menu Tipos de consulta"}
+          ]
+        }
+      },
       "layout": {
         "type": "SingleColumnLayout",
         "children": [
@@ -21,38 +43,7 @@
                 "label": "Escolha uma opção",
                 "name": "opcao",
                 "required": true,
-                "data-source": [
-                  {
-                    "id": "pagar_vista",
-                    "title": "Pagar à vista",
-                    "description": "Emitir guia para pagamento integral."
-                  },
-                  {
-                    "id": "parcelar",
-                    "title": "Parcelar débitos",
-                    "description": "Simular e aderir ao parcelamento."
-                  },
-                  {
-                    "id": "regularizar",
-                    "title": "Regularizar débitos",
-                    "description": "Ver alternativas para ficar em dia."
-                  },
-                  {
-                    "id": "liquidar",
-                    "title": "Liquidar parcelamento",
-                    "description": "Quitar o que falta do parcelamento."
-                  },
-                  {
-                    "id": "segunda_via",
-                    "title": "Emitir 2ª via",
-                    "description": "Gerar segunda via de guia/parcela."
-                  },
-                  {
-                    "id": "voltar",
-                    "title": "Voltar",
-                    "description": "Retornar ao menu Tipos de consulta"
-                  }
-                ]
+                "data-source": "${data.opcoes}"
               },
               {
                 "type": "Footer",
