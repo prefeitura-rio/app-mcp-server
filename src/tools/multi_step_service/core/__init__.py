@@ -24,6 +24,14 @@ DESCRIPTION = """
     - IPTU: "pagar IPTU", "emitir guia de IPTU", "guia de IPTU", "consultar débitos",
       ou número de 7-8 dígitos após consulta de IPTU → service_name="iptu_pagamento"
       (apenas IPTU — NÃO usar pra outras guias como ISS, ITBI, taxa de lixo)
+    - Dívida Ativa: "consultar dívida ativa", "débitos em dívida ativa", "CDA",
+      "certidão de dívida ativa", "execução fiscal" → divida_ativa.
+      ⚠️ EXCEÇÃO DE ORDEM: pra dívida ativa, o PRIMEIRO passo NÃO é esta tool — chame
+      `build_whatsapp_flow_envelope(flow_id="2093327131246166")` (Flow de consulta) ANTES.
+      O Flow coleta o tipo de consulta e dados (CPF/CNPJ, Inscrição, Auto, CDA, EF).
+      Chame multi_step_service(service_name="divida_ativa") só DEPOIS que o cidadão
+      submeter o Flow (inbound com _source="whatsapp_flow"), pra processar a consulta
+      e oferecer ações (pagar, parcelar, regularizar, etc).
     - Luminária pública / poste / iluminação → reparo_luminaria.
       ⚠️ EXCEÇÃO DE ORDEM: pra luminária, o PRIMEIRO passo NÃO é esta tool — chame
       `build_whatsapp_flow_envelope` (Flow prefillado) ANTES; o Flow é a etapa de

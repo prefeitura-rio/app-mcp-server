@@ -56,6 +56,9 @@ from src.tools.inbound_media_video import (
     analyze_inbound_video as analyze_inbound_video_impl,
 )
 from src.tools.luminaria_flow import process_flow_request
+from src.tools.divida_ativa_flow import (
+    process_divida_ativa_flow_request,
+)
 from src.tools.whatsapp_flow_sender import send_flow_by_service, FLOW_TEMPLATES
 from src.tools.whatsapp_message_status import check_message_read_status
 from src.tools.divida_ativa import (
@@ -1673,9 +1676,9 @@ def create_app() -> FastMCP:
         """
         from fastapi.responses import Response
 
-        private_key = env.WA_LUMINARIA_PRIVATE_KEY
+        private_key = env.WA_PRIVATE_KEY
         if not private_key:
-            logger.error("wa_flow_luminaria: WA_LUMINARIA_PRIVATE_KEY não configurada")
+            logger.error("wa_flow_luminaria: WA_PRIVATE_KEY não configurada")
             return JSONResponse(
                 content={"error": "Flow não configurado"}, status_code=503
             )
@@ -1689,6 +1692,37 @@ def create_app() -> FastMCP:
             return JSONResponse(content={"error": str(e)}, status_code=421)
         except Exception as e:
             logger.error(f"wa_flow_luminaria: erro inesperado: {e}")
+            return JSONResponse(content={"error": "Erro interno"}, status_code=500)
+
+    @mcp.custom_route("/whatsapp-flow/divida-ativa", methods=["POST"])
+    async def wa_flow_divida_ativa(request: Request):
+        """
+        Endpoint do WhatsApp Flow de consulta de Dívida Ativa.
+        Decripta o payload (RSA + AES-GCM), processa a action e devolve
+        a resposta criptografada como bytes (exigido pelo protocolo Meta).
+
+        Usa a mesma chave privada compartilhada entre flows (WA_PRIVATE_KEY).
+        """
+        from fastapi.responses import Response
+
+        private_key = env.WA_PRIVATE_KEY
+        if not private_key:
+            logger.error("wa_flow_divida_ativa: WA_PRIVATE_KEY não configurada")
+            return JSONResponse(
+                content={"error": "Flow não configurado"}, status_code=503
+            )
+
+        try:
+            body = await request.json()
+            encrypted_response = await process_divida_ativa_flow_request(
+                body, private_key
+            )
+            return Response(content=encrypted_response, media_type="text/plain")
+        except ValueError as e:
+            logger.error(f"wa_flow_divida_ativa: erro de decriptação: {e}")
+            return JSONResponse(content={"error": str(e)}, status_code=421)
+        except Exception as e:
+            logger.error(f"wa_flow_divida_ativa: erro inesperado: {e}")
             return JSONResponse(content={"error": "Erro interno"}, status_code=500)
 
     @mcp.custom_route("/meta/webhook/status", methods=["POST"])

@@ -188,10 +188,9 @@ TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", default="false", action=
 TYPESENSE_PARAMETERS = getenv_or_action("TYPESENSE_PARAMETERS")
 PODA_SERVICE_ID = getenv_or_action("PODA_SERVICE_ID", action="ignore")
 
-# WhatsApp Flow — Luminária (chave RSA privada em PEM, \n como literal)
-WA_LUMINARIA_PRIVATE_KEY = (
-    getenv_or_action("WA_LUMINARIA_PRIVATE_KEY", action="ignore") or ""
-).replace("\\n", "\n") or None
+WA_PRIVATE_KEY = (getenv_or_action("WA_PRIVATE_KEY", action="ignore") or "").replace(
+    "\\n", "\n"
+) or None
 
 # Salesforce REST API — pro analyze_inbound_image baixar bytes de
 # ContentVersion via OAuth Client Credentials. Reusa Connected App "MuleSoft
