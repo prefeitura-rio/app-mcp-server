@@ -8,7 +8,6 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     AddressConfirmationPayload,
     AddressData,
     AddressPayload,
-    parse_affirmation,
     AddressValidationState,
     CPFPayload,
     EmailPayload,
@@ -187,8 +186,3 @@ class QuadraEsportesPayload(BaseModel):
         if result is None:
             raise ValueError(f"Resposta ambígua: {v!r}. Use 'sim', 'não', 👍, etc.")
         return result
-    def _coerce_quadra(cls, v: object) -> bool:
-        parsed = parse_affirmation(v)
-        if parsed is None:
-            raise ValueError("Responda 'sim' ou 'não'.")
-        return parsed
