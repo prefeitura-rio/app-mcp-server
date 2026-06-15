@@ -14,6 +14,7 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     EmailPayload,
     NomePayload,
     TicketDataConfirmationPayload,
+    parse_affirmation,
 )
 
 __all__ = [
@@ -176,12 +177,7 @@ class LuminariaLocalizacaoPayload(BaseModel):
 
 class QuadraEsportesPayload(BaseModel):
     reparo_luminaria_quadra_esportes: bool = Field(
-        ...,
-        description=(
-            "Interprete a resposta do usuário e converta para boolean. "
-            "True se o defeito está dentro de uma quadra de esportes (respostas afirmativas: sim, claro, está, 👍, etc). "
-            "False se o defeito NÃO está em quadra de esportes (respostas negativas: não, nao, fora, 👎, etc)."
-        ),
+        ..., description="True se o defeito esta dentro de uma quadra de esportes"
     )
 
     @field_validator("reparo_luminaria_quadra_esportes", mode="before")
@@ -191,3 +187,8 @@ class QuadraEsportesPayload(BaseModel):
         if result is None:
             raise ValueError(f"Resposta ambígua: {v!r}. Use 'sim', 'não', 👍, etc.")
         return result
+    def _coerce_quadra(cls, v: object) -> bool:
+        parsed = parse_affirmation(v)
+        if parsed is None:
+            raise ValueError("Responda 'sim' ou 'não'.")
+        return parsed
