@@ -362,8 +362,13 @@ def create_app() -> FastMCP:
         """
         Inicia fluxo de autenticação gov.br via PKCE para um cidadão.
 
-        Esta tool deve ser chamada quando o cidadão precisa se autenticar para
-        acessar serviços restritos (ex: consultar IPTU, multas, processos).
+        NUNCA chame esta tool diretamente — ela é invocada internamente pelos
+        workflows de identificação (ex: reparo_luminaria, poda_de_arvore) quando
+        o próprio workflow decide que precisa de autenticação. O agente JAMAIS
+        deve chamar govbr_auth_init ou govbr_auth_status por conta própria.
+
+        PROIBIDO usar para: dívida ativa, IPTU, ou qualquer outro serviço
+        transacional — esses serviços têm seus próprios fluxos de coleta de dados.
 
         Retorna URL de autenticação que o cidadão deve clicar. O callback é
         tratado pelo Agent Gateway.
@@ -388,8 +393,10 @@ def create_app() -> FastMCP:
         """
         Verifica se cidadão possui autenticação gov.br válida.
 
-        Use esta tool ANTES de solicitar nova autenticação para evitar
-        pedir que o cidadão autentique novamente se já está autenticado.
+        NUNCA chame esta tool diretamente — ela é invocada internamente pelos
+        workflows de identificação. O agente JAMAIS deve chamar esta tool por
+        conta própria, nem para dívida ativa, nem para IPTU, nem para nenhum
+        outro serviço transacional.
 
         Args:
             user_number: Número WhatsApp do cidadão no formato E.164
@@ -1416,33 +1423,34 @@ def create_app() -> FastMCP:
         description=(
             "Envia um WhatsApp Flow (formulário estruturado) ao cidadão do thread atual. "
             "USE PROATIVAMENTE para serviços que têm Flow registrado — hoje: reparo_luminaria, divida_ativa. "
-            "Quando o cidadão relatar problema de luminária (apagada, piscando, danificada, "
-            "etc.) OU pedir consulta de dívida ativa / débitos fiscais, chame ESTA tool ANTES "
-            "de qualquer outra coisa — o Flow é a etapa de coleta/confirmação dos dados. "
+            "🚨 REGRA ABSOLUTA: quando o cidadão mencionar dívida ativa, débitos fiscais, CDA, "
+            "certidão de dívida, execução fiscal ou parcelamento de dívida — chame ESTA tool "
+            "IMEDIATAMENTE como PRIMEIRA e ÚNICA ação do turno. NÃO gere texto explicativo, "
+            "NÃO faça perguntas, NÃO mencione autenticação, NÃO chame nenhuma outra tool antes. "
+            "O mesmo vale para luminária (apagada, piscando, danificada, etc.). "
+            "O Flow é a etapa de coleta dos dados — ele cuida de tudo. "
             "NÃO chame multi_step_service primeiro; ele entra só "
             "DEPOIS que o cidadão submeter o Flow (inbound com _source='whatsapp_flow'). "
             "Encerre o turno logo após a tool call — não escreva texto depois (o body da "
             "tool já é a mensagem entregue; texto extra faz o interativo ser descartado). "
-            "Parâmetros: `flow_id` - use o ID do flow registrado no Meta Business Manager. "
-            "NÃO passe `flow_token` nem tente "
-            "gerar um UUID (não escreva código tipo `import uuid`/`uuid.uuid4()`) — o sistema "
-            "gera um token único por turno SOZINHO. `body` (texto de introdução). Exemplos: "
-            "reparo_luminaria: 'Vou abrir o formulário de defeito de luminária. Esse serviço não "
+            "Parâmetros obrigatórios: `service_type` (ex: 'divida_ativa', 'reparo_luminaria') — "
+            "o sistema resolve o flow_id automaticamente. NÃO passe `flow_id` nem `flow_token`. "
+            "`body` (texto de introdução). Exemplos: "
+            "reparo_luminaria: body='Vou abrir o formulário de defeito de luminária. Esse serviço não "
             "cobre falta de energia, luzes de casas ou semáforos apagados (acione Light 0800 0210196).' "
-            "divida_ativa: 'Vou abrir o formulário de consulta de dívida ativa. Escolha o tipo de consulta "
+            "divida_ativa: body='Vou abrir o formulário de consulta de dívida ativa. Escolha o tipo de consulta "
             "e informe os dados solicitados.' "
-            "PRÉ-PREENCHIMENTO (sempre que der): passe `prefill_data` com os campos que o "
-            "cidadão JÁ mencionou (ex: {'defect_type':'Apagada','location':'Rua','qty_pattern':'uma'}) "
-            "+ `service_type` (ex: 'reparo_luminaria') — encodados no flow_token, o formulário "
-            "abre já preenchido. NUNCA ponha PII (CPF/endereço) no prefill. Para divida_ativa, "
-            "NÃO envie prefill (dados coletados no próprio flow). "
+            "PRÉ-PREENCHIMENTO (reparo_luminaria): passe `prefill_data` com os campos que o "
+            "cidadão JÁ mencionou (ex: {'defect_type':'Apagada','location':'Rua','qty_pattern':'uma'}). "
+            "NUNCA ponha PII (CPF/endereço) no prefill. Para divida_ativa, NÃO envie prefill. "
             "Opcional: `cta` (rótulo do botão, default 'Abrir formulário'), `header`/`footer`, "
             "`flow_action_payload` (tela inicial + data)."
         ),
     )
     def build_whatsapp_flow_envelope(
-        flow_id: str,
         body: str,
+        service_type: str,
+        flow_id: Optional[str] = None,
         flow_token: Optional[str] = None,
         cta: str = "Abrir formulário",
         header: Optional[str] = None,
@@ -1450,7 +1458,6 @@ def create_app() -> FastMCP:
         flow_action: str = "navigate",
         flow_action_payload: Optional[dict] = None,
         prefill_data: Optional[dict] = None,
-        service_type: Optional[str] = None,
     ) -> dict:
         import uuid
 
@@ -1458,6 +1465,16 @@ def create_app() -> FastMCP:
             build_flow_envelope,
             encode_prefill_token,
         )
+
+        # Resolve flow_id pelo service_type se não vier explícito.
+        # O agente passa apenas service_type — nunca precisa saber o id.
+        if not flow_id:
+            flow_id = FLOW_TEMPLATES.get(service_type)
+            if not flow_id:
+                available = ", ".join(FLOW_TEMPLATES.keys())
+                return {
+                    "error": f"service_type '{service_type}' não encontrado. Disponíveis: {available}"
+                }
 
         # flow_token gerado PELO MCP (2026-06-03): pedir pro modelo "gerar um UUID"
         # fazia o Gemini 2.5 Flash emitir `import uuid; uuid.uuid4()` como
@@ -1469,9 +1486,6 @@ def create_app() -> FastMCP:
             flow_token = str(uuid.uuid4())
 
         # `encode_prefill_token` exige `service_type` pra normalizar/whitelist.
-        # O engine às vezes manda `prefill_data` sem `service_type` → encode
-        # vira no-op e o form abre vazio. Inferimos pelo flow_id (reverse de
-        # FLOW_TEMPLATES) pra não perder o prefill por esse esquecimento.
         if prefill_data and not service_type:
             service_type = next(
                 (s for s, fid in FLOW_TEMPLATES.items() if fid == flow_id), None

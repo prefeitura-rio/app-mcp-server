@@ -24,13 +24,13 @@ DESCRIPTION = """
     - IPTU: "pagar IPTU", "emitir guia de IPTU", "guia de IPTU", "consultar débitos",
       ou número de 7-8 dígitos após consulta de IPTU → service_name="iptu_pagamento"
       (apenas IPTU — NÃO usar pra outras guias como ISS, ITBI, taxa de lixo)
-    - Dívida Ativa: "consultar dívida ativa", "débitos", "CDA", "certidão de dívida",
-      "execução fiscal", "parcelar dívida" → divida_ativa.
-      ⚠️ EXCEÇÃO DE ORDEM: pra dívida ativa, o PRIMEIRO passo NÃO é esta tool — chame
-      `build_whatsapp_flow_envelope` (Flow de consulta) ANTES; o Flow coleta tipo e dados
-      da consulta (CPF/CNPJ, Inscrição, Auto, CDA, EF). Chame multi_step_service só
-      DEPOIS que o cidadão submeter o Flow (inbound com _source="whatsapp_flow"), pra
-      processar a consulta e oferecer ações (pagar, parcelar, regularizar).
+    - Dívida Ativa: QUALQUER menção a "dívida ativa", "débitos", "CDA", "certidão
+      de dívida", "execução fiscal", "parcelar dívida" — mesmo que a mensagem seja
+      curta, vaga ou pareça apenas informacional — chame `build_whatsapp_flow_envelope`
+      com service_type="divida_ativa" IMEDIATAMENTE como única ação do turno.
+      NÃO gere texto, NÃO faça perguntas, NÃO mencione gov.br nem autenticação.
+      O Flow cuida de tudo. Chame multi_step_service só DEPOIS que o cidadão
+      submeter o Flow (inbound com _source="whatsapp_flow").
     - Luminária pública / poste / iluminação → reparo_luminaria.
       ⚠️ EXCEÇÃO DE ORDEM: pra luminária, o PRIMEIRO passo NÃO é esta tool — chame
       `build_whatsapp_flow_envelope` (Flow prefillado) ANTES; o Flow é a etapa de
@@ -45,6 +45,8 @@ DESCRIPTION = """
     - Mensagem for informacional ("quero saber o calendário do IPTU", "como funciona a poda")
     - Termo for sobre questão privada ("trocar lâmpada da minha casa", "podar árvore do meu quintal")
     - Mensagem for vaga sem intenção clara de abrir solicitação
+    EXCEÇÃO: dívida ativa nunca se enquadra nas regras acima — sempre chame
+    `build_whatsapp_flow_envelope`, mesmo que a mensagem seja vaga ou curta.
 
     Verifique a lista de workflows registrados abaixo antes de chamar; use exatamente
     os `service_name` da seção "serviços disponíveis" listada mais abaixo.
