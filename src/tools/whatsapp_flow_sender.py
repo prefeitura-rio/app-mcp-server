@@ -6,7 +6,7 @@ de dados do cidadão antes de iniciar workflows conversacionais.
 """
 
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 from loguru import logger
@@ -364,3 +364,71 @@ async def send_interactive_envelope(
     except Exception as e:
         logger.error(f"Erro ao enviar interactive envelope: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def render_interactive_confirm(
+    interactive_spec: Optional[Dict[str, Any]],
+    fallback_body: str,
+    user_id: str,
+    service_name: str,
+) -> Optional[Dict[str, Any]]:
+    """Camada-tool: monta o envelope da confirmação interativa (botões/lista),
+    envia DIRETO pro cidadão e devolve a INSTRUÇÃO pro agente não duplicar em
+    texto. Retorna None quando o caller deve cair no fallback de texto: spec
+    ausente/inválido, sem buttons/sections, envelope inválido, ou envio falhou.
+
+    Extraído do wrapper de app.py pra ser testável (o envio é mockável) — antes a
+    orquestração vivia inline num closure não-coberto.
+    """
+    if not isinstance(interactive_spec, dict):
+        return None
+
+    from src.tools.whatsapp_interactive import (
+        build_buttons_envelope,
+        build_interactive_confirm_instruction,
+        build_list_envelope,
+    )
+
+    body = interactive_spec.get("body") or fallback_body or ""
+    if interactive_spec.get("buttons"):
+        envelope = build_buttons_envelope(
+            body=body, buttons=interactive_spec["buttons"]
+        )
+    elif interactive_spec.get("sections"):
+        envelope = build_list_envelope(
+            body=body,
+            sections=interactive_spec["sections"],
+            button_label=interactive_spec.get("button_label", "Ver opções"),
+        )
+    else:
+        logger.warning(
+            "[INTERACTIVE_CONFIRM] spec sem buttons/sections; fallback pra texto"
+        )
+        return None
+
+    if envelope.get("status") != "ok":
+        logger.warning(
+            f"[INTERACTIVE_CONFIRM] envelope inválido ({envelope.get('error')}); "
+            "fallback pra texto"
+        )
+        return None
+
+    send_result = await send_interactive_envelope(user_id, envelope["interactive"])
+    if not send_result.get("success"):
+        logger.warning(
+            f"[INTERACTIVE_CONFIRM] envio falhou ({send_result.get('error')}); "
+            "fallback pra texto"
+        )
+        return None
+
+    logger.info(
+        f"[INTERACTIVE_CONFIRM] enviado | service={service_name} "
+        f"| user={user_id} | msg_id={send_result.get('message_id')}"
+    )
+    return {
+        "status": "interactive_sent",
+        "next_step": "await_user_selection",
+        "instruction": build_interactive_confirm_instruction(
+            interactive_spec.get("field")
+        ),
+    }

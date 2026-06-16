@@ -99,3 +99,55 @@ async def test_send_flow_by_service_does_not_return_pii_token():
     # Mas o retorno NÃO carrega o payload reversível com PII.
     assert not result["flow_token"].startswith("v1:")
     assert decode_flow_token(result["flow_token"]) == {}
+
+
+# ============ render_interactive_confirm (camada-tool, round-trip) ============
+
+
+@pytest.mark.asyncio
+async def test_render_interactive_confirm_buttons_sends_and_names_field(monkeypatch):
+    """Caminho-feliz: monta o envelope de botões, envia (mockado) e devolve a
+    instrução que NOMEIA o campo do payload — o que destrava o round-trip (sem
+    isso o modelo re-chamava vazio → loop + 'instabilidade' no device-test)."""
+    captured: dict = {}
+
+    async def _fake_send(user_number, interactive):
+        captured["user"] = user_number
+        captured["interactive"] = interactive
+        return {"success": True, "message_id": "wamid.TEST"}
+
+    monkeypatch.setattr(sender_mod, "send_interactive_envelope", _fake_send)
+
+    spec = {
+        "body": "Confirma os dados?",
+        "field": "confirmacao",
+        "buttons": [{"id": "sim", "title": "Sim"}, {"id": "nao", "title": "Não"}],
+    }
+    result = await sender_mod.render_interactive_confirm(
+        spec, "fallback", "5521999999999", "reparo_luminaria"
+    )
+
+    assert result["status"] == "interactive_sent"
+    assert result["next_step"] == "await_user_selection"
+    assert '"confirmacao"' in result["instruction"]
+    assert "vazio" in result["instruction"].lower()
+    assert captured["interactive"]["type"] == "button"
+    assert captured["user"] == "5521999999999"
+
+
+@pytest.mark.asyncio
+async def test_render_interactive_confirm_none_when_spec_missing():
+    """Sem spec (gate on mas workflow não sinalizou) → None → caller cai no texto."""
+    assert await sender_mod.render_interactive_confirm(None, "x", "u", "s") is None
+
+
+@pytest.mark.asyncio
+async def test_render_interactive_confirm_none_when_send_fails(monkeypatch):
+    """Envio falhou → None → fallback de texto (best-effort, não levanta)."""
+
+    async def _fake_send(user_number, interactive):
+        return {"success": False, "error": "boom"}
+
+    monkeypatch.setattr(sender_mod, "send_interactive_envelope", _fake_send)
+    spec = {"body": "q", "buttons": [{"id": "sim", "title": "Sim"}]}
+    assert await sender_mod.render_interactive_confirm(spec, "x", "u", "s") is None
