@@ -1094,17 +1094,38 @@ def create_app() -> FastMCP:
                         f"[INTERACTIVE_CONFIRM] enviado | service={service_name} "
                         f"| user={user_id} | msg_id={send_result.get('message_id')}"
                     )
-                    return {
-                        "status": "interactive_sent",
-                        "next_step": "await_user_selection",
-                        "instruction": (
+                    # Nomeia o campo EXATO que a resposta do cidadão preenche no
+                    # próximo turno (vem do workflow via interactive["field"]). Sem
+                    # isso a instrução era vaga ("o campo correspondente") e o modelo
+                    # re-chamava multi_step_service com payload VAZIO → o passo de
+                    # confirmação loopava (re-enviava os botões) e o turno mudo virava
+                    # resposta vazia → fallback "instabilidade" do Mule. Device-test
+                    # 2026-06-16 expôs isso.
+                    field_name = interactive_spec.get("field")
+                    if field_name:
+                        instruction = (
+                            "Os botões já foram enviados ao cidadão e são "
+                            "auto-explicativos. NÃO escreva nenhuma mensagem "
+                            "adicional repetindo a pergunta nem as opções. Quando o "
+                            "cidadão responder (ex.: 'Sim'/'Não' ou um texto), chame "
+                            "multi_step_service de novo passando a resposta LITERAL "
+                            f'dele no campo "{field_name}" do payload — ex.: '
+                            f'payload={{"{field_name}": "<resposta do cidadão>"}}. '
+                            "NUNCA chame com payload vazio."
+                        )
+                    else:
+                        instruction = (
                             "Os botões já foram enviados ao cidadão e são "
                             "auto-explicativos. NÃO escreva nenhuma mensagem "
                             "adicional repetindo a pergunta nem as opções. Aguarde "
                             "o cidadão escolher; a resposta volta como texto e você "
                             "deve chamar multi_step_service de novo com o campo "
                             "correspondente no payload."
-                        ),
+                        )
+                    return {
+                        "status": "interactive_sent",
+                        "next_step": "await_user_selection",
+                        "instruction": instruction,
                     }
                 logger.warning(
                     f"[INTERACTIVE_CONFIRM] envio falhou ({send_result.get('error')}); "
