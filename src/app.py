@@ -1304,7 +1304,9 @@ def create_app() -> FastMCP:
             neighborhood=neighborhood,
             neighborhood_code=neighborhood_code,
             number=number_digits,
-            locality=reference_point,
+            # Ponto de referência vai pro `complemento` do SGRC, NÃO pra `localidade`
+            # (que é cidade/sub-localidade).
+            complement=reference_point,
             zip_code=zip_code,
         )
 

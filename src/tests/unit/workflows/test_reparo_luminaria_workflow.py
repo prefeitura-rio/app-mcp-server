@@ -222,7 +222,9 @@ def test_reparo_ticket_builder_and_ticket_state_helpers():
     assert description == "Reparo de luminária"
     assert address.street == "Rua IPP"
     assert address.number == "10"
-    assert address.locality == "Perto da praça"
+    # Ponto de referência vai pro complemento (não localidade) no payload SGRC.
+    assert address.complement == "Perto da praça"
+    assert address.locality == ""
     assert requester.email == "user@example.com"
     assert requester.phones.telefone1 == "21999999999"
 
