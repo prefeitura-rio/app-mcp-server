@@ -84,6 +84,17 @@ class IdentificationFlowMixin:
         )
         payload_vazio = not state.payload or len(state.payload) == 0
 
+        # Botões do método (camada-tool, gated ENABLE_INTERACTIVE_CONFIRM). Os títulos
+        # mapeiam pros valores do campo: "CPF"→cpf / "Gov.br"→govbr (normalize_method);
+        # "Sem me identificar" cai no skip-substring → anônimo, antes da validação. A
+        # 3ª opção só aparece quando a identificação é opcional.
+        metodo_buttons = [
+            {"id": "cpf", "title": "CPF"},
+            {"id": "govbr", "title": "Gov.br"},
+        ]
+        if not identificacao_obrigatoria:
+            metodo_buttons.append({"id": "anonimo", "title": "Sem me identificar"})
+
         if not identificacao_obrigatoria and payload_vazio:
             logger.info(
                 "[METHOD] Identificação opcional + payload vazio → pulando (anônimo)"
@@ -176,18 +187,30 @@ class IdentificationFlowMixin:
                     state.agent_response = None
                     return state
 
+                desc_invalido = self._personal_data_template(
+                    "metodo_identificacao_invalido", attempts
+                )
                 state.agent_response = AgentResponse(
-                    description=self._personal_data_template(
-                        "metodo_identificacao_invalido", attempts
-                    ),
+                    description=desc_invalido,
                     payload_schema=IdentificationMethodPayload.model_json_schema(),
+                    interactive={
+                        "body": desc_invalido,
+                        "field": "identification_method",
+                        "buttons": metodo_buttons,
+                    },
                     error_message=str(e),
                 )
                 return state
 
+        desc_metodo = self._personal_data_template("solicitar_metodo_identificacao")
         state.agent_response = AgentResponse(
-            description=self._personal_data_template("solicitar_metodo_identificacao"),
+            description=desc_metodo,
             payload_schema=IdentificationMethodPayload.model_json_schema(),
+            interactive={
+                "body": desc_metodo,
+                "field": "identification_method",
+                "buttons": metodo_buttons,
+            },
         )
         return state
 

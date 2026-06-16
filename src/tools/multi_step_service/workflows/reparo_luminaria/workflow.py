@@ -773,9 +773,20 @@ class ReparoLuminariaWorkflow(
                 )
                 return state
 
+        quadra_desc = tpl.perguntar_quadra_esportes()
         state.agent_response = AgentResponse(
-            description=tpl.perguntar_quadra_esportes(),
+            description=quadra_desc,
             payload_schema=QuadraEsportesPayload.model_json_schema(),
+            # Botões Sim/Não (camada-tool, gated). Field do QuadraEsportesPayload;
+            # parse_affirmation resolve o tap "Sim"/"Não" determinístico.
+            interactive={
+                "body": quadra_desc,
+                "field": "reparo_luminaria_quadra_esportes",
+                "buttons": [
+                    {"id": "sim", "title": "Sim"},
+                    {"id": "nao", "title": "Não"},
+                ],
+            },
         )
         return state
 
