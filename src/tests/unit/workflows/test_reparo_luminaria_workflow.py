@@ -1079,3 +1079,25 @@ def test_agent_response_interactive_no_model_dump():
 
     # Default None nos que não setam (app.py pop → None → ignora, sem efeito).
     assert AgentResponse(description="x").model_dump()["interactive"] is None
+
+
+def test_confirm_ticket_data_sets_sim_nao_buttons():
+    """A confirmação dos dados do chamado (ponto ALCANÇADO no caminho-feliz
+    pós-Flow, diferente de _show_service_summary que o Flow-first pula) sinaliza
+    botões Sim/Não, com o texto como fallback. O `body` espelha o resumo."""
+    workflow = make_workflow()
+    state = (
+        make_state()
+    )  # fresh: sem ticket_data_confirmed, payload vazio → pergunta primária
+
+    result = asyncio.run(workflow._confirm_ticket_data(state))
+
+    interactive = result.agent_response.interactive
+    assert interactive is not None, (
+        "deveria sinalizar interactive na confirmação de dados"
+    )
+    buttons = interactive["buttons"]
+    assert [b["id"] for b in buttons] == ["sim", "nao"]
+    assert [b["title"] for b in buttons] == ["Sim", "Não"]
+    # body == description (o resumo dos dados do chamado), fallback intacto.
+    assert interactive["body"] == result.agent_response.description
