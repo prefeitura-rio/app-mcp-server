@@ -361,3 +361,34 @@ def build_cta_url_envelope(
         interactive["footer"] = {"text": footer}
 
     return {"status": "ok", "type": "interactive", "interactive": interactive}
+
+
+def build_interactive_confirm_instruction(field_name: Optional[str]) -> str:
+    """Instrução pro agente após o wrapper enviar uma confirmação interativa.
+
+    O cidadão responde por texto (o tap devolve o título "Sim"/"Não"). O agente
+    precisa re-chamar `multi_step_service` colocando essa resposta no campo CERTO
+    do payload — senão re-chama vazio, o passo de confirmação loopa (re-envia os
+    botões) e o turno mudo vira resposta vazia → fallback "instabilidade" do Mule
+    (exposto no device-test 2026-06-16).
+
+    Com `field_name` (o workflow declara via `interactive["field"]`), nomeia o
+    campo exato + exemplo de payload + proíbe chamar vazio. Sem `field_name`, cai
+    num texto genérico (back-compat com specs antigas).
+    """
+    if field_name:
+        return (
+            "Os botões já foram enviados ao cidadão e são auto-explicativos. NÃO "
+            "escreva nenhuma mensagem adicional repetindo a pergunta nem as "
+            "opções. Quando o cidadão responder (ex.: 'Sim'/'Não' ou um texto), "
+            "chame multi_step_service de novo passando a resposta LITERAL dele no "
+            f'campo "{field_name}" do payload — ex.: '
+            f'payload={{"{field_name}": "<resposta do cidadão>"}}. '
+            "NUNCA chame com payload vazio."
+        )
+    return (
+        "Os botões já foram enviados ao cidadão e são auto-explicativos. NÃO "
+        "escreva nenhuma mensagem adicional repetindo a pergunta nem as opções. "
+        "Aguarde o cidadão escolher; a resposta volta como texto e você deve "
+        "chamar multi_step_service de novo com o campo correspondente no payload."
+    )

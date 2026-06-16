@@ -448,6 +448,8 @@ class ReparoLuminariaWorkflow(
             # cidadão digita em vez de tocar).
             interactive={
                 "body": description,
+                # Campo do payload que o tap Sim/Não preenche (ver wrapper app.py).
+                "field": "confirmacao_servico",
                 "buttons": [
                     {"id": "sim", "title": "Sim"},
                     {"id": "nao", "title": "Não"},
@@ -951,6 +953,11 @@ class ReparoLuminariaWorkflow(
             # correção. `description` segue como fallback (gate off / texto).
             interactive={
                 "body": ticket_confirm_desc,
+                # Campo do payload que a resposta do cidadão preenche no próximo
+                # turno. O wrapper (app.py) nomeia ESTE campo na instrução pro
+                # agente — sem isso o modelo re-chama com payload vazio e o passo
+                # loopa (re-envia os botões) em vez de avançar.
+                "field": "confirmacao",
                 "buttons": [
                     {"id": "sim", "title": "Sim"},
                     {"id": "nao", "title": "Não"},

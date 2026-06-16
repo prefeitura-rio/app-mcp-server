@@ -4,6 +4,7 @@ from src.flows._token import decode_flow_token
 from src.tools.whatsapp_interactive import (
     build_buttons_envelope,
     build_flow_envelope,
+    build_interactive_confirm_instruction,
     build_list_envelope,
     encode_prefill_token,
 )
@@ -341,3 +342,24 @@ def test_navigate_inline_data_prefills_and_visibility():
     assert params["flow_token"].startswith("v1:")
     decoded = decode_flow_token(params["flow_token"])
     assert decoded["defect_type"] == "Apagada"
+
+
+# ============ build_interactive_confirm_instruction (round-trip) ============
+
+
+def test_interactive_confirm_instruction_names_field():
+    """Com field nomeado: a instrução cita o campo exato, mostra o exemplo de
+    payload e proíbe chamar vazio — o que destrava o round-trip (sem isso o
+    modelo re-chamava vazio → loop + 'instabilidade', visto no device-test)."""
+    msg = build_interactive_confirm_instruction("confirmacao")
+    assert '"confirmacao"' in msg
+    assert "vazio" in msg.lower()
+    assert "multi_step_service" in msg
+
+
+def test_interactive_confirm_instruction_fallback_sem_field():
+    """Sem field (back-compat com specs antigas / sem 'field'): texto genérico,
+    não cita campo nem crasha."""
+    msg = build_interactive_confirm_instruction(None)
+    assert "campo correspondente" in msg
+    assert "multi_step_service" in msg

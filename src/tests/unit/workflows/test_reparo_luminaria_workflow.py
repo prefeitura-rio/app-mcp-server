@@ -1039,6 +1039,9 @@ def test_show_service_summary_sets_sim_nao_buttons():
     buttons = interactive["buttons"]
     assert [b["id"] for b in buttons] == ["sim", "nao"]
     assert [b["title"] for b in buttons] == ["Sim", "Não"]
+    # Campo do payload nomeado pro wrapper instruir o agente (evita re-chamada
+    # com payload vazio → loop). Tem que casar o campo do ConfirmacaoServicoPayload.
+    assert interactive["field"] == "confirmacao_servico"
     # body presente e description (fallback) intactos.
     assert "É este serviço" in interactive["body"]
     assert "É este serviço" in result.agent_response.description
@@ -1099,5 +1102,9 @@ def test_confirm_ticket_data_sets_sim_nao_buttons():
     buttons = interactive["buttons"]
     assert [b["id"] for b in buttons] == ["sim", "nao"]
     assert [b["title"] for b in buttons] == ["Sim", "Não"]
+    # Campo do payload nomeado pro wrapper instruir o agente (sem isso o modelo
+    # re-chama com payload vazio e o passo loopa). Tem que casar o campo do
+    # TicketDataConfirmationPayload que o parse_optional_bool valida.
+    assert interactive["field"] == "confirmacao"
     # body == description (o resumo dos dados do chamado), fallback intacto.
     assert interactive["body"] == result.agent_response.description
