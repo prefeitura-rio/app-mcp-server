@@ -222,7 +222,9 @@ def test_reparo_ticket_builder_and_ticket_state_helpers():
     assert description == "Reparo de luminária"
     assert address.street == "Rua IPP"
     assert address.number == "10"
-    assert address.locality == "Perto da praça"
+    # Ponto de referência vai pro complemento (não localidade) no payload SGRC.
+    assert address.complement == "Perto da praça"
+    assert address.locality == ""
     assert requester.email == "user@example.com"
     assert requester.phones.telefone1 == "21999999999"
 
@@ -1005,6 +1007,60 @@ async def test_optional_identification_valid_method_preserved():
     )
     out = await workflow._select_identification_method(state)
     assert out.data["identification_method"] == "cpf"
+
+
+@pytest.mark.asyncio
+async def test_identification_prompt_sets_3_buttons_when_optional():
+    """Prompt do método (opcional) sinaliza 3 botões: CPF / Gov.br / Sem me
+    identificar. Alcançado com payload não-vazio SEM identification_method (payload
+    vazio + opcional auto-anonimiza antes do prompt). Títulos mapeiam pros valores."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={"_outro": "x"},
+        data={"identificacao_obrigatoria_1746": False},
+    )
+    out = await workflow._select_identification_method(state)
+    interactive = out.agent_response.interactive
+    assert interactive["field"] == "identification_method"
+    assert [b["id"] for b in interactive["buttons"]] == ["cpf", "govbr", "anonimo"]
+    assert interactive["body"] == out.agent_response.description
+
+
+@pytest.mark.asyncio
+async def test_identification_prompt_sets_2_buttons_when_obligatory():
+    """Identificação obrigatória → só CPF / Gov.br (sem a 3ª opção anônima)."""
+    workflow = make_workflow()
+    state = make_state(payload={}, data={"identificacao_obrigatoria_1746": True})
+    out = await workflow._select_identification_method(state)
+    interactive = out.agent_response.interactive
+    assert [b["id"] for b in interactive["buttons"]] == ["cpf", "govbr"]
+
+
+@pytest.mark.asyncio
+async def test_identification_invalid_reprompt_keeps_buttons():
+    """Re-prompt de método inválido (tentativa < 3) também traz os botões."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={"identification_method": "xyz"},
+        data={"identificacao_obrigatoria_1746": True},
+    )
+    out = await workflow._select_identification_method(state)
+    interactive = out.agent_response.interactive
+    assert interactive is not None
+    assert interactive["field"] == "identification_method"
+
+
+@pytest.mark.asyncio
+async def test_collect_quadra_sets_sim_nao_buttons():
+    """A pergunta da quadra de esportes sinaliza botões Sim/Não (field do
+    QuadraEsportesPayload; parse_affirmation resolve o tap)."""
+    workflow = make_workflow()
+    state = make_state(data={"luminaria_localizacao": "Praça"})
+    out = await workflow._collect_quadra_esportes(state)
+    interactive = out.agent_response.interactive
+    assert interactive["field"] == "reparo_luminaria_quadra_esportes"
+    assert [b["id"] for b in interactive["buttons"]] == ["sim", "nao"]
+    assert interactive["body"] == out.agent_response.description
 
 
 def test_metodo_invalido_mantem_opcao_de_pular_quando_opcional():

@@ -41,7 +41,10 @@ def build_address(state: ServiceState) -> Address:
         ),
         neighborhood_code=address_data.get("bairro_id_ipp", ""),
         number=street_number,
-        locality=ponto_ref,
+        # Ponto de referência vai pro `complemento` do SGRC, NÃO pra `localidade`
+        # (que é cidade/sub-localidade). Antes ia pra localidade, mandando "Não tem"
+        # pro campo errado no payload NovoChamado.
+        complement=ponto_ref,
         zip_code=address_data.get("cep", ""),
     )
 

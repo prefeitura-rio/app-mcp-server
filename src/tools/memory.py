@@ -4,6 +4,7 @@ from enum import Enum
 from typing import List, Optional, Union
 
 import httpx
+from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from src.config.env import RMI_API_URL
@@ -79,6 +80,22 @@ async def get_memories(
                 []
                 if memory_name is None
                 else {"status": "not_found", "memory_name": memory_name}
+            )
+
+        # Serviço de memória fora do ar (5xx, ex.: 503 no staging) NÃO é erro do bot —
+        # o agente segue sem memória (degrada gracioso). Rebaixa pra um WARNING único
+        # em vez de levantar HTTPStatusError, que vira traceback ruidoso a cada turno
+        # + reporta ao interceptor como falha. (Flag pra infra se persistir.)
+        if response.status_code >= 500:
+            logger.warning(
+                "Serviço de memória indisponível (HTTP {}); seguindo sem memória.".format(
+                    response.status_code
+                )
+            )
+            return (
+                []
+                if memory_name is None
+                else {"status": "unavailable", "memory_name": memory_name}
             )
 
         response.raise_for_status()
