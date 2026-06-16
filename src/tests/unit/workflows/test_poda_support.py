@@ -258,7 +258,9 @@ def test_build_address_sanitizes_number_and_prefers_ipp_fields():
     assert address.neighborhood == "Bairro IPP"
     assert address.neighborhood_code == "456"
     assert address.number == "10"
-    assert address.locality == "Perto da praça"
+    # Ponto de referência vai pro complemento (não localidade) no payload SGRC.
+    assert address.complement == "Perto da praça"
+    assert address.locality == ""
     assert address.zip_code == "20000-000"
 
 

@@ -132,6 +132,59 @@ async def test_memory_get_and_upsert(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_memory_get_5xx_returns_unavailable(monkeypatch):
+    """Serviço de memória fora (5xx, ex.: 503 no staging) → degrada gracioso, NÃO
+    levanta: lista vazia sem memory_name, {status: unavailable} quando nomeado."""
+    ensure_package("src", PROJECT_ROOT / "src")
+    ensure_package("src.tools", PROJECT_ROOT / "src" / "tools")
+    ensure_package("src.utils", PROJECT_ROOT / "src" / "utils")
+    ensure_package("src.config", PROJECT_ROOT / "src" / "config")
+
+    env_module = types.SimpleNamespace(RMI_API_URL="https://rmi.example")
+    monkeypatch.setitem(sys.modules, "src.config.env", env_module)
+    monkeypatch.setitem(
+        sys.modules, "src.config", types.SimpleNamespace(env=env_module)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.error_interceptor",
+        types.SimpleNamespace(interceptor=passthrough_interceptor),
+    )
+
+    class FakeClient503:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, headers=None):
+            return FakeResponse({"detail": "down"}, status_code=503)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.http_client",
+        types.SimpleNamespace(InterceptedHTTPClient=lambda **kwargs: FakeClient503()),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.rmi_oauth2",
+        types.SimpleNamespace(
+            get_authorization_header=lambda: asyncio.sleep(0, result="Bearer abc"),
+            is_oauth2_configured=lambda: True,
+        ),
+    )
+
+    module = load_module("test_memory_module_503", "src/tools/memory.py")
+
+    # Sem memory_name → lista vazia (não levanta HTTPStatusError).
+    assert await module.get_memories("u1") == []
+    # Com memory_name → status "unavailable".
+    result = await module.get_memories("u1", "prefs")
+    assert result == {"status": "unavailable", "memory_name": "prefs"}
+
+
+@pytest.mark.asyncio
 async def test_memory_unauthorized_and_create_on_404(monkeypatch):
     ensure_package("src", PROJECT_ROOT / "src")
     ensure_package("src.tools", PROJECT_ROOT / "src" / "tools")
