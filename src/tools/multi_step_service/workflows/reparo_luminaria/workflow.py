@@ -938,11 +938,24 @@ class ReparoLuminariaWorkflow(
                 )
                 return state
 
+        ticket_confirm_desc = tpl.confirmar_dados_ticket(
+            self._format_ticket_confirmation_data(state)
+        )
         state.agent_response = AgentResponse(
-            description=tpl.confirmar_dados_ticket(
-                self._format_ticket_confirmation_data(state)
-            ),
+            description=ticket_confirm_desc,
             payload_schema=TicketDataConfirmationPayload.model_json_schema(),
+            # Confirmação dos dados do chamado por botões Sim/Não (camada-tool,
+            # gated em app.py por ENABLE_INTERACTIVE_CONFIRM). Este ponto É
+            # alcançado no caminho-feliz do luminária (pós-Flow) — ao contrário
+            # de _show_service_summary, que o Flow-first pula. Tap Não → fluxo de
+            # correção. `description` segue como fallback (gate off / texto).
+            interactive={
+                "body": ticket_confirm_desc,
+                "buttons": [
+                    {"id": "sim", "title": "Sim"},
+                    {"id": "nao", "title": "Não"},
+                ],
+            },
         )
         return state
 
