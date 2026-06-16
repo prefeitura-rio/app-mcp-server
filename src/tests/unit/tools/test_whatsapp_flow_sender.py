@@ -33,8 +33,13 @@ class _FakeSender:
         flow_token=None,
         flow_cta="Abrir",
         prefill_data=None,
+        body=None,
     ):
-        _FakeSender.last = {"flow_token": flow_token, "prefill_data": prefill_data}
+        _FakeSender.last = {
+            "flow_token": flow_token,
+            "prefill_data": prefill_data,
+            "body": body,
+        }
         return {"success": True, "message_id": "m1", "flow_token": flow_token}
 
 

@@ -46,6 +46,7 @@ class WhatsAppFlowSender:
         flow_token: str | None = None,
         flow_cta: str = "Abrir",
         prefill_data: Dict[str, Any] | None = None,
+        body: str | None = None,
     ) -> Dict[str, Any]:
         """
         Envia WhatsApp Flow interativo para um destinatário.
@@ -99,13 +100,14 @@ class WhatsAppFlowSender:
                 normalized[canonical] = value
             flow_action_payload["data"] = normalized
 
+        msg_body = body or "Por favor, preencha o formulário."
         payload = {
             "messaging_product": "whatsapp",
             "to": recipient,
             "type": "interactive",
             "interactive": {
                 "type": "flow",
-                "body": {"text": "Por favor, me dê mais detalhes sobre a luminária."},
+                "body": {"text": msg_body},
                 "action": {
                     "name": "flow",
                     "parameters": {
@@ -216,6 +218,16 @@ FLOW_TEMPLATES = {
     # "limpeza_urbana": "FLOW_ID_AQUI",
 }
 
+# Configurações por serviço: body da mensagem enviada com o Flow
+FLOW_CONFIG = {
+    "reparo_luminaria": {
+        "body": "Preencha o formulário para registrar o defeito de luminária.",
+    },
+    "divida_ativa": {
+        "body": "Vou abrir o formulário de consulta de dívida ativa. Escolha o tipo de consulta e informe os dados solicitados.",
+    },
+}
+
 
 async def send_flow_by_service(
     service_type: str,
@@ -291,6 +303,7 @@ async def send_flow_by_service(
             f"flow_token={_redact_flow_token(encoded_token)}"
         )
 
+    config = FLOW_CONFIG.get(service_type, {})
     sender = WhatsAppFlowSender()
 
     try:
@@ -299,6 +312,7 @@ async def send_flow_by_service(
             flow_id=flow_id,
             flow_token=encoded_token,
             prefill_data=normalized_prefill or None,
+            body=config.get("body"),
         )
 
         # O token v1:encoded pode conter PII (ex: endereço) e vai SÓ pro

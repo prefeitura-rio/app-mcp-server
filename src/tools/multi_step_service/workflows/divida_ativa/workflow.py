@@ -71,12 +71,13 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
     @handle_errors
     async def _escolher_tipo_consulta(self, state: ServiceState) -> ServiceState:
-        # Se veio do WhatsApp Flow, normaliza o payload
+        # Se veio do WhatsApp Flow, normaliza o payload e marca flow como preenchido
         if state.payload.get("_source") == "whatsapp_flow":
             from src.tools.divida_ativa_flow import normalize_flow_submission
 
             normalized = normalize_flow_submission(state.payload)
             state.payload.update(normalized)
+            state.data["_flow_completed"] = True
 
         if "consulta_debitos" in state.payload:
             payload = TipoConsultaPayload.model_validate(state.payload)

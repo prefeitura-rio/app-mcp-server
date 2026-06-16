@@ -960,9 +960,15 @@ def create_app() -> FastMCP:
             existing_state = await state_manager.load_service_state(service_name)
 
             # Envia flow automaticamente se:
-            # 1. NÃO veio de whatsapp_flow completion
-            # 2. Serviço foi confirmado (service_confirmed=True no state)
-            # 3. Ainda não coletou dados do defeito (luminaria_defeito ausente)
+            # 1. NÃO veio de whatsapp_flow completion (_source != "whatsapp_flow")
+            # 2. Flow ainda não foi preenchido para este serviço
+            #
+            # Para serviços com step de confirmação (ex: reparo_luminaria):
+            # aguarda service_confirmed=True antes de enviar o Flow.
+            # Para serviços sem step de confirmação (ex: divida_ativa):
+            # envia o Flow imediatamente — ele é o primeiro passo de coleta.
+
+            SERVICOS_COM_CONFIRMACAO = {"reparo_luminaria"}
 
             # Detectar se acabou de confirmar o serviço (payload tem confirmacao_servico).
             # parse_affirmation aceita bool (LLM converteu) E string ("Sim"/"sim"): com a
@@ -979,19 +985,24 @@ def create_app() -> FastMCP:
                 existing_state and existing_state.data.get("service_confirmed") is True
             )
 
-            # Verificar se já tem dados do defeito (Flow já foi preenchido)
-            ja_tem_dados_defeito = existing_state and existing_state.data.get(
-                "luminaria_defeito"
+            # Verificar se o Flow já foi preenchido para este serviço.
+            # Para luminária: chave legada "luminaria_defeito".
+            # Para demais serviços: chave genérica "_flow_completed".
+            ja_preencheu_flow = existing_state and (
+                existing_state.data.get("luminaria_defeito")
+                or existing_state.data.get("_flow_completed")
             )
 
-            # Enviar Flow APENAS quando:
-            # - Acabou de confirmar o serviço OU serviço já estava confirmado
-            # - E ainda NÃO tem dados do defeito
-            should_send_flow = (
-                source != "whatsapp_flow"
-                and (acabou_de_confirmar or servico_ja_confirmado)
-                and not ja_tem_dados_defeito
-            )
+            if service_name in SERVICOS_COM_CONFIRMACAO:
+                # Serviços com confirmação: só envia o Flow após confirmar
+                should_send_flow = (
+                    source != "whatsapp_flow"
+                    and (acabou_de_confirmar or servico_ja_confirmado)
+                    and not ja_preencheu_flow
+                )
+            else:
+                # Serviços sem confirmação (ex: divida_ativa): envia o Flow imediatamente
+                should_send_flow = source != "whatsapp_flow" and not ja_preencheu_flow
 
             if should_send_flow:
                 # Envia flow após confirmação do serviço
