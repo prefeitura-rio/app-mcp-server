@@ -62,7 +62,11 @@ from src.flows.divida_ativa.handler import (
 from src.flows.divida_ativa.opcoes.handler import (
     process_flow_request as process_divida_ativa_opcoes_flow_request,
 )
-from src.tools.whatsapp_flow_sender import send_flow_by_service, FLOW_TEMPLATES
+from src.tools.whatsapp_flow_sender import (
+    send_flow_by_service,
+    FLOW_TEMPLATES,
+    FLOW_CONFIG,
+)
 from src.tools.whatsapp_message_status import check_message_read_status
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
@@ -1547,6 +1551,19 @@ def create_app() -> FastMCP:
                 if k in _PUBLISHED_MAIN_KEYS
             }
             flow_action_payload = {"screen": _init.get("screen", "MAIN"), "data": _data}
+
+        # CRÍTICO: se flow_action_payload ainda é None, usar a tela inicial
+        # correta para o serviço. O Meta rejeita com 400 BAD_REQUEST se a
+        # screen não existir no flow publicado. Cada serviço declara sua
+        # `initial_screen` em FLOW_CONFIG (ex: "MAIN" para luminária,
+        # "TIPO_CONSULTA" para dívida ativa). Sem isso, o default "MAIN" de
+        # build_flow_envelope seria usado para todos os serviços, causando
+        # rejeição silenciosa para flows que não têm tela "MAIN".
+        if not flow_action_payload and flow_action == "navigate":
+            _initial_screen = FLOW_CONFIG.get(service_type, {}).get(
+                "initial_screen", "MAIN"
+            )
+            flow_action_payload = {"screen": _initial_screen}
 
         # Observabilidade: só as CHAVES (sem valores, pra não logar PII) + se o
         # token virou `v1:` + se o data inline foi montado. Diagnostica form vazio.

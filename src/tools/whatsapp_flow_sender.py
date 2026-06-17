@@ -47,6 +47,7 @@ class WhatsAppFlowSender:
         flow_cta: str = "Abrir",
         prefill_data: Dict[str, Any] | None = None,
         body: str | None = None,
+        initial_screen: str = "MAIN",
     ) -> Dict[str, Any]:
         """
         Envia WhatsApp Flow interativo para um destinatário.
@@ -86,7 +87,10 @@ class WhatsAppFlowSender:
         # Pra Flow estático: cliente WhatsApp aplica `data` direto nos
         # Form `init-values`. Pra Flow dinâmico: Meta entrega esse data ao
         # endpoint server no INIT — geralmente vazio em v3.0, mas defensive.
-        flow_action_payload: Dict[str, Any] = {"screen": "MAIN"}
+        # `initial_screen` deve bater com o `id` da primeira Screen declarada
+        # no flow.json publicado no Meta (ex: "MAIN" para luminária,
+        # "TIPO_CONSULTA" para dívida ativa). Screen inválida → 400 BAD_REQUEST.
+        flow_action_payload: Dict[str, Any] = {"screen": initial_screen}
         if prefill_data:
             # Normalização: convenção do Flow JSON é declarar
             # `screen.data` com sufixo `_prefill` (ex: `endereco_prefill`)
@@ -218,13 +222,17 @@ FLOW_TEMPLATES = {
     # "limpeza_urbana": "FLOW_ID_AQUI",
 }
 
-# Configurações por serviço: body da mensagem enviada com o Flow
+# Configurações por serviço: body da mensagem enviada com o Flow e tela inicial.
+# `initial_screen` deve bater com o `id` da primeira Screen declarada no flow.json
+# publicado no Meta — o Meta rejeita com 400 BAD_REQUEST se a screen não existir.
 FLOW_CONFIG = {
     "reparo_luminaria": {
         "body": "Preencha o formulário para registrar o defeito de luminária.",
+        "initial_screen": "MAIN",
     },
     "divida_ativa": {
         "body": "Vou abrir o formulário de consulta de dívida ativa. Escolha o tipo de consulta e informe os dados solicitados.",
+        "initial_screen": "TIPO_CONSULTA",
     },
 }
 
@@ -313,6 +321,7 @@ async def send_flow_by_service(
             flow_token=encoded_token,
             prefill_data=normalized_prefill or None,
             body=config.get("body"),
+            initial_screen=config.get("initial_screen", "MAIN"),
         )
 
         # O token v1:encoded pode conter PII (ex: endereço) e vai SÓ pro

@@ -118,12 +118,12 @@ def build_flow_envelope(
             "Permitidos: 'navigate' (default) ou 'data_exchange'."
         )
 
-    # Default screen = "MAIN" (tela de entrada do único Flow registrado, reparo_luminaria).
-    # NÃO usar "FIRST_SCREEN" (placeholder genérico): o Meta rejeita screen inexistente com
-    # 400 BAD_REQUEST e o card NÃO chega ao cidadão (validado 2026-06-03; era o motivo de o
-    # Flow não aparecer). Flow novo com outra tela inicial precisa passar
-    # flow_action_payload={"screen": "<entry_screen>"} explicitamente, ou o
-    # build_whatsapp_flow_envelope (app.py) injeta via FLOW_CONFIG antes de chamar aqui.
+    # ATENÇÃO: o Meta rejeita com 400 BAD_REQUEST se a screen não existir no
+    # flow publicado — e o card NÃO chega ao cidadão (validado 2026-06-03).
+    # O caller (build_whatsapp_flow_envelope em app.py) DEVE sempre passar
+    # flow_action_payload com a screen correta para o serviço (lida de
+    # FLOW_CONFIG["initial_screen"]). O fallback "MAIN" abaixo só vale para
+    # flows que de fato têm uma screen chamada "MAIN" (ex: reparo_luminaria).
     payload: dict[str, Any] = flow_action_payload or {"screen": "MAIN"}
 
     interactive: dict[str, Any] = {
