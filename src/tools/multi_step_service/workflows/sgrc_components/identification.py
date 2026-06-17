@@ -487,8 +487,25 @@ class IdentificationFlowMixin:
                 f"[GOVBR] Auth link sent successfully, auth_id={init_result.get('auth_id')}"
             )
 
+            # O botão de login gov.br já foi enviado DIRETO pra Meta (out-of-band) por
+            # govbr_auth_init/_send_cta_url_button e é auto-explicativo. Sinaliza
+            # out_of_band_sent pro wrapper retornar interactive_sent — assim o cidadão
+            # NÃO recebe o texto redundante "✅ Link enviado, clique no botão acima..."
+            # (device-test 2026-06-17). A `description` fica como fallback gracioso pra
+            # um wrapper antigo que não conheça o sinal. O Mule (#1) reconhece
+            # interactive_sent e não dispara o fallback de resposta-vazia.
             state.agent_response = AgentResponse(
                 description=self._personal_data_template("govbr_autenticacao_iniciada"),
+                interactive={
+                    "out_of_band_sent": True,
+                    "next_step": "await_govbr_auth",
+                    "instruction": (
+                        "O botão de login gov.br já foi enviado ao cidadão e é "
+                        "auto-explicativo. NÃO escreva nenhuma mensagem adicional "
+                        "confirmando o envio. Aguarde o cidadão concluir a "
+                        "autenticação e te enviar uma mensagem."
+                    ),
+                },
             )
 
             return state

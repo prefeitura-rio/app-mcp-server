@@ -477,6 +477,45 @@ async def test_reparo_workflow_collect_address_reference_and_confirmation():
 
 
 @pytest.mark.asyncio
+async def test_confirm_address_prompt_has_sim_nao_buttons():
+    """#2 (device-test 2026-06-17): a confirmação de endereço ("Está correto?") vem
+    com botões Sim/Não (camada-tool). O tap preenche `confirmacao` (→ parse_affirmation
+    → bool). Depende do fix de entrega do Mule (#1)."""
+    workflow = make_workflow()
+    collected = await workflow._collect_address(
+        make_state(payload={"address": "Rua A, 10"})
+    )
+    assert collected.data["address_needs_confirmation"] is True
+
+    collected.payload = {}  # turno sem confirmacao → mostra o prompt
+    prompt = await workflow._confirm_address(collected)
+
+    interactive = prompt.agent_response.interactive
+    assert interactive is not None
+    assert interactive["field"] == "confirmacao"
+    assert [b["title"] for b in interactive["buttons"]] == ["Sim", "Não"]
+    assert [b["id"] for b in interactive["buttons"]] == ["sim", "nao"]
+    assert interactive["body"] == prompt.agent_response.description
+
+
+def test_address_from_memory_prompt_has_sim_nao_buttons():
+    """#2: a re-pergunta do endereço da memória também vem com botões Sim/Não."""
+    workflow = make_workflow()
+    state = make_state(
+        payload={},
+        data={"address": {"logradouro": "Rua X", "numero": "10", "bairro": "Centro"}},
+    )
+
+    handled = workflow._handle_address_from_memory(state)
+
+    assert handled is True
+    interactive = state.agent_response.interactive
+    assert interactive is not None
+    assert interactive["field"] == "confirmacao"
+    assert [b["title"] for b in interactive["buttons"]] == ["Sim", "Não"]
+
+
+@pytest.mark.asyncio
 async def test_endereco_confirmado_nao_reconfirma_em_turno_sem_payload():
     """Regressão (bug real 2026-06-03): após confirmar o endereço e iniciar o
     gov.br, o auto-resume do callback reinvoca o workflow com payload VAZIO. O
@@ -717,6 +756,39 @@ async def test_govbr_wait_state_skip_goes_anonymous_when_optional(monkeypatch):
     cpf_out = await workflow._collect_cpf(out)
     assert cpf_out.agent_response is None  # collect_cpf NÃO pede CPF
     assert workflow._route_after_cpf(cpf_out) == "confirm_ticket_data"
+
+
+@pytest.mark.asyncio
+async def test_govbr_initiating_signals_out_of_band_sent(monkeypatch):
+    """#3 (device-test 2026-06-17): ao iniciar o gov.br, o botão de login é enviado
+    out-of-band; o agent_response sinaliza out_of_band_sent pro wrapper retornar
+    interactive_sent — o cidadão NÃO recebe o texto redundante "link enviado, clique
+    no botão acima". A description fica como fallback gracioso (wrapper antigo)."""
+    from src.tools.multi_step_service.workflows.sgrc_components import (
+        identification as id_mod,
+    )
+
+    async def _not_auth(*_a, **_k):
+        return {"is_authenticated": False}
+
+    async def _init_ok(*_a, **_k):
+        return {"status": "ok", "auth_id": "auth-1"}
+
+    monkeypatch.setattr(id_mod, "govbr_auth_status", _not_auth)
+    monkeypatch.setattr(id_mod, "govbr_auth_init", _init_ok)
+    workflow = make_workflow()
+
+    out = await workflow._authenticate_govbr(
+        make_state(data={"identification_method": "govbr"})
+    )
+
+    assert out.data["govbr_auth_sent"] is True
+    interactive = out.agent_response.interactive
+    assert interactive is not None
+    assert interactive["out_of_band_sent"] is True
+    assert interactive.get("instruction")
+    # description preservada como fallback gracioso pra wrapper que não conheça o sinal
+    assert out.agent_response.description
 
 
 @pytest.mark.asyncio
