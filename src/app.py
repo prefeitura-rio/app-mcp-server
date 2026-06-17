@@ -1085,6 +1085,23 @@ def create_app() -> FastMCP:
         interactive_spec = (
             response.pop("interactive", None) if isinstance(response, dict) else None
         )
+        # Out-of-band JÁ enviado (gov.br: o botão de login foi enviado DIRETO pra Meta
+        # por _send_cta_url_button). Sinaliza interactive_sent INCONDICIONALMENTE (não
+        # depende de ENABLE_INTERACTIVE_CONFIRM) pra: (a) o Mule não cair no fallback
+        # de resposta-vazia (fix #1, hasInteractiveSent); (b) o agente não escrever o
+        # texto redundante "link enviado, clique no botão acima" (device-test 2026-06-17).
+        if isinstance(interactive_spec, dict) and interactive_spec.get(
+            "out_of_band_sent"
+        ):
+            return {
+                "status": "interactive_sent",
+                "next_step": interactive_spec.get("next_step", "await_user_selection"),
+                "instruction": interactive_spec.get("instruction")
+                or (
+                    "A mensagem interativa já foi enviada ao cidadão e é "
+                    "auto-explicativa. NÃO escreva nenhuma mensagem adicional."
+                ),
+            }
         if env.ENABLE_INTERACTIVE_CONFIRM:
             from src.tools.whatsapp_flow_sender import render_interactive_confirm
 

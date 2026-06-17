@@ -11,6 +11,17 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
 )
 
 
+# Botões Sim/Não da confirmação de endereço (camada-tool, gated ENABLE_INTERACTIVE_CONFIRM).
+# O tap preenche o campo `confirmacao` (AddressConfirmationPayload, bool via
+# parse_affirmation): "Sim"→True, "Não"→False. Mesmo padrão validado em quadra e
+# ticket-confirm (#113/#115). Depende do fix de entrega do Mule (#1) pra o turno
+# silencioso do camada-tool não cair no fallback de "instabilidade".
+_SIM_NAO_BUTTONS = [
+    {"id": "sim", "title": "Sim"},
+    {"id": "nao", "title": "Não"},
+]
+
+
 class AddressFlowMixin:
     def _has_valid_confirmed_address(self, state: ServiceState) -> bool:
         # NÃO condicionar a `state.payload`: um endereço já validado+confirmado
@@ -158,11 +169,17 @@ class AddressFlowMixin:
             addr = state.data.get("address") or state.data.get("address_temp")
             state.data["awaiting_address_memory_confirmation"] = True
 
+            desc_hist = self.templates.endereco_historico(
+                self.format_address_confirmation(addr)
+            )
             state.agent_response = AgentResponse(
-                description=self.templates.endereco_historico(
-                    self.format_address_confirmation(addr)
-                ),
+                description=desc_hist,
                 payload_schema=AddressConfirmationPayload.model_json_schema(),
+                interactive={
+                    "body": desc_hist,
+                    "field": "confirmacao",
+                    "buttons": _SIM_NAO_BUTTONS,
+                },
             )
             return True
 
@@ -510,10 +527,16 @@ class AddressFlowMixin:
                 return state
 
             except Exception as e:
+                desc_invalido = self.templates.confirmar_resposta_invalida()
                 state.agent_response = AgentResponse(
-                    description=self.templates.confirmar_resposta_invalida(),
+                    description=desc_invalido,
                     payload_schema=AddressConfirmationPayload.model_json_schema(),
                     error_message=f"Resposta inválida: {str(e)}",
+                    interactive={
+                        "body": desc_invalido,
+                        "field": "confirmacao",
+                        "buttons": _SIM_NAO_BUTTONS,
+                    },
                 )
                 return state
 
@@ -522,14 +545,19 @@ class AddressFlowMixin:
             msg_confirmacao = self.format_address_confirmation(address_temp)
 
             if not state.payload and state.data.get("address_temp"):
-                state.agent_response = AgentResponse(
-                    description=self.templates.endereco_historico(msg_confirmacao),
-                    payload_schema=AddressConfirmationPayload.model_json_schema(),
-                )
+                desc_confirm = self.templates.endereco_historico(msg_confirmacao)
             else:
-                state.agent_response = AgentResponse(
-                    description=self.templates.confirmar_endereco(msg_confirmacao),
-                    payload_schema=AddressConfirmationPayload.model_json_schema(),
-                )
+                desc_confirm = self.templates.confirmar_endereco(msg_confirmacao)
+            # Botões Sim/Não (gated ENABLE_INTERACTIVE_CONFIRM): tap preenche
+            # `confirmacao` → parse_affirmation → bool. Facilita o "Está correto?".
+            state.agent_response = AgentResponse(
+                description=desc_confirm,
+                payload_schema=AddressConfirmationPayload.model_json_schema(),
+                interactive={
+                    "body": desc_confirm,
+                    "field": "confirmacao",
+                    "buttons": _SIM_NAO_BUTTONS,
+                },
+            )
 
         return state
