@@ -1,3 +1,5 @@
+import unicodedata
+
 from loguru import logger
 
 from src.tools.auth.govbr_auth import govbr_auth_init, govbr_auth_status
@@ -11,6 +13,115 @@ from src.tools.multi_step_service.workflows.sgrc_components.models import (
     NomePayload,
 )
 from src.tools.multi_step_service.workflows.sgrc_components import templates as tpl
+
+
+# Termos de RECUSA de identificação — só valem quando a identificação é OPCIONAL.
+# Match exato cobre os tokens curtos; o substring cobre as frases naturais que o
+# agente repassa. Compartilhado entre a escolha de método (_select_identification_method)
+# e o abort do gov.br no estado de espera (_authenticate_govbr), pra a recusa ser
+# reconhecida de forma consistente nos dois pontos.
+_SKIP_TOKENS = {
+    "anonimo",
+    "anônimo",
+    "anonima",
+    "anônima",
+    "pular",
+    "skip",
+    "nao",
+    "não",
+    "nenhum",
+    "nenhuma",
+    "recusar",
+    "recuso",
+    "nao quero",
+    "não quero",
+    "nao quero me identificar",
+    "não quero me identificar",
+    "sem identificacao",
+    "sem identificação",
+    "seguir sem",
+    "continuar sem",
+}
+_SKIP_SUBSTRINGS = (
+    "sem ident",
+    "sem me ident",
+    "nao me ident",
+    "não me ident",
+    "sem se ident",
+    "continuar sem",
+    "seguir sem",
+    "nao quero",
+    "não quero",
+    "anonim",
+    "pular",
+    "recus",
+    "nenhum",
+    "sem cpf",
+)
+# Recusa INEQUÍVOCA de identificação no estado de espera do gov.br. Em
+# _authenticate_govbr ela é avaliada DEPOIS de retry e CPF e só quando a
+# identificação é opcional — então frases que citam "tentar"/"cpf" (e suas negações,
+# p.ex. "não desisti, quero tentar novamente" / "não tenho cpf, quero tentar de
+# novo") já foram roteadas pro reenvio/CPF e NÃO chegam aqui (codex P2). Por isso o
+# set é enxuto: sem termos facilmente negáveis (desist/cancelar) e sem termos que
+# colidam com pedido de cpf. Casado contra texto normalizado (sem acento).
+_GOVBR_ABORT_SUBSTRINGS = (
+    "nao quero me identificar",
+    "nao quero identificar",
+    "nao quero me ident",
+    "nao me identificar",
+    "sem me identificar",
+    "sem me ident",
+    "sem identificar",
+    "sem identificacao",
+    "sem ident",
+    "anonim",
+    # Tokens de skip que o _select_identification_method também aceita — incluídos pra
+    # a recusa ser reconhecida de forma consistente nos dois pontos (codex P2). NÃO
+    # incluir "nenhum": colide com a queixa de entrega "não recebi nenhum link", que
+    # é pedido de reenvio (tratado pela pista "nao recebi" no ramo de retry), não recusa.
+    "pular",
+    "skip",
+    "recus",
+    "seguir sem",
+    "continuar sem",
+)
+# Recusas que MENCIONAM cpf pra RECUSAR ("sem cpf", "não quero usar cpf"). Roteadas
+# pro abort/anônimo (e excluídas do ramo CPF). Afirmativas ("quero usar cpf") não
+# entram aqui (codex P2).
+_CPF_REFUSAL_SUBSTRINGS = (
+    "sem cpf",
+    "sem o cpf",
+    "sem usar cpf",
+    "nao quero cpf",
+    "nao quero o cpf",
+    "nao quero usar cpf",
+    "nao quero usar o cpf",
+    "nao usar cpf",
+    "nao vou usar cpf",
+)
+# Menções de cpf que NÃO são pedido afirmativo: as recusas acima + "não tenho cpf" +
+# recusa de identificação que cita cpf. Servem só pra EXCLUIR do ramo CPF (codex P2):
+# "não tenho cpf, quero tentar novamente" segue pro reenvio (não é recusa de
+# identificação), e "não quero me identificar com cpf" cai na recusa (≠ "com gov.br,
+# quero usar cpf", que troca pra CPF).
+_CPF_NOT_AFFIRMATIVE = _CPF_REFUSAL_SUBSTRINGS + (
+    "nao tenho cpf",
+    "nao tenho o cpf",
+    "nao quero me identificar com cpf",
+    "nao quero me identificar com o cpf",
+)
+
+
+def _normalize_text(value: str) -> str:
+    """lower + strip de acentos pra casar tokens de recusa de forma robusta
+    ("anônimo"/"ANÔNIMO"/"anonimo" caem todos no mesmo token)."""
+    text = (value or "").strip().lower()
+    return "".join(
+        ch
+        for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
 
 
 class IdentificationFlowMixin:
@@ -113,53 +224,15 @@ class IdentificationFlowMixin:
             metodo_raw = (
                 str(state.payload.get("identification_method", "")).strip().lower()
             )
-            _skip_tokens = {
-                "anonimo",
-                "anônimo",
-                "anonima",
-                "anônima",
-                "pular",
-                "skip",
-                "nao",
-                "não",
-                "nenhum",
-                "nenhuma",
-                "recusar",
-                "recuso",
-                "nao quero",
-                "não quero",
-                "nao quero me identificar",
-                "não quero me identificar",
-                "sem identificacao",
-                "sem identificação",
-                "seguir sem",
-                "continuar sem",
-            }
-            # Match exato cobre os tokens curtos; substring cobre as frases naturais
-            # que o agente repassa ("quero continuar sem me identificar", "seguir sem
-            # cpf", "não me identificar"...). Sem o substring, o exato falhava nelas e
-            # o cidadão caía na validação estrita cpf/govbr → erro "escolha CPF ou
-            # Gov.br", contradizendo o "é opcional" (achado 2026-06-04). Como a
+            # Recusa explícita → anônimo. Match exato cobre tokens curtos; substring
+            # cobre as frases naturais que o agente repassa ("quero continuar sem me
+            # identificar", "seguir sem cpf"...). Sem o substring, o exato falhava
+            # nelas e o cidadão caía na validação estrita cpf/govbr → erro "escolha CPF
+            # ou Gov.br", contradizendo o "é opcional" (achado 2026-06-04). Como a
             # identificação é OPCIONAL aqui, interpretar recusa de forma liberal é
             # seguro: input claro de cpf/govbr é normalizado antes de chegar aqui.
-            _skip_substrings = (
-                "sem ident",
-                "sem me ident",
-                "nao me ident",
-                "não me ident",
-                "sem se ident",
-                "continuar sem",
-                "seguir sem",
-                "nao quero",
-                "não quero",
-                "anonim",
-                "pular",
-                "recus",
-                "nenhum",
-                "sem cpf",
-            )
-            if metodo_raw in _skip_tokens or any(
-                s in metodo_raw for s in _skip_substrings
+            if metodo_raw in _SKIP_TOKENS or any(
+                s in metodo_raw for s in _SKIP_SUBSTRINGS
             ):
                 logger.info(
                     "[METHOD] Identificação opcional + recusa explícita → anônimo"
@@ -315,21 +388,70 @@ class IdentificationFlowMixin:
         if state.data.get("govbr_auth_sent"):
             logger.info("[GOVBR] Auth link already sent, waiting for user")
 
-            user_input = (
-                str(state.payload.get("message", "")).lower() if state.payload else ""
+            # Texto livre vem em `message` (às vezes em `identification_method`).
+            # Normaliza (lower + sem acento via _normalize_text) pra casar recusa de
+            # forma robusta: "anônimo"/"ANÔNIMO"/"anonimo" caem no mesmo token.
+            user_input = _normalize_text(
+                " ".join(
+                    str(state.payload.get(k, ""))
+                    for k in ("message", "identification_method")
+                )
+                if state.payload
+                else ""
             )
 
+            identificacao_obrigatoria = state.data.get(
+                "identificacao_obrigatoria_1746", False
+            )
+
+            # Desambiguação por substring tem limite intrínseco: NÃO distingue "não
+            # quero me identificar" (recusa) de "não recusei"/"não quero pular" (retry
+            # negado). Escolhemos REENVIO-PRIMEIRO (a recomendação mais recente do codex)
+            # porque é o mais SEGURO: o pior caso é mandar um link a mais, nunca um
+            # opt-out silencioso de quem ainda quer continuar.
+            #   1) REENVIO: qualquer sinal de retry/entrega ("tentar", "novamente",
+            #      "novo link", "não recebi"). Captura as frases de retry-com-negação
+            #      ("não recusei, quero tentar novamente", "não quero pular, manda novo
+            #      link") ANTES da recusa, evitando opt-out indevido (codex P2).
+            #   2) CPF AFIRMATIVO: cita "cpf" e não é menção não-afirmativa ("sem cpf",
+            #      "não tenho cpf", "não quero me identificar com cpf").
+            #   3) RECUSA de identificação (inclui recusas que citam cpf) → anônimo.
+            #   4) Pendente.
+            # Limitação conhecida (não-aprisionante): "não recebi o link e não quero me
+            # identificar" reenvia em vez de seguir anônimo — o cidadão repete a recusa
+            # sozinha. O fix robusto é trocar este estado por BOTÕES (depende do #1/Mule),
+            # eliminando a classificação de texto livre.
             if (
                 "tentar" in user_input
                 or "novamente" in user_input
                 or "novo link" in user_input
+                or "nao recebi" in user_input
             ):
                 logger.info("[GOVBR] User requested new auth link")
                 state.data.pop("govbr_auth_sent", None)
-            elif "cpf" in user_input:
+            elif "cpf" in user_input and not any(
+                x in user_input for x in _CPF_NOT_AFFIRMATIVE
+            ):
                 logger.info("[GOVBR] User wants to switch to CPF method")
                 state.data["identification_method"] = "cpf"
                 state.data.pop("govbr_auth_sent", None)
+                state.agent_response = None
+                return state
+            elif not identificacao_obrigatoria and (
+                any(s in user_input for s in _GOVBR_ABORT_SUBSTRINGS)
+                or any(r in user_input for r in _CPF_REFUSAL_SUBSTRINGS)
+            ):
+                # Recusa de identificação → anônimo, em vez de prender no loop
+                # "aguardando autenticação" (device-test 2026-06-17). `identificacao_pulada`
+                # faz _collect_cpf/_route_after_cpf pularem pra confirmação nos dois
+                # workflows (a rota _route_after_govbr_auth cai em collect_cpf, que então
+                # pula); limpa o estado do gov.br.
+                logger.info("[GOVBR] User aborted gov.br → anônimo")
+                state.data["identification_method"] = "anonimo"
+                state.data["identificacao_recusada"] = True
+                state.data["identificacao_pulada"] = True
+                state.data.pop("govbr_auth_sent", None)
+                state.data.pop("govbr_auth_id", None)
                 state.agent_response = None
                 return state
             else:

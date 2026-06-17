@@ -668,6 +668,330 @@ async def test_reparo_workflow_identification_steps():
     assert skipped_name.data["name_skipped"] is True
 
 
+# --------------------------------------------------------------------------- #
+# Gov.br: desistência no estado de espera (device-test 2026-06-17). O cidadão
+# clica no botão de login, não consegue autenticar e diz "não quero me
+# identificar" — antes ficava preso repetindo "aguardando autenticação". Agora,
+# quando a identificação é OPCIONAL, a recusa cai em anônimo e o fluxo segue.
+# --------------------------------------------------------------------------- #
+def _patch_govbr_not_authenticated(monkeypatch):
+    from src.tools.multi_step_service.workflows.sgrc_components import (
+        identification as id_mod,
+    )
+
+    async def _not_auth(*_a, **_k):
+        return {"is_authenticated": False}
+
+    monkeypatch.setattr(id_mod, "govbr_auth_status", _not_auth)
+
+
+@pytest.mark.asyncio
+async def test_govbr_wait_state_skip_goes_anonymous_when_optional(monkeypatch):
+    _patch_govbr_not_authenticated(monkeypatch)
+    workflow = make_workflow()
+
+    state = make_state(
+        payload={"message": "não consegui logar. não quero me identificar"},
+        data={
+            "identification_method": "govbr",
+            "govbr_auth_sent": True,
+            "govbr_auth_id": "abc-123",
+            "identificacao_obrigatoria_1746": False,
+        },
+    )
+
+    out = await workflow._authenticate_govbr(state)
+
+    assert out.data["identification_method"] == "anonimo"
+    assert out.data["identificacao_recusada"] is True
+    assert out.data["identificacao_pulada"] is True
+    assert "govbr_auth_sent" not in out.data
+    assert "govbr_auth_id" not in out.data
+    # agent_response None → o fluxo prossegue (não fica preso na espera).
+    assert out.agent_response is None
+
+    # P2-A (codex): o flag de skip precisa levar o GRAFO até a confirmação, não pro
+    # pedido de CPF. A rota cai em collect_cpf, que pula via identificacao_pulada, e
+    # _route_after_cpf segue pra confirm_ticket_data.
+    assert workflow._route_after_govbr_auth(out) == "collect_cpf"
+    cpf_out = await workflow._collect_cpf(out)
+    assert cpf_out.agent_response is None  # collect_cpf NÃO pede CPF
+    assert workflow._route_after_cpf(cpf_out) == "confirm_ticket_data"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "quero seguir sem me identificar",
+        "prefiro ficar anônimo",
+        # Acentuado / caixa — normalização garante o match (codex P2).
+        "anônimo",
+        "ANÔNIMA",
+        # Recusas que CITAM cpf ("sem cpf"/"não quero usar cpf") → anônimo, não
+        # troca-pra-CPF (codex P2).
+        "quero seguir sem cpf",
+        "não quero usar cpf",
+        # Tokens de skip que o _select também aceita — consistência (codex P2).
+        "pular",
+        "skip",
+        "recuso",
+    ],
+)
+async def test_govbr_wait_state_pure_refusal_goes_anonymous(monkeypatch, message):
+    """Recusa de identificação (inclusive as que citam cpf como "sem cpf"/"não quero
+    usar cpf") sem sinal de retry → anônimo; robusto a acento/caixa via normalização."""
+    _patch_govbr_not_authenticated(monkeypatch)
+    workflow = make_workflow()
+
+    out = await workflow._authenticate_govbr(
+        make_state(
+            payload={"message": message},
+            data={
+                "identification_method": "govbr",
+                "govbr_auth_sent": True,
+                "identificacao_obrigatoria_1746": False,
+            },
+        )
+    )
+
+    assert out.data["identification_method"] == "anonimo"
+    assert out.data["identificacao_pulada"] is True
+    assert out.agent_response is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "não desisti, quero tentar novamente",
+        "não tenho o cpf agora, quero tentar novamente",
+        "não quero cancelar, manda novo link",
+    ],
+)
+async def test_govbr_wait_state_retry_beats_negated_refusal(monkeypatch, message):
+    """codex P2: frases de RETRY que contêm negações ("não desisti", "não tenho
+    cpf") são pedido de reenvio, NÃO recusa. Como retry é checado ANTES da recusa,
+    elas reenviam o link em vez de virar anônimo por engano."""
+    from src.tools.multi_step_service.workflows.sgrc_components import (
+        identification as id_mod,
+    )
+
+    async def _not_auth(*_a, **_k):
+        return {"is_authenticated": False}
+
+    async def _init_ok(*_a, **_k):
+        return {"status": "ok", "auth_id": "relink"}
+
+    monkeypatch.setattr(id_mod, "govbr_auth_status", _not_auth)
+    monkeypatch.setattr(id_mod, "govbr_auth_init", _init_ok)
+    workflow = make_workflow()
+
+    out = await workflow._authenticate_govbr(
+        make_state(
+            payload={"message": message},
+            data={
+                "identification_method": "govbr",
+                "govbr_auth_sent": True,
+                "identificacao_obrigatoria_1746": False,
+            },
+        )
+    )
+
+    # Reenviou (re-init), NÃO virou anônimo nem trocou pra CPF.
+    assert out.data["identification_method"] == "govbr"
+    assert out.data.get("identificacao_pulada") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "não recusei, quero tentar novamente",
+        "não quero pular, manda novo link",
+        "não tenho meu cpf, quero tentar novamente",
+    ],
+)
+async def test_govbr_wait_state_negated_skip_with_retry_resends(monkeypatch, message):
+    """codex P2: frases de RETRY que negam um token de skip/cpf ("não recusei", "não
+    quero pular", "não tenho meu cpf") reenviam o link — o reenvio-primeiro evita
+    opt-out silencioso de quem ainda quer continuar (substring não detecta negação)."""
+    from src.tools.multi_step_service.workflows.sgrc_components import (
+        identification as id_mod,
+    )
+
+    async def _not_auth(*_a, **_k):
+        return {"is_authenticated": False}
+
+    async def _init_ok(*_a, **_k):
+        return {"status": "ok", "auth_id": "relink"}
+
+    monkeypatch.setattr(id_mod, "govbr_auth_status", _not_auth)
+    monkeypatch.setattr(id_mod, "govbr_auth_init", _init_ok)
+    workflow = make_workflow()
+
+    out = await workflow._authenticate_govbr(
+        make_state(
+            payload={"message": message},
+            data={
+                "identification_method": "govbr",
+                "govbr_auth_sent": True,
+                "identificacao_obrigatoria_1746": False,
+            },
+        )
+    )
+
+    # Reenviou — NÃO virou anônimo nem trocou pra CPF.
+    assert out.data["identification_method"] == "govbr"
+    assert out.data.get("identificacao_pulada") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "não recebi nenhum link, manda novo link",
+        # Queixa de entrega SEM "novo link"/"tentar" — "nao recebi" leva ao reenvio,
+        # e "nenhum" NÃO pode disparar abort (codex P2).
+        "não recebi nenhum link",
+    ],
+)
+async def test_govbr_wait_state_resend_request_not_treated_as_refusal(
+    monkeypatch, message
+):
+    """P2 (codex): queixa de entrega ("não recebi nenhum link") é pedido de reenvio,
+    NÃO recusa — reenvia o link em vez de virar anônimo."""
+    from src.tools.multi_step_service.workflows.sgrc_components import (
+        identification as id_mod,
+    )
+
+    async def _not_auth(*_a, **_k):
+        return {"is_authenticated": False}
+
+    async def _init_ok(*_a, **_k):
+        return {"status": "ok", "auth_id": "new-link-1"}
+
+    monkeypatch.setattr(id_mod, "govbr_auth_status", _not_auth)
+    monkeypatch.setattr(id_mod, "govbr_auth_init", _init_ok)
+    workflow = make_workflow()
+
+    out = await workflow._authenticate_govbr(
+        make_state(
+            payload={"message": message},
+            data={
+                "identification_method": "govbr",
+                "govbr_auth_sent": True,
+                "identificacao_obrigatoria_1746": False,
+            },
+        )
+    )
+
+    # Reenviou (re-init), NÃO virou anônimo.
+    assert out.data["identification_method"] == "govbr"
+    assert out.data.get("identificacao_pulada") is None
+    assert out.data["govbr_auth_sent"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "não quero gov.br, quero usar cpf",
+        # Recusa de gov.br + pedido afirmativo de cpf — troca pra CPF, não anônimo,
+        # mesmo contendo "não quero me identificar" (codex P2).
+        "não quero me identificar com gov.br, quero usar cpf",
+    ],
+)
+async def test_govbr_wait_state_explicit_cpf_request_beats_refusal(
+    monkeypatch, message
+):
+    """Pedido afirmativo de CPF tem prioridade sobre a recusa do gov.br: troca pra
+    CPF em vez de virar anônimo. Negações de cpf ("sem cpf", "não quero usar cpf")
+    NÃO caem aqui (cobertas no teste de abort)."""
+    _patch_govbr_not_authenticated(monkeypatch)
+    workflow = make_workflow()
+
+    out = await workflow._authenticate_govbr(
+        make_state(
+            payload={"message": message},
+            data={
+                "identification_method": "govbr",
+                "govbr_auth_sent": True,
+                "identificacao_obrigatoria_1746": False,
+            },
+        )
+    )
+
+    assert out.data["identification_method"] == "cpf"
+    assert out.data.get("identificacao_recusada") is None
+    assert out.data.get("identificacao_pulada") is None
+    assert "govbr_auth_sent" not in out.data
+    assert out.agent_response is None
+
+
+@pytest.mark.asyncio
+async def test_govbr_wait_state_skip_blocked_when_required(monkeypatch):
+    _patch_govbr_not_authenticated(monkeypatch)
+    workflow = make_workflow()
+
+    state = make_state(
+        payload={"message": "não quero me identificar"},
+        data={
+            "identification_method": "govbr",
+            "govbr_auth_sent": True,
+            "identificacao_obrigatoria_1746": True,  # obrigatória → sem saída anônima
+        },
+    )
+
+    out = await workflow._authenticate_govbr(state)
+
+    # Permanece em gov.br aguardando; não vira anônimo.
+    assert out.data["identification_method"] == "govbr"
+    assert out.data.get("identificacao_recusada") is None
+    assert out.data["govbr_auth_sent"] is True
+    assert out.agent_response is not None
+
+
+@pytest.mark.asyncio
+async def test_govbr_wait_state_neutral_message_stays_pending(monkeypatch):
+    _patch_govbr_not_authenticated(monkeypatch)
+    workflow = make_workflow()
+
+    state = make_state(
+        payload={"message": "ok"},
+        data={
+            "identification_method": "govbr",
+            "govbr_auth_sent": True,
+            "identificacao_obrigatoria_1746": False,
+        },
+    )
+
+    out = await workflow._authenticate_govbr(state)
+
+    # Sem intenção de skip → continua aguardando (comportamento inalterado).
+    assert out.data["identification_method"] == "govbr"
+    assert out.data["govbr_auth_sent"] is True
+    assert out.agent_response is not None
+
+
+@pytest.mark.asyncio
+async def test_select_identification_explicit_refusal_goes_anonymous():
+    """Trava o refactor das constantes _SKIP_*: recusa explícita na escolha de
+    método continua virando anônimo quando a identificação é opcional."""
+    workflow = make_workflow()
+
+    out = await workflow._select_identification_method(
+        make_state(
+            payload={"identification_method": "não quero me identificar"},
+            data={"identificacao_obrigatoria_1746": False},
+        )
+    )
+
+    assert out.data["identification_method"] == "anonimo"
+    assert out.data["identificacao_recusada"] is True
+    assert out.agent_response is None
+
+
 def test_reparo_workflow_specific_attributes_and_routes():
     workflow = make_workflow()
     state = make_state(
