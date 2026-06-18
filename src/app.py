@@ -1114,6 +1114,33 @@ def create_app() -> FastMCP:
             if sent is not None:
                 return sent
 
+        # Turno TRANSICIONAL do workflow: o passo avançou e NÃO há nada a enviar neste
+        # turno (description vazia, sem interactive, sem erro, sem send_flow). O Engine
+        # fica calado e o Mule cairia no empty_agent_response_fallback ("instabilidade")
+        # — visto MUITO no device-test 2026-06-17→18 (turnos transicionais, não só os
+        # interactive_sent). Marca explicitamente como handled (status interactive_sent,
+        # que o Mule já reconhece via hasInteractiveSent) pra pular o fallback. SEGURO: um
+        # prompt legítimo tem `description` não-vazio e um erro tem `error_message` → NÃO
+        # entram aqui, então não mascaramos mensagens reais (o fallback segue protegendo
+        # esses casos se o Engine não as repassar).
+        if isinstance(response, dict):
+            has_outbound_signal = bool(
+                (response.get("description") or "").strip()
+                or response.get("error_message")
+                or response.get("send_flow")
+                or interactive_spec
+            )
+            if not has_outbound_signal:
+                return {
+                    "status": "interactive_sent",
+                    "next_step": "workflow_in_progress",
+                    "instruction": (
+                        "O fluxo multi-passo avançou e não há mensagem a enviar neste "
+                        "turno. NÃO escreva nada; aguarde a próxima ação do cidadão ou o "
+                        "próximo passo do workflow."
+                    ),
+                }
+
         return response
 
     @conditional_mcp_tool(
