@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +12,15 @@ import pytest
 
 import src.tools.tts as tts_module
 from src.tools.tts import AudioResponseResult, generate_audio_response
+
+
+@pytest.fixture(autouse=True)
+def _tts_cache_off_by_default(monkeypatch):
+    """Cache do TTS OFF por default nos testes: evita que o Redis disponível no CI
+    faça o cache CRUZAR resultados entre testes que compartilham o mesmo texto
+    (ex.: "Olá cidadão"). Os testes de cache religam explicitamente via
+    patch.dict(os.environ, {"TTS_CACHE_ENABLED": "true"})."""
+    monkeypatch.setenv("TTS_CACHE_ENABLED", "false")
 
 
 def test_audio_response_result_to_dict_minimal():
@@ -336,3 +346,161 @@ def test_gemini_ffmpeg_missing_falls_back_to_google():
     assert result["status"] == "ok"
     assert result["voice_used"] == "pt-BR-Neural2-A"  # voz do Google (fallback)
     assert result["audio_base64"] == base64.b64encode(b"OGGGOOGLE").decode("ascii")
+
+
+# --- Cache transparente do TTS (Feature 2a) --------------------------------
+
+
+def test_cache_hit_skips_synthesis():
+    """1ª chamada sintetiza + salva; 2ª (mesmo texto) volta do cache sem
+    re-sintetizar — todo texto pré-definido fica salvo após o 1º uso."""
+    store: dict = {}
+    calls = {"synth": 0}
+
+    async def fake_get(key):
+        return store.get(key)
+
+    async def fake_set(key, result):
+        store[key] = result
+
+    async def fake_google(_cleaned):
+        calls["synth"] += 1
+        return b"OGGCACHED", "pt-BR-Neural2-A"
+
+    with (
+        patch.dict(os.environ, {"TTS_CACHE_ENABLED": "true"}),
+        patch("src.tools.tts.env.TTS_PROVIDER", "google"),
+        patch("src.tools.tts._synthesize_google", fake_google),
+        patch("src.tools.tts._audio_cache_get", fake_get),
+        patch("src.tools.tts._audio_cache_set", fake_set),
+    ):
+        r1 = asyncio.run(generate_audio_response(text="Texto pré-definido"))
+        r2 = asyncio.run(generate_audio_response(text="Texto pré-definido"))
+
+    assert r1["status"] == "ok" and r2["status"] == "ok"
+    assert r1["audio_base64"] == r2["audio_base64"]
+    assert calls["synth"] == 1  # sintetizou só na 1ª; a 2ª veio do cache
+    assert len(store) == 1
+
+
+def test_fallback_audio_is_not_cached():
+    """Fallback gemini→google NÃO é cacheado (não persiste a voz degradada se o
+    gemini se recuperar)."""
+    store: dict = {}
+
+    async def fake_get(key):
+        return store.get(key)
+
+    async def fake_set(key, result):
+        store[key] = result
+
+    async def fake_google(_cleaned):
+        return b"OGGGOOGLE", "pt-BR-Neural2-A"
+
+    async def fake_gemini(_cleaned):
+        raise RuntimeError("Gemini TTS 503")
+
+    with (
+        patch.dict(os.environ, {"TTS_CACHE_ENABLED": "true"}),
+        patch("src.tools.tts.env.TTS_PROVIDER", "gemini"),
+        patch("src.tools.tts._synthesize_google", fake_google),
+        patch("src.tools.tts._synthesize_gemini", fake_gemini),
+        patch("src.tools.tts._audio_cache_get", fake_get),
+        patch("src.tools.tts._audio_cache_set", fake_set),
+    ):
+        result = asyncio.run(generate_audio_response(text="Olá"))
+
+    assert result["status"] == "ok"
+    assert store == {}  # fallback não foi salvo
+
+
+def test_cache_disabled_bypasses_cache():
+    """TTS_CACHE_ENABLED=false → não consulta nem grava o cache (sintetiza sempre)."""
+    get_mock = AsyncMock(return_value=None)
+    set_mock = AsyncMock()
+
+    async def fake_google(_cleaned):
+        return b"X", "pt-BR-Neural2-A"
+
+    with (
+        patch.dict(os.environ, {"TTS_CACHE_ENABLED": "false"}),
+        patch("src.tools.tts.env.TTS_PROVIDER", "google"),
+        patch("src.tools.tts._synthesize_google", fake_google),
+        patch("src.tools.tts._audio_cache_get", get_mock),
+        patch("src.tools.tts._audio_cache_set", set_mock),
+    ):
+        result = asyncio.run(generate_audio_response(text="A"))
+
+    assert result["status"] == "ok"
+    get_mock.assert_not_called()
+    set_mock.assert_not_called()
+
+
+def test_cache_key_stable_and_distinct():
+    """Mesma assinatura → mesma chave; texto/provider diferentes → chaves distintas."""
+    k1 = tts_module._audio_cache_key("Informe o endereço", "google")
+    k2 = tts_module._audio_cache_key("Informe o endereço", "google")
+    k3 = tts_module._audio_cache_key("Outro texto", "google")
+    k4 = tts_module._audio_cache_key("Informe o endereço", "gemini")
+    assert k1 == k2
+    assert k1 != k3
+    assert k1 != k4
+    assert k1.startswith("audio:tts:")
+
+
+def test_cache_get_degrades_when_redis_down():
+    """Redis fora → _audio_cache_get devolve None (degrada gracioso, não levanta)."""
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("Redis unreachable")
+
+    with patch("src.utils.redis_client.get_async_redis_client", boom):
+        out = asyncio.run(tts_module._audio_cache_get("audio:tts:v1:abc"))
+    assert out is None
+
+
+def test_cache_set_get_roundtrip_with_fake_redis():
+    """Cobre o caminho real de _audio_cache_set/_get + _close_redis com um cliente
+    Redis fake: set grava JSON, get lê e desserializa, aclose é chamado."""
+    store: dict = {}
+    closed = {"n": 0}
+
+    class FakeRedis:
+        async def get(self, key):
+            return store.get(key)
+
+        async def set(self, key, value, ex=None):
+            store[key] = value
+
+        async def aclose(self):
+            closed["n"] += 1
+
+    async def fake_client(*_a, **_k):
+        return FakeRedis()
+
+    payload = {"status": "ok", "audio_base64": "QUJD", "mime_type": "audio/ogg"}
+    with patch("src.utils.redis_client.get_async_redis_client", fake_client):
+        asyncio.run(tts_module._audio_cache_set("audio:tts:v1:k", payload))
+        out = asyncio.run(tts_module._audio_cache_get("audio:tts:v1:k"))
+
+    assert out == payload
+    assert closed["n"] == 2  # set + get fecharam o cliente
+
+
+def test_cache_get_ignores_non_dict_entry():
+    """Entrada corrompida (JSON válido mas não-dict) → _audio_cache_get devolve None
+    (cai como miss; não quebra o TTS com AttributeError no call site — codex P2)."""
+
+    class FakeRedis:
+        async def get(self, key):
+            return "[1, 2, 3]"  # JSON válido, porém lista (não dict)
+
+        async def aclose(self):
+            pass
+
+    async def fake_client(*_a, **_k):
+        return FakeRedis()
+
+    with patch("src.utils.redis_client.get_async_redis_client", fake_client):
+        out = asyncio.run(tts_module._audio_cache_get("audio:tts:v1:bad"))
+    assert out is None
