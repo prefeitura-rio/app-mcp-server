@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -83,6 +85,96 @@ def _resolve_provider() -> str:
 def _resolve_voice_name() -> str:
     """Default `pt-BR-Neural2-A`; override via env TTS_VOICE_NAME (Google)."""
     return (os.environ.get("TTS_VOICE_NAME") or "").strip() or "pt-BR-Neural2-A"
+
+
+# ── Cache transparente do TTS (Feature 2a) ──────────────────────────────────
+# O áudio é determinístico por (provider, voz, style, texto): a mesma resposta
+# pré-definida sintetiza o mesmo OGG. Cacheamos por hash dessa assinatura no Redis
+# pra que TODO texto repetido (os templates fixos do bot — e qualquer texto que se
+# repita) entregue áudio instantâneo no 2º+ uso, sem re-chamar o TTS. Transparente:
+# miss gera+salva, hit retorna o salvo. Best-effort: Redis fora degrada pra geração
+# on-demand (nunca quebra o TTS). Kill-switch via env TTS_CACHE_ENABLED=false.
+_AUDIO_CACHE_VERSION = "v1"  # bump invalida tudo (troca de voz/provider/formato)
+_AUDIO_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 dias
+_AUDIO_CACHE_KEY_PREFIX = "audio:tts"
+
+
+def _cache_enabled() -> bool:
+    """Cache ON por default; kill-switch via env TTS_CACHE_ENABLED=false."""
+    return (os.environ.get("TTS_CACHE_ENABLED") or "").strip().lower() != "false"
+
+
+def _audio_cache_key(cleaned: str, provider: str) -> str:
+    """Chave estável pela assinatura de síntese (provider+voz+style+texto).
+
+    Inclui tudo que altera o OGG de saída, então trocar voz/provider/style gera
+    chave nova (não serve áudio velho). A versão no prefixo permite invalidação em
+    massa. O texto entra no hash (aceita qualquer tamanho)."""
+    if provider == "gemini":
+        voice = env.TTS_GEMINI_VOICE or ""
+        style = (env.TTS_GEMINI_STYLE_PROMPT or "").strip()
+        model = env.TTS_GEMINI_MODEL or ""  # troca de modelo invalida (codex P2)
+    else:
+        voice = _resolve_voice_name()
+        style = ""
+        model = ""
+    signature = f"{_AUDIO_CACHE_VERSION}|{provider}|{model}|{voice}|{style}|{cleaned}"
+    digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+    return f"{_AUDIO_CACHE_KEY_PREFIX}:{_AUDIO_CACHE_VERSION}:{digest}"
+
+
+async def _close_redis(client) -> None:
+    """Fecha o cliente async (aclose em redis-py>=5; close como fallback)."""
+    try:
+        closer = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if closer is not None:
+            await closer()
+    except Exception:
+        pass
+
+
+async def _audio_cache_get(key: str) -> Optional[dict]:
+    """Lê o resultado cacheado (dict no formato to_dict). None em miss/erro/Redis fora."""
+    try:
+        from src.utils.redis_client import get_async_redis_client
+
+        client = await get_async_redis_client()
+        try:
+            raw = await client.get(key)
+        finally:
+            await _close_redis(client)
+        if raw:
+            parsed = json.loads(raw)
+            # Best-effort: só trata como hit se for um dict. Uma entrada corrompida/
+            # poisoned (JSON válido mas não-objeto) cai como miss em vez de quebrar o
+            # TTS lá no call site com AttributeError no .get (codex P2).
+            if isinstance(parsed, dict):
+                return parsed
+            logger.warning(
+                "generate_audio_response: cache entry inválida (não-dict); ignorando"
+            )
+    except Exception as exc:
+        logger.warning(
+            "generate_audio_response: cache GET falhou "
+            f"({type(exc).__name__}: {exc}); seguindo sem cache"
+        )
+    return None
+
+
+async def _audio_cache_set(key: str, result: dict) -> None:
+    """Salva o resultado (TTL longo). Best-effort: erro só loga warning."""
+    try:
+        from src.utils.redis_client import get_async_redis_client
+
+        client = await get_async_redis_client()
+        try:
+            await client.set(key, json.dumps(result), ex=_AUDIO_CACHE_TTL_SECONDS)
+        finally:
+            await _close_redis(client)
+    except Exception as exc:
+        logger.warning(
+            f"generate_audio_response: cache SET falhou ({type(exc).__name__}: {exc})"
+        )
 
 
 async def _synthesize_google(cleaned: str) -> tuple[bytes, str]:
@@ -319,6 +411,21 @@ async def generate_audio_response(text: str) -> dict:
             ),
         ).to_dict()
 
+    # Cache transparente (Feature 2a): hit → devolve o áudio salvo sem re-sintetizar.
+    cache_key = _audio_cache_key(cleaned, provider) if _cache_enabled() else None
+    if cache_key is not None:
+        cached = await _audio_cache_get(cache_key)
+        if (
+            isinstance(cached, dict)
+            and cached.get("status") == "ok"
+            and cached.get("audio_base64")
+        ):
+            logger.info(
+                f"generate_audio_response: cache HIT provider={provider} "
+                f"text_len={len(cleaned)}"
+            )
+            return cached
+
     try:
         audio_bytes, voice_name, provider_used = await _synthesize_with_fallback(
             provider, cleaned
@@ -336,13 +443,21 @@ async def generate_audio_response(text: str) -> dict:
             f"voice={voice_name} duration_est={duration:.1f}s"
         )
 
-        return AudioResponseResult(
+        result = AudioResponseResult(
             status="ok",
             audio_base64=audio_b64,
             mime_type="audio/ogg",
             duration_estimate_s=duration,
             voice_used=voice_name,
         ).to_dict()
+
+        # Salva no cache só a síntese LIMPA — não o fallback degradado
+        # (provider_used="google(fallback)"), pra não persistir a voz errada se o
+        # gemini se recuperar depois.
+        if cache_key is not None and provider_used == provider:
+            await _audio_cache_set(cache_key, result)
+
+        return result
 
     except Exception as e:
         logger.exception(
