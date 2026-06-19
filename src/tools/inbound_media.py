@@ -91,6 +91,7 @@ async def register_inbound_media(
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     address: Optional[str] = None,
+    name: Optional[str] = None,  # rótulo do local no payload de location do WhatsApp
     # Conversation correlation (auditoria + futura busca cruzada):
     messaging_session_id: Optional[str] = None,
     conversation_identifier: Optional[str] = None,
@@ -111,6 +112,9 @@ async def register_inbound_media(
         file_size_bytes: tamanho do arquivo.
         latitude/longitude/address: campos de localização (BSP atual NÃO entrega;
             placeholder pra suporte futuro).
+        name: rótulo do local no payload de location do WhatsApp. Aceito (e
+            auditado) p/ não rejeitar a chamada do LLM, que repassa o `name` do
+            pin junto com lat/lng (causava ToolException antes).
         messaging_session_id: SF Id da MessagingSession (audit).
         conversation_identifier: UUID da Conversation Cloud (audit).
 
@@ -148,6 +152,7 @@ async def register_inbound_media(
         "latitude": latitude,
         "longitude": longitude,
         "address": address,
+        "name": name,
         "messaging_session_id": messaging_session_id,
         "conversation_identifier": conversation_identifier,
     }
