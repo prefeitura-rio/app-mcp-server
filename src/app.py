@@ -22,7 +22,7 @@ from src.utils.log import logger
 import src.utils.sgrc_ca  # noqa: F401
 
 from src.config.settings import Settings
-from src.middleware.check_token import CheckTokenMiddleware
+from src.middleware.check_token import CheckTokenMiddleware, is_valid_bearer
 from src.tools.calculator import (
     add,
     subtract,
@@ -1754,6 +1754,8 @@ def create_app() -> FastMCP:
         """
         Endpoint para consultar débitos do contribuinte
         """
+        if not is_valid_bearer(request.headers.get("Authorization")):
+            return JSONResponse(content={"error": "Unauthorized"}, status_code=401)
         try:
             parameters = await request.json()
             result = await consultar_debitos(parameters)
@@ -1767,6 +1769,8 @@ def create_app() -> FastMCP:
         """
         Endpoint para emitir guia de pagamento à vista
         """
+        if not is_valid_bearer(request.headers.get("Authorization")):
+            return JSONResponse(content={"error": "Unauthorized"}, status_code=401)
         try:
             parameters = await request.json()
             result = await emitir_guia_a_vista(parameters)
@@ -1780,6 +1784,8 @@ def create_app() -> FastMCP:
         """
         Endpoint para emitir guia de regularização
         """
+        if not is_valid_bearer(request.headers.get("Authorization")):
+            return JSONResponse(content={"error": "Unauthorized"}, status_code=401)
         try:
             parameters = await request.json()
             result = await emitir_guia_regularizacao(parameters)

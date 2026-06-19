@@ -107,3 +107,31 @@ async def test_check_token_accepts_list_tokens(monkeypatch):
 
     assert result == "passed"
     call_next.assert_awaited_once()
+
+
+# --- is_valid_bearer (reusado pelas @mcp.custom_route Starlette) ---
+
+
+def test_is_valid_bearer_accepts_valid_string_token(monkeypatch):
+    module = load_check_token_module(monkeypatch, "abc123, def456")
+    assert module.is_valid_bearer("Bearer def456") is True
+
+
+def test_is_valid_bearer_accepts_valid_list_token(monkeypatch):
+    module = load_check_token_module(monkeypatch, ["abc123", "def456"])
+    assert module.is_valid_bearer("Bearer abc123") is True
+
+
+def test_is_valid_bearer_rejects_unknown_token(monkeypatch):
+    module = load_check_token_module(monkeypatch, "abc123")
+    assert module.is_valid_bearer("Bearer nope") is False
+
+
+def test_is_valid_bearer_rejects_missing_header(monkeypatch):
+    module = load_check_token_module(monkeypatch, "abc123")
+    assert module.is_valid_bearer(None) is False
+
+
+def test_is_valid_bearer_rejects_malformed_header(monkeypatch):
+    module = load_check_token_module(monkeypatch, "abc123")
+    assert module.is_valid_bearer("Token abc123") is False

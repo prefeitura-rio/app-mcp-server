@@ -1,7 +1,29 @@
+from typing import Optional
+
 from fastapi import HTTPException
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from src.config import env
+
+
+def is_valid_bearer(auth_header: Optional[str]) -> bool:
+    """Valida `Authorization: Bearer <token>` contra env.VALID_TOKENS.
+
+    Reusado pelo CheckTokenMiddleware (pipeline de mensagens MCP) E pelas
+    @mcp.custom_route Starlette — que o middleware NÃO cobre (ele só roda no
+    pipeline de mensagens MCP via fastmcp_context, não em rotas Starlette).
+    """
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header[7:]  # Remove "Bearer "
+    valid_tokens = env.VALID_TOKENS
+    if isinstance(valid_tokens, str):
+        # string: um único token ou vários separados por vírgula
+        valid_tokens_list = [t.strip() for t in valid_tokens.split(",")]
+    else:
+        # já é uma lista
+        valid_tokens_list = valid_tokens
+    return token in valid_tokens_list
 
 
 class CheckTokenMiddleware(Middleware):
@@ -20,19 +42,8 @@ class CheckTokenMiddleware(Middleware):
         if not auth_header.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Formato de token inválido")
 
-        # Extrai o token
-        token = auth_header[7:]  # Remove "Bearer "
-
-        # Verifica se o token é válido
-        valid_tokens = env.VALID_TOKENS
-        if isinstance(valid_tokens, str):
-            # Se VALID_TOKENS é uma string, pode ser um único token ou vários separados por vírgula
-            valid_tokens_list = [t.strip() for t in valid_tokens.split(",")]
-        else:
-            # Se já é uma lista
-            valid_tokens_list = valid_tokens
-
-        if token not in valid_tokens_list:
+        # Verifica se o token é válido (lógica compartilhada com is_valid_bearer)
+        if not is_valid_bearer(auth_header):
             raise HTTPException(status_code=401, detail="Token inválido")
 
         return await call_next(context)
