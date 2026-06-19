@@ -107,6 +107,28 @@ def test_register_location_uses_location_reply(inbound_media_module):
     assert "localização" in result["suggested_reply_pt_br"]
 
 
+def test_register_location_accepts_name_param(inbound_media_module):
+    """Regressao (2026-06-19): o LLM repassa o `name` do pin de location (rótulo
+    do local) junto com lat/lng. Antes o param nao existia → ToolException
+    strict-pydantic 'unexpected keyword argument name' → engine caía no fallback
+    'problema técnico ao processar'. A tool deve ACEITAR name e auditá-lo."""
+    register = inbound_media_module.register_inbound_media
+    result = asyncio.run(
+        register(
+            media_type="location",
+            user_number="5521965850470",
+            latitude=-22.950967,
+            longitude=-43.18,
+            address="",
+            name="Praça Saens Peña",
+        )
+    )
+    assert result["status"] == "received"
+    assert result["media_type"] == "location"
+    logs = inbound_media_module._test_log_messages
+    assert any("Praça Saens Peña" in m for _, m in logs)
+
+
 def test_register_unsupported_uses_unsupported_reply(inbound_media_module):
     register = inbound_media_module.register_inbound_media
     result = asyncio.run(

@@ -479,6 +479,7 @@ def create_app() -> FastMCP:
         latitude: Optional[float] = None,
         longitude: Optional[float] = None,
         address: Optional[str] = None,
+        name: Optional[str] = None,
         messaging_session_id: Optional[str] = None,
         conversation_identifier: Optional[str] = None,
     ) -> dict:
@@ -495,6 +496,7 @@ def create_app() -> FastMCP:
             latitude=latitude,
             longitude=longitude,
             address=address,
+            name=name,
             messaging_session_id=messaging_session_id,
             conversation_identifier=conversation_identifier,
         )
