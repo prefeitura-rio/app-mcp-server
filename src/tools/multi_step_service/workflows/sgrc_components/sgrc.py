@@ -1,3 +1,5 @@
+import hashlib
+import json
 import time
 from datetime import datetime
 from typing import Any, Dict, Union
@@ -20,6 +22,7 @@ from src.tools.multi_step_service.workflows.sgrc_components.ticket_state import 
     ticket_failed,
     ticket_opened,
 )
+from src.utils.idempotency import idempotency_get, idempotency_set
 
 
 class SGRCTicketMixin:
@@ -126,6 +129,56 @@ class SGRCTicketMixin:
 
             specific_attributes = self.build_specific_attributes(state)
 
+            # #14 (gap luminária): idempotência. Um retry (gateway/engine em timeout)
+            # re-chama o multi_step_service → _open_ticket re-roda → chamado SGRC
+            # DUPLICADO se a 1ª chamada tinha dado certo mas a resposta se perdeu.
+            # Chave determinística escopada ao user_id (a conversa) + payload do ticket;
+            # no retry devolve o MESMO protocolo sem re-abrir. Best-effort (sem Redis =
+            # no-op; a dedup do próprio SGRC continua de rede). Só sucesso é cacheado.
+            _idem_key = (
+                "sgrc_ticket_idem:"
+                + hashlib.sha256(
+                    json.dumps(
+                        {
+                            "user": state.user_id,
+                            "service": self.service_id,
+                            "desc": description,
+                            "addr": {
+                                "street": getattr(address, "street", ""),
+                                "street_code": getattr(address, "street_code", ""),
+                                "neighborhood": getattr(address, "neighborhood", ""),
+                                "neighborhood_code": getattr(
+                                    address, "neighborhood_code", ""
+                                ),
+                                "number": getattr(address, "number", ""),
+                                "zip_code": getattr(address, "zip_code", ""),
+                                "complement": getattr(address, "complement", ""),
+                            },
+                            "req": {
+                                "cpf": getattr(requester, "cpf", ""),
+                                "name": getattr(requester, "name", ""),
+                                "email": getattr(requester, "email", ""),
+                            },
+                            "attrs": specific_attributes,
+                        },
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest()
+            )
+
+            _cached = await idempotency_get(_idem_key)
+            if _cached and _cached.get("protocol_id"):
+                logger.info(
+                    f"[_open_ticket] replay idempotente — protocolo {_cached['protocol_id']} (sem re-abrir)"
+                )
+                return ticket_opened(
+                    state,
+                    _cached["protocol_id"],
+                    self.templates.solicitacao_criada_sucesso(_cached["protocol_id"]),
+                )
+
             ticket = await self.new_ticket(
                 classification_code=self.service_id,
                 description=description,
@@ -134,6 +187,10 @@ class SGRCTicketMixin:
                 occurrence_origin_code=self.common_config.occurrence_origin_code,
                 specific_attributes=specific_attributes,
             )
+
+            # Cacheia só o SUCESSO: um retry futuro do mesmo cidadão/dados devolve este
+            # protocolo sem re-abrir no SGRC.
+            await idempotency_set(_idem_key, {"protocol_id": ticket.protocol_id})
 
             return ticket_opened(
                 state,
