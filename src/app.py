@@ -1366,6 +1366,53 @@ def create_app() -> FastMCP:
 
         number_digits = "".join(filter(str.isdigit, str(number))) or "1"
 
+        # #14: idempotência — evita abrir chamado SGRC DUPLICADO num retry (gateway/
+        # engine re-chamam a tool em timeout). Chave determinística dos campos que
+        # definem o chamado; em retry sequencial devolve o MESMO protocolo sem
+        # re-chamar o SGRC. (Concorrência rara: a dedup do próprio SGRC —
+        # SGRCDuplicateTicketException abaixo — é a rede de segurança.) Best-effort.
+        import hashlib
+        import json as _json
+        from src.utils.idempotency import idempotency_get, idempotency_set
+
+        # Hash de TODOS os campos que afetam o async_new_ticket (Address + Requester +
+        # classificação + descrição) — só payload IDÊNTICO conta como replay; mudar
+        # qualquer campo (reference_point, name, número, ...) gera chave nova e re-cria
+        # o chamado (#14 P2 codex). Serialização via JSON da LISTA (não join por "|")
+        # pra campos com "|" não colidirem entre si (#14 P3 codex).
+        # Só cacheia quando há identidade do solicitante (cpf OU phone) → a chave fica
+        # escopada ao caller. Sem cpf/phone (anônimo) NÃO cacheia: dois reports anônimos
+        # DISTINTOS do mesmo endereço/classificação colidiriam e o 2º receberia o
+        # protocolo do 1º (#14 P2 codex). Anônimo conta com a dedup própria do SGRC.
+        _use_idem = bool(cpf or phone)
+        _idem_key = (
+            "sgrc_idem:"
+            + hashlib.sha256(
+                _json.dumps(
+                    [
+                        classification_code,
+                        description,
+                        street,
+                        street_code,
+                        neighborhood,
+                        neighborhood_code,
+                        number_digits,
+                        zip_code,
+                        reference_point,
+                        cpf,
+                        name,
+                        email,
+                        phone,
+                    ],
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+        if _use_idem:
+            _cached = await idempotency_get(_idem_key)
+            if _cached is not None:
+                return {**_cached, "idempotent_replay": True}
+
         address = Address(
             street=street,
             street_code=street_code,
@@ -1397,11 +1444,18 @@ def create_app() -> FastMCP:
                 requester=requester,
                 occurrence_origin_code="28",
             )
-            return {
+            result = {
                 "success": True,
                 "protocol_id": ticket.protocol_id,
                 "ticket_id": ticket.ticket_id,
             }
+            # Cacheia só o SUCESSO e só com identidade (caller-scoped): um retry futuro
+            # do MESMO solicitante com os mesmos campos devolve este protocolo sem
+            # re-criar. Erro/duplicata NÃO são cacheados (o retry deve re-tentar; a
+            # dedup do SGRC trata o caso de duplicata concorrente).
+            if _use_idem:
+                await idempotency_set(_idem_key, result)
+            return result
 
         except (SGRCDuplicateTicketException, SGRCEquivalentTicketException) as e:
             return {
