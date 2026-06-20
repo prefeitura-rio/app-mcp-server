@@ -26,7 +26,9 @@ def divida_module(monkeypatch):
         CHATBOT_PGM_ACCESS_KEY="secret-key",
     )
     logger = types.SimpleNamespace(
-        info=lambda *_args, **_kwargs: None, error=lambda *_args, **_kwargs: None
+        info=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        error=lambda *_args, **_kwargs: None,
     )
     interceptor_module = types.SimpleNamespace(
         interceptor=lambda *args, **kwargs: lambda func: func
@@ -147,11 +149,19 @@ async def test_da_emitir_guia_and_processar_registros(divida_module, monkeypatch
     )
     assert entrada == {"origem_solicitação": 0, "guias": ["GUIA-1"]}
 
-    with pytest.raises(ValueError):
-        await divida_module.da_emitir_guia(
-            {"itens_informados": "abc", "dicionario_itens": "not-a-dict"},
-            tipo="a_vista",
-        )
+    # Item malformado ("abc" não é literal) → parse falha → retorno gracioso (None),
+    # que os callers tratam como "Nenhum parâmetro válido fornecido" (antes estourava
+    # ValueError no fallback float()).
+    entrada = await divida_module.da_emitir_guia(
+        {"itens_informados": "abc", "dicionario_itens": "not-a-dict"},
+        tipo="a_vista",
+    )
+    assert entrada is None
+
+    # Chamada vazia/prematura (nem itens_informados nem apenas_um_item) → None
+    # gracioso, não mais float(None)/float([]) estourando (bug visto em prod 06-20).
+    entrada = await divida_module.da_emitir_guia({}, tipo="a_vista")
+    assert entrada is None
 
     async def fake_pgm_api(endpoint, consumidor, data):
         return [

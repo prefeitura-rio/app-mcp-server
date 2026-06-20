@@ -221,19 +221,32 @@ async def da_emitir_guia(
     )
 
     itens_raw = parameters.get("itens_informados", [])
+    itens_informados = []
     try:
         if itens_raw:
             if isinstance(itens_raw, str):
-                itens_informados = ast.literal_eval(itens_raw.strip())
-                if not isinstance(itens_informados, (list, tuple)):
-                    itens_informados = [str(int(float(itens_informados)))]
+                parsed = ast.literal_eval(itens_raw.strip())
+                itens_informados = (
+                    list(parsed)
+                    if isinstance(parsed, (list, tuple))
+                    else [str(int(float(parsed)))]
+                )
             elif isinstance(itens_raw, list):
                 itens_informados = itens_raw
         else:
-            itens_informados = [str(int(float(parameters.get("apenas_um_item"))))]
+            # Item único informado fora da lista: só converte se houver valor. Sem
+            # o guard, float(None) estourava quando nem `itens_informados` nem
+            # `apenas_um_item` vinham preenchidos (chamada vazia/prematura da tool).
+            apenas_um = parameters.get("apenas_um_item")
+            if apenas_um is not None and str(apenas_um).strip():
+                itens_informados = [str(int(float(apenas_um)))]
 
     except Exception as e:
-        logger.error(
+        # Parse falhou: deixa a lista vazia e cai no guard abaixo. (O fallback antigo
+        # fazia `float(parameters.get("itens_informados", 1))` — mas quando a chave
+        # existia vazia, `.get` devolvia `[]` e `float([])` re-estourava DENTRO do
+        # except, propagando uma exceção não-tratada.)
+        logger.warning(
             {
                 "event": "da_emitir_guia_parse_error",
                 "error": str(e),
@@ -241,7 +254,14 @@ async def da_emitir_guia(
                 "itens_informados_raw": itens_raw,
             }
         )
-        itens_informados = [str(int(float(parameters.get("itens_informados", 1))))]
+        itens_informados = []
+
+    # Sem itens utilizáveis (chamada vazia/prematura ou parse falho) → retorno
+    # gracioso: os callers tratam `not entrada` com "Nenhum parâmetro válido
+    # fornecido", em vez de estourar mais adiante / mandar item vazio pra API.
+    if not itens_informados:
+        logger.info({"event": "da_emitir_guia_sem_itens", "parameters": parameters})
+        return None
 
     try:
         dict_itens = ast.literal_eval(parameters.get("dicionario_itens", "{}"))
