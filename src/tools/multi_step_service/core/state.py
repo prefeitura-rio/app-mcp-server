@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from src.tools.multi_step_service.core.models import ServiceState, ServiceMetadata
 from src.config import env
+from src.utils.redis_lock import redis_lock
 
 try:
     import redis.asyncio as redis
@@ -301,6 +302,16 @@ class StateManager:
         self.backend = self._create_backend(
             data_dir, backend_mode, redis_url, redis_ttl_seconds
         )
+        # #14: o lock de concorrência (redis_lock) tem que viver no MESMO Redis em que
+        # o backend guarda os dados — senão coordenaria na instância/DB errada e o race
+        # persistiria. Resolve a url igual ao backend (override > env). SÓ pra REDIS/BOTH:
+        # no modo JSON local não há store compartilhado, então o lock é None (no-op) — e
+        # assim o save JSON não paga o timeout do Redis se ele estiver fora (#14 P3 codex).
+        self._lock_redis_url = (
+            (redis_url or getattr(env, "REDIS_URL", None))
+            if backend_mode in (StateMode.REDIS, StateMode.BOTH)
+            else None
+        )
 
     def _create_backend(
         self,
@@ -360,8 +371,9 @@ class StateManager:
             )
         return None
 
-    async def save_service_state(self, state: ServiceState) -> None:
-        """Salva o estado de um serviço (async)."""
+    async def _save_service_state_unlocked(self, state: ServiceState) -> None:
+        """Read-modify-write do blob `user_data` SEM lock. Só chamar de dentro de um
+        `redis_lock` por user_id (ver save_service_state / update_service_state)."""
         # Auto-atualiza o timestamp de updated_at antes de salvar
         state.metadata.update_timestamp()
 
@@ -377,32 +389,56 @@ class StateManager:
 
         await self._save_user_data(user_data)
 
+    async def save_service_state(self, state: ServiceState) -> None:
+        """Salva o estado de um serviço (async), serializado por user_id.
+
+        #14: o save é um read-modify-write do blob `user_data` (que carrega TODOS os
+        serviços do usuário). Sem serialização, 2 turnos concorrentes do mesmo usuário
+        (mensagens rápidas / múltiplas réplicas) liam o mesmo blob e o último save
+        sobrescrevia o do outro (lost update). O lock por user_id serializa o
+        read-modify-write."""
+        async with redis_lock(
+            f"service_state_lock:{self.user_id}", redis_url=self._lock_redis_url
+        ):
+            await self._save_service_state_unlocked(state)
+
     async def update_service_state(
         self, service_name: str, updates: Dict[str, Any]
     ) -> None:
-        """Atualiza campos específicos do estado de um serviço (async)."""
-        state = await self.load_service_state(service_name)
+        """Atualiza campos específicos do estado de um serviço (async).
 
-        if state is None:
-            # Criar novo estado se não existir
-            state = ServiceState(user_id=self.user_id, service_name=service_name)
+        #14: load → modify → save sob o MESMO lock por user_id (chama o helper
+        `_unlocked` pra não re-adquirir o lock e travar). Sem isso, o update corria
+        com outro save/update concorrente do mesmo usuário (lost update)."""
+        async with redis_lock(
+            f"service_state_lock:{self.user_id}", redis_url=self._lock_redis_url
+        ):
+            state = await self.load_service_state(service_name)
 
-        # Aplicar atualizações
-        for key, value in updates.items():
-            if hasattr(state, key):
-                setattr(state, key, value)
+            if state is None:
+                # Criar novo estado se não existir
+                state = ServiceState(user_id=self.user_id, service_name=service_name)
 
-        await self.save_service_state(state)
+            # Aplicar atualizações
+            for key, value in updates.items():
+                if hasattr(state, key):
+                    setattr(state, key, value)
+
+            await self._save_service_state_unlocked(state)
 
     async def remove_service_state(self, service_name: str) -> bool:
-        """Remove o estado de um serviço específico (async)."""
-        user_data = await self._load_user_data()
+        """Remove o estado de um serviço específico (async), serializado por user_id
+        (#14: mesmo read-modify-write do blob que o save → mesmo lock)."""
+        async with redis_lock(
+            f"service_state_lock:{self.user_id}", redis_url=self._lock_redis_url
+        ):
+            user_data = await self._load_user_data()
 
-        if service_name in user_data:
-            del user_data[service_name]
-            await self._save_user_data(user_data)
-            return True
-        return False
+            if service_name in user_data:
+                del user_data[service_name]
+                await self._save_user_data(user_data)
+                return True
+            return False
 
     async def remove_user_data(self) -> bool:
         """Remove todos os dados do usuário usando o backend configurado (async)."""
