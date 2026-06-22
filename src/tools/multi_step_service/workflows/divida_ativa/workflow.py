@@ -200,12 +200,23 @@ class DividaAtivaWorkflow(BaseWorkflow):
             state.agent_response = None
             return state
 
-        state.agent_response = AgentResponse(
-            description=mensagem_consulta
+        desc_acao = (
+            mensagem_consulta
             + "\n\n"
-            + DividaAtivaTemplates.escolher_acao(total_nao_parcelado, total_parcelado),
+            + DividaAtivaTemplates.escolher_acao(total_nao_parcelado, total_parcelado)
+        )
+        interactive_list = DividaAtivaTemplates.escolher_acao_interactive(
+            total_nao_parcelado, total_parcelado
+        )
+        state.agent_response = AgentResponse(
+            description=desc_acao,
             payload_schema=AcaoDebitosPayload.model_json_schema(),
             data={"consulta_resultado": consulta},
+            interactive={
+                "body": mensagem_consulta + "\n\nO que deseja fazer?",
+                "field": "acao",
+                **interactive_list,
+            },
         )
         return state
 
@@ -343,11 +354,20 @@ class DividaAtivaWorkflow(BaseWorkflow):
             return state
 
         # Mostra débitos e pede confirmação
+        desc_confirm = DividaAtivaTemplates.confirmar_debitos_selecionados(
+            debitos_detalhados, acao
+        )
         state.agent_response = AgentResponse(
-            description=DividaAtivaTemplates.confirmar_debitos_selecionados(
-                debitos_detalhados, acao
-            ),
+            description=desc_confirm,
             payload_schema=ConfirmacaoPayload.model_json_schema(),
+            interactive={
+                "body": desc_confirm,
+                "field": "confirma",
+                "buttons": [
+                    {"id": "sim", "title": "Sim"},
+                    {"id": "nao", "title": "Não"},
+                ],
+            },
         )
         return state
 

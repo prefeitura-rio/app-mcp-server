@@ -29,6 +29,35 @@ class DividaAtivaTemplates:
         return mensagens.get(tipo_consulta, "Informe o valor para consulta.")
 
     @staticmethod
+    def escolher_acao_interactive(
+        total_nao_parcelado: int, total_parcelado: int
+    ) -> dict:
+        """Retorna kwargs `sections` + `button_label` para build_list_envelope."""
+        if total_nao_parcelado > 0 and total_parcelado > 0:
+            rows = [
+                {"id": "pagar_a_vista", "title": "Pagar à vista"},
+                {"id": "parcelar_debitos", "title": "Parcelar débitos"},
+                {"id": "regularizar_debitos", "title": "Regularizar débitos"},
+                {"id": "liquidar_parcelamento", "title": "Liquidar parcelamento"},
+                {"id": "emitir_segunda_via", "title": "Emitir 2ª via"},
+            ]
+        elif total_nao_parcelado > 0:
+            rows = [
+                {"id": "pagar_a_vista", "title": "Pagar à vista"},
+                {"id": "parcelar_debitos", "title": "Parcelar débitos"},
+            ]
+        else:
+            rows = [
+                {"id": "regularizar_debitos", "title": "Regularizar débitos"},
+                {"id": "liquidar_parcelamento", "title": "Liquidar parcelamento"},
+                {"id": "emitir_segunda_via", "title": "Emitir 2ª via"},
+            ]
+        return {
+            "sections": [{"title": "Opções disponíveis", "rows": rows}],
+            "button_label": "Ver opções",
+        }
+
+    @staticmethod
     def escolher_acao(total_nao_parcelado: int, total_parcelado: int) -> str:
         if total_nao_parcelado > 0 and total_parcelado > 0:
             return (
