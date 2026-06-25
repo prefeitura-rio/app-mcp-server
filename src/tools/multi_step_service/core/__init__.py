@@ -63,6 +63,15 @@ DESCRIPTION = """
 
     __replace__available_services__
 
+    **🚨 REGRA CRÍTICA — RETORNO DE GUIA DE PAGAMENTO (divida_ativa) 🚨**
+
+    Quando `multi_step_service` retornar `description` contendo uma guia emitida
+    (ex: "Guia gerada com sucesso"), você DEVE repassar o conteúdo da `description`
+    **LITERALMENTE e NA ÍNTEGRA** ao cidadão — incluindo Link, Código de barras e
+    código PIX. NUNCA parafraseie, resuma ou omita nenhum desses campos.
+    NÃO diga que "enviou" código PIX ou boleto sem que o texto real do código apareça
+    na mensagem ao cidadão.
+
     Args:
         service_name: Nome do serviço (ex: "bank_account")
         payload: Dicionário com campos solicitados no payload_schema.
