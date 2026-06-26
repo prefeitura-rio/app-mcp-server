@@ -145,14 +145,46 @@ class DividaAtivaTemplates:
         return texto
 
     @staticmethod
-    def guia_emitida(resultado: dict[str, Any]) -> str:
-        texto = "Guia gerada com sucesso."
+    def guia_emitida_escolher_forma(resultado: dict[str, Any]) -> tuple[str, dict]:
+        """
+        Retorna (texto_descricao, kwargs_interactive) para perguntar
+        qual forma de pagamento o cidadão quer receber.
+        Inclui apenas as opções realmente disponíveis na resposta da API.
+        """
+        vencimento = resultado.get("data_vencimento", "")
+        texto = "Guia de pagamento gerada com sucesso!"
+        if vencimento:
+            texto += f" A data de vencimento é {vencimento}."
+        texto += "\n\nEscolha uma das opções para fazer o pagamento:"
+
+        botoes = []
         if resultado.get("link"):
-            texto += f"\n\nLink: {resultado['link']}"
+            botoes.append({"id": "link", "title": "Boleto bancário (PDF)"})
         if resultado.get("codigo_de_barras"):
-            texto += f"\nCódigo de barras: {resultado['codigo_de_barras']}"
+            botoes.append({"id": "codigo_de_barras", "title": "Código de barras"})
         if resultado.get("pix"):
-            texto += f"\nPIX: {resultado['pix']}"
-        if resultado.get("data_vencimento"):
-            texto += f"\nData de vencimento: {resultado['data_vencimento']}"
-        return texto
+            botoes.append({"id": "pix", "title": "Pix copia-e-cola"})
+
+        interactive = {
+            "body": texto,
+            "field": "opcao_pagamento",
+            "buttons": botoes,
+        }
+        return texto, interactive
+
+    @staticmethod
+    def detalhe_pagamento(resultado: dict[str, Any], opcao: str) -> str:
+        """Retorna a mensagem final com o dado de pagamento escolhido."""
+        vencimento = resultado.get("data_vencimento", "")
+        sufixo = f"\n\nData de vencimento: {vencimento}" if vencimento else ""
+
+        if opcao == "link":
+            link = resultado.get("link", "")
+            return f"Você pode acessar o documento para pagamento neste link:\n{link}{sufixo}"
+        if opcao == "codigo_de_barras":
+            codigo = resultado.get("codigo_de_barras", "")
+            return f"Código de barras para pagamento:\n{codigo}{sufixo}"
+        if opcao == "pix":
+            pix = resultado.get("pix", "")
+            return f"Código PIX copia-e-cola para pagamento:\n{pix}{sufixo}"
+        return "Opção não reconhecida."

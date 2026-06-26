@@ -316,3 +316,53 @@ class ConfirmacaoPayload(BaseModel):
             "False para qualquer resposta negativa (não, nao, cancela, volta, errado, 👎, etc)."
         ),
     )
+
+
+OpcaoPagamento = Literal["link", "codigo_de_barras", "pix"]
+
+
+class OpcaoPagamentoPayload(BaseModel):
+    opcao_pagamento: OpcaoPagamento = Field(
+        ...,
+        description=(
+            "Forma de pagamento escolhida pelo usuário: "
+            "'link' para o PDF da guia, "
+            "'codigo_de_barras' para o boleto bancário, "
+            "'pix' para o código PIX copia-e-cola."
+        ),
+    )
+
+    @field_validator("opcao_pagamento", mode="before")
+    @classmethod
+    def normalizar_opcao(cls, value: Any) -> str:
+        raw = str(value or "").strip()
+        opcoes = {
+            "link": [
+                "link",
+                "pdf",
+                "documento",
+                "guia",
+                "boleto bancário",
+                "boleto bancario",
+            ],
+            "codigo_de_barras": [
+                "codigo de barras",
+                "código de barras",
+                "codigo_de_barras",
+                "boleto",
+                "linha digitavel",
+                "linha digitável",
+                "codigo barras",
+            ],
+            "pix": [
+                "pix",
+                "pix copia e cola",
+                "pix copia-e-cola",
+                "codigo pix",
+                "código pix",
+                "chave pix",
+                "qr code",
+                "qrcode",
+            ],
+        }
+        return encontrar_mais_similar(raw, opcoes)

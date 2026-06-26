@@ -15,6 +15,7 @@ from src.tools.multi_step_service.workflows.divida_ativa.models import (
     AnoAutoInfracaoPayload,
     ConfirmacaoPayload,
     ItensPagamentoPayload,
+    OpcaoPagamentoPayload,
     TipoConsultaPayload,
     ValorConsultaPayload,
 )
@@ -34,6 +35,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         "acao",
         "itens_informados",
         "confirmacao_debitos",
+        "opcao_pagamento",
     ]
     step_dependencies = {
         "consulta_debitos": [
@@ -44,6 +46,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "itens_informados",
             "confirmacao_debitos",
             "guia_emitida",
+            "opcao_pagamento",
         ],
         "anoAutoInfracao": [
             "valor_consulta",
@@ -52,6 +55,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "itens_informados",
             "confirmacao_debitos",
             "guia_emitida",
+            "opcao_pagamento",
         ],
         "valor_consulta": [
             "consulta_resultado",
@@ -59,10 +63,16 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "itens_informados",
             "confirmacao_debitos",
             "guia_emitida",
+            "opcao_pagamento",
         ],
-        "acao": ["itens_informados", "confirmacao_debitos", "guia_emitida"],
-        "itens_informados": ["confirmacao_debitos", "guia_emitida"],
-        "confirmacao_debitos": ["guia_emitida"],
+        "acao": [
+            "itens_informados",
+            "confirmacao_debitos",
+            "guia_emitida",
+            "opcao_pagamento",
+        ],
+        "itens_informados": ["confirmacao_debitos", "guia_emitida", "opcao_pagamento"],
+        "confirmacao_debitos": ["guia_emitida", "opcao_pagamento"],
     }
 
     def __init__(self):
@@ -374,6 +384,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
     @handle_errors
     async def _emitir_guia(self, state: ServiceState) -> ServiceState:
         if "guia_emitida" in state.data:
+            state.agent_response = None
             return state
 
         tipo_emissao = (
@@ -405,12 +416,64 @@ class DividaAtivaWorkflow(BaseWorkflow):
             return state
 
         state.data["guia_emitida"] = resultado
+        # Não envia resposta ainda — continua para o nó de escolha de forma de pagamento
+        state.agent_response = None
+        return state
+
+    @handle_errors
+    async def _escolher_forma_pagamento(self, state: ServiceState) -> ServiceState:
+        """Pergunta ao cidadão como quer receber os dados de pagamento (botões)."""
+        resultado = state.data.get("guia_emitida", {})
+
+        if "opcao_pagamento" in state.payload:
+            payload = OpcaoPagamentoPayload.model_validate(state.payload)
+            opcao = payload.opcao_pagamento
+
+            # Verifica se a opção escolhida está disponível
+            disponivel = (
+                (opcao == "link" and resultado.get("link"))
+                or (opcao == "codigo_de_barras" and resultado.get("codigo_de_barras"))
+                or (opcao == "pix" and resultado.get("pix"))
+            )
+            if not disponivel:
+                # Opção indisponível — repergunta
+                texto, interactive = DividaAtivaTemplates.guia_emitida_escolher_forma(
+                    resultado
+                )
+                state.agent_response = AgentResponse(
+                    description="Essa opção não está disponível para esta guia. "
+                    + texto,
+                    payload_schema=OpcaoPagamentoPayload.model_json_schema(),
+                    interactive={
+                        **interactive,
+                        "body": "Essa opção não está disponível. "
+                        + interactive["body"],
+                    },
+                )
+                return state
+
+            state.data["opcao_pagamento"] = opcao
+            mensagem_final = DividaAtivaTemplates.detalhe_pagamento(resultado, opcao)
+            state.agent_response = AgentResponse(
+                service_name=self.service_name,
+                description=mensagem_final,
+                data={"guia_emitida": resultado, "opcao_pagamento": opcao},
+            )
+            state.data["_reset_on_next_call"] = True
+            return state
+
+        if "opcao_pagamento" in state.data:
+            # Já respondido numa chamada anterior (não deve acontecer normalmente)
+            state.agent_response = None
+            return state
+
+        # Pergunta pela primeira vez
+        texto, interactive = DividaAtivaTemplates.guia_emitida_escolher_forma(resultado)
         state.agent_response = AgentResponse(
-            service_name=self.service_name,
-            description=DividaAtivaTemplates.guia_emitida(resultado),
-            data={"guia_emitida": resultado},
+            description=texto,
+            payload_schema=OpcaoPagamentoPayload.model_json_schema(),
+            interactive=interactive,
         )
-        state.data["_reset_on_next_call"] = True
         return state
 
     def _acao_disponivel(
@@ -463,6 +526,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         graph.add_node("coletar_itens", self._coletar_itens)
         graph.add_node("confirmar_debitos", self._confirmar_debitos)
         graph.add_node("emitir_guia", self._emitir_guia)
+        graph.add_node("escolher_forma_pagamento", self._escolher_forma_pagamento)
 
         graph.set_entry_point("escolher_tipo_consulta")
         graph.add_conditional_edges(
@@ -505,5 +569,10 @@ class DividaAtivaWorkflow(BaseWorkflow):
             self._decide_after_node,
             {"continue": "emitir_guia", END: END},
         )
-        graph.add_edge("emitir_guia", END)
+        graph.add_conditional_edges(
+            "emitir_guia",
+            self._decide_after_node,
+            {"continue": "escolher_forma_pagamento", END: END},
+        )
+        graph.add_edge("escolher_forma_pagamento", END)
         return graph
