@@ -22,6 +22,8 @@ spec:
       previewReplicaCount: 1
   template:
     metadata:
+      annotations:
+        prefeitura.rio/restarted-at: "2026-06-28T14:55:00Z"
       labels:
         app: mcp
     spec:
