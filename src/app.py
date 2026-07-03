@@ -55,6 +55,9 @@ from src.tools.inbound_media_audio import (
 from src.tools.inbound_media_video import (
     analyze_inbound_video as analyze_inbound_video_impl,
 )
+from src.tools.inbound_media_document import (
+    analyze_inbound_document as analyze_inbound_document_impl,
+)
 from src.flows.reparo_luminaria.handler import process_flow_request
 from src.flows.divida_ativa.handler import (
     process_flow_request as process_divida_ativa_flow_request,
@@ -523,6 +526,13 @@ def create_app() -> FastMCP:
         os.environ.get("ENABLE_VIDEO_ADDENDUM") or "true"
     ).lower() != "false"
 
+    # Tool de leitura de documento (PDF/TXT/CSV) habilitada por padrão. Mesma
+    # semântica: ENABLE_DOCUMENT_ADDENDUM=false desliga registro + prompt module
+    # document_inbound (no engine).
+    _document_enabled = (
+        os.environ.get("ENABLE_DOCUMENT_ADDENDUM") or "true"
+    ).lower() != "false"
+
     if _vision_enabled:
 
         @conditional_mcp_tool(
@@ -755,6 +765,64 @@ def create_app() -> FastMCP:
                 salesforce_download_path=salesforce_download_path,
                 local_video_path=local_video_path,
                 video_bytes_base64=video_bytes_base64,
+                meta_media_id=meta_media_id,
+                message_id=message_id,
+                content_version_id=content_version_id,
+            )
+
+    if _document_enabled:
+
+        @conditional_mcp_tool(
+            "analyze_inbound_document",
+            description="""
+        Le e extrai o conteudo de um DOCUMENTO inbound do WhatsApp (PDF/TXT/CSV)
+        via Gemini multimodal. Chamar SEMPRE depois de `register_inbound_media`
+        quando `media_type='document'`, antes de responder ao cidadao.
+
+        QUANDO USAR:
+        - Apos register_inbound_media de um documento (PDF de conta/carta/protocolo,
+          .pdf/.txt/.csv que o cidadao anexou).
+        - Pra obter o conteudo extraido (resumo do pedido, endereco, dados) que o
+          cidadao mandou no arquivo em vez de digitar.
+
+        ARGS:
+        - `user_number` (obrig): telefone E.164 sem '+'.
+        - `file_extension` (obrig no caminho Salesforce): 'pdf' | 'txt' | 'csv' | 'rtf'.
+          (doc/docx/xls/xlsx/ppt/pptx sao binarios que o Gemini nao le direto — viram
+          fallback "envie como PDF".)
+        - `salesforce_download_path` (opt, PREFERIDO em UWC/UM): caminho REST relativo
+          do ContentVersion (ex: `/services/data/v62.0/sobjects/ContentVersion/068xxx/VersionData`).
+        - `content_version_id` (COND. OBRIG quando salesforce_download_path presente):
+          cross-check anti prompt-injection. No prefix [INBOUND_MEDIA] vem como
+          `media.content_version_id` — sempre repassar.
+        - `meta_media_id` (opt): Id de midia do Graph API (caminho Meta direto).
+        - `document_bytes_base64` (opt): bytes inline (testes).
+        - `message_id` (opt): correlacao com register_inbound_media (audit).
+
+        PRIORIDADE da fonte de bytes:
+        `meta_media_id` → `salesforce_download_path` (+ content_version_id) →
+        `document_bytes_base64`.
+
+        RETORNO: dict com `status='analyzed'`, `analysis.conteudo_extraido` (texto
+        extraido do documento) e `suggested_reply_pt_br`. Em falha, degrada com
+        fallback "descreva em texto". Use o conteudo extraido pra continuar o
+        atendimento sem pedir o cidadao redigitar o que ja mandou no arquivo.
+        """,
+        )
+        async def analyze_inbound_document(
+            user_number: str,
+            file_extension: Optional[str] = None,
+            salesforce_download_path: Optional[str] = None,
+            document_bytes_base64: Optional[str] = None,
+            meta_media_id: Optional[str] = None,
+            message_id: Optional[str] = None,
+            content_version_id: Optional[str] = None,
+        ) -> dict:
+            return await analyze_inbound_document_impl(
+                user_number=user_number,
+                file_extension=file_extension or "",
+                salesforce_download_path=salesforce_download_path,
+                document_bytes_base64=document_bytes_base64,
                 meta_media_id=meta_media_id,
                 message_id=message_id,
                 content_version_id=content_version_id,

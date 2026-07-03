@@ -102,8 +102,18 @@ types:
   # DOCUMENT
   # ────────────────────────────────────────────────────────────
   document:
-    direction: outbound
+    direction: both
     meta_message_type: document
+    inbound:
+      # Cidadão envia PDF/TXT/CSV via WhatsApp "anexo → documento". A UM anexa como
+      # ContentVersion (validado 2026-07-02: FileType=PDF). Gemini lê PDF/TXT/CSV
+      # nativamente; DOC/XLS/PPT binários degradam com fallback "envie como PDF".
+      analyzer_tool: analyze_inbound_document
+      gemini_model: gemini-2.5-flash
+      accepted_mime_types: [application/pdf, text/plain, text/csv]
+      accepted_extensions: [pdf, txt, csv, rtf]
+      rejected_extensions: [doc, docx, xls, xlsx, ppt, pptx, odt]  # binários — Gemini não lê direto
+      max_size_mb: 20
     outbound:
       builder_tool: send_whatsapp_media
       required_fields: ["url|base64"]
