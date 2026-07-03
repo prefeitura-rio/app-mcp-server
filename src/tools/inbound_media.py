@@ -27,6 +27,7 @@ _ACCEPTED_MEDIA_TYPES = {
     "image",
     "audio",
     "video",
+    "document",
     "location",
     "unsupported",
     "unknown",
@@ -47,6 +48,10 @@ _SUGGESTED_REPLIES_PT_BR = {
     "video": (
         "Recebi seu vídeo! Pode descrever em texto o que está mostrando "
         "enquanto eu processo o vídeo aqui?"
+    ),
+    "document": (
+        "Recebi seu documento! Pode descrever em texto o que precisa "
+        "enquanto eu leio o arquivo aqui?"
     ),
     "location": (
         "Recebi sua localização! Por enquanto preciso do endereço em texto "
