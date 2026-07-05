@@ -1,0 +1,9 @@
+language: pt-BR
+reviews:
+  profile: chill
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+chat:
+  auto_reply: true
