@@ -317,6 +317,20 @@ class ConfirmacaoPayload(BaseModel):
         ),
     )
 
+    @field_validator("confirma", mode="before")
+    @classmethod
+    def parse_bool_from_text(cls, v: object) -> bool:
+        from src.tools.multi_step_service.workflows.sgrc_components.models import (
+            parse_affirmation,
+        )
+
+        result = parse_affirmation(v)
+        if result is None:
+            raise ValueError(
+                f"Não entendi sua confirmação: {v!r}. Responda 'Sim' ou 'Não'."
+            )
+        return result
+
 
 OpcaoPagamento = Literal["link", "codigo_de_barras", "pix"]
 

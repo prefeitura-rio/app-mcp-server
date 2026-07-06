@@ -66,12 +66,12 @@ DESCRIPTION = """
     **🚨 REGRA CRÍTICA — RETORNO DE GUIA DE PAGAMENTO (divida_ativa) 🚨**
 
     Quando `multi_step_service` retornar `description` contendo uma guia emitida
-    (ex: "Guia de pagamento gerada com sucesso"), você DEVE repassar o conteúdo da
-    `description` **LITERALMENTE e NA ÍNTEGRA** ao cidadão.
-    O sistema já pergunta ao cidadão qual forma de pagamento ele deseja (botões:
-    Boleto bancário / Código de barras / Pix copia-e-cola). Quando o cidadão
-    escolher, repasse o dado **LITERALMENTE** (link, código de barras ou código PIX)
-    sem parafrasear, resumir ou omitir.
+    (ex: "A guia de pagamento foi gerada com sucesso"), você DEVE repassar o conteúdo da
+    `description` **LITERALMENTE e NA ÍNTEGRA** ao cidadão. **NÃO adicione listas de
+    opções nem bullets** — os botões interativos (PDF da guia / Código de barras /
+    PIX copia e cola) são enviados automaticamente pelo sistema. Quando o cidadão
+    escolher a opção, repasse o dado **LITERALMENTE** (link, código de barras ou código
+    PIX) sem parafrasear, resumir ou omitir.
 
     Args:
         service_name: Nome do serviço (ex: "bank_account")

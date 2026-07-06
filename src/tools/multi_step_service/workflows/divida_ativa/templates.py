@@ -152,18 +152,18 @@ class DividaAtivaTemplates:
         Inclui apenas as opções realmente disponíveis na resposta da API.
         """
         vencimento = resultado.get("data_vencimento", "")
-        texto = "Guia de pagamento gerada com sucesso!"
+        texto = "A guia de pagamento foi gerada com sucesso!"
         if vencimento:
             texto += f" A data de vencimento é {vencimento}."
-        texto += "\n\nEscolha uma das opções para fazer o pagamento:"
+        texto += "\n\nComo você deseja receber os dados para pagamento?"
 
         botoes = []
         if resultado.get("link"):
-            botoes.append({"id": "link", "title": "Boleto bancário (PDF)"})
+            botoes.append({"id": "link", "title": "PDF da guia"})
         if resultado.get("codigo_de_barras"):
             botoes.append({"id": "codigo_de_barras", "title": "Código de barras"})
         if resultado.get("pix"):
-            botoes.append({"id": "pix", "title": "Pix copia-e-cola"})
+            botoes.append({"id": "pix", "title": "PIX copia e cola"})
 
         interactive = {
             "body": texto,
