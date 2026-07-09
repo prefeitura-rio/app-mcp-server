@@ -1,8 +1,10 @@
+import asyncio
 import hashlib
 import json
 import time
 from datetime import datetime
 from typing import Any, Dict, Union
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 from prefeitura_rio.integrations.sgrc import async_new_ticket
@@ -16,6 +18,7 @@ from prefeitura_rio.integrations.sgrc.exceptions import (
 )
 from prefeitura_rio.integrations.sgrc.models import Address, Requester
 
+from src.config import env
 from src.tools.multi_step_service.core.base_workflow import handle_errors
 from src.tools.multi_step_service.core.models import ServiceState
 from src.tools.multi_step_service.workflows.sgrc_components.ticket_state import (
@@ -23,6 +26,10 @@ from src.tools.multi_step_service.workflows.sgrc_components.ticket_state import 
     ticket_opened,
 )
 from src.utils.idempotency import idempotency_get, idempotency_set
+
+# Timezone do `dataHora` do SGRC (mesma da lib: pre_new_ticket usa
+# America/Sao_Paulo quando date_time é None).
+_SP_TZ = ZoneInfo("America/Sao_Paulo")
 
 
 class SGRCTicketMixin:
@@ -36,33 +43,60 @@ class SGRCTicketMixin:
         occurrence_origin_code: str = "28",
         specific_attributes: Dict[str, Any] = None,
     ):
-        """Cria um novo ticket no SGRC."""
+        """Cria um novo ticket no SGRC, com timeout (#R2).
+
+        O `async_new_ticket` da lib não passa timeout (herda o default de 300s do
+        aiohttp) — um SGRC lento/instável ficava pendurado minutos, estourava o
+        poll do turno e só então o cidadão via "sistema indisponível". Aqui a
+        chamada é limitada por ``SGRC_TIMEOUT_SECONDS`` (fail-fast).
+
+        NÃO há retry AQUI, de propósito: `new_ticket` é um POST mutante e retriá-lo
+        com segurança nesta lib não é viável — em ``prefeitura-rio==1.1.2`` toda
+        falha (4xx/5xx/decode) vira ``BaseSGRCException`` (não dá pra separar
+        transitório de permanente), a exceção de duplicado não traz protocol_id pra
+        reconciliar, e o ``dataHora`` é gerado por chamada (um re-POST vira outra
+        requisição, driblando a dedup do SGRC). O retry seguro é o da camada externa
+        (idempotente): a idempotência do caller (`_open_ticket`) cacheia só o
+        sucesso e a dedup do próprio SGRC é a rede de segurança.
+        """
         start_time = time.time()
-        end_time = None
-
         try:
-            ticket = await async_new_ticket(
-                classification_code=classification_code,
-                description=description,
-                address=address,
-                date_time=date_time,
-                requester=requester,
-                occurrence_origin_code=occurrence_origin_code,
-                specific_attributes=specific_attributes or {},
-            )
+            async with asyncio.timeout(env.SGRC_TIMEOUT_SECONDS):
+                ticket = await async_new_ticket(
+                    classification_code=classification_code,
+                    description=description,
+                    address=address,
+                    date_time=date_time,
+                    requester=requester,
+                    occurrence_origin_code=occurrence_origin_code,
+                    specific_attributes=specific_attributes or {},
+                )
 
-            end_time = time.time()
+            elapsed = time.time() - start_time
             logger.info(
-                f"Ticket criado com sucesso. Protocol ID: {ticket.protocol_id}. Tempo: {end_time - start_time:.2f}s"
+                f"Ticket criado com sucesso. Protocol ID: {ticket.protocol_id}. "
+                f"Tempo: {elapsed:.2f}s"
             )
             return ticket
 
-        except Exception as exc:
-            end_time = end_time if end_time else time.time()
+        except (asyncio.TimeoutError, TimeoutError):
+            # Fail-fast no timeout (mata o pendura de 300s). Sem re-POST: seria
+            # ambíguo (pode ter committado) e duplicaria. Propaga pro handler de
+            # _open_ticket, que preserva o estado p/ "tentar novamente".
+            elapsed = time.time() - start_time
             logger.error(
-                f"Erro ao criar ticket. Tempo: {end_time - start_time:.2f}s. Erro: {exc}"
+                f"Timeout no SGRC (>{env.SGRC_TIMEOUT_SECONDS}s). "
+                f"Tempo: {elapsed:.2f}s. Fail-fast (sem re-POST)."
             )
-            raise exc
+            raise
+
+        except Exception as exc:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"Erro ao criar ticket. Tempo: {elapsed:.2f}s. "
+                f"Erro: {type(exc).__name__}: {exc}"
+            )
+            raise
 
     @handle_errors
     async def _open_ticket(self, state: ServiceState) -> ServiceState:
@@ -179,10 +213,23 @@ class SGRCTicketMixin:
                     self.templates.solicitacao_criada_sucesso(_cached["protocol_id"]),
                 )
 
+            # dataHora ESTÁVEL por ticket lógico (#R2). Com date_time=None a lib
+            # gera um dataHora novo A CADA chamada; se um timeout preservou o
+            # estado e a camada externa re-POSTa, o dataHora diferente driblaria a
+            # dedup do SGRC → chamado DUPLICADO. Persistir o carimbo no state (que
+            # sobrevive ao reset_workflow=False) faz o re-POST mandar o MESMO
+            # dataHora → a dedup do SGRC reconhece e devolve duplicado em vez de
+            # abrir um 2º. Formato = o mesmo da lib (America/Sao_Paulo, sem TZ).
+            ticket_datetime = state.data.get("_ticket_datetime")
+            if not ticket_datetime:
+                ticket_datetime = datetime.now(_SP_TZ).strftime("%Y-%m-%dT%H:%M:%S")
+                state.data["_ticket_datetime"] = ticket_datetime
+
             ticket = await self.new_ticket(
                 classification_code=self.service_id,
                 description=description,
                 address=address,
+                date_time=ticket_datetime,
                 requester=requester,
                 occurrence_origin_code=self.common_config.occurrence_origin_code,
                 specific_attributes=specific_attributes,

@@ -313,6 +313,48 @@ async def test_retryable_failure_preserves_state_for_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_open_ticket_reuses_stable_datetime_across_retries(monkeypatch):
+    """#R2: o dataHora é carimbado UMA vez e reusado no re-POST (o "tente
+    novamente" após erro/timeout que preservou o estado). Sem isso, cada chamada
+    geraria um dataHora novo e a dedup do SGRC não reconheceria o re-POST → 2º
+    chamado duplicado."""
+    workflow = ReparoLuminariaWorkflow(use_fake_api=False)
+    monkeypatch.setattr(
+        workflow,
+        "build_ticket_payload",
+        lambda state: ("Rua das Luzes, 100", "requester", "descricao"),
+    )
+    monkeypatch.setattr(workflow, "build_specific_attributes", lambda state: {})
+
+    base = {
+        "address_validated": True,
+        "address_confirmed": True,
+        "ticket_data_confirmed": True,
+        "cpf": "12345678909",
+        "defect_type": "apagada",
+    }
+    seen_datetimes = []
+
+    async def _boom(**kwargs):
+        seen_datetimes.append(kwargs.get("date_time"))
+        raise RuntimeError("SGRC indisponível")
+
+    monkeypatch.setattr(workflow, "new_ticket", _boom)
+    failed = await workflow._open_ticket(make_state(data=dict(base)))
+
+    async def _ok(**kwargs):
+        seen_datetimes.append(kwargs.get("date_time"))
+        return SimpleNamespace(protocol_id="PROTO-RETRY")
+
+    monkeypatch.setattr(workflow, "new_ticket", _ok)
+    await workflow._open_ticket(failed)  # "tente novamente" → re-POST
+
+    assert len(seen_datetimes) == 2
+    assert seen_datetimes[0]  # carimbado (não vazio)
+    assert seen_datetimes[0] == seen_datetimes[1]  # MESMO dataHora no re-POST
+
+
+@pytest.mark.asyncio
 async def test_open_ticket_sem_logradouro_falha_cedo_sem_chamar_sgrc(monkeypatch):
     """Endereço sem logradouro → falha acionável (chamado_sem_endereco) ANTES do
     SGRC, em vez do catch-all genérico 'erro ao abrir o chamado' (bug do teste

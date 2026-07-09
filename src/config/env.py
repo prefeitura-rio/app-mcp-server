@@ -192,6 +192,17 @@ SHORT_MEMORY_TOKEN_LIMIT = getenv_or_action(
 SGRC_URL = getenv_or_action("SGRC_URL")
 SGRC_AUTHORIZATION_HEADER = getenv_or_action("SGRC_AUTHORIZATION_HEADER")
 SGRC_BODY_TOKEN = getenv_or_action("SGRC_BODY_TOKEN")
+
+# Timeout do callout SGRC (#R2). O `async_new_ticket` da lib não passa timeout
+# (herda o default de 300s do aiohttp) — um SGRC lento/instável ficava pendurado
+# minutos, estourava o poll do turno e só então o cidadão via "sistema
+# indisponível". SGRC_TIMEOUT_SECONDS limita a chamada (fail-fast). NÃO há retry
+# aqui de propósito: `new_ticket` é POST mutante e o retry seguro é o da camada
+# externa (idempotente) — ver docstring de SGRCTicketMixin.new_ticket.
+# action="ignore" → default vale sem env; tunável no Infisical sem redeploy.
+SGRC_TIMEOUT_SECONDS = float(
+    getenv_or_action("SGRC_TIMEOUT_SECONDS", default="20", action="ignore") or "20"
+)
 GMAPS_API_TOKEN = getenv_or_action("GMAPS_API_TOKEN")
 DATA_DIR = getenv_or_action("DATA_DIR")
 
