@@ -76,7 +76,10 @@ async def get_google_search(query: str):
             query=query,
             model=env.GEMINI_MODEL,
             temperature=0.0,
-            retry_attempts=2,
+            # 3 tentativas (2 retries): com o fix do 429 em gemini_service, o retry passa
+            # a valer pra quota transiente do Gemini AI Studio — a causa da falha ~12% em
+            # buscas factuais. Backoff exponencial (1s, 2s) absorve o pico de quota.
+            retry_attempts=3,
         )
         response_data = response_google
         final_response = {

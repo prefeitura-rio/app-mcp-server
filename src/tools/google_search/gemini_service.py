@@ -172,10 +172,22 @@ class GeminiService:
 
             except genai_errors.ClientError as e:
                 last_exception = e
-                logger.error(
-                    f"Erro não recuperável na API Google (4xx): {e}. Não haverá nova tentativa."
-                )
-                break
+                # 429 RESOURCE_EXHAUSTED (quota do Gemini AI Studio) é TRANSIENTE — cai no
+                # backoff abaixo e re-tenta. Os demais 4xx (400/403/404) seguem sendo
+                # não-recuperáveis e dão break. Antes, todo 4xx dava break, o que anulava o
+                # retry justamente no caso de quota (causa da falha intermitente ~12% em
+                # buscas factuais — só a busca usa este 2º pool Gemini, separado do Vertex).
+                if getattr(e, "code", None) == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                    logger.warning(
+                        f"Quota 429/RESOURCE_EXHAUSTED na API Gemini de busca: {e}. "
+                        f"Tentando novamente com backoff."
+                    )
+                    # NÃO dá break — segue pro backoff no fim do loop.
+                else:
+                    logger.error(
+                        f"Erro não recuperável na API Google (4xx): {e}. Não haverá nova tentativa."
+                    )
+                    break
 
             except (genai_errors.ServerError, asyncio.TimeoutError) as e:
                 last_exception = e
