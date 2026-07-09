@@ -40,7 +40,11 @@ class GeminiService:
         query: str,
         model: str = "gemini-2.5-flash",
         temperature: float = 0.0,
-        retry_attempts: int = 1,
+        # #R7 — default 3 (não 1): com 1, o backoff nunca dispara
+        # (attempt < retry_attempts-1 = 0 < 0 = False) e o fix do 429 fica inócuo
+        # p/ qualquer caller que use o default. O único caller (search.py) já
+        # passa 3; subir o default endurece contra novos callers.
+        retry_attempts: int = 3,
     ):
         logger.info(f"Iniciando pesquisa Google para: {query}")
         request_id = str(uuid4())
