@@ -1461,9 +1461,7 @@ def create_app() -> FastMCP:
                         classification_code,
                         description,
                         street,
-                        street_code,
                         neighborhood,
-                        neighborhood_code,
                         number_digits,
                         zip_code,
                         reference_point,
@@ -1481,11 +1479,30 @@ def create_app() -> FastMCP:
             if _cached is not None:
                 return {**_cached, "idempotent_replay": True}
 
+        # #D-2 (determinismo): re-deriva os códigos IPP do endereço COMPLETO
+        # (autoritativo) em vez de confiar na cópia do LLM — a maior fonte de payload
+        # SGRC malformado ("erro ao abrir o chamado"). Fallback (bounded por timeout)
+        # pros códigos do LLM se o serviço de endereço falhar/travar. DEPOIS do
+        # fast-path de idempotência: um replay cacheado volta na hora, sem o lookup de
+        # ~15s. A chave é chaveada pelos campos de endereço ESTÁVEIS (não pelos
+        # códigos), então a dedup não depende do resultado do resolver.
+        from src.utils.ipp_resolver import resolve_ipp_codes
+
+        resolved_street_code, resolved_neighborhood_code = await resolve_ipp_codes(
+            AddressAPIService(),
+            street,
+            number,
+            neighborhood,
+            zip_code,
+            street_code,
+            neighborhood_code,
+        )
+
         address = Address(
             street=street,
-            street_code=street_code,
+            street_code=resolved_street_code,
             neighborhood=neighborhood,
-            neighborhood_code=neighborhood_code,
+            neighborhood_code=resolved_neighborhood_code,
             number=number_digits,
             # Ponto de referência vai pro `complemento` do SGRC, NÃO pra `localidade`
             # (que é cidade/sub-localidade).
