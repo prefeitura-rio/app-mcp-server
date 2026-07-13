@@ -110,6 +110,26 @@ GOVBR_AUTH_STATE_TTL = int(
     getenv_or_action("GOVBR_AUTH_STATE_TTL", default="300", action="ignore")
 )
 
+# Autenticação JWT via Keycloak ("Identidade Carioca") para o servidor MCP
+# atuar como Resource Server (novo consumidor: Salesforce via OAuth 2.0).
+# Enquanto ausentes, a autenticação permanece 100% baseada em VALID_TOKENS
+# (token estático) — ver HybridTokenVerifier em src/middleware/hybrid_verifier.py.
+KEYCLOAK_JWKS_URI = getenv_or_action("KEYCLOAK_JWKS_URI", action="ignore")
+KEYCLOAK_ISSUER = getenv_or_action("KEYCLOAK_ISSUER", action="ignore")
+
+# Lista de client_ids (azp) autorizados a autenticar via JWT do Keycloak,
+# espelhando TRUSTED_SERVICE_CLIENTS do app-rmi. CSV separado por vírgula
+# (ex: "salesforce-mcp-client"). Vazia = qualquer client válido do realm.
+KEYCLOAK_TRUSTED_CLIENTS = list(
+    set(
+        client_id.strip()
+        for client_id in getenv_or_action(
+            "KEYCLOAK_TRUSTED_CLIENTS", default="", action="ignore"
+        ).split(",")
+        if client_id.strip()
+    )
+)
+
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
