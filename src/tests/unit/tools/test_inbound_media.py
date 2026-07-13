@@ -164,17 +164,41 @@ def test_register_unknown_is_accepted(inbound_media_module):
     assert result["suggested_reply_pt_br"]
 
 
+def test_register_document_uses_document_reply(inbound_media_module):
+    """Cobertura pro path feliz de 'document' (PR #125) — faltava desde a
+    introdução do tipo, o que deixou passar a regressão coberta pelo teste
+    test_invalid_media_type_rejected logo abaixo."""
+    register = inbound_media_module.register_inbound_media
+    result = asyncio.run(
+        register(
+            media_type="document",
+            user_number="5521989091014",
+            content_version_id="068xxxYYY",
+            file_extension="pdf",
+        )
+    )
+    assert result["status"] == "received"
+    assert result["media_type"] == "document"
+    assert "documento" in result["suggested_reply_pt_br"]
+
+
 def test_invalid_media_type_rejected(inbound_media_module):
     register = inbound_media_module.register_inbound_media
-    # 'document' usado como tipo inválido (era 'video' antes; agora video é aceito).
-    result = asyncio.run(register(media_type="document", user_number="5521989091014"))
+    # 'sticker' é um tipo real do WhatsApp (ver media-types.yaml), mas com
+    # direction=outbound apenas — nunca foi, e não é, aceito como mídia
+    # inbound por register_inbound_media. Usar um tipo já aceito (como
+    # 'document' foi no passado, antes da PR #125) quebra este teste assim
+    # que o tipo passa a ser suportado; 'sticker' não tem esse risco porque
+    # inbound de sticker não é um caminho suportado pelo BSP/Meta.
+    result = asyncio.run(register(media_type="sticker", user_number="5521989091014"))
     assert result["status"] == "rejected"
-    assert "document" in result["error"]
+    assert "sticker" in result["error"]
     assert "accepted_types" in result
     assert set(result["accepted_types"]) == {
         "image",
         "audio",
         "video",
+        "document",
         "location",
         "unsupported",
         "unknown",
