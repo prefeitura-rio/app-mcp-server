@@ -79,7 +79,19 @@ def create_app() -> FastMCP:
             if isinstance(valid_tokens, str)
             else valid_tokens
         )
-        if env.KEYCLOAK_ISSUER and not env.KEYCLOAK_TRUSTED_CLIENTS:
+        keycloak_partially_configured = bool(env.KEYCLOAK_ISSUER) != bool(
+            env.KEYCLOAK_JWKS_URI
+        )
+        if keycloak_partially_configured:
+            logger.warning(
+                "Configuração do Keycloak incompleta (KEYCLOAK_ISSUER=%r, "
+                "KEYCLOAK_JWKS_URI=%r): autenticação via JWT permanecerá "
+                "DESATIVADA até ambos estarem preenchidos — só o token "
+                "estático (VALID_TOKENS) será aceito.",
+                bool(env.KEYCLOAK_ISSUER),
+                bool(env.KEYCLOAK_JWKS_URI),
+            )
+        elif env.KEYCLOAK_ISSUER and not env.KEYCLOAK_TRUSTED_CLIENTS:
             logger.warning(
                 "KEYCLOAK_ISSUER configurado sem KEYCLOAK_TRUSTED_CLIENTS: "
                 "qualquer client válido do realm será aceito."
