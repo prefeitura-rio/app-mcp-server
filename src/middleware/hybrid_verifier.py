@@ -41,7 +41,12 @@ class HybridTokenVerifier(TokenVerifier):
         if self._jwt_verifier is not None:
             result = await self._jwt_verifier.load_access_token(token)
             if result is not None:
-                result.claims.setdefault("auth_method", "oauth")
+                # Atribuição direta (não `setdefault`): o servidor é a
+                # autoridade sobre qual caminho autenticou o token. Uma claim
+                # `auth_method` vinda do próprio JWT não deve conseguir se
+                # sobrepor a essa decisão (relevante se essa claim vier a ser
+                # usada para autorização por rota — ver AUTHENTICATION.md).
+                result.claims["auth_method"] = "oauth"
                 return result
         return self._verify_static(token)
 

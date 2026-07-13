@@ -30,9 +30,17 @@ def _load_fresh_module(monkeypatch, dotted_name, path):
 
 def load_hybrid_verifier_module(monkeypatch):
     """Carrega `hybrid_verifier` (e sua dependência `keycloak_verifier`)
-    diretamente dos arquivos, sem passar pelo `src/__init__.py` real (que
-    importaria `src.app` e todas as tools), seguindo o mesmo estilo de
-    isolamento usado em `test_check_token.py`.
+    diretamente dos arquivos, registrando módulos `src`/`src.middleware`
+    "vazios" em `sys.modules` para que os imports relativos do módulo
+    (`from src.middleware...`) resolvam sem reimportar as versões já
+    carregadas por `src/__init__.py` (que, na coleta normal do pytest via
+    `conftest.py`, já importou `src.app` e todas as tools).
+
+    Isso NÃO isola o teste de exigir as env vars de produção — a coleção
+    do pytest já disparou essa importação completa antes deste fixture
+    rodar. O único isolamento real aqui é de rede: nenhum Keycloak/JWKS
+    de verdade é chamado (tudo é mockado via `httpx` + `RSAKeyPair`
+    gerado localmente).
     """
     src_pkg = types.ModuleType("src")
     src_pkg.__path__ = [str(PROJECT_ROOT / "src")]
