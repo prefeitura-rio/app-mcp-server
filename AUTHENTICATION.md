@@ -51,14 +51,24 @@ Importante: essa validação roda apenas no pipeline de mensagens do protocolo M
 |---|---|---|
 | `KEYCLOAK_JWKS_URI` | Só se for usar OAuth | URL do endpoint JWKS do Keycloak, usado para validar a assinatura do JWT. Formato padrão: `<issuer>/protocol/openid-connect/certs`. |
 | `KEYCLOAK_ISSUER` | Só se for usar OAuth | URL do issuer (realm) do Keycloak. Deve bater exatamente com o claim `iss` dos tokens emitidos. |
-| `KEYCLOAK_TRUSTED_CLIENTS` | Recomendado | Lista de `client_id` (claim `azp`) autorizados a autenticar via JWT, separados por vírgula (ex: `salesforce-mcp-client`). **Se deixado vazio, qualquer client autenticado com sucesso contra o realm é aceito** — o servidor loga um warning no startup avisando disso. Sempre preencha assim que o client do Salesforce for criado. |
+| `KEYCLOAK_TRUSTED_CLIENTS` | Recomendado | Lista de `client_id` (claim `azp`) autorizados a autenticar via JWT, separados por vírgula (ex: `mcp-salesforce-integration`). **Se deixado vazio, qualquer client autenticado com sucesso contra o realm é aceito** — o servidor loga um warning no startup avisando disso. Sempre preencha assim que o client do Salesforce for criado. |
 
-**Enquanto `KEYCLOAK_JWKS_URI`/`KEYCLOAK_ISSUER` não existirem no ambiente, o comportamento do servidor é 100% idêntico ao atual** (só `VALID_TOKENS`). Não é necessário nenhum novo deploy de código para ativar o OAuth depois — só adicionar essas 3 variáveis no secret do ambiente (Infisical → K8s Secret `mcp-secrets`, mesmo mecanismo já usado por `VALID_TOKENS`/`RMI_OAUTH_*`).
+**Enquanto `KEYCLOAK_JWKS_URI`/`KEYCLOAK_ISSUER` não existirem no ambiente, o comportamento do servidor é 100% idêntico ao atual** (só `VALID_TOKENS`). Não é necessário nenhum novo deploy de código para ativar o OAuth depois — basta adicionar essas 3 variáveis como secrets no projeto **Infisical `mcp`** (ambiente correspondente) e reiniciar o deployment. `infra/superapp/modules/deployments/mcp.tf` já sincroniza o projeto inteiro para o K8s Secret `mcp-secrets` (`InfisicalSecret` com `includeAllSecrets: true` + `recursive: true`), e `k8s/staging/resources.yaml`/`k8s/prod/resources.yaml` já fazem `envFrom: secretRef: name: mcp-secrets` — nenhuma mudança de Terraform ou manifesto é necessária, só o valor no Infisical.
 
 ### De onde vêm os valores
 
-- `KEYCLOAK_ISSUER` e `KEYCLOAK_JWKS_URI`: dependem do client OAuth2 (`client_credentials`) que precisa ser criado no Keycloak "Identidade Carioca" pela equipe da IplanRio. O pedido é feito manualmente via Discord IplanRio, canal `#peça-permissão`, informando sistema solicitante, secretaria, escopo e justificativa (mesmo processo documentado publicamente em `mintlify-docs/barramento/auth.mdx`). Confirme com a IplanRio qual realm será usado antes de configurar (há divergência entre a URL documentada internamente e a documentada para parceiros externos — não assuma, pergunte).
-- `KEYCLOAK_TRUSTED_CLIENTS`: o `client_id` que a IplanRio atribuir ao client do Salesforce.
+- **NÃO reaproveite um client de serviço já existente** (ex: o `KEYCLOAK_CLIENT_ID`/`KEYCLOAK_CLIENT_SECRET` que o `app-go-api` usa para chamar a RMI via service-account `client_credentials`, ou o `GOVBR_CLIENT_ID`/`GOVBR_CLIENT_SECRET` do `eai-agent-gateway`, que é um client de **login de cidadão** via Authorization Code + PKCE — nem o grant type serve, nem faz sentido expor a um terceiro externo uma credencial com escopo de identidade de cidadão). O padrão já estabelecido na infra (`TRUSTED_SERVICE_CLIENTS` da RMI hoje só lista `superapp`) é **um client dedicado por consumidor confiável**, nunca compartilhado entre serviços/terceiros distintos.
+- `KEYCLOAK_ISSUER` e `KEYCLOAK_JWKS_URI`: dependem de um client OAuth2 **novo e dedicado** (`client_credentials`, sem capacidade de login de cidadão) a ser criado no Keycloak "Identidade Carioca" pela equipe da IplanRio — pedido manual via Discord IplanRio, canal `#peça-permissão`, informando sistema solicitante, secretaria, escopo e justificativa (mesmo processo documentado publicamente em `mintlify-docs/barramento/auth.mdx`). Nome sugerido para o client: `mcp-salesforce-integration` (a confirmar com a IplanRio).
+- `KEYCLOAK_TRUSTED_CLIENTS`: o `client_id` que a IplanRio atribuir a esse client novo.
+
+**Valores confirmados em staging** (via `kubectl get secret go-secrets -n go`, mesmo Keycloak/realm usado pelo `app-go-api` — a IplanRio deve confirmar que o client novo do Salesforce será provisionado neste mesmo realm):
+
+```
+KEYCLOAK_ISSUER   = https://auth-idriohom.apps.rio.gov.br/auth/realms/idrio_cidadao
+KEYCLOAK_JWKS_URI = https://auth-idriohom.apps.rio.gov.br/auth/realms/idrio_cidadao/protocol/openid-connect/certs
+```
+
+⚠️ `-idriohom` = homologação/staging. **Produção usa uma URL de Keycloak diferente** — confirme o equivalente de `go-secrets` no cluster de produção antes de configurar prod; não assuma que é a mesma URL só trocando o hostname.
 
 ## 🤝 Como o Salesforce vai se conectar via OAuth 2.0
 
@@ -71,7 +81,13 @@ Este servidor atua como **Resource Server** (só valida tokens; não emite nem g
 2. Do lado do Salesforce (Named Credential / External Credential com
    OAuth 2.0 Client Credentials Flow), configura-se:
      - Token Endpoint URL: <KEYCLOAK_ISSUER>/protocol/openid-connect/token
+       (staging: https://auth-idriohom.apps.rio.gov.br/auth/realms/idrio_cidadao/protocol/openid-connect/token)
      - Client ID / Client Secret: os fornecidos pela IplanRio
+     - Scope: deixar em branco / default do client (não precisa de escopo
+       específico só para chamar o MCP)
+     - Não há Authorization Endpoint nem redirect URI neste fluxo — isso
+       só existiria em Authorization Code (login de usuário), que não é
+       o caso aqui.
                     │
 3. O Salesforce solicita um access token:
 
@@ -170,7 +186,7 @@ key_pair = RSAKeyPair.generate()
 
 token = key_pair.create_token(
     issuer="https://fake-issuer.example.com",
-    additional_claims={"azp": "salesforce-mcp-client"},
+    additional_claims={"azp": "mcp-salesforce-integration"},
 )
 ```
 
