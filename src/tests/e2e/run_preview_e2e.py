@@ -288,14 +288,16 @@ def _call_with_external_retry(label: str, do_call):
         if isinstance(parsed, dict) and parsed.get("api_resposta_sucesso") is True:
             return status, raw, parsed
         info(
-            f"{label}: attempt {attempt - 1} returned api_resposta_sucesso!=true, "
+            f"{label}: attempt {attempt - 1} failed or returned api_resposta_sucesso!=true, "
             f"retrying in {EXTERNAL_API_RETRY_DELAY_SECONDS}s"
         )
         time.sleep(EXTERNAL_API_RETRY_DELAY_SECONDS)
         try:
             status, raw, parsed = do_call()
         except http.client.RemoteDisconnected as exc:
-            info(f"{label}: attempt {attempt} connection dropped ({exc}), treating as non-success")
+            remaining = EXTERNAL_API_MAX_ATTEMPTS - attempt
+            retry_msg = f"retrying up to {remaining} more time(s)" if remaining > 0 else "no retries left"
+            info(f"{label}: attempt {attempt} connection dropped ({exc}), {retry_msg}")
             status, raw, parsed = None, None, {}
     if (
         isinstance(parsed, dict)
