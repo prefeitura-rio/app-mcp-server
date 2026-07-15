@@ -143,8 +143,9 @@ jobs:
         run: |
           for i in $(seq 1 60); do
             CURRENT_IMAGE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}')
-            if [ "$CURRENT_IMAGE" = "$FULL_IMAGE" ]; then
-              echo "Rollout updated with expected image."
+            CURRENT_DIGEST="${CURRENT_IMAGE##*@}"
+            if [ "$CURRENT_DIGEST" = "$DIGEST" ]; then
+              echo "Rollout updated with expected digest: $DIGEST"
               exit 0
             fi
             sleep 5
