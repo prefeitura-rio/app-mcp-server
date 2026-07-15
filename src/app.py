@@ -135,6 +135,7 @@ MULTI_STEP_SERVICE_OUTPUT_SCHEMA = {
             ]
         },
     },
+    "required": ["description"],
     "additionalProperties": True,
 }
 
@@ -144,6 +145,11 @@ def get_multi_step_service_tool_options(fastmcp_type=FastMCP) -> dict:
     if "output_schema" not in inspect.signature(fastmcp_type.tool).parameters:
         return {}
     return {"output_schema": MULTI_STEP_SERVICE_OUTPUT_SCHEMA}
+
+
+def normalize_multi_step_service_output(response: dict) -> dict:
+    """Keep every response envelope compatible with the published MCP schema."""
+    return {**response, "description": response.get("description") or ""}
 
 
 MULTI_STEP_SERVICE_TOOL_OPTIONS = get_multi_step_service_tool_options()
@@ -1200,19 +1206,21 @@ def create_app() -> FastMCP:
                 )
 
                 if flow_result.get("success"):
-                    return {
-                        "status": "flow_sent",
-                        "flow_token": flow_result.get("flow_token"),
-                        "next_step": "await_flow_completion",
-                        "instruction": (
-                            "O cartão do formulário (com o botão de abrir) já foi "
-                            "enviado ao cidadão e é auto-explicativo. NÃO escreva "
-                            "nenhuma mensagem adicional confirmando o envio. NÃO "
-                            "prossiga coletando dados manualmente — aguarde o webhook "
-                            "com os dados preenchidos (o workflow será chamado "
-                            "automaticamente)."
-                        ),
-                    }
+                    return normalize_multi_step_service_output(
+                        {
+                            "status": "flow_sent",
+                            "flow_token": flow_result.get("flow_token"),
+                            "next_step": "await_flow_completion",
+                            "instruction": (
+                                "O cartão do formulário (com o botão de abrir) já foi "
+                                "enviado ao cidadão e é auto-explicativo. NÃO escreva "
+                                "nenhuma mensagem adicional confirmando o envio. NÃO "
+                                "prossiga coletando dados manualmente — aguarde o webhook "
+                                "com os dados preenchidos (o workflow será chamado "
+                                "automaticamente)."
+                            ),
+                        }
+                    )
                 else:
                     # Flow falhou, continuar normalmente por texto
                     logger.warning(
@@ -1242,15 +1250,19 @@ def create_app() -> FastMCP:
         if isinstance(interactive_spec, dict) and interactive_spec.get(
             "out_of_band_sent"
         ):
-            return {
-                "status": "interactive_sent",
-                "next_step": interactive_spec.get("next_step", "await_user_selection"),
-                "instruction": interactive_spec.get("instruction")
-                or (
-                    "A mensagem interativa já foi enviada ao cidadão e é "
-                    "auto-explicativa. NÃO escreva nenhuma mensagem adicional."
-                ),
-            }
+            return normalize_multi_step_service_output(
+                {
+                    "status": "interactive_sent",
+                    "next_step": interactive_spec.get(
+                        "next_step", "await_user_selection"
+                    ),
+                    "instruction": interactive_spec.get("instruction")
+                    or (
+                        "A mensagem interativa já foi enviada ao cidadão e é "
+                        "auto-explicativa. NÃO escreva nenhuma mensagem adicional."
+                    ),
+                }
+            )
         if env.ENABLE_INTERACTIVE_CONFIRM:
             from src.tools.whatsapp_flow_sender import render_interactive_confirm
 
@@ -1261,7 +1273,7 @@ def create_app() -> FastMCP:
                 service_name,
             )
             if sent is not None:
-                return sent
+                return normalize_multi_step_service_output(sent)
 
         # Turno TRANSICIONAL do workflow: o passo avançou e NÃO há nada a enviar neste
         # turno (description vazia, sem interactive, sem erro, sem send_flow). O Engine
@@ -1280,17 +1292,19 @@ def create_app() -> FastMCP:
                 or interactive_spec
             )
             if not has_outbound_signal:
-                return {
-                    "status": "interactive_sent",
-                    "next_step": "workflow_in_progress",
-                    "instruction": (
-                        "O fluxo multi-passo avançou e não há mensagem a enviar neste "
-                        "turno. NÃO escreva nada; aguarde a próxima ação do cidadão ou o "
-                        "próximo passo do workflow."
-                    ),
-                }
+                return normalize_multi_step_service_output(
+                    {
+                        "status": "interactive_sent",
+                        "next_step": "workflow_in_progress",
+                        "instruction": (
+                            "O fluxo multi-passo avançou e não há mensagem a enviar neste "
+                            "turno. NÃO escreva nada; aguarde a próxima ação do cidadão ou "
+                            "o próximo passo do workflow."
+                        ),
+                    }
+                )
 
-        return response
+        return normalize_multi_step_service_output(response)
 
     @conditional_mcp_tool(
         "reset_session_state",
