@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
+import http.client
 import json
 import os
 import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -17,6 +19,43 @@ REGULARIZACAO_PAYLOAD = os.environ.get("PREVIEW_REGULARIZACAO_PAYLOAD", "")
 DEFAULT_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_POST_TIMEOUT", "60"))
 DEFAULT_GET_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GET_TIMEOUT", "15"))
 GUIDE_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GUIDE_TIMEOUT", "90"))
+MCP_STREAM_TIMEOUT = int(os.environ.get("PREVIEW_E2E_MCP_STREAM_TIMEOUT", "5"))
+# Retries pros endpoints que dependem de APIs externas (Dívida Ativa).
+# Quando upstream retorna api_resposta_sucesso=false transitoriamente,
+# retry distingue infra glitch vs regressão real. Não usa exponential
+# backoff (delay linear suficiente pra flakiness curta da API externa).
+EXTERNAL_API_MAX_ATTEMPTS = int(os.environ.get("PREVIEW_E2E_EXTERNAL_RETRIES", "3"))
+EXTERNAL_API_RETRY_DELAY_SECONDS = int(
+    os.environ.get("PREVIEW_E2E_EXTERNAL_RETRY_DELAY", "10")
+)
+# Substrings em `api_descricao_erro` que indicam "fixture stale" (dados
+# de teste em Infisical não-aplicáveis hoje, e.g. guia paga, sem débitos)
+# em vez de regressão do nosso código. Quando upstream retorna um desses,
+# o test SKIPPA em vez de falhar — preview environment está saudável,
+# a fixture é que precisa atualizar.
+STALE_FIXTURE_HINTS = (
+    "não há parcelas em atraso",
+    "nao ha parcelas em atraso",
+    "não há débitos",
+    "nao ha debitos",
+    "sem débitos",
+    "sem debitos",
+    "guia paga",
+    "guia ja paga",
+    "guia já paga",
+)
+
+
+def is_stale_fixture_error(parsed) -> bool:
+    """True se o response upstream indica que a fixture de teste está
+    obsoleta (não há trabalho pra fazer pra os dados configurados em
+    Infisical). NÃO é regressão do nosso código."""
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("api_resposta_sucesso") is True:
+        return False
+    desc = (parsed.get("api_descricao_erro") or "").lower()
+    return any(hint in desc for hint in STALE_FIXTURE_HINTS)
 
 
 def fail(message: str, details=None) -> None:
@@ -65,6 +104,31 @@ def request_json(
         return exc.code, raw, parse_json(raw)
     except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
         fail(f"{path}: request timed out or failed to connect", str(exc))
+
+
+def request_mcp_json(path: str, payload, token: str, headers=None):
+    url = f"{BASE_URL}{path}"
+    body = json.dumps(payload).encode("utf-8")
+    request_headers = {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
+
+    request = urllib.request.Request(
+        url, data=body, headers=request_headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=DEFAULT_POST_TIMEOUT) as response:
+            raw = response.read().decode("utf-8")
+            return response.status, raw, response.headers
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        return exc.code, raw, exc.headers
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+        fail(f"{path}: MCP request timed out or failed to connect", str(exc))
 
 
 def request_text(path: str, timeout: int = DEFAULT_GET_TIMEOUT):
@@ -121,6 +185,62 @@ def run_health_check() -> None:
         fail("health: unexpected body", raw)
 
 
+def run_mcp_streamable_http_check() -> None:
+    info("Checking MCP streamable HTTP session")
+    auth_token = get_auth_token()
+    initialize_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "preview-e2e", "version": "1"},
+        },
+    }
+    status, raw, headers = request_mcp_json("/mcp", initialize_payload, auth_token)
+    require_status(status, 200, "mcp initialize", raw)
+    session_id = headers.get("Mcp-Session-Id") or headers.get("mcp-session-id")
+    if not session_id:
+        fail("mcp initialize: missing Mcp-Session-Id", raw)
+
+    tools_payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+    status, raw, _ = request_mcp_json(
+        "/mcp", tools_payload, auth_token, {"Mcp-Session-Id": session_id}
+    )
+    require_status(status, 200, "mcp tools/list", raw)
+    if "build_whatsapp_flow_envelope" not in raw:
+        fail("mcp tools/list: expected build_whatsapp_flow_envelope tool", raw)
+
+    stream_request = urllib.request.Request(
+        f"{BASE_URL}/mcp",
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {auth_token}",
+            "Mcp-Session-Id": session_id,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(
+            stream_request, timeout=MCP_STREAM_TIMEOUT
+        ) as response:
+            require_status(response.status, 200, "mcp GET stream", "")
+            try:
+                response.read(1)
+            except (TimeoutError, socket.timeout):
+                # A quiet 200 stream is healthy; the engine keeps this channel
+                # open while POST requests deliver JSON-RPC messages.
+                pass
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        fail(f"mcp GET stream: expected HTTP 200, got {exc.code}", raw)
+    except (TimeoutError, socket.timeout):
+        fail("mcp GET stream: timed out before opening the stream")
+    except urllib.error.URLError as exc:
+        fail("mcp GET stream: failed to connect", str(exc))
+
+
 def require_authenticated_env() -> None:
     missing = []
     if not get_auth_token():
@@ -150,16 +270,63 @@ def build_consulta_payload(valid: bool):
     return payload
 
 
+def _call_with_external_retry(label: str, do_call):
+    """Invoca `do_call()` até `EXTERNAL_API_MAX_ATTEMPTS`x quando upstream
+    retorna `api_resposta_sucesso=false` ou quando a conexão é interrompida
+    transitoriamente. Retorna a última tupla `(status, raw, parsed)`. Para
+    early se já sucedeu.
+    """
+    try:
+        status, raw, parsed = do_call()
+    except http.client.RemoteDisconnected as exc:
+        info(f"{label}: attempt 1 connection dropped ({exc}), retrying if attempts remain")
+        status, raw, parsed = None, None, {}
+    for attempt in range(2, EXTERNAL_API_MAX_ATTEMPTS + 1):
+        if isinstance(parsed, dict) and parsed.get("api_resposta_sucesso") is True:
+            return status, raw, parsed
+        info(
+            f"{label}: attempt {attempt - 1} returned api_resposta_sucesso!=true, "
+            f"retrying in {EXTERNAL_API_RETRY_DELAY_SECONDS}s"
+        )
+        time.sleep(EXTERNAL_API_RETRY_DELAY_SECONDS)
+        try:
+            status, raw, parsed = do_call()
+        except http.client.RemoteDisconnected as exc:
+            info(f"{label}: attempt {attempt} connection dropped ({exc}), treating as non-success")
+            status, raw, parsed = None, None, {}
+    if (
+        isinstance(parsed, dict)
+        and parsed.get("api_resposta_sucesso") is True
+        and EXTERNAL_API_MAX_ATTEMPTS > 1
+    ):
+        info(f"{label}: succeeded on attempt {EXTERNAL_API_MAX_ATTEMPTS}")
+    return status, raw, parsed
+
+
 def run_consulta_happy_path() -> None:
     info("Running authenticated consulta_debitos happy path")
     auth_token = get_auth_token()
-    status, raw, parsed = request_json(
-        "/consulta_debitos",
-        payload=build_consulta_payload(valid=True),
-        token=auth_token,
+
+    def do_call():
+        return request_json(
+            "/consulta_debitos",
+            payload=build_consulta_payload(valid=True),
+            token=auth_token,
+        )
+
+    status, raw, parsed = _call_with_external_retry(
+        "consulta_debitos happy path", do_call
     )
     require_status(status, 200, "consulta_debitos happy path", raw)
     require_json_object(parsed, "consulta_debitos happy path")
+
+    if is_stale_fixture_error(parsed):
+        info(
+            "consulta_debitos happy path: SKIPPED — fixture stale "
+            f"(upstream: '{parsed.get('api_descricao_erro')}'). "
+            "Update PREVIEW_CONSULTA_VALOR em Infisical."
+        )
+        return
 
     if parsed.get("api_resposta_sucesso") is not True:
         fail("consulta_debitos happy path: expected api_resposta_sucesso=true", parsed)
@@ -211,19 +378,32 @@ def run_emitir_guia_happy_paths() -> None:
     avista_payload = load_json_env("PREVIEW_AVISTA_PAYLOAD", AVISTA_PAYLOAD)
     if avista_payload:
         info("Running authenticated emitir_guia happy path")
-        status, raw, parsed = request_json(
-            "/emitir_guia",
-            payload=avista_payload,
-            token=auth_token,
-            timeout=GUIDE_POST_TIMEOUT,
+
+        def do_avista():
+            return request_json(
+                "/emitir_guia",
+                payload=avista_payload,
+                token=auth_token,
+                timeout=GUIDE_POST_TIMEOUT,
+            )
+
+        status, raw, parsed = _call_with_external_retry(
+            "emitir_guia happy path", do_avista
         )
         require_status(status, 200, "emitir_guia happy path", raw)
         require_json_object(parsed, "emitir_guia happy path")
-        if parsed.get("api_resposta_sucesso") is not True:
+        if is_stale_fixture_error(parsed):
+            info(
+                "emitir_guia happy path: SKIPPED — fixture stale "
+                f"(upstream: '{parsed.get('api_descricao_erro')}'). "
+                "Update PREVIEW_AVISTA_PAYLOAD em Infisical."
+            )
+        elif parsed.get("api_resposta_sucesso") is not True:
             fail("emitir_guia happy path: expected api_resposta_sucesso=true", parsed)
-        for key in ("codigo_de_barras", "link"):
-            if key not in parsed:
-                fail(f"emitir_guia happy path: missing key '{key}'", parsed)
+        else:
+            for key in ("codigo_de_barras", "link"):
+                if key not in parsed:
+                    fail(f"emitir_guia happy path: missing key '{key}'", parsed)
     else:
         info(
             "Skipping emitir_guia happy path because PREVIEW_AVISTA_PAYLOAD is not set"
@@ -234,24 +414,38 @@ def run_emitir_guia_happy_paths() -> None:
     )
     if regularizacao_payload:
         info("Running authenticated emitir_guia_regularizacao happy path")
-        status, raw, parsed = request_json(
-            "/emitir_guia_regularizacao",
-            payload=regularizacao_payload,
-            token=auth_token,
-            timeout=GUIDE_POST_TIMEOUT,
+
+        def do_regularizacao():
+            return request_json(
+                "/emitir_guia_regularizacao",
+                payload=regularizacao_payload,
+                token=auth_token,
+                timeout=GUIDE_POST_TIMEOUT,
+            )
+
+        status, raw, parsed = _call_with_external_retry(
+            "emitir_guia_regularizacao happy path", do_regularizacao
         )
         require_status(status, 200, "emitir_guia_regularizacao happy path", raw)
         require_json_object(parsed, "emitir_guia_regularizacao happy path")
-        if parsed.get("api_resposta_sucesso") is not True:
+        if is_stale_fixture_error(parsed):
+            info(
+                "emitir_guia_regularizacao happy path: SKIPPED — fixture stale "
+                f"(upstream: '{parsed.get('api_descricao_erro')}'). "
+                "Update PREVIEW_REGULARIZACAO_PAYLOAD em Infisical."
+            )
+        elif parsed.get("api_resposta_sucesso") is not True:
             fail(
                 "emitir_guia_regularizacao happy path: expected api_resposta_sucesso=true",
                 parsed,
             )
-        for key in ("codigo_de_barras", "link"):
-            if key not in parsed:
-                fail(
-                    f"emitir_guia_regularizacao happy path: missing key '{key}'", parsed
-                )
+        else:
+            for key in ("codigo_de_barras", "link"):
+                if key not in parsed:
+                    fail(
+                        f"emitir_guia_regularizacao happy path: missing key '{key}'",
+                        parsed,
+                    )
     else:
         info(
             "Skipping emitir_guia_regularizacao happy path because PREVIEW_REGULARIZACAO_PAYLOAD is not set"
@@ -262,6 +456,7 @@ def main() -> None:
     print(f"Running preview E2E checks against: {BASE_URL}")
     run_health_check()
     require_authenticated_env()
+    run_mcp_streamable_http_check()
     run_consulta_happy_path()
     run_consulta_invalid_input_check()
     run_emitir_guia_minimal_payload_checks()
