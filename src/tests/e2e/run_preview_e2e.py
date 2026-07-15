@@ -279,9 +279,10 @@ def _call_with_external_retry(label: str, do_call):
     try:
         status, raw, parsed = do_call()
     except http.client.RemoteDisconnected as exc:
+        _more = EXTERNAL_API_MAX_ATTEMPTS - 1
         info(
             f"{label}: attempt 1 connection dropped ({exc}), "
-            f"retrying up to {EXTERNAL_API_MAX_ATTEMPTS - 1} more time(s)"
+            f"retrying up to {_more} more {'time' if _more == 1 else 'times'}"
         )
         status, raw, parsed = None, None, {}
     for attempt in range(2, EXTERNAL_API_MAX_ATTEMPTS + 1):
@@ -296,7 +297,10 @@ def _call_with_external_retry(label: str, do_call):
             status, raw, parsed = do_call()
         except http.client.RemoteDisconnected as exc:
             remaining = EXTERNAL_API_MAX_ATTEMPTS - attempt
-            retry_msg = f"retrying up to {remaining} more time(s)" if remaining > 0 else "no retries left"
+            if remaining > 0:
+                retry_msg = f"retrying up to {remaining} more {'time' if remaining == 1 else 'times'}"
+            else:
+                retry_msg = "no retries left"
             info(f"{label}: attempt {attempt} connection dropped ({exc}), {retry_msg}")
             status, raw, parsed = None, None, {}
     if (
