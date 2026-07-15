@@ -4,6 +4,7 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 # comment to trigger build
 
+import inspect
 import os
 import time
 
@@ -113,6 +114,39 @@ else:
     from fastmcp import FastMCP
 
 TOOL_VERSION = get_tool_version_from_file()["version"]
+
+MULTI_STEP_SERVICE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "service_name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "error_message": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "description": {"type": "string"},
+        "payload_schema": {
+            "anyOf": [
+                {"type": "object", "additionalProperties": True},
+                {"type": "null"},
+            ]
+        },
+        "data": {"type": "object", "additionalProperties": True},
+        "interactive": {
+            "anyOf": [
+                {"type": "object", "additionalProperties": True},
+                {"type": "null"},
+            ]
+        },
+    },
+    "additionalProperties": True,
+}
+
+
+def get_multi_step_service_tool_options(fastmcp_type=FastMCP) -> dict:
+    """Expose structured output when supported without breaking older FastMCP."""
+    if "output_schema" not in inspect.signature(fastmcp_type.tool).parameters:
+        return {}
+    return {"output_schema": MULTI_STEP_SERVICE_OUTPUT_SCHEMA}
+
+
+MULTI_STEP_SERVICE_TOOL_OPTIONS = get_multi_step_service_tool_options()
 
 
 def create_app() -> FastMCP:
@@ -1056,7 +1090,11 @@ def create_app() -> FastMCP:
 
             return await gar_impl(text=text)
 
-    @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
+    @conditional_mcp_tool(
+        "multi_step_service",
+        description=mss_tools_description,
+        **MULTI_STEP_SERVICE_TOOL_OPTIONS,
+    )
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
     ) -> dict:
