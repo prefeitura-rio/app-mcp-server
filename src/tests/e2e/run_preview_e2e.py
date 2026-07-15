@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import http.client
 import json
 import os
 import socket
@@ -101,8 +102,18 @@ def request_json(
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
         return exc.code, raw, parse_json(raw)
-    except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
-        fail(f"{path}: request timed out or failed to connect", str(exc))
+    except (
+        TimeoutError,
+        socket.timeout,
+        urllib.error.URLError,
+        http.client.HTTPException,
+        ConnectionError,
+    ) as exc:
+        # Conexão derrubada pelo servidor (e.g. RemoteDisconnected) durante um
+        # glitch transitório. Devolve um resultado "falho" em vez de abortar o
+        # processo, pra que _call_with_external_retry possa tentar de novo; se
+        # persistir após as tentativas, require_status falha com mensagem clara.
+        return 0, str(exc), None
 
 
 def request_mcp_json(path: str, payload, token: str, headers=None):
