@@ -10,10 +10,7 @@ from src.app import (
 def test_multi_step_service_exposes_salesforce_outputs() -> None:
     properties = MULTI_STEP_SERVICE_OUTPUT_SCHEMA["properties"]
 
-    assert properties["description"] == {"type": "string"}
-    assert "error_message" in properties
-    assert "payload_schema" in properties
-    assert "data" in properties
+    assert properties == {"description": {"type": "string"}}
     assert MULTI_STEP_SERVICE_OUTPUT_SCHEMA["required"] == ["description"]
     assert MULTI_STEP_SERVICE_OUTPUT_SCHEMA["additionalProperties"] is True
 
