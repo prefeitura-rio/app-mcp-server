@@ -118,22 +118,7 @@ TOOL_VERSION = get_tool_version_from_file()["version"]
 MULTI_STEP_SERVICE_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "service_name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "error_message": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "description": {"type": "string"},
-        "payload_schema": {
-            "anyOf": [
-                {"type": "object", "additionalProperties": True},
-                {"type": "null"},
-            ]
-        },
-        "data": {"type": "object", "additionalProperties": True},
-        "interactive": {
-            "anyOf": [
-                {"type": "object", "additionalProperties": True},
-                {"type": "null"},
-            ]
-        },
     },
     "required": ["description"],
     "additionalProperties": True,
