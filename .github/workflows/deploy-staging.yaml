@@ -65,7 +65,7 @@ jobs:
 
       - name: Configure kubectl for GKE
         run: |
-          gcloud container clusters get-credentials application \
+          gcloud container clusters get-credentials --dns-endpoint application \
             --zone=us-central1 \
             --project "$GCP_PROJECT_ID"
 
