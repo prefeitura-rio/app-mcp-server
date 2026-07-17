@@ -12,7 +12,7 @@ from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
-from src.middleware.check_token import CheckTokenMiddleware
+from src.middleware.hybrid_verifier import HybridTokenVerifier
 from src.tools.calculator import (
     add,
     subtract,
@@ -68,9 +68,51 @@ def create_app() -> FastMCP:
     Returns:
         Instância configurada do FastMCP
     """
+    # Monta o provider de autenticação híbrido (JWT do Keycloak "Identidade
+    # Carioca" + token estático legado) apenas em ambientes não-locais,
+    # preservando o comportamento local atual de zero fricção (sem auth).
+    auth_provider = None
+    if not IS_LOCAL:
+        valid_tokens = env.VALID_TOKENS
+        static_tokens = (
+            [t.strip() for t in valid_tokens.split(",")]
+            if isinstance(valid_tokens, str)
+            else valid_tokens
+        )
+        keycloak_partially_configured = bool(env.KEYCLOAK_ISSUER) != bool(
+            env.KEYCLOAK_JWKS_URI
+        )
+        if keycloak_partially_configured:
+            logger.warning(
+                "Configuração do Keycloak incompleta (KEYCLOAK_ISSUER=%r, "
+                "KEYCLOAK_JWKS_URI=%r): autenticação via JWT permanecerá "
+                "DESATIVADA até ambos estarem preenchidos — só o token "
+                "estático (VALID_TOKENS) será aceito.",
+                bool(env.KEYCLOAK_ISSUER),
+                bool(env.KEYCLOAK_JWKS_URI),
+            )
+        elif env.KEYCLOAK_ISSUER and not env.KEYCLOAK_TRUSTED_CLIENTS:
+            logger.warning(
+                "KEYCLOAK_ISSUER configurado sem KEYCLOAK_TRUSTED_CLIENTS: "
+                "qualquer client válido do realm será aceito."
+            )
+        auth_provider = HybridTokenVerifier(
+            static_tokens=static_tokens,
+            jwks_uri=env.KEYCLOAK_JWKS_URI,
+            issuer=env.KEYCLOAK_ISSUER,
+            allowed_azp=env.KEYCLOAK_TRUSTED_CLIENTS,
+        )
+
     # Inicializa o servidor FastMCP
+    # `FastMCP` é importado condicionalmente (mcp.server.fastmcp quando
+    # IS_LOCAL, fastmcp caso contrário — ver bloco de import acima), então o
+    # type checker só enxerga a assinatura de `auth` de uma das duas classes
+    # (AuthSettings). Em runtime a classe usada quando `not IS_LOCAL` é
+    # `fastmcp.FastMCP`, que aceita `auth: AuthProvider | None`, e
+    # `auth_provider` só é não-None nesse caso.
     mcp = FastMCP(
         name=Settings.SERVER_NAME,
+        auth=auth_provider,  # pyright: ignore[reportArgumentType]
         # version=Settings.VERSION,
     )
 
@@ -87,7 +129,6 @@ def create_app() -> FastMCP:
         return decorator
 
     if not IS_LOCAL:
-        mcp.add_middleware(CheckTokenMiddleware())
 
         @mcp.custom_route("/health", methods=["GET"])
         async def health_check(request: Request) -> PlainTextResponse:
