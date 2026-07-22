@@ -88,6 +88,10 @@ from src.tools.langgraph_workflows import (
     BACKEND_MODE,
 )
 from src.tools.multi_step_service.core.state import StateManager
+from src.tools.multi_step_service.core.models import (
+    ChannelAction,
+    MultiStepServiceOutput,
+)
 from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service import (
     SGRCAPIService,
     AddressAPIService,
@@ -1059,7 +1063,7 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
-    ) -> dict:
+    ) -> MultiStepServiceOutput:
         # WhatsApp Flow auto-trigger: se o serviço tem Flow cadastrado e ainda
         # não foi enviado (_source != "whatsapp_flow"), envia automaticamente
         # APENAS se não houver um workflow já em andamento
@@ -1162,19 +1166,27 @@ def create_app() -> FastMCP:
                 )
 
                 if flow_result.get("success"):
-                    return {
-                        "status": "flow_sent",
-                        "flow_token": flow_result.get("flow_token"),
-                        "next_step": "await_flow_completion",
-                        "instruction": (
-                            "O cartão do formulário (com o botão de abrir) já foi "
-                            "enviado ao cidadão e é auto-explicativo. NÃO escreva "
-                            "nenhuma mensagem adicional confirmando o envio. NÃO "
-                            "prossiga coletando dados manualmente — aguarde o webhook "
-                            "com os dados preenchidos (o workflow será chamado "
-                            "automaticamente)."
+                    return MultiStepServiceOutput(
+                        service_name=service_name,
+                        status="in_progress",
+                        description="",
+                        payload_schema=None,
+                        data={},
+                        error_message=None,
+                        channel_action=ChannelAction(
+                            type="flow_sent",
+                            flow_token=flow_result.get("flow_token"),
+                            next_step="await_flow_completion",
+                            instruction=(
+                                "O cartão do formulário (com o botão de abrir) já foi "
+                                "enviado ao cidadão e é auto-explicativo. NÃO escreva "
+                                "nenhuma mensagem adicional confirmando o envio. NÃO "
+                                "prossiga coletando dados manualmente — aguarde o webhook "
+                                "com os dados preenchidos (o workflow será chamado "
+                                "automaticamente)."
+                            ),
                         ),
-                    }
+                    )
                 else:
                     # Flow falhou, continuar normalmente por texto
                     logger.warning(
@@ -1197,22 +1209,31 @@ def create_app() -> FastMCP:
             response.pop("interactive", None) if isinstance(response, dict) else None
         )
         # Out-of-band JÁ enviado (gov.br: o botão de login foi enviado DIRETO pra Meta
-        # por _send_cta_url_button). Sinaliza interactive_sent INCONDICIONALMENTE (não
+        # por _send_cta_url_button). Sinaliza channel_action=interactive_sent
+        # INCONDICIONALMENTE (não
         # depende de ENABLE_INTERACTIVE_CONFIRM) pra: (a) o Mule não cair no fallback
         # de resposta-vazia (fix #1, hasInteractiveSent); (b) o agente não escrever o
         # texto redundante "link enviado, clique no botão acima" (device-test 2026-06-17).
         if isinstance(interactive_spec, dict) and interactive_spec.get(
             "out_of_band_sent"
         ):
-            return {
-                "status": "interactive_sent",
-                "next_step": interactive_spec.get("next_step", "await_user_selection"),
-                "instruction": interactive_spec.get("instruction")
-                or (
-                    "A mensagem interativa já foi enviada ao cidadão e é "
-                    "auto-explicativa. NÃO escreva nenhuma mensagem adicional."
+            return MultiStepServiceOutput(
+                service_name=service_name,
+                status="in_progress",
+                description="",
+                payload_schema=None,
+                data=response.get("data", {}) if isinstance(response, dict) else {},
+                error_message=None,
+                channel_action=ChannelAction(
+                    type="interactive_sent",
+                    next_step=interactive_spec.get("next_step", "await_user_selection"),
+                    instruction=interactive_spec.get("instruction")
+                    or (
+                        "A mensagem interativa já foi enviada ao cidadão e é "
+                        "auto-explicativa. NÃO escreva nenhuma mensagem adicional."
+                    ),
                 ),
-            }
+            )
         if env.ENABLE_INTERACTIVE_CONFIRM:
             from src.tools.whatsapp_flow_sender import render_interactive_confirm
 
@@ -1223,14 +1244,26 @@ def create_app() -> FastMCP:
                 service_name,
             )
             if sent is not None:
-                return sent
+                return MultiStepServiceOutput(
+                    service_name=service_name,
+                    status="in_progress",
+                    description="",
+                    payload_schema=None,
+                    data=response.get("data", {}) if isinstance(response, dict) else {},
+                    error_message=None,
+                    channel_action=ChannelAction(
+                        type="interactive_sent",
+                        next_step=sent.get("next_step", "await_user_selection"),
+                        instruction=sent.get("instruction"),
+                    ),
+                )
 
         # Turno TRANSICIONAL do workflow: o passo avançou e NÃO há nada a enviar neste
         # turno (description vazia, sem interactive, sem erro, sem send_flow). O Engine
         # fica calado e o Mule cairia no empty_agent_response_fallback ("instabilidade")
         # — visto MUITO no device-test 2026-06-17→18 (turnos transicionais, não só os
-        # interactive_sent). Marca explicitamente como handled (status interactive_sent,
-        # que o Mule já reconhece via hasInteractiveSent) pra pular o fallback. SEGURO: um
+        # interactive_sent). Marca explicitamente como handled
+        # (channel_action=interactive_sent) pra pular o fallback. SEGURO: um
         # prompt legítimo tem `description` não-vazio e um erro tem `error_message` → NÃO
         # entram aqui, então não mascaramos mensagens reais (o fallback segue protegendo
         # esses casos se o Engine não as repassar).
@@ -1242,17 +1275,43 @@ def create_app() -> FastMCP:
                 or interactive_spec
             )
             if not has_outbound_signal:
-                return {
-                    "status": "interactive_sent",
-                    "next_step": "workflow_in_progress",
-                    "instruction": (
-                        "O fluxo multi-passo avançou e não há mensagem a enviar neste "
-                        "turno. NÃO escreva nada; aguarde a próxima ação do cidadão ou o "
-                        "próximo passo do workflow."
+                return MultiStepServiceOutput(
+                    service_name=service_name,
+                    status="in_progress",
+                    description="",
+                    payload_schema=None,
+                    data=response.get("data", {}),
+                    error_message=None,
+                    channel_action=ChannelAction(
+                        type="interactive_sent",
+                        next_step="workflow_in_progress",
+                        instruction=(
+                            "O fluxo multi-passo avançou e não há mensagem a enviar neste "
+                            "turno. NÃO escreva nada; aguarde a próxima ação do cidadão ou o "
+                            "próximo passo do workflow."
+                        ),
                     ),
-                }
+                )
 
-        return response
+        response = response if isinstance(response, dict) else {}
+        error_message = response.get("error_message")
+        response_data = response.get("data") or {}
+        if error_message:
+            public_status = "error"
+        elif response_data.get("_reset_on_next_call"):
+            public_status = "completed"
+        else:
+            public_status = "in_progress"
+
+        return MultiStepServiceOutput(
+            service_name=response.get("service_name") or service_name,
+            status=public_status,
+            description=response.get("description") or "",
+            payload_schema=response.get("payload_schema"),
+            data=response_data,
+            error_message=error_message,
+            channel_action=None,
+        )
 
     @conditional_mcp_tool(
         "reset_session_state",
