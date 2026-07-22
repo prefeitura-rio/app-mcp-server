@@ -17,6 +17,20 @@ REGULARIZACAO_PAYLOAD = os.environ.get("PREVIEW_REGULARIZACAO_PAYLOAD", "")
 DEFAULT_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_POST_TIMEOUT", "60"))
 DEFAULT_GET_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GET_TIMEOUT", "15"))
 GUIDE_POST_TIMEOUT = int(os.environ.get("PREVIEW_E2E_GUIDE_TIMEOUT", "90"))
+STALE_REGULARIZACAO_HINTS = (
+    "nao ha parcelas em atraso",
+    "não há parcelas em atraso",
+)
+
+
+def is_stale_regularizacao_fixture(parsed) -> bool:
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("api_resposta_sucesso") is True:
+        return False
+
+    description = (parsed.get("api_descricao_erro") or "").lower()
+    return any(hint in description for hint in STALE_REGULARIZACAO_HINTS)
 
 
 def fail(message: str, details=None) -> None:
@@ -243,6 +257,14 @@ def run_emitir_guia_happy_paths() -> None:
         require_status(status, 200, "emitir_guia_regularizacao happy path", raw)
         require_json_object(parsed, "emitir_guia_regularizacao happy path")
         if parsed.get("api_resposta_sucesso") is not True:
+            if is_stale_regularizacao_fixture(parsed):
+                info(
+                    "emitir_guia_regularizacao happy path: SKIPPED - fixture stale "
+                    f"(upstream: '{parsed.get('api_descricao_erro')}'). "
+                    "Update PREVIEW_REGULARIZACAO_PAYLOAD em Infisical."
+                )
+                return
+
             fail(
                 "emitir_guia_regularizacao happy path: expected api_resposta_sucesso=true",
                 parsed,
