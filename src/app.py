@@ -42,6 +42,7 @@ from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
 )
+from src.tools.multi_step_service.core.models import MultiStepServiceOutput
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -410,11 +411,29 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
         service_name: str, user_id: str, payload: Optional[dict] = None
-    ) -> dict:
+    ) -> MultiStepServiceOutput:
         response = await mss(
             service_name=service_name, user_id=user_id, payload=payload
         )
-        return response
+        response = response if isinstance(response, dict) else {}
+        error_message = response.get("error_message")
+        response_data = response.get("data") or {}
+        if error_message:
+            public_status = "error"
+        elif response_data.get("_reset_on_next_call"):
+            public_status = "completed"
+        else:
+            public_status = "in_progress"
+
+        return MultiStepServiceOutput(
+            service_name=response.get("service_name") or service_name,
+            status=public_status,
+            description=response.get("description") or "",
+            payload_schema=response.get("payload_schema"),
+            data=response_data,
+            error_message=error_message,
+            channel_action=None,
+        )
 
     # ===== REGISTRAR RESOURCES =====
 
