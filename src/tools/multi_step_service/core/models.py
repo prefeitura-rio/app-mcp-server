@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, Dict, Literal, Optional
 from datetime import datetime
 
@@ -25,78 +25,20 @@ class AgentResponse(BaseModel):
     data: Dict[str, Any] = {}
 
 
-class PayloadFieldSchema(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: str | list[str] | None = None
-    anyOf: list[dict[str, Any]] | None = None
-    title: str | None = None
-    description: str | None = None
-    default: Any | None = None
-    enum: list[Any] | None = None
-    items: dict[str, Any] | None = None
-
-
-class PayloadSchema(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: Literal["object"] = "object"
-    title: str | None = None
-    description: str | None = None
-    properties: dict[str, PayloadFieldSchema] = Field(default_factory=dict)
-    required: list[str] = Field(default_factory=list)
-
-
-class ChannelAction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["flow_sent", "interactive_sent"]
-    next_step: str | None = None
-    instruction: str | None = None
-    flow_token: str | None = None
-
-
 class MultiStepServiceOutput(BaseModel):
     """
-    Contrato publico da tool multi_step_service.
+    Contrato publico plano da tool multi_step_service.
 
-    `status` descreve o estado do workflow; `channel_action` descreve efeitos
-    ja executados fora da resposta textual, como WhatsApp Flow ou interativo.
+    Campos dinamicos seguem serializados como JSON string para evitar que o
+    schema MCP publique estruturas complexas.
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     service_name: str
     status: Literal["in_progress", "completed", "error"]
-    description: str = ""
-    payload_schema: PayloadSchema | None = None
-    data: Dict[str, Any] = Field(default_factory=dict)
-    error_message: str | None = None
-    channel_action: ChannelAction | None = None
-
-    @classmethod
-    def from_agent_response(
-        cls,
-        response: AgentResponse,
-        *,
-        workflow_status: Literal["progress", "completed", "error"] = "progress",
-    ) -> "MultiStepServiceOutput":
-        status: Literal["in_progress", "completed", "error"]
-        if response.error_message or workflow_status == "error":
-            status = "error"
-        elif workflow_status == "completed":
-            status = "completed"
-        else:
-            status = "in_progress"
-
-        return cls(
-            service_name=response.service_name or "",
-            status=status,
-            description=response.description,
-            payload_schema=response.payload_schema,
-            data=response.data,
-            error_message=response.error_message,
-        )
+    description: str
+    payload_schema_json: str = "{}"
+    data_json: str = "{}"
+    error_message: str = ""
 
 
 class ServiceMetadata(BaseModel):

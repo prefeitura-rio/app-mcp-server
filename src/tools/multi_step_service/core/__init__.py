@@ -8,9 +8,6 @@ from src.tools.multi_step_service.core.models import (
     ServiceState,
     AgentResponse,
     ServiceRequest,
-    PayloadFieldSchema,
-    PayloadSchema,
-    ChannelAction,
     MultiStepServiceOutput,
 )
 from src.tools.multi_step_service.core.state import StateManager, StateMode
@@ -25,19 +22,19 @@ DESCRIPTION = """
     
     Args:
         service_name: Nome do serviço (ex: "bank_account")
-        payload: Dicionário com campos solicitados no payload_schema.
-        user_id: ID do agente, passar sempre 'agent'
+        payload_json: JSON serializado com os campos solicitados no payload_schema_json.
+        user_id: ID roteavel do usuário/sessão. No Agentforce, usar o routableId.
 
-    COMO PREENCHER O PAYLOAD:
-    Este sistema gerencia o estado da conversa. Sua decisão sobre o que enviar no `payload` define o comportamento do fluxo:
+    COMO PREENCHER O PAYLOAD_JSON:
+    Este sistema gerencia o estado da conversa. Sua decisão sobre o que enviar no `payload_json` define o comportamento do fluxo:
 
     1. FLUXO SEQUENCIAL (Comportamento Padrão):
-       - O sistema fornece um `payload_schema` indicando o que é necessário para a etapa atual.
-       - Se o usuário responder a pergunta atual, envie apenas o campo solicitado.
+       - O sistema fornece um `payload_schema_json` indicando o que é necessário para a etapa atual.
+       - Se o usuário responder a pergunta atual, envie apenas o campo solicitado em JSON string.
 
     2. FLUXO DE CORREÇÃO (Navegação/Rollback):
        - O usuário pode mudar de ideia sobre uma informação já fornecida em etapas anteriores.
-       - Se o usuário corrigir um dado passado (ex: mudar a data, o tipo de serviço, etc.), **envie este campo no payload**, ignorando o schema da etapa atual.
+       - Se o usuário corrigir um dado passado (ex: mudar a data, o tipo de serviço, etc.), **envie este campo no payload_json**, ignorando o schema da etapa atual.
        - O sistema detectará que é um campo anterior, resetará o fluxo para aquele ponto e limpará as etapas dependentes.
 
     Exemplo Genérico (Contexto: Agendamento):
@@ -45,12 +42,12 @@ DESCRIPTION = """
     [Cenário A - Seguindo o fluxo]
         - O sistema pede: "data_agendamento" (Etapa 2)
         - Usuário responde: "Dia 25 de outubro"
-        - Ação: Envie {"data_agendamento": "2025-10-25"}
+        - Ação: Envie "{\"data_agendamento\":\"2025-10-25\"}"
 
     [Cenário B - Correção de etapa anterior]
         - O sistema pede: "horario_disponivel" (Etapa 3)
         - Usuário responde: "Espere, quero mudar a especialidade para Cardiologia" (Dado da Etapa 1)
-        - Ação: Envie {"especialidade": "cardiologia"}
+        - Ação: Envie "{\"especialidade\":\"cardiologia\"}"
         * O sistema voltará automaticamente para a Etapa 1 e pedirá a data novamente depois.
     """
 
@@ -81,9 +78,6 @@ __all__ = [
     "ServiceState",
     "AgentResponse",
     "ServiceRequest",
-    "PayloadFieldSchema",
-    "PayloadSchema",
-    "ChannelAction",
     "MultiStepServiceOutput",
     "StateManager",
     "StateMode",

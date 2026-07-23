@@ -4,6 +4,8 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 # comment to trigger build
 
+import json
+
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
@@ -410,8 +412,30 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
-        service_name: str, user_id: str, payload: Optional[dict] = None
+        service_name: str, user_id: str, payload_json: str = "{}"
     ) -> MultiStepServiceOutput:
+        try:
+            payload = json.loads(payload_json or "{}")
+        except json.JSONDecodeError:
+            return MultiStepServiceOutput(
+                service_name=service_name,
+                status="error",
+                description="",
+                payload_schema_json="{}",
+                data_json="{}",
+                error_message="payload_json deve ser um JSON object valido",
+            )
+
+        if not isinstance(payload, dict):
+            return MultiStepServiceOutput(
+                service_name=service_name,
+                status="error",
+                description="",
+                payload_schema_json="{}",
+                data_json="{}",
+                error_message="payload_json deve ser um JSON object valido",
+            )
+
         response = await mss(
             service_name=service_name, user_id=user_id, payload=payload
         )
@@ -429,10 +453,11 @@ def create_app() -> FastMCP:
             service_name=response.get("service_name") or service_name,
             status=public_status,
             description=response.get("description") or "",
-            payload_schema=response.get("payload_schema"),
-            data=response_data,
-            error_message=error_message,
-            channel_action=None,
+            payload_schema_json=json.dumps(
+                response.get("payload_schema") or {}, ensure_ascii=False
+            ),
+            data_json=json.dumps(response_data, ensure_ascii=False),
+            error_message=error_message or "",
         )
 
     # ===== REGISTRAR RESOURCES =====
