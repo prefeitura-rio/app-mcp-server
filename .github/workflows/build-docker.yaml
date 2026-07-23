@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - staging
 
 jobs:
   build:
@@ -21,14 +20,8 @@ jobs:
         id: meta
         run: |
           IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/app-mcp-server"
-
-          if [ "${GITHUB_REF##*/}" == "main" ]; then
-            COMMIT_HASH=${{ github.sha }}
-            TAGS="stable,$COMMIT_HASH"
-          elif [ "${GITHUB_REF##*/}" == "staging" ]; then
-            COMMIT_HASH=${{ github.sha }}
-            TAGS="latest,$COMMIT_HASH"
-          fi
+          COMMIT_HASH=${{ github.sha }}
+          TAGS="stable,latest,$COMMIT_HASH"
 
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
           echo "TAGS=$TAGS" >> $GITHUB_ENV
