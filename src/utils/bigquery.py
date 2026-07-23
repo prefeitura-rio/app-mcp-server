@@ -6,10 +6,11 @@ from typing import List
 import base64
 import json
 import src.config.env as env
-from datetime import datetime, date
+from datetime import datetime, date, time
 import pytz
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
+from src.utils.json_utils import CustomJSONEncoder
 
 
 def get_bigquery_client() -> bigquery.Client:
@@ -68,7 +69,7 @@ def save_response_in_bq(
     data_to_save = {
         "datetime": datetime_to_save,
         "endpoint": endpoint,
-        "data": json.dumps(data),  # Serialize JSON field to string
+        "data": json.dumps(data, cls=CustomJSONEncoder),
         "environment": env_value,
         "data_particao": datetime_to_save.split("T")[0],
     }
@@ -526,8 +527,7 @@ def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
         for row in results:
             row_dict = {}
             for key, value in row.items():
-                # Convert datetime/date objects to ISO format strings for JSON serialization
-                if isinstance(value, (datetime, date)):
+                if isinstance(value, (datetime, date, time)):
                     row_dict[key] = value.isoformat()
                 else:
                     row_dict[key] = value

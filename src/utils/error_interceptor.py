@@ -16,6 +16,7 @@ import httpx
 from loguru import logger
 
 from src.config import env
+from src.utils.json_utils import CustomJSONEncoder
 
 
 async def send_error_to_interceptor(
@@ -67,7 +68,9 @@ async def send_error_to_interceptor(
 
     # Serializa input_body para string JSON se necessário
     if isinstance(input_body, (dict, list)):
-        input_body_str = json.dumps(input_body, ensure_ascii=False)
+        input_body_str = json.dumps(
+            input_body, ensure_ascii=False, cls=CustomJSONEncoder
+        )
     elif input_body is None:
         input_body_str = "None"
     else:
