@@ -33,7 +33,11 @@ async def test_send_error_to_interceptor_serializes_datetime_time_input_body(
     BigQuery TIME column). Reporting the error itself must not fail with a
     second serialization TypeError.
     """
-    monkeypatch.setattr(error_interceptor.env, "ERROR_INTERCEPTOR_URL", "https://test.interceptor.local/api")
+    monkeypatch.setattr(
+        error_interceptor.env,
+        "ERROR_INTERCEPTOR_URL",
+        "https://test.interceptor.local/api",
+    )
     monkeypatch.setattr(error_interceptor.env, "ERROR_INTERCEPTOR_TOKEN", "test-token")
 
     transport = _CapturingTransport()
@@ -48,7 +52,9 @@ async def test_send_error_to_interceptor_serializes_datetime_time_input_body(
     input_body = {
         "data": {
             "horario_funcionamento": datetime.time(8, 30, 0),
-            "atualizado_em": datetime.datetime(2026, 4, 8, 9, 0, 0),
+            "atualizado_em": datetime.datetime(
+                2026, 4, 8, 9, 0, 0, tzinfo=datetime.UTC
+            ),
             "inaugurado_em": datetime.date(2010, 1, 1),
         }
     }
@@ -67,5 +73,5 @@ async def test_send_error_to_interceptor_serializes_datetime_time_input_body(
     sent_payload = json.loads(transport.requests[0].content.decode("utf-8"))
     sent_input_body = json.loads(sent_payload["input_body"])
     assert sent_input_body["data"]["horario_funcionamento"] == "08:30:00"
-    assert sent_input_body["data"]["atualizado_em"] == "2026-04-08T09:00:00"
+    assert sent_input_body["data"]["atualizado_em"] == "2026-04-08T09:00:00+00:00"
     assert sent_input_body["data"]["inaugurado_em"] == "2010-01-01"
