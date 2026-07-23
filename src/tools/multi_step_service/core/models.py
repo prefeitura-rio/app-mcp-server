@@ -25,22 +25,6 @@ class AgentResponse(BaseModel):
     data: Dict[str, Any] = {}
 
 
-class MultiStepServiceOutput(BaseModel):
-    """
-    Contrato publico plano da tool multi_step_service.
-
-    Campos dinamicos seguem serializados como JSON string para evitar que o
-    schema MCP publique estruturas complexas.
-    """
-
-    service_name: str
-    status: Literal["in_progress", "completed", "error"]
-    description: str
-    payload_schema_json: str = "{}"
-    data_json: str = "{}"
-    error_message: str = ""
-
-
 class ServiceMetadata(BaseModel):
     """
     Metadados autogeridos do serviço com timestamps.

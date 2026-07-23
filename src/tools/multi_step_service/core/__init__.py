@@ -8,7 +8,6 @@ from src.tools.multi_step_service.core.models import (
     ServiceState,
     AgentResponse,
     ServiceRequest,
-    MultiStepServiceOutput,
 )
 from src.tools.multi_step_service.core.state import StateManager, StateMode
 from src.tools.multi_step_service.core.orchestrator import Orchestrator
@@ -78,7 +77,6 @@ __all__ = [
     "ServiceState",
     "AgentResponse",
     "ServiceRequest",
-    "MultiStepServiceOutput",
     "StateManager",
     "StateMode",
     "Orchestrator",

@@ -44,7 +44,6 @@ from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
 )
-from src.tools.multi_step_service.core.models import MultiStepServiceOutput
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -413,52 +412,31 @@ def create_app() -> FastMCP:
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
         service_name: str, user_id: str, payload_json: str = "{}"
-    ) -> MultiStepServiceOutput:
+    ) -> dict:
         try:
             payload = json.loads(payload_json or "{}")
         except json.JSONDecodeError:
-            return MultiStepServiceOutput(
-                service_name=service_name,
-                status="error",
-                description="",
-                payload_schema_json="{}",
-                data_json="{}",
-                error_message="payload_json deve ser um JSON object valido",
-            )
+            return {
+                "service_name": service_name,
+                "error_message": "payload_json deve ser um JSON object valido",
+                "description": "",
+                "payload_schema": None,
+                "data": {},
+            }
 
         if not isinstance(payload, dict):
-            return MultiStepServiceOutput(
-                service_name=service_name,
-                status="error",
-                description="",
-                payload_schema_json="{}",
-                data_json="{}",
-                error_message="payload_json deve ser um JSON object valido",
-            )
+            return {
+                "service_name": service_name,
+                "error_message": "payload_json deve ser um JSON object valido",
+                "description": "",
+                "payload_schema": None,
+                "data": {},
+            }
 
         response = await mss(
             service_name=service_name, user_id=user_id, payload=payload
         )
-        response = response if isinstance(response, dict) else {}
-        error_message = response.get("error_message")
-        response_data = response.get("data") or {}
-        if error_message:
-            public_status = "error"
-        elif response_data.get("_reset_on_next_call"):
-            public_status = "completed"
-        else:
-            public_status = "in_progress"
-
-        return MultiStepServiceOutput(
-            service_name=response.get("service_name") or service_name,
-            status=public_status,
-            description=response.get("description") or "",
-            payload_schema_json=json.dumps(
-                response.get("payload_schema") or {}, ensure_ascii=False
-            ),
-            data_json=json.dumps(response_data, ensure_ascii=False),
-            error_message=error_message or "",
-        )
+        return response
 
     # ===== REGISTRAR RESOURCES =====
 
