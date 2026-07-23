@@ -4,6 +4,8 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 # comment to trigger build
 
+import json
+
 from fastapi import Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from typing import Optional, List, Union
@@ -409,8 +411,28 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
-        service_name: str, user_id: str, payload: Optional[dict] = None
+        service_name: str, user_id: str, payload_json: str = "{}"
     ) -> dict:
+        try:
+            payload = json.loads(payload_json or "{}")
+        except json.JSONDecodeError:
+            return {
+                "service_name": service_name,
+                "error_message": "payload_json deve ser um JSON object valido",
+                "description": "",
+                "payload_schema": None,
+                "data": {},
+            }
+
+        if not isinstance(payload, dict):
+            return {
+                "service_name": service_name,
+                "error_message": "payload_json deve ser um JSON object valido",
+                "description": "",
+                "payload_schema": None,
+                "data": {},
+            }
+
         response = await mss(
             service_name=service_name, user_id=user_id, payload=payload
         )
