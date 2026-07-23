@@ -58,10 +58,10 @@ jobs:
         run: uv sync --frozen --all-groups
 
       - name: Run Ruff lint
-        run: uvx ruff check .
+        run: uvx ruff@0.15.5 check .
 
       - name: Run Ruff format check
-        run: uvx ruff format --check .
+        run: uvx ruff@0.15.5 format --check .
 
   security-scan:
     name: Security Scan
