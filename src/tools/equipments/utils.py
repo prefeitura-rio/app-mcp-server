@@ -1,5 +1,4 @@
 import json
-import datetime
 from typing import Tuple, Optional
 
 from src.config import env
@@ -11,22 +10,6 @@ from src.tools.cor_alert_tools import (
 )
 
 # from src.utils.log import logger
-
-
-class CustomJSONEncoder(json.JSONEncoder):
-    """
-    JSON Encoder customizado que sabe como converter objetos
-    de data, hora e data/hora do Python para strings no padrão ISO 8601.
-    """
-
-    def default(self, obj):
-        # Se o objeto for uma instância de datetime, date ou time...
-        if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
-            # ... converta-o para uma string no formato ISO.
-            return obj.isoformat()
-
-        # Para qualquer outro tipo, deixe o encoder padrão fazer o trabalho.
-        return super().default(obj)
 
 
 def get_coords_from_nominatim_api(address: str) -> dict:
