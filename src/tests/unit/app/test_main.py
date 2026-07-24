@@ -45,4 +45,5 @@ def test_main_runs_streamable_http_when_not_local(monkeypatch):
         host="0.0.0.0",
         port=80,
         path="/mcp",
+        middleware=None,
     )
