@@ -15,6 +15,7 @@ from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.hybrid_verifier import HybridTokenVerifier
+from src.observability.tracing import ToolCallTracingMiddleware, setup_tracing
 from src.tools.calculator import (
     add,
     subtract,
@@ -117,6 +118,12 @@ def create_app() -> FastMCP:
         auth=auth_provider,  # pyright: ignore[reportArgumentType]
         # version=Settings.VERSION,
     )
+
+    # Observabilidade: habilita tracing OpenTelemetry (exportando para o
+    # SigNoz) se OTEL_EXPORTER_OTLP_TRACES_ENDPOINT estiver configurado.
+    # `setup_tracing()` é seguro mesmo sem configuração (retorna False).
+    if setup_tracing():
+        mcp.add_middleware(ToolCallTracingMiddleware())
 
     def conditional_mcp_tool(tool_name: str, **kwargs):
         """Wrapper to conditionally register tools based on EXCLUDED_TOOLS"""
