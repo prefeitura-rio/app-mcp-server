@@ -157,6 +157,9 @@ GCS_BUCKET = getenv_or_action("GCS_BUCKET", action="ignore")
 PROJECT_NUMBER = getenv_or_action("PROJECT_NUMBER", action="ignore")
 REASONING_ENGINE_ID = getenv_or_action("REASONING_ENGINE_ID", action="ignore")
 
+OTEL_SERVICE_NAME = getenv_or_action(
+    "OTEL_SERVICE_NAME", default="app-mcp-server", action="ignore"
+)
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = getenv_or_action(
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", action="ignore"
 )
