@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   packages: read
 
 env:
@@ -110,6 +110,16 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
           echo "FULL_IMAGE=$FULL_IMAGE" >> "$GITHUB_ENV"
           echo "Resolved image: $FULL_IMAGE"
+
+      - name: Commit resolved image to git
+        if: steps.check-changes.outputs.k8s_only != 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          sed -i "s|image: ghcr.io/prefeitura-rio/app-mcp-server:.*|image: ${FULL_IMAGE}  # Updated by deploy-staging workflow|" k8s/staging/resources.yaml
+          git add k8s/staging/resources.yaml
+          git commit -m "chore: update staging image to $(git rev-parse --short HEAD)" || echo "No changes to commit"
+          git push origin HEAD:main || echo "Nothing to push"
 
       - name: Capture current Argo CD image override (for rollback)
         if: steps.check-changes.outputs.k8s_only != 'true'

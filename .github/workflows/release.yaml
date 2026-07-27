@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
@@ -88,6 +88,15 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
           echo "FULL_IMAGE=$FULL_IMAGE" >> "$GITHUB_ENV"
           echo "Resolved image: $FULL_IMAGE"
+
+      - name: Commit resolved image to git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          sed -i "s|image: ghcr.io/prefeitura-rio/app-mcp-server:.*|image: ${FULL_IMAGE}  # Updated by release workflow|" k8s/prod/resources.yaml
+          git add k8s/prod/resources.yaml
+          git commit -m "chore: update prod image to ${VERSION}" || echo "No changes to commit"
+          git push origin HEAD:main || echo "Nothing to push"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
