@@ -2,12 +2,14 @@ import asyncio
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 from google.oauth2 import service_account
+from opentelemetry.trace import Status, StatusCode
 from typing import List
 import base64
 import json
 import src.config.env as env
 from datetime import datetime, date, time
 import pytz
+from src.observability.tracing import get_tracer
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.json_utils import CustomJSONEncoder
@@ -76,16 +78,28 @@ def save_response_in_bq(
     json_data = [data_to_save]
     client = get_bigquery_client()
 
-    try:
-        errors = client.insert_rows_json(table_full_name, json_data)
-        if errors:
-            error_msgs = [
-                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-            ]
-            raise Exception(f"Erro ao inserir no BigQuery: {'; '.join(error_msgs)}")
-    except Exception as e:
-        logger.error(f"Erro ao salvar resposta no BigQuery: {str(e)}")
-        raise
+    tracer = get_tracer()
+    with tracer.start_as_current_span("bigquery.save_response") as span:
+        span.set_attribute("bigquery.project_id", project_id)
+        span.set_attribute("bigquery.dataset_id", dataset_id)
+        span.set_attribute("bigquery.table_id", table_id)
+        span.set_attribute("bigquery.endpoint", endpoint)
+        span.set_attribute("bigquery.row_count", len(json_data))
+        try:
+            errors = client.insert_rows_json(table_full_name, json_data)
+            if errors:
+                error_msgs = [
+                    f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+                ]
+                raise Exception(f"Erro ao inserir no BigQuery: {'; '.join(error_msgs)}")
+            span.set_attribute("bigquery.success", True)
+            span.set_status(Status(StatusCode.OK))
+        except Exception as e:
+            span.set_attribute("bigquery.success", False)
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            logger.error(f"Erro ao salvar resposta no BigQuery: {str(e)}")
+            raise
 
 
 async def save_response_in_bq_background(
@@ -156,19 +170,30 @@ def save_feedback_in_bq(
     json_data = json.loads(json.dumps([data_to_save]))
     client = get_bigquery_client()
 
-    try:
-        errors = client.insert_rows_json(table_full_name, json_data)
-        if errors:
-            error_msgs = [
-                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-            ]
-            raise Exception(
-                f"Erro ao inserir feedback no BigQuery: {'; '.join(error_msgs)}"
-            )
-        logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
-    except Exception as e:
-        logger.error(f"Erro ao salvar feedback no BigQuery: {str(e)}")
-        raise
+    tracer = get_tracer()
+    with tracer.start_as_current_span("bigquery.save_feedback") as span:
+        span.set_attribute("bigquery.project_id", project_id)
+        span.set_attribute("bigquery.dataset_id", dataset_id)
+        span.set_attribute("bigquery.table_id", table_id)
+        span.set_attribute("bigquery.row_count", len(json_data))
+        try:
+            errors = client.insert_rows_json(table_full_name, json_data)
+            if errors:
+                error_msgs = [
+                    f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+                ]
+                raise Exception(
+                    f"Erro ao inserir feedback no BigQuery: {'; '.join(error_msgs)}"
+                )
+            logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
+            span.set_attribute("bigquery.success", True)
+            span.set_status(Status(StatusCode.OK))
+        except Exception as e:
+            span.set_attribute("bigquery.success", False)
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            logger.error(f"Erro ao salvar feedback no BigQuery: {str(e)}")
+            raise
 
 
 async def save_feedback_in_bq_background(
@@ -260,19 +285,32 @@ def save_cor_alert_in_bq(
     json_data = json.loads(json.dumps([data_to_save]))
     client = get_bigquery_client()
 
-    try:
-        errors = client.insert_rows_json(table_full_name, json_data)
-        if errors:
-            error_msgs = [
-                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-            ]
-            raise Exception(
-                f"Erro ao inserir alerta COR no BigQuery: {'; '.join(error_msgs)}"
-            )
-        logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
-    except Exception as e:
-        logger.error(f"Erro ao salvar alerta COR no BigQuery: {str(e)}")
-        raise
+    tracer = get_tracer()
+    with tracer.start_as_current_span("bigquery.save_cor_alert") as span:
+        span.set_attribute("bigquery.project_id", project_id)
+        span.set_attribute("bigquery.dataset_id", dataset_id)
+        span.set_attribute("bigquery.table_id", table_id)
+        span.set_attribute("bigquery.alert_type", alert_type)
+        span.set_attribute("bigquery.severity", severity)
+        span.set_attribute("bigquery.row_count", len(json_data))
+        try:
+            errors = client.insert_rows_json(table_full_name, json_data)
+            if errors:
+                error_msgs = [
+                    f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+                ]
+                raise Exception(
+                    f"Erro ao inserir alerta COR no BigQuery: {'; '.join(error_msgs)}"
+                )
+            logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
+            span.set_attribute("bigquery.success", True)
+            span.set_status(Status(StatusCode.OK))
+        except Exception as e:
+            span.set_attribute("bigquery.success", False)
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            logger.error(f"Erro ao salvar alerta COR no BigQuery: {str(e)}")
+            raise
 
 
 async def save_cor_alert_in_bq_background(
@@ -517,28 +555,42 @@ def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
     page_size = page_size if page_size is not None else GOOGLE_BIGQUERY_PAGE_SIZE
     client = get_bigquery_client()
 
-    try:
-        logger.info(f"Executando query no BigQuery: {query[:100]}...")
-        query_job = client.query(query)
-        results = query_job.result(page_size=page_size)
+    tracer = get_tracer()
+    with tracer.start_as_current_span("bigquery.query") as span:
+        span.set_attribute("bigquery.page_size", page_size)
+        span.set_attribute("bigquery.query_length", len(query))
+        try:
+            logger.info(f"Executando query no BigQuery: {query[:100]}...")
+            query_job = client.query(query)
+            results = query_job.result(page_size=page_size)
 
-        # Convert results to list of dictionaries
-        rows = []
-        for row in results:
-            row_dict = {}
-            for key, value in row.items():
-                if isinstance(value, (datetime, date, time)):
-                    row_dict[key] = value.isoformat()
-                else:
-                    row_dict[key] = value
-            rows.append(row_dict)
+            # Convert results to list of dictionaries
+            rows = []
+            for row in results:
+                row_dict = {}
+                for key, value in row.items():
+                    if isinstance(value, (datetime, date, time)):
+                        row_dict[key] = value.isoformat()
+                    else:
+                        row_dict[key] = value
+                rows.append(row_dict)
 
-        logger.info(f"Query executada com sucesso. {len(rows)} linhas retornadas.")
-        return rows
-    except NotFound as e:
-        logger.warning(f"Tabela não encontrada no BigQuery: {str(e)}")
-        # Return empty list when table doesn't exist yet - allows graceful degradation
-        return []
-    except Exception as e:
-        logger.error(f"Erro ao executar query no BigQuery: {str(e)}")
-        raise Exception(f"Failed to execute BigQuery query: {str(e)}")
+            logger.info(f"Query executada com sucesso. {len(rows)} linhas retornadas.")
+            span.set_attribute("bigquery.row_count", len(rows))
+            span.set_attribute("bigquery.success", True)
+            span.set_status(Status(StatusCode.OK))
+            return rows
+        except NotFound as e:
+            span.set_attribute("bigquery.row_count", 0)
+            span.set_attribute("bigquery.table_not_found", True)
+            span.set_attribute("bigquery.success", True)
+            span.set_status(Status(StatusCode.OK))
+            logger.warning(f"Tabela não encontrada no BigQuery: {str(e)}")
+            # Return empty list when table doesn't exist yet - allows graceful degradation
+            return []
+        except Exception as e:
+            span.set_attribute("bigquery.success", False)
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            logger.error(f"Erro ao executar query no BigQuery: {str(e)}")
+            raise Exception(f"Failed to execute BigQuery query: {str(e)}")
