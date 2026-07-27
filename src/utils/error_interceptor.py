@@ -8,15 +8,134 @@ Este módulo fornece funções assíncronas para reportar erros de forma não-bl
 garantindo que falhas no envio de erros não afetem o fluxo principal da aplicação.
 """
 
+import asyncio
 import inspect
 import json
+import re
 import traceback as tb
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Set
+
 import httpx
 from loguru import logger
+from opentelemetry import trace
 
 from src.config import env
 from src.utils.json_utils import CustomJSONEncoder
+
+
+# ---------------------------------------------------------------------------
+# Correlação com traces do OpenTelemetry (CHATR-113)
+# ---------------------------------------------------------------------------
+#
+# Reusa exatamente o mesmo padrão de acesso ao contexto de trace/span usado
+# em `src/observability/tracing.py`: `opentelemetry.trace.get_current_span()`
+# seguido de `.get_span_context()`. Isso permite correlacionar um erro
+# reportado ao interceptor com o trace correspondente no SigNoz (CHATR-110),
+# sem introduzir nenhuma dependência nova nem exigir que o tracing esteja
+# habilitado -- quando não há span ativo/válido, o contexto é simplesmente
+# omitido do payload.
+
+
+def _get_current_trace_context() -> Dict[str, str]:
+    """
+    Obtém trace_id/span_id (em hexadecimal, mesmo formato usado pelo
+    OTel/SigNoz) do span atualmente ativo, se houver.
+
+    Degrada graciosamente em qualquer cenário sem trace ativo (tracing não
+    configurado, span inválido, ou qualquer erro inesperado ao acessar o
+    contexto): nunca levanta exceção, apenas retorna um dicionário vazio.
+
+    Returns:
+        Dict com as chaves "trace_id" (32 caracteres hex) e "span_id" (16
+        caracteres hex) se houver um span ativo válido, ou `{}` caso
+        contrário.
+    """
+    try:
+        span_context = trace.get_current_span().get_span_context()
+        if not span_context.is_valid:
+            return {}
+        return {
+            "trace_id": trace.format_trace_id(span_context.trace_id),
+            "span_id": trace.format_span_id(span_context.span_id),
+        }
+    except Exception:
+        # Nunca deixamos um problema de acesso ao contexto de trace impedir
+        # o envio do relatório de erro em si.
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Redação básica de PII (CHATR-113)
+# ---------------------------------------------------------------------------
+#
+# Redação conservadora e best-effort, usando apenas stdlib (`re` + slicing
+# de strings) -- não é uma limpeza completa do conteúdo, e sim uma redução
+# do risco de exposição mantendo contexto suficiente para debug. Como
+# `input_body` chega aqui já serializado como string (ver
+# `send_error_to_interceptor` abaixo), a substituição por regex opera sobre
+# texto puro e não é ciente da estrutura JSON subjacente -- em casos raros
+# (ex.: um número aparecendo como literal numérico não citado dentro do
+# JSON) a substituição poderia invalidar o JSON resultante; esse é um
+# tradeoff aceito para manter a implementação simples e sem dependências
+# novas.
+
+# Formato de CPF "000.000.000-00". Esse padrão só pode aparecer dentro de
+# uma string JSON válida (não é um literal numérico válido em JSON), então
+# a substituição abaixo nunca corrompe a estrutura do payload.
+_CPF_PATTERN = re.compile(r"(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)")
+
+# Números de telefone com 10 a 13 dígitos, com ou sem "+" inicial (cobre os
+# formatos usados neste projeto, ex.: "5521999999999" ou "+5521999999999").
+_PHONE_NUMBER_PATTERN = re.compile(r"(?<!\d)\+?\d{10,13}(?!\d)")
+
+
+def _mask_last_four_digits(value: str) -> str:
+    """
+    Mascara um valor mantendo visíveis apenas os últimos 4 caracteres,
+    substituindo o restante por asteriscos. Um eventual "+" inicial (comum
+    em números de telefone no formato E.164) é preservado como está, já
+    que não carrega PII por si só.
+
+    Usado diretamente em `customer_whatsapp_number`: como esse campo é, por
+    contrato, sempre um número de telefone, mascaramos incondicionalmente
+    em vez de depender de `_PHONE_NUMBER_PATTERN` bater com o formato
+    exato -- isso evita vazar o valor por completo caso ele venha em um
+    formato inesperado (mais curto/mais longo que o previsto pelo regex).
+
+    Examples:
+        >>> _mask_last_four_digits("5521999999999")
+        '*********9999'
+        >>> _mask_last_four_digits("+5521999999999")
+        '+*********9999'
+    """
+    if not value:
+        return value
+    prefix = "+" if value.startswith("+") else ""
+    rest = value[len(prefix) :]
+    if len(rest) <= 4:
+        return value
+    return f"{prefix}{'*' * (len(rest) - 4)}{rest[-4:]}"
+
+
+def _redact_pii_in_text(text: str) -> str:
+    """
+    Aplica uma varredura leve por padrões óbvios de PII (CPF e números de
+    telefone) em um texto livre, substituindo apenas os trechos que batem
+    com esses padrões por um marcador -- o restante do conteúdo é mantido
+    intacto, propositalmente, já que o objetivo é reduzir exposição de PII
+    mantendo contexto útil de debug (isto não é uma limpeza completa do
+    conteúdo).
+
+    Usa o mesmo `_PHONE_NUMBER_PATTERN` usado para mascarar
+    `customer_whatsapp_number`, então qualquer número de telefone que
+    apareça embutido em `input_body` é redigido com a mesma referência de
+    formato.
+    """
+    if not text:
+        return text
+    redacted = _CPF_PATTERN.sub("[REDACTED-CPF]", text)
+    redacted = _PHONE_NUMBER_PATTERN.sub("[REDACTED-PHONE]", redacted)
+    return redacted
 
 
 async def send_error_to_interceptor(
@@ -76,6 +195,11 @@ async def send_error_to_interceptor(
     else:
         input_body_str = str(input_body)
 
+    # Redação básica de PII antes do envio (CHATR-113): mascara o número de
+    # telefone e redige possíveis CPFs/telefones embutidos em input_body.
+    masked_whatsapp_number = _mask_last_four_digits(str(customer_whatsapp_number))
+    input_body_str = _redact_pii_in_text(input_body_str)
+
     # Prepara error_response como JSON string contendo error_message e traceback
     error_response_data = {"error_message": error_message}
     if traceback:
@@ -90,7 +214,7 @@ async def send_error_to_interceptor(
 
     # Prepara o payload
     payload = {
-        "customer_whatsapp_number": customer_whatsapp_number,
+        "customer_whatsapp_number": masked_whatsapp_number,
         "source": source_str,
         "flowname": flowname,
         "api_endpoint": api_endpoint,
@@ -98,6 +222,9 @@ async def send_error_to_interceptor(
         "http_status_code": http_status_code,
         "error_response": error_response_str,
     }
+    # Correlação com trace/span do OTel (CHATR-110/CHATR-113): presente
+    # apenas quando há um trace ativo, ausente do payload caso contrário.
+    payload.update(_get_current_trace_context())
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -304,6 +431,44 @@ async def send_general_error(
     )
 
 
+# ---------------------------------------------------------------------------
+# Tracking de tasks fire-and-forget do interceptor (CHATR-113)
+# ---------------------------------------------------------------------------
+#
+# `sync_wrapper` (abaixo) agenda `_handle_error(...)` via
+# `loop.create_task(...)` sem dar `await`, pois o contrato do decorator é
+# nunca bloquear o chamador original. O problema conhecido do asyncio é que
+# a *event loop* só guarda uma referência fraca a cada task -- sem uma
+# referência forte guardada em algum outro lugar, o garbage collector pode
+# coletar a task no meio da execução (perdendo o report silenciosamente,
+# sem nenhuma exceção ou log). Este set guarda essa referência forte
+# enquanto a task está pendente; o próprio callback de conclusão se
+# encarrega de removê-la.
+_pending_interceptor_tasks: Set[asyncio.Task] = set()
+
+
+def _track_interceptor_task(task: asyncio.Task) -> None:
+    """
+    Registra uma task fire-and-forget do interceptor para que não seja
+    coletada pelo GC antes de terminar, e loga (sem propagar) qualquer
+    exceção não tratada ao concluir.
+
+    Continua fire-and-forget: nada aqui bloqueia ou aguarda o chamador
+    original, apenas torna a task observável até sua conclusão.
+    """
+    _pending_interceptor_tasks.add(task)
+
+    def _on_done(finished_task: asyncio.Task) -> None:
+        _pending_interceptor_tasks.discard(finished_task)
+        if finished_task.cancelled():
+            return
+        exc = finished_task.exception()
+        if exc is not None:
+            logger.warning(f"Task de report ao error interceptor falhou: {exc}")
+
+    task.add_done_callback(_on_done)
+
+
 def interceptor(
     source: Dict[str, Any],
     error_types: tuple = (Exception,),
@@ -353,7 +518,6 @@ def interceptor(
         # Flowname: "source=mcp | tool=equipments | address=Av. Presidente Vargas | function=get_nearby_equipments"
     """
     from functools import wraps
-    import asyncio
 
     def decorator(func):
         @wraps(func)
@@ -372,7 +536,8 @@ def interceptor(
                 # Para funções sync, executamos o report de forma síncrona via asyncio
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(_handle_error(func, args, kwargs, e))
+                    task = loop.create_task(_handle_error(func, args, kwargs, e))
+                    _track_interceptor_task(task)
                 except RuntimeError:
                     # Não há event loop rodando, tenta criar um
                     try:
