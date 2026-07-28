@@ -113,17 +113,22 @@ def create_app() -> FastMCP:
     # (AuthSettings). Em runtime a classe usada quando `not IS_LOCAL` é
     # `fastmcp.FastMCP`, que aceita `auth: AuthProvider | None`, e
     # `auth_provider` só é não-None nesse caso.
-    mcp = FastMCP(
-        name=Settings.SERVER_NAME,
-        auth=auth_provider,  # pyright: ignore[reportArgumentType]
-        # version=Settings.VERSION,
-    )
-
     # Observabilidade: habilita tracing OpenTelemetry (exportando para o
     # SigNoz) se OTEL_EXPORTER_OTLP_TRACES_ENDPOINT estiver configurado.
     # `setup_tracing()` é seguro mesmo sem configuração (retorna False).
-    if setup_tracing():
-        mcp.add_middleware(ToolCallTracingMiddleware())
+    mcp_middleware = []
+    if setup_tracing() and not IS_LOCAL:
+        mcp_middleware.append(ToolCallTracingMiddleware())
+
+    mcp_kwargs = {
+        "name": Settings.SERVER_NAME,
+        "auth": auth_provider,
+        # "version": Settings.VERSION,
+    }
+    if mcp_middleware:
+        mcp_kwargs["middleware"] = mcp_middleware
+
+    mcp = FastMCP(**mcp_kwargs)  # pyright: ignore[reportCallIssue]
 
     def conditional_mcp_tool(tool_name: str, **kwargs):
         """Wrapper to conditionally register tools based on EXCLUDED_TOOLS"""

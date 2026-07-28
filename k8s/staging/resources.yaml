@@ -6,7 +6,7 @@ metadata:
   annotations:
     secrets.infisical.com/auto-reload: "true"
 spec:
-  replicas: 1
+  replicas: 2
   revisionHistoryLimit: 3
   selector:
     matchLabels:
@@ -33,6 +33,8 @@ spec:
               value: "app-mcp-server"
             - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
               value: "http://signoz-otel-collector.signoz.svc.cluster.local:4318"
+            - name: MCP_STATELESS_HTTP
+              value: "true"
           envFrom:
             - secretRef:
                 name: mcp-secrets

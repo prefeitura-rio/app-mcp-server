@@ -1,6 +1,14 @@
 import os
 from src.utils.infisical import getenv_or_action
 
+
+def getenv_bool(env_name: str, *, default: str, action: str = "ignore") -> bool:
+    value = getenv_or_action(env_name, default=default, action=action)
+    if value is None or str(value).strip() == "":
+        value = default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 # if file .env exists, load it
 if os.path.exists("src/config/.env"):
     import dotenv
@@ -11,6 +19,9 @@ if os.path.exists("src/config/.env"):
 ENVIRONMENT = getenv_or_action("ENVIRONMENT", default="staging", action="ignore")
 VALID_TOKENS = getenv_or_action("VALID_TOKENS")
 IS_LOCAL = getenv_or_action("IS_LOCAL", default="false", action="ignore") == "true"
+MCP_STATELESS_HTTP = getenv_bool(
+    "MCP_STATELESS_HTTP", default="false" if IS_LOCAL else "true"
+)
 
 WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT")
 WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")

@@ -32,4 +32,5 @@ if __name__ == "__main__":
             port=80,
             path="/mcp",
             middleware=http_middleware,
+            stateless_http=env.MCP_STATELESS_HTTP,
         )
