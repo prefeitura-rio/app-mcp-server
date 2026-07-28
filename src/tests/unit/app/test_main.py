@@ -15,16 +15,23 @@ def run_main_with_env(monkeypatch, is_local: bool):
 
     env_module = types.ModuleType("src.config.env")
     env_module.IS_LOCAL = is_local
+    env_module.MCP_STATELESS_HTTP = not is_local
 
     src_pkg = types.ModuleType("src")
     src_pkg.__path__ = [str(PROJECT_ROOT / "src")]
     config_pkg = types.ModuleType("src.config")
     config_pkg.__path__ = [str(PROJECT_ROOT / "src" / "config")]
+    observability_pkg = types.ModuleType("src.observability")
+    observability_pkg.__path__ = [str(PROJECT_ROOT / "src" / "observability")]
+    tracing_module = types.ModuleType("src.observability.tracing")
+    tracing_module.is_tracing_enabled = Mock(return_value=False)
 
     monkeypatch.setitem(sys.modules, "src", src_pkg)
     monkeypatch.setitem(sys.modules, "src.app", app_module)
     monkeypatch.setitem(sys.modules, "src.config", config_pkg)
     monkeypatch.setitem(sys.modules, "src.config.env", env_module)
+    monkeypatch.setitem(sys.modules, "src.observability", observability_pkg)
+    monkeypatch.setitem(sys.modules, "src.observability.tracing", tracing_module)
 
     runpy.run_path(str(MAIN_PATH), run_name="__main__")
 
@@ -46,4 +53,5 @@ def test_main_runs_streamable_http_when_not_local(monkeypatch):
         port=80,
         path="/mcp",
         middleware=None,
+        stateless_http=True,
     )
