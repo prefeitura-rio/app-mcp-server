@@ -44,6 +44,14 @@ Importante: essa validação roda apenas no pipeline de mensagens do protocolo M
 | `VALID_TOKENS` | Sim | Tokens estáticos válidos, separados por vírgula. Continua sendo o único mecanismo de auth até o Keycloak ser configurado. |
 | `IS_LOCAL` | Não (default `false`) | Quando `true`, desativa toda autenticação (dev local). |
 | `DANGEROUSLY_OMIT_AUTH` | Não | Escape hatch de dev local, ver `README.md`. |
+| `MCP_STATELESS_HTTP` | Não (default `true` fora do local) | Controla o modo stateless do transporte Streamable HTTP em `/mcp`. Mantenha `true` em ambientes com múltiplas réplicas; use `false` apenas como rollback temporário. |
+| `MCP_JSON_RESPONSE` | Não (default `false`) | Mantém o formato de resposta atual do Streamable HTTP. Deixe `false` salvo necessidade explícita de trocar o wire format. |
+
+### Transporte MCP (`/mcp`)
+
+Em ambientes não-locais, o servidor roda o transporte Streamable HTTP em modo stateless por padrão. Isso remove a dependência de manter a sessão MCP em memória no mesmo pod entre `initialize`, `notifications/initialized` e chamadas seguintes.
+
+Não é necessário Redis para esse modo stateless básico. O Redis plug-and-play do FastMCP via `EventStore` deve ser considerado apenas se o servidor passar a depender de resumability/eventos SSE entre reconexões.
 
 ### Novas (para habilitar OAuth 2.0 / Keycloak)
 

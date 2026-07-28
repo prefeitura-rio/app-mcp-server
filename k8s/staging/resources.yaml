@@ -33,6 +33,10 @@ spec:
               value: "app-mcp-server"
             - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
               value: "http://signoz-otel-collector.signoz.svc.cluster.local:4318"
+            - name: MCP_STATELESS_HTTP
+              value: "true"
+            - name: MCP_JSON_RESPONSE
+              value: "false"
           envFrom:
             - secretRef:
                 name: mcp-secrets
