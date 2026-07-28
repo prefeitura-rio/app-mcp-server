@@ -22,7 +22,6 @@ IS_LOCAL = getenv_or_action("IS_LOCAL", default="false", action="ignore") == "tr
 MCP_STATELESS_HTTP = getenv_bool(
     "MCP_STATELESS_HTTP", default="false" if IS_LOCAL else "true"
 )
-MCP_JSON_RESPONSE = getenv_bool("MCP_JSON_RESPONSE", default="false")
 
 WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT")
 WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")

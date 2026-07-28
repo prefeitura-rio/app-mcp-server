@@ -54,7 +54,6 @@ Variáveis úteis:
 
 ```env
 MCP_STATELESS_HTTP=true
-MCP_JSON_RESPONSE=false
 ```
 
 Use `MCP_STATELESS_HTTP=false` apenas como rollback operacional se algum cliente depender explicitamente de sessão MCP stateful. Redis não é necessário para o modo stateless básico; ele só deve ser considerado para resumability/eventos SSE se o servidor passar a usar esse tipo de recurso.

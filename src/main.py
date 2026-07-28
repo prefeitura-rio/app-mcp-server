@@ -33,5 +33,4 @@ if __name__ == "__main__":
             path="/mcp",
             middleware=http_middleware,
             stateless_http=env.MCP_STATELESS_HTTP,
-            json_response=env.MCP_JSON_RESPONSE,
         )
