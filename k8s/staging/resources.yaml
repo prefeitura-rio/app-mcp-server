@@ -38,6 +38,11 @@ spec:
           envFrom:
             - secretRef:
                 name: mcp-secrets
+          resources:
+            requests:
+              memory: "512Mi"
+            limits:
+              memory: "1536Mi"
           livenessProbe:
             httpGet:
               path: /health
