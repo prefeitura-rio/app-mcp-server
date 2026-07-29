@@ -1,4 +1,5 @@
 import asyncio
+import functools
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 from google.oauth2 import service_account
@@ -15,11 +16,23 @@ from src.utils.error_interceptor import interceptor
 from src.utils.json_utils import CustomJSONEncoder
 
 
+@functools.lru_cache(maxsize=1)
 def get_bigquery_client() -> bigquery.Client:
     """Get the BigQuery client.
 
+    The client is constructed once per process and cached for reuse across all
+    call sites.  ``lru_cache`` provides thread-safe initialisation in CPython
+    (the GIL ensures only one thread executes the body for a given argument
+    set), so concurrent callers from ``loop.run_in_executor`` threads will all
+    receive the same instance without any additional locking.
+
+    Credential rotation is handled by the Argo Rollouts / Infisical
+    ``auto-reload`` annotation, which triggers a full pod restart on secret
+    change — so the cached client is always constructed with the latest
+    credentials at startup.
+
     Returns:
-        bigquery.Client: The BigQuery client
+        bigquery.Client: The BigQuery client (singleton for the process lifetime)
     """
     credentials = get_gcp_credentials(
         scopes=[
