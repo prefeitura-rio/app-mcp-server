@@ -4,6 +4,7 @@ import asyncio
 from functools import wraps
 from typing import Dict, Any, Optional
 
+
 from src.tools.utils import internal_request
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
@@ -317,12 +318,10 @@ async def processar_registros(
     message["api_resposta_sucesso"] = True
 
     for item in registros:
-        message["codigo_de_barras"] = item["codigoDeBarras"]
-        message["link"] = item["pdf"]
-        if "dataVencimento" in item:
-            message["data_vencimento"] = item["dataVencimento"]
-        if item.get("codigoQrEMVPix"):
-            message["pix"] = item["codigoQrEMVPix"]
+        message["codigo_de_barras"] = item.get("codigoDeBarras") or ""
+        message["link"] = item.get("pdf") or ""
+        message["data_vencimento"] = item.get("dataVencimento") or ""
+        message["pix"] = item.get("codigoQrEMVPix") or ""
 
     return message
 
