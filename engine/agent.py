@@ -25,14 +25,6 @@ from langchain_google_cloud_sql_pg import (
     PostgresSaver,
 )
 
-from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.trace.sampling import ALWAYS_ON
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-from opentelemetry.instrumentation.langchain import LangchainInstrumentor
 
 from engine.log import logger
 
@@ -71,17 +63,10 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         self._database_name = getenv("DATABASE", "")
         self._database_user = getenv("DATABASE_USER", "")
         self._database_password = getenv("DATABASE_PASSWORD", "")
-        self._otlp_endpoint = getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
-        self._otlp_header = getenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "")
 
         self._graph = None
         self._setup_complete_async = False
         self._setup_complete_sync = False
-        self._opentelemetry_setup_complete = False
-
-        # OpenTelemetry tracer e processor para shutdown
-        self._tracer = None
-        self._batch_processor = None
         self._shutdown_handlers_registered = False
 
         # Short-term memory limits - lazy loaded from env vars
@@ -95,70 +80,6 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         # {thread_id: {"data": memory_data, "timestamp": datetime}}
         self._memory_cache = {}
         self._memory_needs_refresh = False  # Flag set when upsert_user_memory is called
-
-    def _set_up_opentelemetry(self):
-        if self._opentelemetry_setup_complete:
-            return
-        provider = TracerProvider(
-            resource=Resource.create({"service.name": self._otpl_service}),
-            sampler=ALWAYS_ON,  # Garantir 100% de sampling
-        )
-        otlp_exporter = OTLPSpanExporter(
-            endpoint=self._otlp_endpoint,
-            headers=(
-                dict(
-                    header.split("=")
-                    for header in self._otlp_header.split(",")
-                    if "=" in header
-                )
-                if self._otlp_header
-                else None
-            ),
-        )
-
-        # Configurar BatchSpanProcessor com parâmetros otimizados para reduzir perda de spans
-        self._batch_processor = BatchSpanProcessor(
-            otlp_exporter,
-            max_queue_size=8192,  # Aumentar buffer (padrão: 2048)
-            schedule_delay_millis=1000,  # Flush mais frequente (padrão: 5000)
-            export_timeout_millis=10000,  # Timeout menor (padrão: 30000)
-            max_export_batch_size=256,  # Lotes menores para reduzir latência (padrão: 512)
-        )
-        provider.add_span_processor(self._batch_processor)
-        trace.set_tracer_provider(provider)
-
-        # Initialize tracer
-        self._tracer = trace.get_tracer(__name__)
-
-        LangchainInstrumentor().instrument()
-
-        self._opentelemetry_setup_complete = True
-
-    def _trace_conversation(self, filtered_result: dict, **kwargs):
-        """Simple tracing to show user input and model output."""
-        if not self._tracer:
-            return
-
-        # Extract input message
-        input_msg = str(kwargs.get("input", ""))
-
-        # Extract thread_id
-        thread_id = (
-            kwargs.get("config", {}).get("configurable", {}).get("thread_id", "unknown")
-        )
-
-        with self._tracer.start_as_current_span("conversation") as span:
-            span.set_attributes(
-                {
-                    "user.input": input_msg,
-                    "model.output": json.dumps(
-                        dumpd(filtered_result), ensure_ascii=False, indent=2
-                    ),
-                    "thread.id": thread_id,
-                    "model.name": self._model,
-                    "model.temperature": self._temperature,
-                }
-            )
 
     def set_up(self):
         """Mark that setup is needed - actual setup happens lazily."""
@@ -848,7 +769,6 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
     async def _ensure_async_setup(self):
         """Ensure async components are set up."""
 
-        self._set_up_opentelemetry()
 
         if self._setup_complete_async:
             return
@@ -868,7 +788,6 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
     def _ensure_sync_setup(self):
         """Ensure sync components are set up."""
 
-        self._set_up_opentelemetry()
 
         if self._setup_complete_sync:
             return self._graph
@@ -912,8 +831,6 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         result = await self._graph.ainvoke(**kwargs)
         filtered_result = self._filter_current_interaction(result)
 
-        # Simple tracing
-        self._trace_conversation(filtered_result, **kwargs)
 
         return filtered_result
 
@@ -943,8 +860,6 @@ class Agent(AsyncQueryable, AsyncStreamQueryable, Queryable, StreamQueryable):
         result = self._graph.invoke(**kwargs)
         filtered_result = self._filter_current_interaction(result)
 
-        # Simple tracing
-        self._trace_conversation(filtered_result, **kwargs)
 
         return filtered_result
 
