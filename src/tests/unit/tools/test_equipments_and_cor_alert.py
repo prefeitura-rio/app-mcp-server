@@ -341,6 +341,76 @@ async def test_equipments_tools_instructions_and_whitelist(monkeypatch):
     assert created_tasks
 
 
+def _load_pluscode_service(monkeypatch, get_bigquery_result):
+    """Carrega `pluscode_service` com as dependências externas trocadas."""
+    ensure_package("src", PROJECT_ROOT / "src")
+    ensure_package("src.tools", PROJECT_ROOT / "src" / "tools")
+    ensure_package(
+        "src.tools.equipments", PROJECT_ROOT / "src" / "tools" / "equipments"
+    )
+    ensure_package("src.utils", PROJECT_ROOT / "src" / "utils")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.tools.equipments.utils",
+        types.SimpleNamespace(get_plus8_coords_from_address=lambda address: (None, None)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.bigquery",
+        types.SimpleNamespace(get_bigquery_result=get_bigquery_result),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.error_interceptor",
+        types.SimpleNamespace(interceptor=passthrough_interceptor),
+    )
+    return load_module(
+        "test_pluscode_service_module", "src/tools/equipments/pluscode_service.py"
+    )
+
+
+@pytest.mark.asyncio
+async def test_instrucoes_degradam_quando_a_tabela_externa_cai(monkeypatch):
+    """CHATR-119: perder a Google Sheet não pode derrubar o fluxo inteiro.
+
+    O erro real é um 400 do BigQuery — não um `NotFound` —, então ele
+    atravessa a degradação de `get_bigquery_result` e chegaria à tool.
+    """
+
+    def bigquery_quebrado(query):
+        raise Exception(
+            "Failed to execute BigQuery query: 400 Error while reading table: "
+            "rj-iplanrio.plus_codes.equipamentos_instrucoes, error message: "
+            "Spreadsheet not found. File: 1VPnJSf9puDgZ-Ed9MRkpe3Jy38nKxGLp7O9-ydAdm98"
+        )
+
+    module = _load_pluscode_service(monkeypatch, bigquery_quebrado)
+
+    resultado = await module.get_tematic_instructions_for_equipments(tema="geral")
+
+    assert isinstance(resultado, list) and len(resultado) == 1
+    assert resultado[0]["error"] == "Instruções temporariamente indisponíveis"
+    # O contrato com o agente: seguir para `equipments_by_address` mesmo assim.
+    assert "equipments_by_address" in resultado[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_instrucoes_retornam_os_dados_quando_a_tabela_responde(monkeypatch):
+    queries = []
+
+    def bigquery_ok(query):
+        queries.append(query)
+        return [{"tema": "educacao", "instrucoes": "..."}]
+
+    module = _load_pluscode_service(monkeypatch, bigquery_ok)
+
+    resultado = await module.get_tematic_instructions_for_equipments(tema="educacao")
+
+    assert resultado == [{"tema": "educacao", "instrucoes": "..."}]
+    assert "WHERE tema = 'educacao'" in queries[0]
+
+
 def test_openlocationcode_roundtrip_and_helpers():
     openlocationcode = load_module(
         "test_openlocationcode_module", "src/tools/equipments/openlocationcode.py"

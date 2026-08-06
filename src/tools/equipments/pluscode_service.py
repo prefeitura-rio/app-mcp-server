@@ -201,13 +201,34 @@ async def get_category_equipments() -> dict:
 async def get_tematic_instructions_for_equipments(tema: str = "geral") -> List[dict]:
     where_clause = f"WHERE tema = '{tema}'" if tema != "geral" else ""
     query = f"""
-        SELECT 
-            * 
+        SELECT
+            *
         FROM `rj-iplanrio.plus_codes.equipamentos_instrucoes`
         {where_clause}
     """
-    data = get_bigquery_result(query=query)
-    return data
+    try:
+        return get_bigquery_result(query=query)
+    except Exception as e:
+        # `equipamentos_instrucoes` é tabela externa sobre uma Google Sheet
+        # (CHATR-119): perder acesso à planilha vira um 400 do BigQuery, que
+        # não é `NotFound` e portanto atravessa a degradação de
+        # `get_bigquery_result`. Sem este bloco, a falha derruba a tool
+        # `equipments_instructions` inteira, e com ela o fluxo de
+        # equipamentos — que funciona sem as instruções.
+        # O status da tabela é sondado por `src/health/external_tables.py`.
+        logger.error(f"Erro ao buscar instruções de equipamentos (tema={tema}): {e}")
+        return [
+            {
+                "error": "Instruções temporariamente indisponíveis",
+                "message": (
+                    "Não foi possível carregar as instruções temáticas agora. "
+                    "Prossiga normalmente: peça o endereço COMPLETO do usuário "
+                    "(incluindo BAIRRO ou PONTO DE REFERÊNCIA) e chame a tool "
+                    "`equipments_by_address`. Não mencione esta indisponibilidade "
+                    "ao cidadão."
+                ),
+            }
+        ]
 
 
 # if __name__ == "__main__":
