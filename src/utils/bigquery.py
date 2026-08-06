@@ -1,6 +1,8 @@
 import asyncio
+import atexit
 import functools
 import hashlib
+import threading
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 from google.oauth2 import service_account
@@ -65,6 +67,213 @@ def get_datetime() -> str:
     return timestamp.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
+_batch_buffer_lock = threading.Lock()
+_batch_buffer: dict = {}
+
+# ---------------------------------------------------------------------------
+# Background flush thread — drains the batch buffer periodically so rows are
+# not stranded in memory when volume is too low to hit the batch_size threshold.
+# _start_batch_flush_thread() is called at the bottom of this module, after
+# flush_bigquery_batch_buffer is defined.
+# ---------------------------------------------------------------------------
+
+_flush_thread: threading.Thread | None = None
+_flush_stop_event = threading.Event()
+
+_FLUSH_INTERVAL_SECONDS = 30  # override via env at start-up if needed
+
+
+def _flush_loop() -> None:
+    """Run in a daemon thread; flushes all pending rows every interval."""
+    while not _flush_stop_event.wait(timeout=_FLUSH_INTERVAL_SECONDS):
+        try:
+            flush_bigquery_batch_buffer()
+        except Exception:
+            pass  # errors already logged inside flush_bigquery_batch_buffer
+
+
+def _start_batch_flush_thread() -> None:
+    """Start the periodic flush daemon thread (idempotent)."""
+    global _flush_thread
+    if _flush_thread is not None and _flush_thread.is_alive():
+        return
+    _flush_stop_event.clear()
+    _flush_thread = threading.Thread(
+        target=_flush_loop, name="bq-batch-flusher", daemon=True
+    )
+    _flush_thread.start()
+
+
+def _stop_batch_flush_thread() -> None:
+    """Signal the flush thread to stop and do a final flush (called on shutdown)."""
+    _flush_stop_event.set()
+    try:
+        flush_bigquery_batch_buffer()
+    except Exception:
+        pass
+
+
+_sync_redis_client = None
+_sync_redis_lock = threading.Lock()
+
+
+def _get_sync_redis_client():
+    """Return a process-wide synchronous Redis client, or None if unavailable."""
+    global _sync_redis_client
+    if _sync_redis_client is not None:
+        return _sync_redis_client
+    with _sync_redis_lock:
+        if _sync_redis_client is not None:
+            return _sync_redis_client
+        try:
+            import redis as _redis_lib
+
+            redis_url = getattr(env, "REDIS_URL", None)
+            if redis_url:
+                _sync_redis_client = _redis_lib.Redis.from_url(
+                    redis_url, decode_responses=True
+                )
+        except Exception as e:
+            logger.warning(f"Could not initialize sync Redis client: {e}")
+    return _sync_redis_client
+
+
+def _persist_to_dlq(
+    table_full_name: str, json_data: List[dict], error_msg: str
+) -> None:
+    """
+    Persists failed payload to Redis Dead-Letter Queue (DLQ) or fallback file storage.
+
+    Priority:
+    1. Redis (reuses process-wide singleton client)
+    2. Local .jsonl file under DATA_DIR/bq_dlq/ (always has a safe default path)
+    """
+    from pathlib import Path
+
+    dlq_item = {
+        "table_full_name": table_full_name,
+        "failed_at": get_datetime(),
+        "error": error_msg,
+        "payload": json_data,
+    }
+    serialized = json.dumps(dlq_item, cls=CustomJSONEncoder)
+
+    pushed = False
+    try:
+        r = _get_sync_redis_client()
+        if r is not None:
+            r.rpush(f"bq_dlq:{table_full_name}", serialized)
+            pushed = True
+            logger.error(
+                f"Falha definitiva de escrita no BigQuery ({table_full_name}). "
+                f"{len(json_data)} registro(s) salvos na DLQ Redis (chave: bq_dlq:{table_full_name}). Erro: {error_msg}"
+            )
+    except Exception as redis_err:
+        logger.warning(f"Não foi possível salvar na DLQ do Redis: {redis_err}")
+
+    if not pushed:
+        try:
+            data_dir_path = getattr(env, "DATA_DIR", None) or "scratch"
+            dlq_dir = Path(data_dir_path) / "bq_dlq"
+            dlq_dir.mkdir(parents=True, exist_ok=True)
+            safe_table_name = table_full_name.replace(".", "_")
+            dlq_file = dlq_dir / f"dlq_{safe_table_name}.jsonl"
+            with open(dlq_file, "a", encoding="utf-8") as f:
+                f.write(serialized + "\n")
+            logger.error(
+                f"Falha definitiva de escrita no BigQuery ({table_full_name}). "
+                f"{len(json_data)} registro(s) salvos na DLQ em arquivo ({dlq_file}). Erro: {error_msg}"
+            )
+        except Exception as file_err:
+            logger.error(f"CRÍTICO: Falha ao salvar DLQ em arquivo: {file_err}")
+
+
+def insert_rows_json_with_retry_and_dlq(
+    table_full_name: str,
+    json_data: List[dict],
+    max_retries: int = 3,
+    initial_delay: float = 0.5,
+) -> None:
+    """
+    Inserts rows into BigQuery with exponential backoff retries and Dead-Letter Queue (DLQ) fallback.
+    """
+    client = get_bigquery_client()
+    last_exception = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            errors = client.insert_rows_json(table_full_name, json_data)
+            if not errors:
+                return
+            error_msgs = [
+                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
+            ]
+            raise Exception(f"Erro ao inserir no BigQuery: {'; '.join(error_msgs)}")
+        except Exception as e:
+            last_exception = e
+            logger.warning(
+                f"Tentativa {attempt}/{max_retries} de inserção no BigQuery falhou para {table_full_name}: {e}"
+            )
+            if attempt < max_retries:
+                import time
+
+                time.sleep(initial_delay * (2 ** (attempt - 1)))
+
+    _persist_to_dlq(table_full_name, json_data, str(last_exception))
+    raise last_exception
+
+
+def enqueue_bigquery_row(
+    table_full_name: str, row: dict, batch_size: int = None
+) -> None:
+    """
+    Enqueues a row to the BigQuery batch buffer.
+    Flushes automatically when pending rows reach batch_size threshold.
+    """
+    batch_size = (
+        batch_size
+        if batch_size is not None
+        else getattr(env, "BIGQUERY_BATCH_SIZE", 50)
+    )
+
+    rows_to_flush = None
+    with _batch_buffer_lock:
+        if table_full_name not in _batch_buffer:
+            _batch_buffer[table_full_name] = []
+        _batch_buffer[table_full_name].append(row)
+
+        if len(_batch_buffer[table_full_name]) >= batch_size:
+            rows_to_flush = _batch_buffer[table_full_name]
+            _batch_buffer[table_full_name] = []
+
+    if rows_to_flush:
+        insert_rows_json_with_retry_and_dlq(table_full_name, rows_to_flush)
+
+
+def flush_bigquery_batch_buffer(table_full_name: str = None) -> None:
+    """
+    Flushes pending rows in the batch buffer to BigQuery.
+    If table_full_name is specified, flushes only that table. Otherwise flushes all tables.
+    """
+    tables_to_flush = {}
+    with _batch_buffer_lock:
+        if table_full_name:
+            if table_full_name in _batch_buffer and _batch_buffer[table_full_name]:
+                tables_to_flush[table_full_name] = _batch_buffer[table_full_name]
+                _batch_buffer[table_full_name] = []
+        else:
+            for tbl, rows in _batch_buffer.items():
+                if rows:
+                    tables_to_flush[tbl] = rows
+            _batch_buffer.clear()
+
+    for tbl, rows in tables_to_flush.items():
+        try:
+            insert_rows_json_with_retry_and_dlq(tbl, rows)
+        except Exception as e:
+            logger.error(f"Erro ao descarregar buffer em lote para {tbl}: {e}")
+
+
 @interceptor(source={"source": "mcp", "tool": "bigquery"})
 def save_response_in_bq(
     data: dict,
@@ -73,12 +282,11 @@ def save_response_in_bq(
     table_id: str,
     project_id: str = "rj-iplanrio",
     environment: str = None,
+    use_batch: bool = False,
 ):
     from src.config.env import ENVIRONMENT
 
-    # Use passed environment or default from config
     env_value = environment if environment is not None else ENVIRONMENT
-
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando resposta no BigQuery: {table_full_name}")
     datetime_to_save = get_datetime()
@@ -89,8 +297,6 @@ def save_response_in_bq(
         "environment": env_value,
         "data_particao": datetime_to_save.split("T")[0],
     }
-    json_data = [data_to_save]
-    client = get_bigquery_client()
 
     tracer = get_tracer()
     with tracer.start_as_current_span("bigquery.save_response") as span:
@@ -98,14 +304,12 @@ def save_response_in_bq(
         span.set_attribute("bigquery.dataset_id", dataset_id)
         span.set_attribute("bigquery.table_id", table_id)
         span.set_attribute("bigquery.endpoint", endpoint)
-        span.set_attribute("bigquery.row_count", len(json_data))
+        span.set_attribute("bigquery.row_count", 1)
         try:
-            errors = client.insert_rows_json(table_full_name, json_data)
-            if errors:
-                error_msgs = [
-                    f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-                ]
-                raise Exception(f"Erro ao inserir no BigQuery: {'; '.join(error_msgs)}")
+            if use_batch:
+                enqueue_bigquery_row(table_full_name, data_to_save)
+            else:
+                insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
         except Exception as e:
@@ -120,22 +324,21 @@ async def save_response_in_bq_background(
     data, endpoint, dataset_id, table_id, environment=None
 ):
     """
-    Asynchronous wrapper for saving the response in BigQuery.
+    Asynchronous wrapper for saving the response in BigQuery using batching buffer.
     Catches and logs exceptions to prevent crashing background tasks.
     """
     try:
-        # Since save_response_in_bq is a regular synchronous function,
-        # we run it in an executor to avoid blocking the event loop.
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None,  # Uses the default ThreadPoolExecutor
+            None,
             save_response_in_bq,
             data,
             endpoint,
             dataset_id,
             table_id,
-            "rj-iplanrio",  # project_id
+            "rj-iplanrio",
             environment,
+            True,  # use_batch=True
         )
     except Exception:
         logger.exception(
@@ -157,19 +360,8 @@ def save_feedback_in_bq(
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "feedback",
     project_id: str = "rj-iplanrio",
+    use_batch: bool = False,
 ):
-    """
-    Saves user feedback directly to BigQuery with feedback-specific schema.
-
-    Args:
-        user_id: User identifier
-        feedback: User feedback text
-        timestamp: Timestamp when feedback was submitted
-        environment: Environment where feedback was generated (staging, prod, etc.)
-        dataset_id: BigQuery dataset ID
-        table_id: BigQuery table ID
-        project_id: GCP project ID
-    """
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando feedback no BigQuery: {table_full_name}")
 
@@ -181,24 +373,17 @@ def save_feedback_in_bq(
         "data_particao": timestamp.split("T")[0],
     }
 
-    json_data = json.loads(json.dumps([data_to_save]))
-    client = get_bigquery_client()
-
     tracer = get_tracer()
     with tracer.start_as_current_span("bigquery.save_feedback") as span:
         span.set_attribute("bigquery.project_id", project_id)
         span.set_attribute("bigquery.dataset_id", dataset_id)
         span.set_attribute("bigquery.table_id", table_id)
-        span.set_attribute("bigquery.row_count", len(json_data))
+        span.set_attribute("bigquery.row_count", 1)
         try:
-            errors = client.insert_rows_json(table_full_name, json_data)
-            if errors:
-                error_msgs = [
-                    f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-                ]
-                raise Exception(
-                    f"Erro ao inserir feedback no BigQuery: {'; '.join(error_msgs)}"
-                )
+            if use_batch:
+                enqueue_bigquery_row(table_full_name, data_to_save)
+            else:
+                insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
             logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
@@ -219,7 +404,7 @@ async def save_feedback_in_bq_background(
     table_id: str = "feedback",
 ):
     """
-    Asynchronous wrapper for saving feedback in BigQuery.
+    Asynchronous wrapper for saving feedback in BigQuery using batching buffer.
     Catches and logs exceptions to prevent crashing background tasks.
     """
     try:
@@ -233,6 +418,8 @@ async def save_feedback_in_bq_background(
             environment,
             dataset_id,
             table_id,
+            "rj-iplanrio",
+            True,  # use_batch=True
         )
     except Exception:
         logger.exception(
@@ -257,28 +444,13 @@ def save_cor_alert_in_bq(
     longitude: float,
     timestamp: str,
     environment: str,
+    bairro_raw: str = None,
+    bairro_normalizado: str = None,
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "cor_alerts",
     project_id: str = "rj-iplanrio",
+    use_batch: bool = False,
 ):
-    """
-    Saves COR alert directly to BigQuery with alert-specific schema.
-
-    Args:
-        alert_id: Unique alert identifier (UUID)
-        user_id: User identifier
-        alert_type: Type of alert ("alagamento", "enchente", "dano_chuva")
-        severity: Alert severity ("alta" or "critica")
-        description: Detailed description of the problem
-        address: Address provided by user
-        latitude: Geocoded latitude (nullable)
-        longitude: Geocoded longitude (nullable)
-        timestamp: Timestamp when alert was created
-        environment: Environment where alert was generated (staging, prod, etc.)
-        dataset_id: BigQuery dataset ID
-        table_id: BigQuery table ID
-        project_id: GCP project ID
-    """
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando alerta COR no BigQuery: {table_full_name}")
 
@@ -291,13 +463,12 @@ def save_cor_alert_in_bq(
         "address": address,
         "latitude": latitude,
         "longitude": longitude,
+        "bairro_raw": bairro_raw,
+        "bairro_normalizado": bairro_normalizado,
         "created_at": timestamp,
         "environment": environment,
         "data_particao": timestamp.split("T")[0],
     }
-
-    json_data = json.loads(json.dumps([data_to_save]))
-    client = get_bigquery_client()
 
     tracer = get_tracer()
     with tracer.start_as_current_span("bigquery.save_cor_alert") as span:
@@ -306,16 +477,12 @@ def save_cor_alert_in_bq(
         span.set_attribute("bigquery.table_id", table_id)
         span.set_attribute("bigquery.alert_type", alert_type)
         span.set_attribute("bigquery.severity", severity)
-        span.set_attribute("bigquery.row_count", len(json_data))
+        span.set_attribute("bigquery.row_count", 1)
         try:
-            errors = client.insert_rows_json(table_full_name, json_data)
-            if errors:
-                error_msgs = [
-                    f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-                ]
-                raise Exception(
-                    f"Erro ao inserir alerta COR no BigQuery: {'; '.join(error_msgs)}"
-                )
+            if use_batch:
+                enqueue_bigquery_row(table_full_name, data_to_save)
+            else:
+                insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
             logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
@@ -343,11 +510,6 @@ async def save_cor_alert_in_bq_background(
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "cor_alerts",
 ):
-    """
-    Asynchronous wrapper for saving COR alert in BigQuery.
-    Catches and logs exceptions to prevent crashing background tasks.
-    """
-
     def _normalize(value: str) -> str:
         if not value:
             return ""
@@ -383,39 +545,28 @@ async def save_cor_alert_in_bq_background(
     if final_bairro_normalizado == "jd america":
         final_bairro_normalizado = "jardim america"
 
-    def _save_alert_with_neighborhood():
-        table_full_name = f"rj-iplanrio.{dataset_id}.{table_id}"
-        payload = [
-            {
-                "alert_id": alert_id,
-                "user_id": user_id,
-                "alert_type": alert_type,
-                "severity": severity,
-                "description": description,
-                "address": address,
-                "latitude": latitude,
-                "longitude": longitude,
-                "bairro_raw": final_bairro_raw or None,
-                "bairro_normalizado": final_bairro_normalizado or None,
-                "created_at": timestamp,
-                "environment": environment,
-                "data_particao": timestamp.split("T")[0],
-            }
-        ]
-        client = get_bigquery_client()
-        errors = client.insert_rows_json(table_full_name, payload)
-        if errors:
-            error_msgs = [
-                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-            ]
-            raise Exception(
-                f"Erro ao inserir alerta COR no BigQuery: {'; '.join(error_msgs)}"
-            )
-        logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
-
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _save_alert_with_neighborhood)
+        await loop.run_in_executor(
+            None,
+            save_cor_alert_in_bq,
+            alert_id,
+            user_id,
+            alert_type,
+            severity,
+            description,
+            address,
+            latitude,
+            longitude,
+            timestamp,
+            environment,
+            final_bairro_raw or None,
+            final_bairro_normalizado or None,
+            dataset_id,
+            table_id,
+            "rj-iplanrio",
+            True,  # use_batch=True
+        )
     except Exception:
         logger.exception(
             f"Failed to save COR alert to BigQuery in background for alert_id: {alert_id}"
@@ -438,34 +589,8 @@ def save_cor_alert_to_queue(
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "cor_alerts_queue",
     project_id: str = "rj-iplanrio",
+    use_batch: bool = False,
 ):
-    """
-    Saves COR alert to queue table for aggregation processing by Prefect pipeline.
-
-    The alert is saved with status='pending' and will be processed by the
-    rj_iplanrio__cor_alerts_aggregator pipeline which runs every 2 minutes.
-
-    Aggregation rules:
-    - Alerts are grouped by type (enchente, alagamento, bolsao) within 500m radius
-    - 5+ alerts in cluster: dispatch immediately
-    - 1-4 alerts + 7 min window expired: dispatch
-    - 1-4 alerts + window active: wait for more
-
-    Args:
-        alert_id: Unique alert identifier (UUID)
-        user_id: User identifier
-        alert_type: Type of alert ("alagamento", "enchente", "bolsao")
-        severity: Alert severity ("alta" or "critica")
-        description: Detailed description of the problem
-        address: Address provided by user
-        latitude: Geocoded latitude (nullable)
-        longitude: Geocoded longitude (nullable)
-        timestamp: Timestamp when alert was created
-        environment: Environment (staging, prod)
-        dataset_id: BigQuery dataset ID
-        table_id: BigQuery table ID
-        project_id: GCP project ID
-    """
     table_full_name = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Salvando alerta COR na fila: {table_full_name}")
 
@@ -488,18 +613,11 @@ def save_cor_alert_to_queue(
         "data_particao": timestamp.split("T")[0],
     }
 
-    json_data = json.loads(json.dumps([data_to_save]))
-    client = get_bigquery_client()
-
     try:
-        errors = client.insert_rows_json(table_full_name, json_data)
-        if errors:
-            error_msgs = [
-                f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
-            ]
-            raise Exception(
-                f"Erro ao inserir alerta COR na fila: {'; '.join(error_msgs)}"
-            )
+        if use_batch:
+            enqueue_bigquery_row(table_full_name, data_to_save)
+        else:
+            insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
         logger.info(f"Alerta COR salvo na fila: {alert_id}")
     except Exception as e:
         logger.error(f"Erro ao salvar alerta COR na fila: {str(e)}")
@@ -522,10 +640,6 @@ async def save_cor_alert_to_queue_background(
     dataset_id: str = "brutos_eai_logs",
     table_id: str = "cor_alerts_queue",
 ):
-    """
-    Asynchronous wrapper for saving COR alert to queue in BigQuery.
-    Catches and logs exceptions to prevent crashing background tasks.
-    """
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
@@ -545,6 +659,8 @@ async def save_cor_alert_to_queue_background(
             bairro_normalizado,
             dataset_id,
             table_id,
+            "rj-iplanrio",
+            False,  # use_batch=False — entrega imediata para o pipeline Prefect
         )
     except Exception:
         logger.exception(
@@ -723,3 +839,16 @@ async def get_bigquery_result(
             logger.warning(f"Erro ao gravar cache no Redis para BigQuery: {e}")
 
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Module-level initialisation — must come after flush_bigquery_batch_buffer is
+# defined so the flush thread can call it safely.
+# ---------------------------------------------------------------------------
+
+# Flush remaining rows on clean process exit (atexit fires before interpreter
+# shutdown; gunicorn/uvicorn trigger it on SIGTERM for each worker).
+atexit.register(_stop_batch_flush_thread)
+
+# Start the periodic background flush thread for the lifetime of this process.
+_start_batch_flush_thread()

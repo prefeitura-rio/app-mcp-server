@@ -645,6 +645,15 @@ async def test_bigquery_background_helpers(monkeypatch):
     )
     assert calls[1][0] is module.save_response_in_bq
 
+    # save_cor_alert_in_bq_background now enqueues rows to the batch buffer
+    # instead of writing directly; capture calls to enqueue_bigquery_row.
+    enqueued = []
+    monkeypatch.setattr(
+        module,
+        "enqueue_bigquery_row",
+        lambda table, row, **_kw: enqueued.append((table, row)),
+    )
+
     await module.save_cor_alert_in_bq_background(
         alert_id="a3",
         user_id="u4",
@@ -661,10 +670,11 @@ async def test_bigquery_background_helpers(monkeypatch):
         dataset_id="dataset",
         table_id="alerts",
     )
-    payload, table_name = saved_payloads[-1]
+    assert len(enqueued) == 1
+    table_name, row = enqueued[-1]
     assert table_name == "rj-iplanrio.dataset.alerts"
-    assert payload[0]["bairro_normalizado"] == "jardim america"
-    assert payload[0]["bairro_raw"] == "jardim america"
+    assert row["bairro_normalizado"] == "jardim america"
+    assert row["bairro_raw"] == "jardim america"
 
     await module.save_cor_alert_to_queue_background(
         alert_id="a4",
