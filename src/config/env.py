@@ -144,6 +144,12 @@ DIVIDA_ATIVA_ACCESS_KEY = getenv_or_action("DIVIDA_ATIVA_ACCESS_KEY")
 
 REDIS_URL = getenv_or_action("REDIS_URL")
 REDIS_TTL_SECONDS = int(getenv_or_action("REDIS_TTL_SECONDS"))
+BIGQUERY_CACHE_TTL_SECONDS = int(
+    getenv_or_action("BIGQUERY_CACHE_TTL_SECONDS", default="3600", action="ignore")
+)
+BIGQUERY_TIMEOUT_SECONDS = float(
+    getenv_or_action("BIGQUERY_TIMEOUT_SECONDS", default="10.0", action="ignore")
+)
 
 PROXY_URL = getenv_or_action("PROXY_URL")
 

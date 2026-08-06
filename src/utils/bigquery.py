@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import hashlib
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 from google.oauth2 import service_account
@@ -551,21 +552,57 @@ async def save_cor_alert_to_queue_background(
         )
 
 
-@interceptor(source={"source": "mcp", "tool": "bigquery"})
-def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
-    """
-    Executes a BigQuery query and returns results as a list of dictionaries.
+_async_redis_client = None
 
-    Args:
-        query: SQL query to execute
-        page_size: Number of rows per page (optional, uses env default)
 
-    Returns:
-        List of dictionaries with query results
-    """
-    from src.config.env import GOOGLE_BIGQUERY_PAGE_SIZE
+async def get_async_redis_client():
+    """Get or create process-wide async Redis client instance."""
+    global _async_redis_client
+    if _async_redis_client is None:
+        try:
+            import redis.asyncio as redis
 
-    page_size = page_size if page_size is not None else GOOGLE_BIGQUERY_PAGE_SIZE
+            redis_url = getattr(env, "REDIS_URL", None)
+
+            if redis_url:
+                _async_redis_client = redis.Redis.from_url(
+                    redis_url, decode_responses=True
+                )
+        except Exception as e:
+            logger.warning(f"Could not initialize async Redis client: {e}")
+            _async_redis_client = None
+    return _async_redis_client
+
+
+def _generate_cache_key(query: str, query_parameters: list = None) -> str:
+    params_str = ""
+    if query_parameters:
+        parts = []
+        for p in query_parameters:
+            name = getattr(p, "name", "")
+            type_ = getattr(p, "type_", getattr(p, "array_type", ""))
+            val = getattr(p, "value", getattr(p, "values", str(p)))
+            parts.append(f"{name}:{type_}:{val}")
+        params_str = "|".join(parts)
+    raw_key = f"{query}:{params_str}"
+    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    return f"bq_cache:{key_hash}"
+
+
+def _execute_bigquery_query(
+    query: str,
+    query_parameters: list = None,
+    page_size: int = None,
+    timeout_seconds: float = None,
+) -> List[dict]:
+    """Synchronous execution of BigQuery query, designed to run in thread executor."""
+    default_page_size = getattr(env, "GOOGLE_BIGQUERY_PAGE_SIZE", 100)
+    default_timeout = getattr(env, "BIGQUERY_TIMEOUT_SECONDS", 10.0)
+
+    page_size = page_size if page_size is not None else default_page_size
+    timeout_seconds = (
+        timeout_seconds if timeout_seconds is not None else default_timeout
+    )
     client = get_bigquery_client()
 
     tracer = get_tracer()
@@ -574,8 +611,16 @@ def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
         span.set_attribute("bigquery.query_length", len(query))
         try:
             logger.info(f"Executando query no BigQuery: {query[:100]}...")
-            query_job = client.query(query)
-            results = query_job.result(page_size=page_size)
+            job_config = None
+            if query_parameters:
+                job_config = bigquery.QueryJobConfig(query_parameters=query_parameters)
+
+            if job_config is not None:
+                query_job = client.query(query, job_config=job_config)
+            else:
+                query_job = client.query(query)
+
+            results = query_job.result(page_size=page_size, timeout=timeout_seconds)
 
             # Convert results to list of dictionaries
             rows = []
@@ -607,3 +652,74 @@ def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
             span.set_status(Status(StatusCode.ERROR, str(e)))
             logger.error(f"Erro ao executar query no BigQuery: {str(e)}")
             raise Exception(f"Failed to execute BigQuery query: {str(e)}")
+
+
+@interceptor(source={"source": "mcp", "tool": "bigquery"})
+async def get_bigquery_result(
+    query: str,
+    query_parameters: list = None,
+    page_size: int = None,
+    cache_ttl_seconds: int = None,
+    timeout_seconds: float = None,
+) -> List[dict]:
+    """
+    Executes a BigQuery query with caching and non-blocking executor execution.
+
+    Args:
+        query: SQL query to execute
+        query_parameters: List of BigQuery QueryParameter objects
+        page_size: Number of rows per page (optional, uses env default)
+        cache_ttl_seconds: Cache TTL in seconds (0 to bypass cache)
+        timeout_seconds: Query execution timeout in seconds
+
+    Returns:
+        List of dictionaries with query results
+    """
+    default_ttl = getattr(env, "BIGQUERY_CACHE_TTL_SECONDS", 3600)
+    default_timeout = getattr(env, "BIGQUERY_TIMEOUT_SECONDS", 10.0)
+
+    ttl = cache_ttl_seconds if cache_ttl_seconds is not None else default_ttl
+    timeout = timeout_seconds if timeout_seconds is not None else default_timeout
+
+    cache_key = None
+    if ttl > 0:
+        cache_key = _generate_cache_key(query, query_parameters)
+        try:
+            redis_client = await get_async_redis_client()
+            if redis_client is not None:
+                cached_data = await redis_client.get(cache_key)
+                if cached_data is not None:
+                    logger.info(f"BigQuery cache hit para chave: {cache_key}")
+                    if isinstance(cached_data, bytes):
+                        cached_data = cached_data.decode("utf-8")
+                    return json.loads(cached_data)
+        except Exception as e:
+            logger.warning(f"Erro ao ler cache do Redis para BigQuery: {e}")
+
+    loop = asyncio.get_running_loop()
+    try:
+        rows = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                _execute_bigquery_query,
+                query,
+                query_parameters,
+                page_size,
+                timeout,
+            ),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout de {timeout}s excedido ao executar query BigQuery")
+        raise TimeoutError(f"BigQuery query execution timed out after {timeout}s")
+
+    if ttl > 0 and cache_key is not None:
+        try:
+            redis_client = await get_async_redis_client()
+            if redis_client is not None:
+                serialized = json.dumps(rows, cls=CustomJSONEncoder)
+                await redis_client.setex(cache_key, ttl, serialized)
+        except Exception as e:
+            logger.warning(f"Erro ao gravar cache no Redis para BigQuery: {e}")
+
+    return rows

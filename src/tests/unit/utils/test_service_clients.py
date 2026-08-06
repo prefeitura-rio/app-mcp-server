@@ -313,7 +313,8 @@ async def test_typesense_api_search_and_by_id(monkeypatch):
     assert result["title"] == "Serviço"
 
 
-def test_bigquery_helpers(monkeypatch):
+@pytest.mark.asyncio
+async def test_bigquery_helpers(monkeypatch):
     ensure_package("src", PROJECT_ROOT / "src")
     ensure_package("src.config", PROJECT_ROOT / "src" / "config")
     ensure_package("src.utils", PROJECT_ROOT / "src" / "utils")
@@ -385,7 +386,7 @@ def test_bigquery_helpers(monkeypatch):
             return super().items()
 
     class FakeQueryJob:
-        def result(self, page_size=None):
+        def result(self, page_size=None, **_kwargs):
             return [
                 FakeRow(
                     {
@@ -396,26 +397,30 @@ def test_bigquery_helpers(monkeypatch):
                 )
             ]
 
-    query_client = types.SimpleNamespace(query=lambda query: FakeQueryJob())
+    query_client = types.SimpleNamespace(query=lambda query, **_kwargs: FakeQueryJob())
     monkeypatch.setattr(module, "get_bigquery_client", lambda: query_client)
-    rows = module.get_bigquery_result("select 1")
+    rows = await module.get_bigquery_result("select 1")
     assert rows[0]["dt"].startswith("2026-04-08T10:00:00")
     assert rows[0]["d"] == "2026-04-08"
 
+    def _raise_not_found(*_a, **_k):
+        raise not_found("missing")
+
     class MissingClient:
-        def query(self, query):
-            raise not_found("missing")
+        query = _raise_not_found
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: MissingClient())
-    assert module.get_bigquery_result("select 1") == []
+    assert await module.get_bigquery_result("select 1") == []
+
+    def _raise_error(*_a, **_k):
+        raise RuntimeError("boom")
 
     class ErrorClient:
-        def query(self, query):
-            raise RuntimeError("boom")
+        query = _raise_error
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: ErrorClient())
     with pytest.raises(Exception, match="Failed to execute BigQuery query"):
-        module.get_bigquery_result("select 1")
+        await module.get_bigquery_result("select 1")
 
 
 def test_bigquery_save_functions(monkeypatch):
