@@ -1,18 +1,61 @@
-import httpx
-import re
-import traceback as tb
+import os
 from typing import Optional, Dict, Any
 
 from loguru import logger
 
 from src.config import env
+from src.tools.divida_ativa import pgm_api
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
     DadosDividaAtiva,
 )
-from src.utils.error_interceptor import send_api_error
 
 
 class DividaAtivaAPIService:
+    CONSULTA_DEBITOS_CONSUMIDOR = "consultar-dividas-contribuinte"
+    CONSULTA_DEBITOS_ENDPOINT = "v2/cdas/dividas-contribuinte"
+    EMITIR_GUIA_A_VISTA_CONSUMIDOR = "emitir-guia-vista"
+    EMITIR_GUIA_A_VISTA_ENDPOINT = "v2/guiapagamento/emitir/avista"
+    ORIGEM_SOLICITACAO = "origem_solicitação"
+    CONSULTA_CONFIGS = {
+        "numero_guia_pagamento": {
+            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
+            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
+            "value_field": "numeroGuiaPagamento",
+        },
+        "cpf_cnpj": {
+            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
+            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
+            "value_field": "cpfCnpj",
+        },
+        "inscricao_imobiliaria": {
+            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
+            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
+            "value_field": "inscricaoImobiliaria",
+        },
+        "auto_infracao": {
+            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
+            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
+            "value_field": "numeroAutoInfracao",
+            "extra_fields": {"ano": "anoAutoInfracao"},
+        },
+        "cda": {
+            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
+            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
+            "value_field": "cda",
+        },
+        "execucao_fiscal": {
+            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
+            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
+            "value_field": "numeroExecucaoFiscal",
+        },
+    }
+    NODE_TO_TIPO_CONSULTA = {
+        "consultar_cpf_cnpj": "cpf_cnpj",
+        "consultar_inscricao_imobiliaria": "inscricao_imobiliaria",
+        "consultar_auto_infracao": "auto_infracao",
+        "consultar_cda": "cda",
+        "consultar_execucao_fiscal": "execucao_fiscal",
+    }
     ERROR_SOURCE = {
         "source": "mcp",
         "tool": "multi_step_service",
@@ -20,340 +63,214 @@ class DividaAtivaAPIService:
     }
 
     def __init__(self, user_id: str = "unknown"):
+        self.api_base_url = env.CHATBOT_PGM_API_URL
+        self.access_key = env.CHATBOT_PGM_ACCESS_KEY
         self.proxy = env.PROXY_URL
         self.user_id = user_id
 
-    def _limpar_inscricao(self, inscricao: str) -> str:
+    def _build_url(self, path: str) -> str:
         """
-        Limpa a inscrição imobiliária removendo caracteres não numéricos.
-
-        Args:
-            inscricao (str): Inscrição imobiliária original.
-
-        Returns:
-            str: Inscrição imobiliária limpa.
+        Monta URLs da Dívida Ativa aceitando base com ou sem o sufixo /api.
         """
-        return "".join(filter(str.isdigit, inscricao))
+        base_url = self.api_base_url.rstrip("/")
+        normalized_path = path.strip("/")
 
-    def _limpar_cpf_cnpj(self, documento: str) -> str:
-        """
-        Limpa CPF ou CNPJ removendo caracteres não numéricos.
+        if base_url.endswith("/api") and normalized_path.startswith("api/"):
+            normalized_path = normalized_path.removeprefix("api/")
 
-        Args:
-            documento (str): CPF ou CNPJ original.
+        return f"{base_url}/{normalized_path}"
 
-        Returns:
-            str: Documento limpo.
-        """
-        return "".join(filter(str.isdigit, documento))
+    def _limpar_valor(self, valor: str) -> str:
+        """Remove caracteres não numéricos do valor informado pelo usuário."""
+        return "".join(filter(str.isdigit, valor or ""))
 
-    def _identificar_tipo_entrada(self, entrada: str) -> tuple[str, str]:
-        """
-        Identifica o tipo de entrada fornecida.
+    def _debug_api_enabled(self) -> bool:
+        return os.getenv("DIVIDA_ATIVA_DEBUG_API", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "sim",
+        }
 
-        Args:
-            entrada (str): Entrada fornecida pelo usuário.
+    def _debug_response_summary(
+        self,
+        response_data: Dict[str, Any],
+        parsed: DadosDividaAtiva,
+    ) -> None:
+        if not self._debug_api_enabled():
+            return
 
-        Returns:
-            tuple[str, str]: Tupla com (tipo_entrada, valor_limpo).
-        """
-        # Remove espaços e caracteres especiais para análise
-        entrada_limpa = re.sub(r"[\s\-\.\,\/]", "", entrada)
+        data = response_data.get("data", response_data)
+        if isinstance(data, list):
+            first_item = data[0] if data else None
+            logger.info(
+                "DEBUG Dívida Ativa API: data_type=list data_len={} first_item_keys={} "
+                "parsed_counts={{cdas: {}, efs: {}, parcelamentos: {}}} parsed_tem_divida={}",
+                len(data),
+                list(first_item.keys()) if isinstance(first_item, dict) else None,
+                len(parsed.cdas),
+                len(parsed.efs),
+                len(parsed.parcelamentos),
+                parsed.tem_divida_ativa,
+            )
+            return
 
-        # Verifica se é CPF (11 dígitos)
-        if re.match(r"^\d{11}$", entrada_limpa):
-            return ("cpf", entrada_limpa)
+        if not isinstance(data, dict):
+            logger.info(
+                "DEBUG Dívida Ativa API: data_type={} parsed_tem_divida={}",
+                type(data).__name__,
+                parsed.tem_divida_ativa,
+            )
+            return
 
-        # Verifica se é CNPJ (14 dígitos)
-        if re.match(r"^\d{14}$", entrada_limpa):
-            return ("cnpj", entrada_limpa)
+        debitos_nao_parcelados = data.get("debitosNaoParceladosComSaldoTotal", {})
+        guias_parceladas = data.get("guiasParceladasComSaldoTotal", {})
+        logger.info(
+            "DEBUG Dívida Ativa API: top_keys={} data_keys={} "
+            "raw_counts={{cdasNaoAjuizadasNaoParceladas: {}, efsNaoParceladas: {}, "
+            "guiasParceladas: {}}} parsed_counts={{cdas: {}, efs: {}, parcelamentos: {}}} "
+            "parsed_tem_divida={}",
+            list(response_data.keys()),
+            list(data.keys()),
+            len(debitos_nao_parcelados.get("cdasNaoAjuizadasNaoParceladas", []) or []),
+            len(debitos_nao_parcelados.get("efsNaoParceladas", []) or []),
+            len(guias_parceladas.get("guiasParceladas", []) or []),
+            len(parsed.cdas),
+            len(parsed.efs),
+            len(parsed.parcelamentos),
+            parsed.tem_divida_ativa,
+        )
 
-        # Verifica se é inscrição imobiliária (7 dígitos)
-        if re.match(r"^\d{7}$", entrada_limpa):
-            return ("inscricao_imobiliaria", entrada_limpa)
-
-        # Verifica se é certidão de dívida ativa (formato: CDA ou número)
-        if (
-            "cda" in entrada.lower()
-            or "certidao" in entrada.lower()
-            or "certidão" in entrada.lower()
-        ):
-            # Extrai apenas números
-            numeros = "".join(filter(str.isdigit, entrada))
-            if numeros:
-                return ("certidao_divida_ativa", numeros)
-
-        # Verifica se é execução fiscal (formato: EF ou número de processo)
-        if (
-            "ef" in entrada.lower()
-            or "execucao" in entrada.lower()
-            or "execução" in entrada.lower()
-            or "fiscal" in entrada.lower()
-        ):
-            # Extrai apenas números
-            numeros = "".join(filter(str.isdigit, entrada))
-            if numeros:
-                return ("execucao_fiscal", numeros)
-
-        # Verifica se é auto de infração (formato: ano + número)
-        # Padrão: pode ser "2024 123456" ou "2024/123456" ou "123456/2024"
-        auto_match = re.match(r"(\d{4})[\s\/\-]+(\d+)", entrada)
-        if not auto_match:
-            auto_match = re.match(r"(\d+)[\s\/\-]+(\d{4})", entrada)
-            if auto_match:
-                # Inverte a ordem se o ano vier depois
-                auto_match = (auto_match.group(2), auto_match.group(1))
-            else:
-                auto_match = None
-
-        if auto_match:
-            if isinstance(auto_match, tuple):
-                ano = auto_match[0]
-                numero = auto_match[1]
-            else:
-                ano = auto_match.group(1)
-                numero = auto_match.group(2)
-            return ("auto_infracao", f"{ano}_{numero}")
-
-        # Se contém a palavra "auto" e números, tenta extrair como auto de infração
-        if "auto" in entrada.lower():
-            numeros = re.findall(r"\d+", entrada)
-            if len(numeros) >= 2:
-                # Assume que o número de 4 dígitos é o ano
-                for num in numeros:
-                    if len(num) == 4:
-                        ano = num
-                        numeros.remove(num)
-                        numero = "".join(numeros)
-                        return ("auto_infracao", f"{ano}_{numero}")
-
-        # Tenta identificar se é um número de processo judicial
-        if (
-            re.match(r"^\d{7}\d{2}\d{4}\d{3}\d{4}$", entrada_limpa)
-            or len(entrada_limpa) == 20
-        ):
-            return ("execucao_fiscal", entrada_limpa)
-
-        # Se não identificou, assume que é inscrição imobiliária
-        return ("inscricao_imobiliaria", self._limpar_inscricao(entrada))
-
-    def _preparar_payload(self, tipo_entrada: str, valor: str) -> Dict[str, Any]:
+    def _preparar_payload(
+        self, tipo_consulta: str, valor: str, dados: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Prepara o payload para a API de acordo com o tipo de entrada.
 
         Args:
-            tipo_entrada (str): Tipo de entrada identificado.
+            tipo_consulta (str): Tipo de consulta escolhido no workflow.
             valor (str): Valor limpo da entrada.
+            dados (Optional[Dict[str, Any]]): Campos extras coletados no nó.
 
         Returns:
             Dict[str, Any]: Payload para a API.
         """
-        payload = {"origem_solicitação": 0}
+        dados = dados or {}
+        config = self._get_consulta_config(tipo_consulta)
+        payload = {self.ORIGEM_SOLICITACAO: 0}
 
-        if tipo_entrada == "cpf":
-            payload["cpf"] = valor
-        elif tipo_entrada == "cnpj":
-            payload["cnpj"] = valor
-        elif tipo_entrada == "inscricao_imobiliaria":
-            payload["inscricaoImobiliaria"] = valor
-        elif tipo_entrada == "auto_infracao":
-            # Separa ano e número
-            partes = valor.split("_")
-            if len(partes) == 2:
-                payload["anoAutoInfracao"] = partes[0]
-                payload["numeroAutoInfracao"] = partes[1]
-            else:
-                # Fallback para inscrição
-                payload["inscricaoImobiliaria"] = valor
-        elif tipo_entrada == "certidao_divida_ativa":
-            payload["certidaoDividaAtiva"] = valor
-        elif tipo_entrada == "execucao_fiscal":
-            payload["execucaoFiscal"] = valor
-        else:
-            # Default para inscrição imobiliária
-            payload["inscricaoImobiliaria"] = valor
+        payload[config["value_field"]] = self._limpar_valor(valor)
+
+        for input_field, api_field in config.get("extra_fields", {}).items():
+            payload[api_field] = self._limpar_valor(str(dados.get(input_field, "")))
 
         return payload
 
-    async def get_divida_ativa_info(self, entrada: str) -> Optional[DadosDividaAtiva]:
+    def _get_consulta_config(self, tipo_consulta: str) -> Dict[str, Any]:
         """
-        Consulta a API de Dívida Ativa para obter informações sobre débitos.
-
-        Args:
-            entrada (str): Pode ser CPF, CNPJ, inscrição imobiliária,
-                          ano + número do auto de infração, certidão de dívida ativa,
-                          ou execução fiscal.
-
-        Returns:
-            DadosDividaAtiva com informações processadas de dívida ativa, ou None se não houver débitos.
-
-        Raises:
-            APIUnavailableError: Quando API está indisponível (timeout, 500, 503, etc.)
-            AuthenticationError: Quando falha autenticação (401)
+        Retorna a configuração de endpoint e campos da API para o tipo de consulta.
         """
-        # Identifica o tipo de entrada e prepara o valor
-        tipo_entrada, valor_limpo = self._identificar_tipo_entrada(entrada)
+        try:
+            return self.CONSULTA_CONFIGS[tipo_consulta]
+        except KeyError:
+            raise ValueError(f"Tipo de consulta inválido: {tipo_consulta}")
+
+    def _get_tipo_consulta_by_node(self, node_name: str) -> str:
+        """
+        Resolve o tipo de consulta a partir do nome do nó que está chamando a API.
+        """
+        try:
+            return self.NODE_TO_TIPO_CONSULTA[node_name]
+        except KeyError:
+            raise ValueError(f"Nó de consulta inválido: {node_name}")
+
+    async def consultar_debitos(
+        self, tipo_consulta: str, valor: str, **dados: Any
+    ) -> Optional[DadosDividaAtiva]:
+        """
+        Consulta débitos usando endpoint e payload definidos pelo tipo de consulta.
+
+        Exemplos:
+            consultar_debitos("cpf_cnpj", "123.456.789-00")
+            consultar_debitos("auto_infracao", "12345", ano="2024")
+        """
+        config = self._get_consulta_config(tipo_consulta)
+        endpoint = config["endpoint"]
+        consumer = config["consumer"]
+        payload = self._preparar_payload(tipo_consulta, valor, dados)
+
+        if not payload.get(config["value_field"]):
+            raise ValueError(f"Valor ausente para consulta por {tipo_consulta}")
+
+        for api_field in config.get("extra_fields", {}).values():
+            if not payload.get(api_field):
+                raise ValueError(
+                    f"Campo obrigatório ausente para {tipo_consulta}: {api_field}"
+                )
 
         logger.info(
-            f"Iniciando consulta de dívida ativa - Tipo: {tipo_entrada}, Valor: {valor_limpo}"
+            f"Iniciando consulta de dívida ativa - Tipo: {tipo_consulta}, Endpoint: {endpoint}"
         )
 
-        async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-            # Autenticação
-            try:
-                auth_response = await client.post(
-                    f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                    data={
-                        "verify": False,
-                        "grant_type": "password",
-                        "Consumidor": "consultar-dividas-contribuinte",
-                        "ChaveAcesso": env.DIVIDA_ATIVA_ACCESS_KEY,
-                    },
-                )
+        return await self._post_consulta_debitos(
+            endpoint=endpoint,
+            consumer=consumer,
+            payload=payload,
+        )
 
-                if auth_response.status_code == 401:
-                    logger.error("Falha na autenticação da Dívida Ativa")
-                    # Reporta erro ao interceptor
-                    await send_api_error(
-                        user_id=self.user_id,
-                        source=self.ERROR_SOURCE,
-                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
-                        status_code=auth_response.status_code,
-                        error_message="Falha na autenticação do serviço de Dívida Ativa",
-                    )
-                    raise Exception("Falha na autenticação do serviço de Dívida Ativa")
-                elif auth_response.status_code in [500, 503]:
-                    logger.error(
-                        f"Erro de servidor na autenticação da Dívida Ativa: {auth_response.status_code}"
-                    )
-                    # Reporta erro ao interceptor
-                    await send_api_error(
-                        user_id=self.user_id,
-                        source=self.ERROR_SOURCE,
-                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
-                        status_code=auth_response.status_code,
-                        error_message=f"Serviço de Dívida Ativa temporariamente indisponível (autenticação): {auth_response.text[:500]}",
-                    )
-                    raise Exception(
-                        f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {auth_response.status_code})"
-                    )
+    async def consultar_debitos_por_no(
+        self, node_name: str, valor: str, **dados: Any
+    ) -> Optional[DadosDividaAtiva]:
+        """
+        Consulta débitos usando o nome do nó do LangGraph como chave de roteamento.
+        """
+        tipo_consulta = self._get_tipo_consulta_by_node(node_name)
+        return await self.consultar_debitos(tipo_consulta, valor, **dados)
 
-                auth_response_json = auth_response.json()
-                if "access_token" not in auth_response_json:
-                    logger.error(
-                        f"Token não encontrado na resposta de autenticação: {auth_response.status_code} - {auth_response.text}"
-                    )
-                    await send_api_error(
-                        user_id=self.user_id,
-                        source=self.ERROR_SOURCE,
-                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                        request_body={"Consumidor": "consultar-dividas-contribuinte"},
-                        status_code=auth_response.status_code,
-                        error_message="Token de acesso não encontrado na resposta de autenticação",
-                    )
-                    raise Exception(
-                        "Falha ao obter token de autenticação da Dívida Ativa"
-                    )
+    async def emitir_guia_a_vista(
+        self, cdas: list[str], efs: list[str]
+    ) -> list[Dict[str, Any]]:
+        """
+        Emite guia de pagamento à vista para CDAs e EFs selecionadas.
+        """
+        payload = {
+            "cdas": cdas,
+            "efs": efs,
+            self.ORIGEM_SOLICITACAO: 0,
+        }
+        return await self._post_emitir_guia_a_vista(
+            endpoint=self.EMITIR_GUIA_A_VISTA_ENDPOINT,
+            consumer=self.EMITIR_GUIA_A_VISTA_CONSUMIDOR,
+            payload=payload,
+        )
 
-                token = f"Bearer {auth_response_json['access_token']}"
-                logger.info("Token de autenticação obtido com sucesso")
+    async def _post_consulta_debitos(
+        self, endpoint: str, consumer: str, payload: Dict[str, Any]
+    ) -> Optional[DadosDividaAtiva]:
+        """
+        Executa a consulta usando a tool interna legada de PGM.
+        """
+        registros = await pgm_api(endpoint=endpoint, consumidor=consumer, data=payload)
+        if isinstance(registros, dict) and registros.get("erro"):
+            logger.info(
+                f"Nenhuma dívida ativa encontrada ou erro de negócio: {registros['motivos']}"
+            )
+            return None
 
-            except httpx.TimeoutException:
-                logger.error("Timeout ao autenticar na Dívida Ativa")
-                # Reporta erro ao interceptor com traceback
-                await send_api_error(
-                    user_id=self.user_id,
-                    source=self.ERROR_SOURCE,
-                    api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/security/token",
-                    request_body={"Consumidor": "consultar-dividas-contribuinte"},
-                    status_code=408,
-                    error_message="Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)",
-                    traceback=tb.format_exc(),
-                )
-                raise Exception(
-                    "Serviço de Dívida Ativa não respondeu no tempo esperado (autenticação)"
-                )
+        response_data = {"success": True, "data": registros}
+        parsed = DadosDividaAtiva.from_api_response(response_data)
+        self._debug_response_summary(response_data, parsed)
+        return parsed
 
-            # Consulta de dívidas
-            try:
-                # Prepara o payload de acordo com o tipo de entrada
-                payload = self._preparar_payload(tipo_entrada, valor_limpo)
+    async def _post_emitir_guia_a_vista(
+        self, endpoint: str, consumer: str, payload: Dict[str, Any]
+    ) -> list[Dict[str, Any]]:
+        registros = await pgm_api(endpoint=endpoint, consumidor=consumer, data=payload)
+        if isinstance(registros, dict) and registros.get("erro"):
+            logger.error(f"Erro ao emitir guia à vista: {registros['motivos']}")
+            raise Exception(registros["motivos"])
 
-                response = await client.post(
-                    f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                    headers={"Authorization": token},
-                    data=payload,
-                )
-                if response.status_code == 200:
-                    response_data = response.json()
-                    logger.info("Consulta de dívida ativa realizada com sucesso")
-                    # Usa o método from_api_response do modelo para processar os dados
-                    return DadosDividaAtiva.from_api_response(response_data)
-                elif response.status_code == 404:
-                    # Não encontrou débitos - retorna None
-                    logger.info(
-                        f"Nenhuma dívida ativa encontrada para {tipo_entrada}: {valor_limpo}"
-                    )
-                    return None
-                elif response.status_code == 401:
-                    logger.error("Erro de autenticação ao consultar dívidas")
-                    # Reporta erro ao interceptor
-                    await send_api_error(
-                        user_id=self.user_id,
-                        source=self.ERROR_SOURCE,
-                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                        request_body=payload,
-                        status_code=response.status_code,
-                        error_message="Falha na autenticação ao consultar dívidas",
-                    )
-                    raise Exception("Falha na autenticação ao consultar dívidas")
-                elif response.status_code in [500, 503]:
-                    logger.error(
-                        f"Erro de servidor ao consultar dívidas. Status: {response.status_code}"
-                    )
-                    # Reporta erro ao interceptor
-                    await send_api_error(
-                        user_id=self.user_id,
-                        source=self.ERROR_SOURCE,
-                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                        request_body=payload,
-                        status_code=response.status_code,
-                        error_message=f"Serviço de Dívida Ativa temporariamente indisponível: {response.text[:500]}",
-                    )
-                    raise Exception(
-                        f"Serviço de Dívida Ativa temporariamente indisponível (HTTP {response.status_code})"
-                    )
-                else:
-                    logger.error(
-                        f"Erro ao consultar dívida ativa. Status: {response.status_code}, Texto: {response.text}"
-                    )
-                    # Reporta erro ao interceptor
-                    await send_api_error(
-                        user_id=self.user_id,
-                        source=self.ERROR_SOURCE,
-                        api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                        request_body=payload,
-                        status_code=response.status_code,
-                        error_message=f"Erro HTTP {response.status_code}: {response.text[:500]}",
-                    )
-                    raise Exception(
-                        f"Erro ao comunicar com serviço de Dívida Ativa (HTTP {response.status_code})"
-                    )
+        if isinstance(registros, list):
+            return registros
 
-            except httpx.TimeoutException:
-                logger.error("Timeout ao consultar dívidas")
-                # Reporta erro ao interceptor com traceback
-                await send_api_error(
-                    user_id=self.user_id,
-                    source=self.ERROR_SOURCE,
-                    api_endpoint=f"{env.DIVIDA_ATIVA_API_URL}/v2/cdas/dividas-contribuinte",
-                    request_body=payload,
-                    status_code=408,
-                    error_message="Serviço de Dívida Ativa não respondeu no tempo esperado",
-                    traceback=tb.format_exc(),
-                )
-                raise Exception(
-                    "Serviço de Dívida Ativa não respondeu no tempo esperado"
-                )
+        return registros or []

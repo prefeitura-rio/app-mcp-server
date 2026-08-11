@@ -17,6 +17,7 @@ from src.tools.multi_step_service.workflows.equipments.equipments_workflow impor
 from src.tools.multi_step_service.workflows.poda_de_arvore.workflow import (
     PodaDeArvoreWorkflow,
 )
+from src.tools.multi_step_service.workflows.divida_ativa import DividaAtivaWorkflow
 
 # Lista central de workflows (classes)
 workflows = [
@@ -24,7 +25,8 @@ workflows = [
     IPTUWorkflow,
     # EquipmentsWorkflow,
     PodaDeArvoreWorkflow,
+    DividaAtivaWorkflow,
 ]
 
 # Lista de workflows disponíveis para import fácil
-__all__ = ["workflows", "BankAccountWorkflow", "EquipmentsWorkflow"]
+__all__ = ["workflows", "BankAccountWorkflow", "EquipmentsWorkflow", "DividaAtivaWorkflow"]
