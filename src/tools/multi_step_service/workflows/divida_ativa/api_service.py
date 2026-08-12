@@ -1,52 +1,30 @@
-import os
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 from loguru import logger
 
-from src.config import env
-from src.tools.divida_ativa import pgm_api
-from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
-    DadosDividaAtiva,
+from src.tools.divida_ativa import (
+    consultar_debitos as consultar_debitos_tool,
+    emitir_guia_a_vista as emitir_guia_a_vista_tool,
 )
 
 
 class DividaAtivaAPIService:
-    CONSULTA_DEBITOS_CONSUMIDOR = "consultar-dividas-contribuinte"
-    CONSULTA_DEBITOS_ENDPOINT = "v2/cdas/dividas-contribuinte"
-    EMITIR_GUIA_A_VISTA_CONSUMIDOR = "emitir-guia-vista"
-    EMITIR_GUIA_A_VISTA_ENDPOINT = "v2/guiapagamento/emitir/avista"
-    ORIGEM_SOLICITACAO = "origem_solicitação"
     CONSULTA_CONFIGS = {
-        "numero_guia_pagamento": {
-            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
-            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
-            "value_field": "numeroGuiaPagamento",
-        },
         "cpf_cnpj": {
-            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
-            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
-            "value_field": "cpfCnpj",
+            "tool_field": "cpfCnpj",
         },
         "inscricao_imobiliaria": {
-            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
-            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
-            "value_field": "inscricaoImobiliaria",
+            "tool_field": "inscricaoImobiliaria",
         },
         "auto_infracao": {
-            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
-            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
-            "value_field": "numeroAutoInfracao",
+            "tool_field": "numeroAutoInfracao",
             "extra_fields": {"ano": "anoAutoInfracao"},
         },
         "cda": {
-            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
-            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
-            "value_field": "cda",
+            "tool_field": "cda",
         },
         "execucao_fiscal": {
-            "endpoint": CONSULTA_DEBITOS_ENDPOINT,
-            "consumer": CONSULTA_DEBITOS_CONSUMIDOR,
-            "value_field": "numeroExecucaoFiscal",
+            "tool_field": "numeroExecucaoFiscal",
         },
     }
     NODE_TO_TIPO_CONSULTA = {
@@ -63,89 +41,17 @@ class DividaAtivaAPIService:
     }
 
     def __init__(self, user_id: str = "unknown"):
-        self.api_base_url = env.CHATBOT_PGM_API_URL
-        self.access_key = env.CHATBOT_PGM_ACCESS_KEY
-        self.proxy = env.PROXY_URL
         self.user_id = user_id
-
-    def _build_url(self, path: str) -> str:
-        """
-        Monta URLs da Dívida Ativa aceitando base com ou sem o sufixo /api.
-        """
-        base_url = self.api_base_url.rstrip("/")
-        normalized_path = path.strip("/")
-
-        if base_url.endswith("/api") and normalized_path.startswith("api/"):
-            normalized_path = normalized_path.removeprefix("api/")
-
-        return f"{base_url}/{normalized_path}"
 
     def _limpar_valor(self, valor: str) -> str:
         """Remove caracteres não numéricos do valor informado pelo usuário."""
         return "".join(filter(str.isdigit, valor or ""))
 
-    def _debug_api_enabled(self) -> bool:
-        return os.getenv("DIVIDA_ATIVA_DEBUG_API", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "sim",
-        }
-
-    def _debug_response_summary(
-        self,
-        response_data: Dict[str, Any],
-        parsed: DadosDividaAtiva,
-    ) -> None:
-        if not self._debug_api_enabled():
-            return
-
-        data = response_data.get("data", response_data)
-        if isinstance(data, list):
-            first_item = data[0] if data else None
-            logger.info(
-                "DEBUG Dívida Ativa API: data_type=list data_len={} first_item_keys={} "
-                "parsed_counts={{cdas: {}, efs: {}, parcelamentos: {}}} parsed_tem_divida={}",
-                len(data),
-                list(first_item.keys()) if isinstance(first_item, dict) else None,
-                len(parsed.cdas),
-                len(parsed.efs),
-                len(parsed.parcelamentos),
-                parsed.tem_divida_ativa,
-            )
-            return
-
-        if not isinstance(data, dict):
-            logger.info(
-                "DEBUG Dívida Ativa API: data_type={} parsed_tem_divida={}",
-                type(data).__name__,
-                parsed.tem_divida_ativa,
-            )
-            return
-
-        debitos_nao_parcelados = data.get("debitosNaoParceladosComSaldoTotal", {})
-        guias_parceladas = data.get("guiasParceladasComSaldoTotal", {})
-        logger.info(
-            "DEBUG Dívida Ativa API: top_keys={} data_keys={} "
-            "raw_counts={{cdasNaoAjuizadasNaoParceladas: {}, efsNaoParceladas: {}, "
-            "guiasParceladas: {}}} parsed_counts={{cdas: {}, efs: {}, parcelamentos: {}}} "
-            "parsed_tem_divida={}",
-            list(response_data.keys()),
-            list(data.keys()),
-            len(debitos_nao_parcelados.get("cdasNaoAjuizadasNaoParceladas", []) or []),
-            len(debitos_nao_parcelados.get("efsNaoParceladas", []) or []),
-            len(guias_parceladas.get("guiasParceladas", []) or []),
-            len(parsed.cdas),
-            len(parsed.efs),
-            len(parsed.parcelamentos),
-            parsed.tem_divida_ativa,
-        )
-
     def _preparar_payload(
-        self, tipo_consulta: str, valor: str, dados: Optional[Dict[str, Any]] = None
+        self, tipo_consulta: str, valor: str, dados: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """
-        Prepara o payload para a API de acordo com o tipo de entrada.
+        Prepara o payload esperado pela tool legada de Dívida Ativa.
 
         Args:
             tipo_consulta (str): Tipo de consulta escolhido no workflow.
@@ -153,16 +59,20 @@ class DividaAtivaAPIService:
             dados (Optional[Dict[str, Any]]): Campos extras coletados no nó.
 
         Returns:
-            Dict[str, Any]: Payload para a API.
+            Dict[str, Any]: Payload para a tool consultar_debitos.
         """
         dados = dados or {}
         config = self._get_consulta_config(tipo_consulta)
-        payload = {self.ORIGEM_SOLICITACAO: 0}
+        tool_field = config["tool_field"]
+        payload = {
+            "consulta_debitos": tool_field,
+            tool_field: self._limpar_valor(valor),
+        }
 
-        payload[config["value_field"]] = self._limpar_valor(valor)
-
-        for input_field, api_field in config.get("extra_fields", {}).items():
-            payload[api_field] = self._limpar_valor(str(dados.get(input_field, "")))
+        for input_field, tool_extra_field in config.get("extra_fields", {}).items():
+            payload[tool_extra_field] = self._limpar_valor(
+                str(dados.get(input_field, ""))
+            )
 
         return payload
 
@@ -184,22 +94,18 @@ class DividaAtivaAPIService:
         except KeyError:
             raise ValueError(f"Nó de consulta inválido: {node_name}")
 
-    async def consultar_debitos(
-        self, tipo_consulta: str, valor: str, **dados: Any
-    ) -> Optional[DadosDividaAtiva]:
+    async def consultar_debitos(self, tipo_consulta: str, valor: str, **dados: Any):
         """
-        Consulta débitos usando endpoint e payload definidos pelo tipo de consulta.
+        Consulta débitos usando a tool oficial de Dívida Ativa.
 
         Exemplos:
             consultar_debitos("cpf_cnpj", "123.456.789-00")
             consultar_debitos("auto_infracao", "12345", ano="2024")
         """
         config = self._get_consulta_config(tipo_consulta)
-        endpoint = config["endpoint"]
-        consumer = config["consumer"]
         payload = self._preparar_payload(tipo_consulta, valor, dados)
 
-        if not payload.get(config["value_field"]):
+        if not payload.get(config["tool_field"]):
             raise ValueError(f"Valor ausente para consulta por {tipo_consulta}")
 
         for api_field in config.get("extra_fields", {}).values():
@@ -208,19 +114,12 @@ class DividaAtivaAPIService:
                     f"Campo obrigatório ausente para {tipo_consulta}: {api_field}"
                 )
 
-        logger.info(
-            f"Iniciando consulta de dívida ativa - Tipo: {tipo_consulta}, Endpoint: {endpoint}"
-        )
-
-        return await self._post_consulta_debitos(
-            endpoint=endpoint,
-            consumer=consumer,
-            payload=payload,
-        )
+        logger.info(f"Iniciando consulta de dívida ativa via tool: {tipo_consulta}")
+        return await consultar_debitos_tool(payload)
 
     async def consultar_debitos_por_no(
         self, node_name: str, valor: str, **dados: Any
-    ) -> Optional[DadosDividaAtiva]:
+    ) -> Dict[str, Any]:
         """
         Consulta débitos usando o nome do nó do LangGraph como chave de roteamento.
         """
@@ -229,48 +128,21 @@ class DividaAtivaAPIService:
 
     async def emitir_guia_a_vista(
         self, cdas: list[str], efs: list[str]
-    ) -> list[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
-        Emite guia de pagamento à vista para CDAs e EFs selecionadas.
+        Emite guia de pagamento à vista usando a tool oficial de Dívida Ativa.
         """
+        dicionario_itens = {}
+        itens_informados = []
+        for indice, identificador in enumerate([*cdas, *efs], start=1):
+            dicionario_itens[str(indice)] = identificador
+            itens_informados.append(str(indice))
+
         payload = {
-            "cdas": cdas,
-            "efs": efs,
-            self.ORIGEM_SOLICITACAO: 0,
+            "itens_informados": itens_informados,
+            "dicionario_itens": repr(dicionario_itens),
+            "lista_cdas": repr(cdas),
+            "lista_efs": repr(efs),
+            "lista_guias": "[]",
         }
-        return await self._post_emitir_guia_a_vista(
-            endpoint=self.EMITIR_GUIA_A_VISTA_ENDPOINT,
-            consumer=self.EMITIR_GUIA_A_VISTA_CONSUMIDOR,
-            payload=payload,
-        )
-
-    async def _post_consulta_debitos(
-        self, endpoint: str, consumer: str, payload: Dict[str, Any]
-    ) -> Optional[DadosDividaAtiva]:
-        """
-        Executa a consulta usando a tool interna legada de PGM.
-        """
-        registros = await pgm_api(endpoint=endpoint, consumidor=consumer, data=payload)
-        if isinstance(registros, dict) and registros.get("erro"):
-            logger.info(
-                f"Nenhuma dívida ativa encontrada ou erro de negócio: {registros['motivos']}"
-            )
-            return None
-
-        response_data = {"success": True, "data": registros}
-        parsed = DadosDividaAtiva.from_api_response(response_data)
-        self._debug_response_summary(response_data, parsed)
-        return parsed
-
-    async def _post_emitir_guia_a_vista(
-        self, endpoint: str, consumer: str, payload: Dict[str, Any]
-    ) -> list[Dict[str, Any]]:
-        registros = await pgm_api(endpoint=endpoint, consumidor=consumer, data=payload)
-        if isinstance(registros, dict) and registros.get("erro"):
-            logger.error(f"Erro ao emitir guia à vista: {registros['motivos']}")
-            raise Exception(registros["motivos"])
-
-        if isinstance(registros, list):
-            return registros
-
-        return registros or []
+        return await emitir_guia_a_vista_tool(payload)

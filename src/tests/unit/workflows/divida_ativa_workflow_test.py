@@ -121,61 +121,53 @@ def _resultado_divida(
     efs=None,
     parcelamentos=None,
 ):
-    def _merge(defaults, items):
-        merged = []
-        for item in items:
-            values = defaults | vars(item)
-            merged.append(types.SimpleNamespace(**values))
-        return merged
+    lista_cdas = [
+        getattr(cda, "cda_id", None) or getattr(cda, "numero", None)
+        for cda in cdas or []
+    ]
+    lista_efs = [
+        getattr(ef, "numero_execucao_fiscal", None) or getattr(ef, "numero_ef", None)
+        for ef in efs or []
+    ]
+    lista_guias = [getattr(guia, "numero", None) for guia in parcelamentos or []]
+    itens = [item for item in [*lista_cdas, *lista_efs, *lista_guias] if item]
 
-    return types.SimpleNamespace(
-        data_vencimento="10/09/2026",
-        saldo_total_divida="R$ 300,00",
-        saldo_total_nao_parcelado="R$ 200,00",
-        saldo_total_parcelado="R$ 100,00",
-        endereco_imovel="Rua A, 123",
-        bairro_imovel="Centro",
-        url_pdf="https://example.com/divida.pdf",
-        cdas=_merge(
-            {
-                "cda_id": None,
-                "numero": None,
-                "valor_saldo_total": "R$ 200,00",
-                "valor_original": None,
-            },
-            cdas or [],
+    return {
+        "api_resposta_sucesso": True,
+        "mensagem_divida_contribuinte": (
+            "Tipo de consulta:\n"
+            "CPF/CNPJ: 12345678901\n\n"
+            "*Endereço do imóvel:*\n"
+            "Rua A, 123\n\n"
+            "Data de Vencimento: 10/09/2026"
         ),
-        efs=_merge(
-            {
-                "numero_execucao_fiscal": None,
-                "numero_ef": None,
-                "saldo_execucao_fiscal_nao_parcelada": "R$ 150,00",
-                "valor_original": None,
-            },
-            efs or [],
+        "lista_cdas": [item for item in lista_cdas if item],
+        "lista_efs": [item for item in lista_efs if item],
+        "lista_guias": [item for item in lista_guias if item],
+        "dicionario_itens": {index: item for index, item in enumerate(itens, start=1)},
+        "total_itens_pagamento": len(itens),
+        "guias_quantidade_total": len([item for item in lista_guias if item]),
+        "efs_cdas_quantidade_total": len(
+            [item for item in [*lista_cdas, *lista_efs] if item]
         ),
-        parcelamentos=_merge(
-            {
-                "numero": None,
-                "data_ultimo_pagamento": "01/08/2026",
-            },
-            parcelamentos or [],
+        "total_nao_parcelado": len(
+            [item for item in [*lista_cdas, *lista_efs] if item]
         ),
-    )
+        "total_parcelado": len([item for item in lista_guias if item]),
+        "debitos_msg": [],
+    }
 
 
 class FakeDividaAtivaAPIService:
     def __init__(self, resultado=None, guias=None):
         self.resultado = resultado
-        self.guias = guias or [
-            {
-                "dataVencimento": "10/09/2026",
-                "pdf": "https://example.com/guia.pdf",
-                "arquivoBase64": "base64",
-                "codigoDeBarras": "123456789",
-                "codigoQrEMVPix": "000201PIX",
-            }
-        ]
+        self.guias = guias or {
+            "api_resposta_sucesso": True,
+            "data_vencimento": "10/09/2026",
+            "link": "https://example.com/guia.pdf",
+            "codigo_de_barras": "123456789",
+            "pix": "000201PIX",
+        }
         self.consulta_calls = []
         self.emissao_calls = []
 
@@ -209,25 +201,6 @@ async def test_payload_vazio_retorna_schema_do_flow(divida_ativa_modules):
 
 
 @pytest.mark.asyncio
-async def test_payload_vazio_retorna_schema_do_flow(divida_ativa_modules):
-    workflow = divida_ativa_modules.DividaAtivaWorkflow()
-    state = await workflow.execute(_new_state(divida_ativa_modules), {})
-
-    response = state.agent_response
-    tipo_schema = response.payload_schema["properties"]["tipo_consulta"]
-
-    assert "tipos de consulta" in response.description
-    assert tipo_schema["enum"] == [
-        "cpf_cnpj",
-        "inscricao_imobiliaria",
-        "auto_infracao",
-        "cda",
-        "execucao_fiscal",
-    ]
-    assert len(tipo_schema["options"]) == 5
-
-
-@pytest.mark.asyncio
 async def test_tipo_consulta_valido_salva_no_state(divida_ativa_modules):
     workflow = divida_ativa_modules.DividaAtivaWorkflow()
     state = await workflow.execute(_new_state(divida_ativa_modules), {})
@@ -236,7 +209,7 @@ async def test_tipo_consulta_valido_salva_no_state(divida_ativa_modules):
     state = await workflow.execute(state, {"tipo_consulta": "cpf_cnpj"})
 
     assert state.internal["tipo_consulta_cache"] == "cpf_cnpj"
-    assert "tipo_consulta" not in state.data
+    assert state.data["tipo_consulta"] == "cpf_cnpj"
     assert "cpf_cnpj" in state.agent_response.payload_schema["properties"]
     assert "CPF/CNPJ" in state.agent_response.description
 
@@ -414,46 +387,10 @@ async def test_resultado_da_api_formata_mensagem_e_opcoes_menu(
     parcelamentos,
     opcoes_menu,
 ):
-    def _merge(defaults, items):
-        merged = []
-        for item in items:
-            values = defaults | vars(item)
-            merged.append(types.SimpleNamespace(**values))
-        return merged
-
-    resultado_api = types.SimpleNamespace(
-        data_vencimento="10/09/2026",
-        saldo_total_divida="R$ 300,00",
-        saldo_total_nao_parcelado="R$ 200,00",
-        saldo_total_parcelado="R$ 100,00",
-        endereco_imovel="Rua A, 123",
-        bairro_imovel="Centro",
-        url_pdf="https://example.com/divida.pdf",
-        cdas=_merge(
-            {
-                "cda_id": None,
-                "numero": None,
-                "valor_saldo_total": "R$ 200,00",
-                "valor_original": None,
-            },
-            cdas,
-        ),
-        efs=_merge(
-            {
-                "numero_execucao_fiscal": None,
-                "numero_ef": None,
-                "saldo_execucao_fiscal_nao_parcelada": "R$ 150,00",
-                "valor_original": None,
-            },
-            efs,
-        ),
-        parcelamentos=_merge(
-            {
-                "numero": None,
-                "data_ultimo_pagamento": "01/08/2026",
-            },
-            parcelamentos,
-        ),
+    resultado_api = _resultado_divida(
+        cdas=cdas,
+        efs=efs,
+        parcelamentos=parcelamentos,
     )
 
     class FakeAPIService:
@@ -657,6 +594,9 @@ async def test_opcao_pagar_a_vista_invalida_retorna_botoes(
         "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
         "lista_cdas": ["CDA-1"],
         "lista_efs": [],
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1", "label": "1. CDA-1"},
+        ],
     }
 
     state = await workflow.execute(
@@ -766,6 +706,9 @@ async def test_debitos_escolhidos_invalidos_retorna_schema(
         "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
         "lista_cdas": ["CDA-1"],
         "lista_efs": [],
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1", "label": "1. CDA-1"},
+        ],
     }
 
     state = await workflow.execute(state, {"debitos_escolhidos": "2"})
@@ -786,6 +729,9 @@ async def test_confirmacao_pagamento_invalida_retorna_botoes(
         "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
         "lista_cdas": ["CDA-1"],
         "lista_efs": [],
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1", "label": "1. CDA-1"},
+        ],
     }
 
     state = await workflow.execute(
@@ -814,6 +760,9 @@ async def test_confirmacao_pagamento_nao_retorna_menu_de_retentativa(
         "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
         "lista_cdas": ["CDA-1"],
         "lista_efs": [],
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1", "label": "1. CDA-1"},
+        ],
     }
 
     state = await workflow.execute(
@@ -846,6 +795,9 @@ async def test_confirmacao_pagamento_sim_retorna_formas_de_pagamento(
         "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
         "lista_cdas": ["CDA-1"],
         "lista_efs": [],
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1", "label": "1. CDA-1"},
+        ],
     }
 
     state = await workflow.execute(
@@ -872,6 +824,9 @@ async def test_forma_pagamento_invalida_retorna_botoes(
     state.data["divida_ativa"] = {
         "mensagem_divida_contribuinte": "mensagem",
         "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1", "label": "1. CDA-1"},
+        ],
     }
 
     state = await workflow.execute(
@@ -882,6 +837,37 @@ async def test_forma_pagamento_invalida_retorna_botoes(
     assert "Essa opção não existe" in state.agent_response.description
     assert (
         "forma_pagamento_a_vista"
+        in state.agent_response.payload_schema["properties"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_forma_pagamento_sem_debitos_selecionados_nao_emite_guia(
+    divida_ativa_modules,
+):
+    class FakeAPIService:
+        async def emitir_guia_a_vista(self, cdas, efs):
+            raise AssertionError("não deveria emitir guia sem débitos escolhidos")
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeAPIService()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "lista_cdas": ["CDA-1"],
+        "lista_efs": [],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+    )
+
+    assert "Não consegui entender esse input" in state.agent_response.description
+    assert (
+        "opcao_pagar_a_vista"
         in state.agent_response.payload_schema["properties"]
     )
 
@@ -906,15 +892,13 @@ async def test_forma_pagamento_valida_salva_e_responde(
 
         async def emitir_guia_a_vista(self, cdas, efs):
             self.calls.append((cdas, efs))
-            return [
-                {
-                    "dataVencimento": "10/09/2026",
-                    "pdf": "https://example.com/guia.pdf",
-                    "arquivoBase64": "base64",
-                    "codigoDeBarras": "123456789",
-                    "codigoQrEMVPix": "000201PIX",
-                }
-            ]
+            return {
+                "api_resposta_sucesso": True,
+                "data_vencimento": "10/09/2026",
+                "link": "https://example.com/guia.pdf",
+                "codigo_de_barras": "123456789",
+                "pix": "000201PIX",
+            }
 
     api_service = FakeAPIService()
     workflow = divida_ativa_modules.DividaAtivaWorkflow()
@@ -939,7 +923,7 @@ async def test_forma_pagamento_valida_salva_e_responde(
     assert texto_esperado in state.agent_response.description
     assert state.agent_response.payload_schema is None
     assert state.data["divida_ativa"]["forma_pagamento_a_vista"] == forma_pagamento
-    assert state.data["divida_ativa"]["guia_pagamento_a_vista"]["pdf"] == (
+    assert state.data["divida_ativa"]["guia_pagamento_a_vista"]["link"] == (
         "https://example.com/guia.pdf"
     )
     assert api_service.calls == [(["CDA-1"], ["EF-1"])]
