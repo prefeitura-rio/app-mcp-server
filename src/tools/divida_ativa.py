@@ -329,6 +329,14 @@ async def processar_registros(
 @interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 @log_execution_time
 async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Emite guia de regularização.
+
+    DEPRECATED (CHATR-120): use `emitir_guia_regularizacao_v2` de
+    `src.tools.divida_ativa_v2`, exposta em POST /v2/emitir_guia_regularizacao.
+    A v2 valida entrada e saída com Pydantic. Esta versão segue funcionando
+    sem alterações enquanto os consumidores migram.
+    """
     try:
         entrada = await da_emitir_guia(parameters, tipo="regularizacao")
 
@@ -361,6 +369,14 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
 @interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 @log_execution_time
 async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Emite guia de pagamento à vista.
+
+    DEPRECATED (CHATR-120): use `emitir_guia_a_vista_v2` de
+    `src.tools.divida_ativa_v2`, exposta em POST /v2/emitir_guia. A v2 valida
+    entrada e saída com Pydantic. Esta versão segue funcionando sem alterações
+    enquanto os consumidores migram.
+    """
     try:
         entrada = await da_emitir_guia(parameters, tipo="a_vista")
 

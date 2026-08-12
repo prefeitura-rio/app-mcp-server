@@ -63,3 +63,68 @@ Use `MCP_STATELESS_HTTP=false` apenas como rollback operacional se algum cliente
 
 `kubectx rj-superapp or rj-superapp-staging`
 `kubectl port-forward svc/mcp-redis -n mcp 6379:6379`
+
+## 💰 Dívida Ativa — endpoints HTTP
+
+| Endpoint | Status |
+|---|---|
+| `POST /consulta_debitos` | ativo |
+| `POST /emitir_guia` | **deprecated** — migrar para `/v2/emitir_guia` |
+| `POST /emitir_guia_regularizacao` | **deprecated** — migrar para `/v2/emitir_guia_regularizacao` |
+| `POST /v2/emitir_guia` | ativo, com validação |
+| `POST /v2/emitir_guia_regularizacao` | ativo, com validação |
+
+### v2: validação com Pydantic
+
+A v2 (`src/tools/divida_ativa_v2/`) valida entrada e saída com Pydantic antes de
+chamar a PGM. A v1 continua funcionando sem alterações enquanto os consumidores migram.
+
+O que a v2 garante:
+
+- **Aceita os dois formatos.** Tipos nativos (`dict`/`list`/`bool`) e o formato legado
+  do SFMC, em que todo campo chega como string JSON escapada. String vazia vira
+  coleção vazia; `apenas_um_item` aceita `"1"`, `1`, `1.0` ou `true`.
+- **Rejeita placeholder de template não renderizado.** Qualquer campo contendo
+  `{{...}}` (ex.: `{{Event.DEAudience-...}}`) é recusado com mensagem nomeando o
+  campo, em vez de estourar `could not convert string to float`.
+- **Nunca chama a PGM com entrada inválida.** Falha de validação encerra a
+  requisição antes da chamada externa.
+- **Recusa seleção vazia.** Se nenhum sequencial resolver para um identificador
+  conhecido — chave ausente em `dicionario_itens`, identificador fora das listas, ou
+  campo renomeado pelo consumidor — a requisição é recusada em vez de chegar à PGM
+  com `cdas`/`efs`/`guias` vazios. Resolução parcial (alguns itens válidos) segue
+  emitindo a guia, com os descartados registrados em log.
+- **Normalização simétrica de sequencial.** As chaves de `dicionario_itens` passam
+  pela mesma normalização de `itens_informados`/`apenas_um_item`, então `"01"` casa
+  com `"1"`. Chaves que colidem após normalização são rejeitadas.
+- **Resposta tipada** (`EmitirGuiaResponse`), com o mesmo contrato JSON da v1.
+
+Erros de validação retornam **HTTP 200 com `api_resposta_sucesso: false`** e
+`api_descricao_erro` preenchido — o mesmo contrato que a v1 já usa, para não quebrar
+os consumidores (SFMC/LLM). Toda falha de validação é reportada ao error interceptor
+(`ValidationError` para erros de schema, `SelecaoVaziaError` para seleção vazia), que é
+como se acompanha se o SFMC parou de enviar placeholders.
+
+```bash
+# payload legado (strings JSON escapadas) — aceito
+curl -X POST http://localhost:80/v2/emitir_guia \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dicionario_itens": "{\"1\": \"01/225716/2024-00\"}",
+    "lista_cdas": "[\"01/225716/2024-00\"]",
+    "lista_efs": "",
+    "lista_guias": "",
+    "apenas_um_item": "1"
+  }'
+
+# payload nativo — também aceito
+curl -X POST http://localhost:80/v2/emitir_guia \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dicionario_itens": {"1": "01/225716/2024-00"},
+    "lista_cdas": ["01/225716/2024-00"],
+    "itens_informados": ["1"]
+  }'
+```
+
+Testes: `uv run pytest src/tests/unit/tools/test_divida_ativa_v2.py -v`
