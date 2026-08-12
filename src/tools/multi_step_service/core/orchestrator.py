@@ -5,7 +5,6 @@ from src.tools.multi_step_service.core.models import (
     AgentResponse,
 )
 from src.tools.multi_step_service.core.state import StateManager, StateMode
-from src.tools.multi_step_service.workflows import workflows
 from src.utils.error_interceptor import interceptor
 
 
@@ -37,6 +36,11 @@ class Orchestrator:
         self.backend_mode = backend_mode
         self.redis_url = redis_url
         self.data_dir = data_dir
+
+        # Import adiado para quebrar o ciclo `workflows` → `bank_account` →
+        # `core` → `orchestrator` → `workflows`. Em nível de módulo, importar o
+        # pacote pela ponta de `workflows` pega a lista ainda não definida.
+        from src.tools.multi_step_service.workflows import workflows
 
         # Importa workflows automaticamente usando service_name
         for workflow_class in workflows:
