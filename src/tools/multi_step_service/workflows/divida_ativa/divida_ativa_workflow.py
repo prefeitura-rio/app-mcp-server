@@ -232,8 +232,12 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
     def _retornar_step_esperado(self, state: ServiceState) -> None:
         esperado = state.internal.get(STATE_PAYLOAD_ESPERADO) or {}
-        payload_schema = esperado.get("payload_schema") or TipoConsultaPayload.model_json_schema()
-        error_message = esperado.get("error_message") or DividaAtivaTemplates.input_inesperado()
+        payload_schema = (
+            esperado.get("payload_schema") or TipoConsultaPayload.model_json_schema()
+        )
+        error_message = (
+            esperado.get("error_message") or DividaAtivaTemplates.input_inesperado()
+        )
         state.agent_response = AgentResponse(
             service_name=self.service_name,
             description=error_message,
@@ -266,10 +270,9 @@ class DividaAtivaWorkflow(BaseWorkflow):
         return False
 
     def _ensure_debitos_a_vista(self, state: ServiceState) -> bool:
-        if (
-            self._tem_divida_consultada(state)
-            and state.data.get("divida_ativa", {}).get("debitos_pagamento_a_vista")
-        ):
+        if self._tem_divida_consultada(state) and state.data.get(
+            "divida_ativa", {}
+        ).get("debitos_pagamento_a_vista"):
             return True
 
         self._opcao_pagamento_response(
@@ -616,8 +619,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         efs = [
             debito["identificador"]
             for debito in debitos
-            if debito.get("tipo") == "execucao_fiscal"
-            and debito.get("identificador")
+            if debito.get("tipo") == "execucao_fiscal" and debito.get("identificador")
         ]
 
         return cdas, efs
@@ -661,11 +663,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         total_debitos: int,
     ) -> list[int] | None:
         try:
-            indices = [
-                int(item.strip())
-                for item in valor.split(",")
-                if item.strip()
-            ]
+            indices = [int(item.strip()) for item in valor.split(",") if item.strip()]
         except ValueError:
             return None
 
@@ -688,9 +686,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             return True
 
         try:
-            validated = ConfirmacaoPagamentoAVistaPayload.model_validate(
-                state.payload
-            )
+            validated = ConfirmacaoPagamentoAVistaPayload.model_validate(state.payload)
         except Exception:
             self._opcao_pagamento_response(
                 state,
@@ -743,9 +739,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             return True
 
         divida_ativa = state.data.setdefault("divida_ativa", {})
-        divida_ativa["acao_pagamento_recusado"] = (
-            validated.acao_pagamento_recusado
-        )
+        divida_ativa["acao_pagamento_recusado"] = validated.acao_pagamento_recusado
 
         if validated.acao_pagamento_recusado == "escolher_debitos":
             self._debitos_escolhidos_response(state)
@@ -772,7 +766,10 @@ class DividaAtivaWorkflow(BaseWorkflow):
     ) -> str:
         if forma_pagamento == "boleto_bancario":
             return DividaAtivaTemplates.boleto_bancario_a_vista(
-                guia.get("link") or guia.get("pdf") or guia.get("arquivoBase64") or "N/A"
+                guia.get("link")
+                or guia.get("pdf")
+                or guia.get("arquivoBase64")
+                or "N/A"
             )
 
         if forma_pagamento == "codigo_barras":
@@ -784,9 +781,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             guia.get("pix") or guia.get("codigoQrEMVPix") or "N/A"
         )
 
-    async def _processar_forma_pagamento_a_vista(
-        self, state: ServiceState
-    ) -> bool:
+    async def _processar_forma_pagamento_a_vista(self, state: ServiceState) -> bool:
         if "forma_pagamento_a_vista" not in state.payload:
             return False
 
@@ -804,9 +799,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             return True
 
         divida_ativa = state.data.setdefault("divida_ativa", {})
-        divida_ativa["forma_pagamento_a_vista"] = (
-            validated.forma_pagamento_a_vista
-        )
+        divida_ativa["forma_pagamento_a_vista"] = validated.forma_pagamento_a_vista
         state.data["forma_pagamento_a_vista"] = validated.forma_pagamento_a_vista
 
         cdas, efs = self._get_cdas_efs_para_emissao_a_vista(state)
@@ -1098,9 +1091,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         state.data["tipo_consulta"] = tipo_consulta
         state.data[value_field] = getattr(validated, value_field)
         if tipo_consulta == "auto_infracao":
-            state.data["ano_auto_infracao"] = getattr(
-                validated, "ano_auto_infracao"
-            )
+            state.data["ano_auto_infracao"] = getattr(validated, "ano_auto_infracao")
 
         dados = {}
         for payload_field, api_field in (extra_fields or {}).items():

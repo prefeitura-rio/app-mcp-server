@@ -244,8 +244,7 @@ class DebitosEscolhidosPayload(BaseModel):
         ...,
         title="Débitos escolhidos",
         description=(
-            "Números dos débitos escolhidos, separados por vírgula. "
-            "Exemplo: 1, 2, 4."
+            "Números dos débitos escolhidos, separados por vírgula. Exemplo: 1, 2, 4."
         ),
         min_length=1,
     )

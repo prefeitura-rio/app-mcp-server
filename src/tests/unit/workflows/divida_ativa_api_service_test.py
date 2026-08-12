@@ -61,4 +61,3 @@ async def test_emitir_guia_a_vista_usa_contrato_da_tool(monkeypatch):
             "lista_guias": "[]",
         }
     ]
-

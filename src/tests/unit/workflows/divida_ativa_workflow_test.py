@@ -470,8 +470,7 @@ async def test_pagar_agora_nao_parcelado_retorna_botoes(divida_ativa_modules):
     schema = state.agent_response.payload_schema
     assert schema["x-render"] == "buttons"
     assert (
-        schema["properties"]["opcao_menu"]["enum"]
-        == workflow.opcoes_menu_nao_parcelado
+        schema["properties"]["opcao_menu"]["enum"] == workflow.opcoes_menu_nao_parcelado
     )
     assert state.data["divida_ativa"]["renderizacao_menu"] == "buttons"
 
@@ -576,10 +575,7 @@ async def test_opcao_menu_pagar_a_vista_retorna_botoes(divida_ativa_modules):
         "pagar_tudo",
         "escolher_debitos",
     ]
-    assert (
-        state.data["divida_ativa"]["opcao_menu_selecionada"]
-        == "pagar_a_vista"
-    )
+    assert state.data["divida_ativa"]["opcao_menu_selecionada"] == "pagar_a_vista"
 
 
 @pytest.mark.asyncio
@@ -605,12 +601,9 @@ async def test_opcao_pagar_a_vista_invalida_retorna_botoes(
     )
 
     assert "Essa opção não existe" in state.agent_response.description
-    assert (
-        state.agent_response.payload_schema["properties"]["opcao_pagar_a_vista"][
-            "enum"
-        ]
-        == ["pagar_tudo", "escolher_debitos"]
-    )
+    assert state.agent_response.payload_schema["properties"]["opcao_pagar_a_vista"][
+        "enum"
+    ] == ["pagar_tudo", "escolher_debitos"]
 
 
 @pytest.mark.asyncio
@@ -740,12 +733,9 @@ async def test_confirmacao_pagamento_invalida_retorna_botoes(
     )
 
     assert "Essa opção não existe" in state.agent_response.description
-    assert (
-        state.agent_response.payload_schema["properties"][
-            "confirmar_pagamento_a_vista"
-        ]["enum"]
-        == ["sim", "nao"]
-    )
+    assert state.agent_response.payload_schema["properties"][
+        "confirmar_pagamento_a_vista"
+    ]["enum"] == ["sim", "nao"]
 
 
 @pytest.mark.asyncio
@@ -772,15 +762,11 @@ async def test_confirmacao_pagamento_nao_retorna_menu_de_retentativa(
 
     assert "Tudo bem. Vamos tentar novamente." in state.agent_response.description
     assert (
-        "acao_pagamento_recusado"
-        in state.agent_response.payload_schema["properties"]
+        "acao_pagamento_recusado" in state.agent_response.payload_schema["properties"]
     )
-    assert (
-        state.agent_response.payload_schema["properties"][
-            "acao_pagamento_recusado"
-        ]["enum"]
-        == ["escolher_debitos", "opcoes_pagamento", "encerrar_atendimento"]
-    )
+    assert state.agent_response.payload_schema["properties"]["acao_pagamento_recusado"][
+        "enum"
+    ] == ["escolher_debitos", "opcoes_pagamento", "encerrar_atendimento"]
 
 
 @pytest.mark.asyncio
@@ -806,12 +792,9 @@ async def test_confirmacao_pagamento_sim_retorna_formas_de_pagamento(
     )
 
     assert "Agora escolha uma das três opções" in state.agent_response.description
-    assert (
-        state.agent_response.payload_schema["properties"][
-            "forma_pagamento_a_vista"
-        ]["enum"]
-        == ["boleto_bancario", "codigo_barras", "pix_copia_e_cola"]
-    )
+    assert state.agent_response.payload_schema["properties"]["forma_pagamento_a_vista"][
+        "enum"
+    ] == ["boleto_bancario", "codigo_barras", "pix_copia_e_cola"]
 
 
 @pytest.mark.asyncio
@@ -836,8 +819,7 @@ async def test_forma_pagamento_invalida_retorna_botoes(
 
     assert "Essa opção não existe" in state.agent_response.description
     assert (
-        "forma_pagamento_a_vista"
-        in state.agent_response.payload_schema["properties"]
+        "forma_pagamento_a_vista" in state.agent_response.payload_schema["properties"]
     )
 
 
@@ -866,10 +848,7 @@ async def test_forma_pagamento_sem_debitos_selecionados_nao_emite_guia(
     )
 
     assert "Não consegui entender esse input" in state.agent_response.description
-    assert (
-        "opcao_pagar_a_vista"
-        in state.agent_response.payload_schema["properties"]
-    )
+    assert "opcao_pagar_a_vista" in state.agent_response.payload_schema["properties"]
 
 
 @pytest.mark.asyncio
@@ -977,8 +956,7 @@ async def test_acao_pagamento_recusado_invalida_retorna_botoes(
 
     assert "Essa opção não existe" in state.agent_response.description
     assert (
-        "acao_pagamento_recusado"
-        in state.agent_response.payload_schema["properties"]
+        "acao_pagamento_recusado" in state.agent_response.payload_schema["properties"]
     )
 
 
@@ -1111,9 +1089,7 @@ async def test_primeira_chamada_com_cpf_cnpj_sem_debitos_mantem_mesmo_step(
         {"cpf_cnpj": "12.345.678/0001-90"},
     )
 
-    assert api_service.calls == [
-        ("consultar_cpf_cnpj", "12.345.678/0001-90", {})
-    ]
+    assert api_service.calls == [("consultar_cpf_cnpj", "12.345.678/0001-90", {})]
     assert state.internal["consulta_realizada"] is True
     assert state.internal["tipo_consulta_cache"] == "cpf_cnpj"
     assert "cpf_cnpj" in state.agent_response.payload_schema["properties"]
@@ -1182,10 +1158,7 @@ async def test_input_inesperado_no_botao_pagar_a_vista_reenvia_schema(
     state = await workflow.execute(state, {"texto_livre": "pagar tudo"})
 
     assert "Essa opção não existe" in state.agent_response.description
-    assert (
-        "opcao_pagar_a_vista"
-        in state.agent_response.payload_schema["properties"]
-    )
+    assert "opcao_pagar_a_vista" in state.agent_response.payload_schema["properties"]
 
 
 @pytest.mark.asyncio
@@ -1209,7 +1182,9 @@ async def test_fluxo_completo_pagar_tudo_boleto_bancario(
     state = await workflow.execute(state, {"cpf_cnpj": "12.345.678/0001-90"})
     assert "Tipo de consulta:" in state.agent_response.description
     assert "acao_resultado" in state.agent_response.payload_schema["properties"]
-    assert state.data["divida_ativa"]["opcoes_menu"] == workflow.opcoes_menu_nao_parcelado
+    assert (
+        state.data["divida_ativa"]["opcoes_menu"] == workflow.opcoes_menu_nao_parcelado
+    )
 
     state = await workflow.execute(state, {"acao_resultado": "pagar_agora"})
     assert "opcao_menu" in state.agent_response.payload_schema["properties"]
@@ -1218,16 +1193,23 @@ async def test_fluxo_completo_pagar_tudo_boleto_bancario(
     assert "opcao_pagar_a_vista" in state.agent_response.payload_schema["properties"]
 
     state = await workflow.execute(state, {"opcao_pagar_a_vista": "pagar_tudo"})
-    assert "confirmar_pagamento_a_vista" in state.agent_response.payload_schema["properties"]
+    assert (
+        "confirmar_pagamento_a_vista"
+        in state.agent_response.payload_schema["properties"]
+    )
     assert state.data["divida_ativa"]["debitos_pagamento_a_vista_labels"] == [
         "1. CDA-1",
         "2. EF-1",
     ]
 
     state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
-    assert "forma_pagamento_a_vista" in state.agent_response.payload_schema["properties"]
+    assert (
+        "forma_pagamento_a_vista" in state.agent_response.payload_schema["properties"]
+    )
 
-    state = await workflow.execute(state, {"forma_pagamento_a_vista": "boleto_bancario"})
+    state = await workflow.execute(
+        state, {"forma_pagamento_a_vista": "boleto_bancario"}
+    )
     assert "https://example.com/guia.pdf" in state.agent_response.description
     assert state.agent_response.payload_schema is None
     assert api_service.consulta_calls == [
@@ -1270,7 +1252,9 @@ async def test_fluxo_completo_escolher_debitos_e_pix(
     assert "1. CDA-1" not in state.agent_response.description
 
     state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
-    state = await workflow.execute(state, {"forma_pagamento_a_vista": "pix_copia_e_cola"})
+    state = await workflow.execute(
+        state, {"forma_pagamento_a_vista": "pix_copia_e_cola"}
+    )
 
     assert "000201PIX" in state.agent_response.description
     assert api_service.emissao_calls == [(["CDA-2"], ["EF-1"])]
@@ -1295,9 +1279,13 @@ async def test_fluxo_nao_opcoes_pagamento_e_parcelar(
     state = await workflow.execute(state, {"opcao_pagar_a_vista": "pagar_tudo"})
 
     state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "nao"})
-    assert "acao_pagamento_recusado" in state.agent_response.payload_schema["properties"]
+    assert (
+        "acao_pagamento_recusado" in state.agent_response.payload_schema["properties"]
+    )
 
-    state = await workflow.execute(state, {"acao_pagamento_recusado": "opcoes_pagamento"})
+    state = await workflow.execute(
+        state, {"acao_pagamento_recusado": "opcoes_pagamento"}
+    )
     assert "opcao_menu" in state.agent_response.payload_schema["properties"]
 
     state = await workflow.execute(state, {"opcao_menu": "parcelar_debitos"})

@@ -29,4 +29,9 @@ workflows = [
 ]
 
 # Lista de workflows disponíveis para import fácil
-__all__ = ["workflows", "BankAccountWorkflow", "EquipmentsWorkflow", "DividaAtivaWorkflow"]
+__all__ = [
+    "workflows",
+    "BankAccountWorkflow",
+    "EquipmentsWorkflow",
+    "DividaAtivaWorkflow",
+]

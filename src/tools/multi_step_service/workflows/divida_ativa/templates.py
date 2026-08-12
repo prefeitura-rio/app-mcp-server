@@ -141,10 +141,7 @@ class DividaAtivaTemplates:
 
     @staticmethod
     def pagamento_a_vista_confirmado() -> str:
-        return (
-            "Certo.\n\n"
-            "Agora escolha uma das três opções para fazer o pagamento:"
-        )
+        return "Certo.\n\nAgora escolha uma das três opções para fazer o pagamento:"
 
     @staticmethod
     def pagamento_a_vista_recusado() -> str:
@@ -163,9 +160,7 @@ class DividaAtivaTemplates:
     @staticmethod
     def boleto_bancario_a_vista(link: str) -> str:
         return (
-            "Beleza.\n\n"
-            "Clique no link para o pagamento por *boleto bancário*:\n"
-            f"{link}"
+            f"Beleza.\n\nClique no link para o pagamento por *boleto bancário*:\n{link}"
         )
 
     @staticmethod
@@ -231,9 +226,7 @@ class DividaAtivaTemplates:
             for indice, ef in enumerate(divida_info.efs, start=1):
                 numero = ef.numero_execucao_fiscal or ef.numero_ef or "N/A"
                 valor = (
-                    ef.saldo_execucao_fiscal_nao_parcelada
-                    or ef.valor_original
-                    or "N/A"
+                    ef.saldo_execucao_fiscal_nao_parcelada or ef.valor_original or "N/A"
                 )
                 linhas.append(f"{indice}. {numero}")
                 linhas.append(f"Valor {valor}")
