@@ -61,3 +61,30 @@ async def test_emitir_guia_a_vista_usa_contrato_da_tool(monkeypatch):
             "lista_guias": "[]",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_emitir_guia_a_vista_remove_cdas_e_efs_duplicadas(monkeypatch):
+    calls = []
+
+    async def fake_emitir_guia_a_vista(parameters):
+        calls.append(parameters)
+        return {"api_resposta_sucesso": True}
+
+    monkeypatch.setattr(module, "emitir_guia_a_vista_tool", fake_emitir_guia_a_vista)
+
+    service = module.DividaAtivaAPIService(user_id="unit-test-user")
+    await service.emitir_guia_a_vista(
+        cdas=["CDA-1", "CDA-1", "CDA-2"],
+        efs=["EF-1", "EF-1"],
+    )
+
+    assert calls == [
+        {
+            "itens_informados": ["1", "2", "3"],
+            "dicionario_itens": "{'1': 'CDA-1', '2': 'CDA-2', '3': 'EF-1'}",
+            "lista_cdas": "['CDA-1', 'CDA-2']",
+            "lista_efs": "['EF-1']",
+            "lista_guias": "[]",
+        }
+    ]

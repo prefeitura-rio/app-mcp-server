@@ -5,6 +5,7 @@ Implementa o início do fluxo de consulta de dívidas ativas.
 """
 
 from langgraph.graph import StateGraph, END
+from pydantic import ValidationError
 
 from src.tools.multi_step_service.core import (
     AgentResponse,
@@ -327,7 +328,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         if "tipo_consulta" in state.payload:
             try:
                 validated = TipoConsultaPayload.model_validate(state.payload)
-            except Exception:
+            except ValidationError:
                 state.agent_response = AgentResponse(
                     service_name=self.service_name,
                     description=DividaAtivaTemplates.opcao_menu_indisponivel(),
@@ -687,7 +688,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         try:
             validated = ConfirmacaoPagamentoAVistaPayload.model_validate(state.payload)
-        except Exception:
+        except ValidationError:
             self._opcao_pagamento_response(
                 state,
                 DividaAtivaTemplates.opcao_botao_indisponivel(),
@@ -730,7 +731,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         try:
             validated = AcaoPagamentoRecusadoPayload.model_validate(state.payload)
-        except Exception:
+        except ValidationError:
             self._opcao_pagamento_response(
                 state,
                 DividaAtivaTemplates.opcao_botao_indisponivel(),
@@ -790,7 +791,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         try:
             validated = FormaPagamentoAVistaPayload.model_validate(state.payload)
-        except Exception:
+        except ValidationError:
             self._opcao_pagamento_response(
                 state,
                 DividaAtivaTemplates.opcao_botao_indisponivel(),
@@ -836,7 +837,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         try:
             validated = DebitosEscolhidosPayload.model_validate(state.payload)
-        except Exception:
+        except ValidationError:
             self._opcao_pagamento_response(
                 state,
                 DividaAtivaTemplates.debitos_escolhidos_invalidos(total_debitos),
@@ -870,7 +871,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         try:
             validated = OpcaoPagarAVistaPayload.model_validate(state.payload)
-        except Exception:
+        except ValidationError:
             self._opcao_pagamento_response(
                 state,
                 DividaAtivaTemplates.opcao_botao_indisponivel(),
@@ -968,7 +969,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         try:
             validated = AcaoResultadoConsultaPayload.model_validate(state.payload)
-        except Exception:
+        except ValidationError:
             state.agent_response = AgentResponse(
                 service_name=self.service_name,
                 description=DividaAtivaTemplates.opcao_botao_indisponivel(),
@@ -1070,7 +1071,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         try:
             validated = payload_model.model_validate(state.payload)
-        except Exception as e:
+        except ValidationError as e:
             state.agent_response = AgentResponse(
                 service_name=self.service_name,
                 description=description,

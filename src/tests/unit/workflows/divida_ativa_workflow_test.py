@@ -4,6 +4,7 @@ import types
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -87,7 +88,7 @@ def divida_ativa_modules(monkeypatch):
         "src.tools.multi_step_service.workflows.divida_ativa.core.constants",
         "src/tools/multi_step_service/workflows/divida_ativa/core/constants.py",
     )
-    _load_module(
+    models_module = _load_module(
         "src.tools.multi_step_service.workflows.divida_ativa.core.models",
         "src/tools/multi_step_service/workflows/divida_ativa/core/models.py",
     )
@@ -103,6 +104,7 @@ def divida_ativa_modules(monkeypatch):
     return types.SimpleNamespace(
         ServiceState=service_models.ServiceState,
         DividaAtivaWorkflow=workflow_module.DividaAtivaWorkflow,
+        models=models_module,
     )
 
 
@@ -198,6 +200,45 @@ async def test_payload_vazio_retorna_schema_do_flow(divida_ativa_modules):
         "execucao_fiscal",
     ]
     assert len(tipo_schema["options"]) == 5
+
+
+def test_cpf_cnpj_rejeita_letras(divida_ativa_modules):
+    with pytest.raises(ValidationError):
+        divida_ativa_modules.models.CpfCnpjPayload.model_validate(
+            {"cpf_cnpj": "abc.def.ghi-jk"}
+        )
+
+
+def test_entrada_rejeita_identificador_sem_numero(divida_ativa_modules):
+    with pytest.raises(ValidationError):
+        divida_ativa_modules.models.EntradaPayload.model_validate(
+            {"entrada": "documento"}
+        )
+
+
+def test_options_de_botoes_nao_incluem_description(divida_ativa_modules):
+    schema = divida_ativa_modules.models.OpcaoPagarAVistaPayload.model_json_schema()
+
+    options = schema["properties"]["opcao_pagar_a_vista"]["options"]
+
+    assert options == [
+        {"label": "Pagar tudo", "value": "pagar_tudo"},
+        {"label": "Escolher os débitos", "value": "escolher_debitos"},
+    ]
+
+
+def test_options_de_whatsapp_flow_incluem_description(divida_ativa_modules):
+    schema = (
+        divida_ativa_modules.models.MenuPagamentoCompletoPayload.model_json_schema()
+    )
+
+    options = schema["properties"]["opcao_menu"]["options"]
+
+    assert options[0] == {
+        "description": "Emitir guia para pagamento integral",
+        "label": "Pagar à vista",
+        "value": "pagar_a_vista",
+    }
 
 
 @pytest.mark.asyncio

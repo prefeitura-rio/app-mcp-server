@@ -94,6 +94,10 @@ class DividaAtivaAPIService:
         except KeyError:
             raise ValueError(f"Nó de consulta inválido: {node_name}")
 
+    def _deduplicar_identificadores(self, identificadores: list[str]) -> list[str]:
+        """Remove duplicados preservando a ordem original."""
+        return list(dict.fromkeys(identificadores))
+
     async def consultar_debitos(self, tipo_consulta: str, valor: str, **dados: Any):
         """
         Consulta débitos usando a tool oficial de Dívida Ativa.
@@ -132,6 +136,8 @@ class DividaAtivaAPIService:
         """
         Emite guia de pagamento à vista usando a tool oficial de Dívida Ativa.
         """
+        cdas = self._deduplicar_identificadores(cdas)
+        efs = self._deduplicar_identificadores(efs)
         dicionario_itens = {}
         itens_informados = []
         for indice, identificador in enumerate([*cdas, *efs], start=1):
