@@ -1,5 +1,7 @@
 from typing import List, Optional
 
+from google.api_core.exceptions import GoogleAPIError
+
 from src.tools.equipments.utils import get_plus8_coords_from_address
 from src.utils.bigquery import get_bigquery_result
 from src.utils.error_interceptor import interceptor
@@ -197,6 +199,25 @@ async def get_category_equipments() -> dict:
     return categories
 
 
+# Resposta de fallback quando as instruções temáticas não podem ser carregadas.
+# É a mesma para falha esperada e inesperada: o contrato com o agente não muda,
+# o que muda é só o log. Função (e não constante de módulo) para que ninguém
+# mutile acidentalmente o dict devolvido a um chamador anterior.
+def _instrucoes_indisponiveis() -> List[dict]:
+    return [
+        {
+            "error": "Instruções temporariamente indisponíveis",
+            "message": (
+                "Não foi possível carregar as instruções temáticas agora. "
+                "Prossiga normalmente: peça o endereço COMPLETO do usuário "
+                "(incluindo BAIRRO ou PONTO DE REFERÊNCIA) e chame a tool "
+                "`equipments_by_address`. Não mencione esta indisponibilidade "
+                "ao cidadão."
+            ),
+        }
+    ]
+
+
 @interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_tematic_instructions_for_equipments(tema: str = "geral") -> List[dict]:
     where_clause = f"WHERE tema = '{tema}'" if tema != "geral" else ""
@@ -208,27 +229,24 @@ async def get_tematic_instructions_for_equipments(tema: str = "geral") -> List[d
     """
     try:
         return get_bigquery_result(query=query)
-    except Exception as e:
-        # `equipamentos_instrucoes` é tabela externa sobre uma Google Sheet
-        # (CHATR-119): perder acesso à planilha vira um 400 do BigQuery, que
-        # não é `NotFound` e portanto atravessa a degradação de
+    except GoogleAPIError as e:
+        # Caso esperado. `equipamentos_instrucoes` é tabela externa sobre uma
+        # Google Sheet (CHATR-119): perder acesso à planilha vira um 400 do
+        # BigQuery, que não é `NotFound` e portanto atravessa a degradação de
         # `get_bigquery_result`. Sem este bloco, a falha derruba a tool
         # `equipments_instructions` inteira, e com ela o fluxo de
         # equipamentos — que funciona sem as instruções.
         # O status da tabela é sondado por `src/health/external_tables.py`.
-        logger.error(f"Erro ao buscar instruções de equipamentos (tema={tema}): {e}")
-        return [
-            {
-                "error": "Instruções temporariamente indisponíveis",
-                "message": (
-                    "Não foi possível carregar as instruções temáticas agora. "
-                    "Prossiga normalmente: peça o endereço COMPLETO do usuário "
-                    "(incluindo BAIRRO ou PONTO DE REFERÊNCIA) e chame a tool "
-                    "`equipments_by_address`. Não mencione esta indisponibilidade "
-                    "ao cidadão."
-                ),
-            }
-        ]
+        logger.error(f"Tabela externa de instruções indisponível (tema={tema}): {e}")
+        return _instrucoes_indisponiveis()
+    except Exception as e:
+        # Caso inesperado: bug nosso ou mudança de API, não planilha fora do ar.
+        # O cidadão continua protegido pelo mesmo fallback, mas o log precisa
+        # ser distinguível — este aqui pede investigação, o de cima não.
+        logger.error(
+            f"Erro INESPERADO ao buscar instruções de equipamentos (tema={tema}): {e!r}"
+        )
+        return _instrucoes_indisponiveis()
 
 
 # if __name__ == "__main__":

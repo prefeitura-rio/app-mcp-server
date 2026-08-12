@@ -1,7 +1,7 @@
 import asyncio
 import functools
 from google.cloud import bigquery
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.oauth2 import service_account
 from opentelemetry.trace import Status, StatusCode
 from typing import List
@@ -601,6 +601,16 @@ def get_bigquery_result(query: str, page_size: int = None) -> List[dict]:
             logger.warning(f"Tabela não encontrada no BigQuery: {str(e)}")
             # Return empty list when table doesn't exist yet - allows graceful degradation
             return []
+        except GoogleAPIError as e:
+            span.set_attribute("bigquery.success", False)
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            logger.error(f"Erro ao executar query no BigQuery: {str(e)}")
+            # Repassa a exceção original em vez de envolvê-la: é o tipo que
+            # permite ao chamador separar falha conhecida de infraestrutura
+            # (400 de tabela externa, 403 do Drive) de um bug nosso. Envolver
+            # em `Exception` apagaria essa distinção.
+            raise
         except Exception as e:
             span.set_attribute("bigquery.success", False)
             span.record_exception(e)

@@ -5,6 +5,7 @@ import types
 from pathlib import Path
 
 import pytest
+from google.api_core.exceptions import BadRequest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -353,7 +354,9 @@ def _load_pluscode_service(monkeypatch, get_bigquery_result):
     monkeypatch.setitem(
         sys.modules,
         "src.tools.equipments.utils",
-        types.SimpleNamespace(get_plus8_coords_from_address=lambda address: (None, None)),
+        types.SimpleNamespace(
+            get_plus8_coords_from_address=lambda address: (None, None)
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -370,6 +373,13 @@ def _load_pluscode_service(monkeypatch, get_bigquery_result):
     )
 
 
+def _capturar_erros(monkeypatch, module):
+    """Troca o logger do módulo por um coletor das mensagens de ERROR."""
+    erros = []
+    monkeypatch.setattr(module, "logger", types.SimpleNamespace(error=erros.append))
+    return erros
+
+
 @pytest.mark.asyncio
 async def test_instrucoes_degradam_quando_a_tabela_externa_cai(monkeypatch):
     """CHATR-119: perder a Google Sheet não pode derrubar o fluxo inteiro.
@@ -379,13 +389,14 @@ async def test_instrucoes_degradam_quando_a_tabela_externa_cai(monkeypatch):
     """
 
     def bigquery_quebrado(query):
-        raise Exception(
-            "Failed to execute BigQuery query: 400 Error while reading table: "
+        raise BadRequest(
+            "400 Error while reading table: "
             "rj-iplanrio.plus_codes.equipamentos_instrucoes, error message: "
             "Spreadsheet not found. File: 1VPnJSf9puDgZ-Ed9MRkpe3Jy38nKxGLp7O9-ydAdm98"
         )
 
     module = _load_pluscode_service(monkeypatch, bigquery_quebrado)
+    erros = _capturar_erros(monkeypatch, module)
 
     resultado = await module.get_tematic_instructions_for_equipments(tema="geral")
 
@@ -393,6 +404,33 @@ async def test_instrucoes_degradam_quando_a_tabela_externa_cai(monkeypatch):
     assert resultado[0]["error"] == "Instruções temporariamente indisponíveis"
     # O contrato com o agente: seguir para `equipments_by_address` mesmo assim.
     assert "equipments_by_address" in resultado[0]["message"]
+    # Falha conhecida de infraestrutura: não pode ser logada como bug.
+    assert len(erros) == 1
+    assert "Tabela externa" in erros[0] and "INESPERADO" not in erros[0]
+
+
+@pytest.mark.asyncio
+async def test_instrucoes_degradam_tambem_em_erro_inesperado(monkeypatch):
+    """Um bug nosso não pode chegar ao cidadão, mas tem de gritar no log.
+
+    Mesmo fallback do caso esperado; o que muda é a mensagem de ERROR, para
+    que planilha fora do ar e defeito de código não se confundam na busca.
+    """
+
+    def bigquery_com_bug(query):
+        raise RuntimeError("boom")
+
+    module = _load_pluscode_service(monkeypatch, bigquery_com_bug)
+    erros = _capturar_erros(monkeypatch, module)
+
+    resultado = await module.get_tematic_instructions_for_equipments(tema="geral")
+
+    assert resultado[0]["error"] == "Instruções temporariamente indisponíveis"
+    assert "equipments_by_address" in resultado[0]["message"]
+    assert len(erros) == 1
+    assert "INESPERADO" in erros[0]
+    # `{e!r}` preserva o tipo do erro no log — é o que aponta para o bug.
+    assert "RuntimeError" in erros[0]
 
 
 @pytest.mark.asyncio
