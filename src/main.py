@@ -8,9 +8,16 @@ from pathlib import Path
 # Adiciona o diretório raiz do projeto ao Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.app import mcp
-from src.config import env
-from src.observability.tracing import is_tracing_enabled
+from src.health.preflight import run_startup_preflight
+
+# Precisa rodar ANTES de `src.app`, que importa `src.config.env` e aborta na
+# primeira variável faltante. O preflight reporta todas de uma vez e só então
+# deixa (ou não) a aplicação subir.
+run_startup_preflight()
+
+from src.app import mcp  # noqa: E402
+from src.config import env  # noqa: E402
+from src.observability.tracing import is_tracing_enabled  # noqa: E402
 
 if __name__ == "__main__":
     if env.IS_LOCAL:

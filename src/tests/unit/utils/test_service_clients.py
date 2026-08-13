@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from google.api_core.exceptions import BadRequest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -415,6 +416,17 @@ def test_bigquery_helpers(monkeypatch):
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: ErrorClient())
     with pytest.raises(Exception, match="Failed to execute BigQuery query"):
+        module.get_bigquery_result("select 1")
+
+    # Erro conhecido do Google chega ao chamador com o tipo original, e não
+    # envolvido em `Exception`: é o que permite a `pluscode_service` separar
+    # tabela externa fora do ar de bug nosso (revisão do PR #149).
+    class BadRequestClient:
+        def query(self, query):
+            raise BadRequest("400 Error while reading table: Spreadsheet not found")
+
+    monkeypatch.setattr(module, "get_bigquery_client", lambda: BadRequestClient())
+    with pytest.raises(BadRequest, match="Spreadsheet not found"):
         module.get_bigquery_result("select 1")
 
 

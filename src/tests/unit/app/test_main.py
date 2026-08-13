@@ -25,6 +25,10 @@ def run_main_with_env(monkeypatch, is_local: bool):
     observability_pkg.__path__ = [str(PROJECT_ROOT / "src" / "observability")]
     tracing_module = types.ModuleType("src.observability.tracing")
     tracing_module.is_tracing_enabled = Mock(return_value=False)
+    health_pkg = types.ModuleType("src.health")
+    health_pkg.__path__ = [str(PROJECT_ROOT / "src" / "health")]
+    preflight_module = types.ModuleType("src.health.preflight")
+    preflight_module.run_startup_preflight = Mock()
 
     monkeypatch.setitem(sys.modules, "src", src_pkg)
     monkeypatch.setitem(sys.modules, "src.app", app_module)
@@ -32,20 +36,22 @@ def run_main_with_env(monkeypatch, is_local: bool):
     monkeypatch.setitem(sys.modules, "src.config.env", env_module)
     monkeypatch.setitem(sys.modules, "src.observability", observability_pkg)
     monkeypatch.setitem(sys.modules, "src.observability.tracing", tracing_module)
+    monkeypatch.setitem(sys.modules, "src.health", health_pkg)
+    monkeypatch.setitem(sys.modules, "src.health.preflight", preflight_module)
 
     runpy.run_path(str(MAIN_PATH), run_name="__main__")
 
-    return app_module.mcp
+    return app_module.mcp, preflight_module.run_startup_preflight
 
 
 def test_main_runs_default_transport_locally(monkeypatch):
-    mcp = run_main_with_env(monkeypatch, is_local=True)
+    mcp, _ = run_main_with_env(monkeypatch, is_local=True)
 
     mcp.run.assert_called_once_with()
 
 
 def test_main_runs_streamable_http_when_not_local(monkeypatch):
-    mcp = run_main_with_env(monkeypatch, is_local=False)
+    mcp, _ = run_main_with_env(monkeypatch, is_local=False)
 
     mcp.run.assert_called_once_with(
         transport="streamable-http",
@@ -55,3 +61,25 @@ def test_main_runs_streamable_http_when_not_local(monkeypatch):
         middleware=None,
         stateless_http=True,
     )
+
+
+def test_main_runs_config_preflight(monkeypatch):
+    _, preflight = run_main_with_env(monkeypatch, is_local=False)
+
+    preflight.assert_called_once_with()
+
+
+def test_preflight_precede_o_import_da_aplicacao():
+    """O preflight precisa rodar antes de `src.app` ser importado.
+
+    `src.app` importa `src.config.env`, que aborta na primeira variável
+    faltante — o que anularia o propósito de reportar todas de uma vez. A
+    ordem é frágil justamente porque parece um import fora de lugar: este
+    teste impede que alguém "conserte" o E402 movendo os imports para o topo.
+    """
+    source = MAIN_PATH.read_text(encoding="utf-8")
+
+    chamada_preflight = source.index("run_startup_preflight()")
+    import_da_app = source.index("from src.app import")
+
+    assert chamada_preflight < import_da_app

@@ -29,6 +29,19 @@ def _ensure_package(module_name: str, path: Path):
     return pkg
 
 
+# Carrega o pacote real ANTES dos stubs abaixo. Os testes de `divida_ativa`
+# importam o workflow de verdade, que precisa de `core` com conteúdo real
+# (`AgentResponse` e afins) — os stubs seguintes são pacotes vazios e só
+# servem para pendurar os módulos carregados por caminho.
+#
+# Isto funcionava por acidente enquanto `src/__init__.py` importava `src.app`
+# de forma ansiosa: o grafo real já estava em `sys.modules` quando os stubs
+# eram instalados, então eles nunca chegavam a ser usados. Com a importação
+# preguiçosa (necessária para o preflight reportar todas as variáveis de
+# ambiente faltantes de uma vez), o aquecimento passou a ser explícito.
+import src.tools.multi_step_service.core  # noqa: E402,F401
+import src.tools.multi_step_service.workflows  # noqa: E402,F401
+
 _ensure_package("src", project_root / "src")
 _ensure_package("src.tools", project_root / "src" / "tools")
 _ensure_package(
@@ -39,10 +52,10 @@ _ensure_package(
     "src.tools.multi_step_service.core",
     project_root / "src" / "tools" / "multi_step_service" / "core",
 )
-_ensure_package(
-    "src.tools.multi_step_service.workflows",
-    project_root / "src" / "tools" / "multi_step_service" / "workflows",
-)
+# `src.tools.multi_step_service.workflows` NÃO é stubado: o `Orchestrator` lê
+# a lista `workflows` desse pacote em tempo de execução. O aquecimento acima já
+# o deixou em `sys.modules` com o `__path__` correto, então os stubs de
+# subpacotes logo abaixo continuam funcionando.
 _ensure_package(
     "src.tools.multi_step_service.workflows.poda_de_arvore",
     project_root
