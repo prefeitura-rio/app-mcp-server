@@ -31,6 +31,7 @@ from src.tools.multi_step_service.workflows.divida_ativa.core.models import (
 )
 from src.tools.multi_step_service.workflows.divida_ativa.core.constants import (
     STATE_CONSULTA_REALIZADA,
+    STATE_CURRENT_VIEW,
     STATE_PAYLOAD_ESPERADO,
     STATE_TIPO_CONSULTA_CACHE,
 )
@@ -58,12 +59,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
         "numero_auto_infracao",
         "cda",
         "execucao_fiscal",
-        "acao_resultado",
-        "opcao_menu",
-        "opcao_pagar_a_vista",
-        "debitos_escolhidos",
-        "confirmar_pagamento_a_vista",
-        "forma_pagamento_a_vista",
     ]
     step_dependencies = {
         "tipo_consulta": [
@@ -151,6 +146,126 @@ class DividaAtivaWorkflow(BaseWorkflow):
         "confirmar_pagamento_a_vista": ["forma_pagamento_a_vista"],
         "forma_pagamento_a_vista": [],
     }
+    VIEW_TIPO_CONSULTA = "tipo_consulta"
+    VIEW_ACAO_RESULTADO = "acao_resultado"
+    VIEW_OPCAO_MENU = "opcao_menu"
+    VIEW_OPCAO_PAGAR_A_VISTA = "opcao_pagar_a_vista"
+    VIEW_DEBITOS_ESCOLHIDOS = "debitos_escolhidos"
+    VIEW_CONFIRMAR_PAGAMENTO_A_VISTA = "confirmar_pagamento_a_vista"
+    VIEW_FORMA_PAGAMENTO_A_VISTA = "forma_pagamento_a_vista"
+    VIEW_ACAO_PAGAMENTO_RECUSADO = "acao_pagamento_recusado"
+    view_requirements = {
+        VIEW_TIPO_CONSULTA: [],
+        VIEW_ACAO_RESULTADO: ["divida_ativa"],
+        VIEW_OPCAO_MENU: ["divida_ativa"],
+        VIEW_OPCAO_PAGAR_A_VISTA: ["divida_ativa"],
+        VIEW_DEBITOS_ESCOLHIDOS: ["divida_ativa"],
+        VIEW_CONFIRMAR_PAGAMENTO_A_VISTA: [
+            "divida_ativa",
+            "debitos_pagamento_a_vista",
+        ],
+        VIEW_FORMA_PAGAMENTO_A_VISTA: [
+            "divida_ativa",
+            "debitos_pagamento_a_vista",
+        ],
+        VIEW_ACAO_PAGAMENTO_RECUSADO: ["divida_ativa"],
+    }
+    view_back_targets = {
+        VIEW_OPCAO_MENU: VIEW_ACAO_RESULTADO,
+        VIEW_OPCAO_PAGAR_A_VISTA: VIEW_OPCAO_MENU,
+        VIEW_DEBITOS_ESCOLHIDOS: VIEW_OPCAO_PAGAR_A_VISTA,
+        VIEW_CONFIRMAR_PAGAMENTO_A_VISTA: VIEW_OPCAO_PAGAR_A_VISTA,
+        VIEW_FORMA_PAGAMENTO_A_VISTA: VIEW_CONFIRMAR_PAGAMENTO_A_VISTA,
+        VIEW_ACAO_PAGAMENTO_RECUSADO: VIEW_CONFIRMAR_PAGAMENTO_A_VISTA,
+    }
+    view_dependencies = {
+        VIEW_ACAO_RESULTADO: {
+            "data": [
+                "acao_resultado",
+                "opcao_menu",
+                "opcao_pagar_a_vista",
+                "debitos_escolhidos",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+            ],
+            "divida_ativa": [
+                "opcao_menu_selecionada",
+                "opcao_pagar_a_vista",
+                "debitos_pagamento_a_vista",
+                "debitos_pagamento_a_vista_labels",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+                "guia_pagamento_a_vista",
+                "acao_pagamento_recusado",
+                "renderizacao_menu",
+            ],
+        },
+        VIEW_OPCAO_MENU: {
+            "data": [
+                "opcao_menu",
+                "opcao_pagar_a_vista",
+                "debitos_escolhidos",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+            ],
+            "divida_ativa": [
+                "opcao_menu_selecionada",
+                "opcao_pagar_a_vista",
+                "debitos_pagamento_a_vista",
+                "debitos_pagamento_a_vista_labels",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+                "guia_pagamento_a_vista",
+                "acao_pagamento_recusado",
+                "renderizacao_menu",
+            ],
+        },
+        VIEW_OPCAO_PAGAR_A_VISTA: {
+            "data": [
+                "opcao_pagar_a_vista",
+                "debitos_escolhidos",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+            ],
+            "divida_ativa": [
+                "opcao_pagar_a_vista",
+                "debitos_pagamento_a_vista",
+                "debitos_pagamento_a_vista_labels",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+                "guia_pagamento_a_vista",
+                "acao_pagamento_recusado",
+            ],
+        },
+        VIEW_DEBITOS_ESCOLHIDOS: {
+            "data": [
+                "debitos_escolhidos",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+            ],
+            "divida_ativa": [
+                "debitos_pagamento_a_vista",
+                "debitos_pagamento_a_vista_labels",
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+                "guia_pagamento_a_vista",
+                "acao_pagamento_recusado",
+            ],
+        },
+        VIEW_CONFIRMAR_PAGAMENTO_A_VISTA: {
+            "data": ["confirmar_pagamento_a_vista", "forma_pagamento_a_vista"],
+            "divida_ativa": [
+                "confirmar_pagamento_a_vista",
+                "forma_pagamento_a_vista",
+                "guia_pagamento_a_vista",
+                "acao_pagamento_recusado",
+            ],
+        },
+        VIEW_FORMA_PAGAMENTO_A_VISTA: {
+            "data": ["forma_pagamento_a_vista"],
+            "divida_ativa": ["forma_pagamento_a_vista", "guia_pagamento_a_vista"],
+        },
+    }
     tipo_consulta_steps = {
         "cpf_cnpj": "consultar_cpf_cnpj",
         "inscricao_imobiliaria": "consultar_inscricao_imobiliaria",
@@ -225,11 +340,38 @@ class DividaAtivaWorkflow(BaseWorkflow):
         campo_identificador = self._campo_identificador_atual(state)
         return bool(campo_identificador and campo_identificador in state.payload)
 
+    def _payload_eh_voltar(self, state: ServiceState) -> bool:
+        return any(value == "voltar" for value in state.payload.values())
+
     def _tem_divida_consultada(self, state: ServiceState) -> bool:
         return bool(
             state.internal.get(STATE_CONSULTA_REALIZADA)
             and state.data.get("divida_ativa")
         )
+
+    def _view_tem_requisitos(self, state: ServiceState, view: str) -> bool:
+        divida_ativa = state.data.get("divida_ativa", {})
+        for requisito in self.view_requirements.get(view, []):
+            if requisito == "divida_ativa":
+                if not self._tem_divida_consultada(state):
+                    return False
+                continue
+
+            if requisito in state.data or requisito in divida_ativa:
+                continue
+
+            return False
+
+        return True
+
+    def _limpar_dependencias_view(self, state: ServiceState, view: str) -> None:
+        dependencies = self.view_dependencies.get(view, {})
+        for campo in dependencies.get("data", []):
+            state.data.pop(campo, None)
+
+        divida_ativa = state.data.get("divida_ativa", {})
+        for campo in dependencies.get("divida_ativa", []):
+            divida_ativa.pop(campo, None)
 
     def _retornar_step_esperado(self, state: ServiceState) -> None:
         esperado = state.internal.get(STATE_PAYLOAD_ESPERADO) or {}
@@ -288,6 +430,9 @@ class DividaAtivaWorkflow(BaseWorkflow):
         """
         Envia o Flow de tipos de consulta e valida a escolha do usuário.
         """
+        if self._processar_voltar(state):
+            return state
+
         if self._processar_payload_fora_do_step(state):
             return state
 
@@ -356,6 +501,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
     def _limpar_payload_esperado(self, state: ServiceState) -> None:
         state.internal.pop(STATE_PAYLOAD_ESPERADO, None)
+        state.internal.pop(STATE_CURRENT_VIEW, None)
 
     def _registrar_payload_esperado(
         self,
@@ -363,6 +509,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         payload_schema: dict | None,
         description: str,
         error_message: str,
+        current_view: str | None = None,
     ) -> None:
         if not payload_schema:
             self._limpar_payload_esperado(state)
@@ -370,12 +517,15 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         properties = payload_schema.get("properties", {})
         required = payload_schema.get("required") or list(properties.keys())
+        view = current_view or (required[0] if required else None)
         state.internal[STATE_PAYLOAD_ESPERADO] = {
             "fields": required,
             "description": description,
             "payload_schema": payload_schema,
             "error_message": error_message,
         }
+        if view:
+            state.internal[STATE_CURRENT_VIEW] = view
 
     def _processar_payload_inesperado(self, state: ServiceState) -> bool:
         esperado = state.internal.get(STATE_PAYLOAD_ESPERADO)
@@ -498,6 +648,71 @@ class DividaAtivaWorkflow(BaseWorkflow):
         state.internal.pop(STATE_CONSULTA_REALIZADA, None)
         state.internal.pop(STATE_TIPO_CONSULTA_CACHE, None)
         self._limpar_payload_esperado(state)
+
+    def _render_view(self, state: ServiceState, view: str) -> ServiceState:
+        if not self._view_tem_requisitos(state, view):
+            self._limpar_divida_consultada(state)
+            return self._tipo_consulta_response(state)
+
+        divida_ativa = state.data.get("divida_ativa", {})
+
+        if view == self.VIEW_ACAO_RESULTADO:
+            return self._action_response(
+                state,
+                divida_ativa.get("mensagem_divida_contribuinte")
+                or DividaAtivaTemplates.consulta_realizada(),
+            )
+
+        if view == self.VIEW_OPCAO_MENU:
+            return self._menu_pagamento_response(
+                state,
+                DividaAtivaTemplates.escolher_opcao_pagamento(),
+            )
+
+        if view == self.VIEW_OPCAO_PAGAR_A_VISTA:
+            return self._opcao_pagamento_response(
+                state,
+                DividaAtivaTemplates.pagar_a_vista(),
+                payload_schema=self._build_opcao_pagar_a_vista_schema(),
+            )
+
+        if view == self.VIEW_DEBITOS_ESCOLHIDOS:
+            return self._debitos_escolhidos_response(state)
+
+        if view == self.VIEW_CONFIRMAR_PAGAMENTO_A_VISTA:
+            labels = divida_ativa.get("debitos_pagamento_a_vista_labels", [])
+            return self._opcao_pagamento_response(
+                state,
+                DividaAtivaTemplates.confirmar_pagamento_a_vista(labels),
+                payload_schema=self._build_confirmacao_pagamento_schema(),
+            )
+
+        if view == self.VIEW_FORMA_PAGAMENTO_A_VISTA:
+            return self._opcao_pagamento_response(
+                state,
+                DividaAtivaTemplates.pagamento_a_vista_confirmado(),
+                payload_schema=self._build_forma_pagamento_schema(),
+            )
+
+        return self._tipo_consulta_response(state)
+
+    def _voltar_para_view_response(
+        self, state: ServiceState, target_view: str
+    ) -> ServiceState:
+        self._limpar_dependencias_view(state, target_view)
+        return self._render_view(state, target_view)
+
+    def _processar_voltar(self, state: ServiceState) -> bool:
+        if not self._payload_eh_voltar(state):
+            return False
+
+        current_view = state.internal.get(STATE_CURRENT_VIEW)
+        target_view = self.view_back_targets.get(current_view)
+        if not target_view:
+            return False
+
+        self._voltar_para_view_response(state, target_view)
+        return True
 
     def _tipo_consulta_response(self, state: ServiceState) -> ServiceState:
         schema = TipoConsultaPayload.model_json_schema()
@@ -891,6 +1106,24 @@ class DividaAtivaWorkflow(BaseWorkflow):
         self._debitos_escolhidos_response(state)
         return True
 
+    def _regularizar_debitos_response(self, state: ServiceState) -> ServiceState:
+        divida_ativa = state.data.setdefault("divida_ativa", {})
+        total_guias = len(
+            [guia for guia in divida_ativa.get("lista_guias", []) if guia]
+        )
+
+        if total_guias <= 1:
+            divida_ativa["opcao_pagar_a_vista"] = "pagar_tudo"
+            state.data["opcao_pagar_a_vista"] = "pagar_tudo"
+            debitos = self._get_debitos_pagaveis_a_vista(state)
+            return self._confirmar_debitos_a_vista_response(state, debitos)
+
+        return self._opcao_pagamento_response(
+            state,
+            DividaAtivaTemplates.regularizar_debitos(),
+            payload_schema=self._build_opcao_pagar_a_vista_schema(),
+        )
+
     def _processar_opcao_menu(self, state: ServiceState) -> bool:
         if "opcao_menu" not in state.payload:
             return False
@@ -916,8 +1149,8 @@ class DividaAtivaWorkflow(BaseWorkflow):
         state.data["opcao_menu"] = opcao_menu
 
         if opcao_menu == "voltar":
-            self._limpar_divida_consultada(state)
-            self._tipo_consulta_response(state)
+            target_view = self.view_back_targets[self.VIEW_OPCAO_MENU]
+            self._voltar_para_view_response(state, target_view)
             return True
 
         if opcao_menu == "pagar_a_vista":
@@ -936,10 +1169,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             return True
 
         if opcao_menu == "regularizar_debitos":
-            self._opcao_pagamento_response(
-                state,
-                DividaAtivaTemplates.regularizar_debitos(),
-            )
+            self._regularizar_debitos_response(state)
             return True
 
         if opcao_menu == "liquidar_parcelamento":
