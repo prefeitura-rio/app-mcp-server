@@ -94,7 +94,11 @@ class DividaAtivaTemplates:
 
     @staticmethod
     def regularizar_debitos() -> str:
-        return "Para regularizar todas as parcelas em atraso, digite *TODAS*."
+        return (
+            "Para regularizar seus débitos você pode *pagar tudo* ou "
+            "*escolher os débitos* que deseja pagar.\n\n"
+            "O que prefere fazer?"
+        )
 
     @staticmethod
     def liquidar_parcelamento() -> str:

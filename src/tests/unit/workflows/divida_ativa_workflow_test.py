@@ -557,24 +557,94 @@ async def test_acao_resultado_invalida_retorna_botoes(
 
 
 @pytest.mark.asyncio
-async def test_opcao_menu_voltar_limpa_divida_e_volta_para_tipo(
+async def test_opcao_menu_voltar_descarta_ultima_opcao_e_volta_para_resultado(
     divida_ativa_modules,
 ):
     workflow = divida_ativa_modules.DividaAtivaWorkflow()
     state = _new_state(divida_ativa_modules)
     state.internal["consulta_realizada"] = True
+    state.data["tipo_consulta"] = "cpf_cnpj"
+    state.data["cpf_cnpj"] = "12345678901"
+    state.data["acao_resultado"] = "pagar_agora"
+    state.data["opcao_menu"] = "voltar"
     state.data["divida_ativa"] = {
         "mensagem_divida_contribuinte": "mensagem",
         "opcoes_menu": workflow.opcoes_menu_completo,
         "renderizacao_menu": "whatsapp_flow",
+        "opcao_menu_selecionada": "voltar",
     }
 
     state = await workflow.execute(state, {"opcao_menu": "voltar"})
 
-    assert "divida_ativa" not in state.data
-    assert "consulta_realizada" not in state.internal
+    assert state.data["tipo_consulta"] == "cpf_cnpj"
+    assert state.data["cpf_cnpj"] == "12345678901"
+    assert state.data["divida_ativa"]["mensagem_divida_contribuinte"] == "mensagem"
+    assert state.internal["consulta_realizada"] is True
+    assert "acao_resultado" not in state.data
+    assert "opcao_menu" not in state.data
+    assert "renderizacao_menu" not in state.data["divida_ativa"]
+    assert "opcao_menu_selecionada" not in state.data["divida_ativa"]
     assert "tipo_consulta_cache" not in state.internal
-    assert "tipo_consulta" in state.agent_response.payload_schema["properties"]
+    assert state.internal["current_view"] == "acao_resultado"
+    assert "mensagem" in state.agent_response.description
+    assert "acao_resultado" in state.agent_response.payload_schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_opcao_menu_antiga_apos_voltar_nao_dispara_parcelamento(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["tipo_consulta"] = "cpf_cnpj"
+    state.data["cpf_cnpj"] = "12345678901"
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_parcelado,
+    }
+
+    state = await workflow.execute(state, {"acao_resultado": "pagar_agora"})
+    assert "opcao_menu" in state.agent_response.payload_schema["properties"]
+
+    state = await workflow.execute(state, {"opcao_menu": "voltar"})
+    assert "acao_resultado" in state.agent_response.payload_schema["properties"]
+
+    state = await workflow.execute(state, {"opcao_menu": "parcelar_debitos"})
+
+    assert "parcelamento-em-divida-ativa" not in state.agent_response.description
+    assert "Essa opção não existe" in state.agent_response.description
+    assert "acao_resultado" in state.agent_response.payload_schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_voltar_usa_view_atual_para_retornar_ao_menu_pagamento(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["tipo_consulta"] = "cpf_cnpj"
+    state.data["cpf_cnpj"] = "12345678901"
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "lista_cdas": ["CDA-1"],
+        "lista_efs": [],
+    }
+
+    state = await workflow.execute(state, {"acao_resultado": "pagar_agora"})
+    state = await workflow.execute(state, {"opcao_menu": "pagar_a_vista"})
+    assert state.internal["current_view"] == "opcao_pagar_a_vista"
+
+    state = await workflow.execute(state, {"botao": "voltar"})
+
+    assert "Como você quer seguir com o pagamento?" in state.agent_response.description
+    assert "opcao_menu" in state.agent_response.payload_schema["properties"]
+    assert state.internal["current_view"] == "opcao_menu"
+    assert "opcao_menu" not in state.data
+    assert "opcao_pagar_a_vista" not in state.data
+    assert "opcao_menu_selecionada" not in state.data["divida_ativa"]
 
 
 @pytest.mark.asyncio
@@ -1078,7 +1148,6 @@ async def test_acao_pagamento_recusado_encerrar_finaliza(
             "parcelar_debitos",
             "https://carioca.rio/servicos/parcelamento-em-divida-ativa/",
         ),
-        ("regularizar_debitos", "digite *TODAS*"),
         (
             "liquidar_parcelamento",
             "https://daminternet.rio.rj.gov.br/GuiaPagamento/Liquidacao",
@@ -1107,6 +1176,62 @@ async def test_opcoes_menu_informativas_retornam_mensagem(
     assert texto_esperado in state.agent_response.description
     assert state.agent_response.payload_schema is None
     assert state.data["divida_ativa"]["opcao_menu_selecionada"] == opcao_menu
+
+
+@pytest.mark.asyncio
+async def test_regularizar_debitos_com_uma_guia_pula_todas_e_confirma_debitos(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_completo,
+        "lista_cdas": ["CDA-1"],
+        "lista_efs": [],
+        "lista_guias": ["GUIA-1"],
+    }
+
+    state = await workflow.execute(state, {"opcao_menu": "regularizar_debitos"})
+
+    assert "digite *TODAS*" not in state.agent_response.description
+    assert "Os débitos escolhidos foram" in state.agent_response.description
+    assert "1. CDA-1" in state.agent_response.description
+    assert (
+        "confirmar_pagamento_a_vista"
+        in state.agent_response.payload_schema["properties"]
+    )
+    assert state.data["opcao_pagar_a_vista"] == "pagar_tudo"
+    assert state.data["divida_ativa"]["opcao_pagar_a_vista"] == "pagar_tudo"
+
+
+@pytest.mark.asyncio
+async def test_regularizar_debitos_com_multiplas_guias_retorna_botoes_de_escolha(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_completo,
+        "lista_cdas": ["CDA-1"],
+        "lista_efs": [],
+        "lista_guias": ["GUIA-1", "GUIA-2"],
+    }
+
+    state = await workflow.execute(state, {"opcao_menu": "regularizar_debitos"})
+
+    schema = state.agent_response.payload_schema
+    assert "pagar tudo" in state.agent_response.description
+    assert "escolher os débitos" in state.agent_response.description
+    assert schema["x-render"] == "buttons"
+    assert schema["properties"]["opcao_pagar_a_vista"]["enum"] == [
+        "pagar_tudo",
+        "escolher_debitos",
+    ]
+    assert state.data["divida_ativa"]["opcao_menu_selecionada"] == "regularizar_debitos"
 
 
 @pytest.mark.asyncio
