@@ -49,6 +49,10 @@ from src.tools.divida_ativa import (
     emitir_guia_regularizacao,
     consultar_debitos,
 )
+from src.tools.divida_ativa_v2 import (
+    emitir_guia_a_vista_v2,
+    emitir_guia_regularizacao_v2,
+)
 from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
@@ -582,6 +586,9 @@ def create_app() -> FastMCP:
     async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de pagamento à vista
+
+        DEPRECATED: use POST /v2/emitir_guia, que valida a entrada com
+        Pydantic antes de chamar a PGM.
         """
         try:
             parameters = await request.json()
@@ -595,10 +602,43 @@ def create_app() -> FastMCP:
     async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de regularização
+
+        DEPRECATED: use POST /v2/emitir_guia_regularizacao, que valida a
+        entrada com Pydantic antes de chamar a PGM.
         """
         try:
             parameters = await request.json()
             result = await emitir_guia_regularizacao(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    # ===== DÍVIDA ATIVA V2 (entrada e saída validadas com Pydantic) =====
+    # Erros de validação retornam HTTP 200 com api_resposta_sucesso=false,
+    # mantendo o contrato que os consumidores (SFMC/LLM) já tratam.
+
+    @mcp.custom_route("/v2/emitir_guia", methods=["POST"])
+    async def da_emitir_guia_pagamento_a_vista_v2(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de pagamento à vista, com validação de entrada
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_a_vista_v2(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/v2/emitir_guia_regularizacao", methods=["POST"])
+    async def da_emitir_guia_regularizacao_v2(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de regularização, com validação de entrada
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_regularizacao_v2(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
             logger.error(f"Error processing request: {str(e)}")
