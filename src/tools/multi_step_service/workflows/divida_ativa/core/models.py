@@ -308,7 +308,7 @@ class AcaoResultadoConsultaPayload(BaseModel):
 
 
 class MenuPagamentoCompletoPayload(BaseModel):
-    """WhatsApp Flow para dívida com débitos não parcelados e parcelados."""
+    """Lista para dívida com débitos não parcelados e parcelados."""
 
     opcao_menu: Literal[
         "pagar_a_vista",
@@ -330,15 +330,16 @@ class MenuPagamentoCompletoPayload(BaseModel):
                     "liquidar_parcelamento",
                     "emitir_2_via",
                     "voltar",
-                ]
+                ],
+                include_description=False,
             ),
-            "x-render": "whatsapp_flow",
+            "x-render": "list",
         },
     )
 
 
 class MenuPagamentoParceladoPayload(BaseModel):
-    """WhatsApp Flow para dívida apenas com guias parceladas."""
+    """Lista para dívida apenas com guias parceladas."""
 
     opcao_menu: Literal[
         "parcelar_debitos",
@@ -358,9 +359,10 @@ class MenuPagamentoParceladoPayload(BaseModel):
                     "liquidar_parcelamento",
                     "emitir_2_via",
                     "voltar",
-                ]
+                ],
+                include_description=False,
             ),
-            "x-render": "whatsapp_flow",
+            "x-render": "list",
         },
     )
 
@@ -461,7 +463,7 @@ class AcaoPagamentoRecusadoPayload(BaseModel):
 
 
 class TipoConsultaPayload(BaseModel):
-    """Payload para escolha do tipo de consulta no WhatsApp Flow."""
+    """Payload para escolha do tipo de consulta em lista."""
 
     tipo_consulta: Literal[
         "cpf_cnpj",
@@ -481,7 +483,9 @@ class TipoConsultaPayload(BaseModel):
                     "auto_infracao",
                     "cda",
                     "execucao_fiscal",
-                ]
-            )
+                ],
+                include_description=False,
+            ),
+            "x-render": "list",
         },
     )
