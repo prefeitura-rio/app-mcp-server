@@ -8,10 +8,12 @@ fallback do Google em vez de derrubar a tool.
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
 
+import httpx
 import pytest
 from google.genai import errors as genai_errors
 
@@ -34,7 +36,9 @@ def _load_module(module_name: str, path: Path):
 
 def _silent_logger():
     noop = lambda *_args, **_kwargs: None  # noqa: E731
-    return types.SimpleNamespace(info=noop, warning=noop, error=noop, debug=noop)
+    return types.SimpleNamespace(
+        info=noop, warning=noop, error=noop, debug=noop, exception=noop
+    )
 
 
 def server_error(code: int = 503, status: str = "UNAVAILABLE", details=None):
@@ -392,11 +396,40 @@ def search(monkeypatch, env_stub):
     return state
 
 
-def test_falha_do_typesense_cai_no_google(search, monkeypatch):
-    """Antes do CHATR-122, a exceção do Typesense matava a tool antes do fallback."""
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(
+            httpx.HTTPStatusError(
+                "502 Bad Gateway",
+                request=httpx.Request("GET", "http://typesense.local/search"),
+                response=httpx.Response(502),
+            ),
+            id="http_status_error",
+        ),
+        pytest.param(httpx.ReadTimeout("read timeout"), id="timeout"),
+        pytest.param(httpx.ConnectError("connection refused"), id="network_error"),
+        pytest.param(httpx.RemoteProtocolError("resposta truncada"), id="protocol"),
+        pytest.param(httpx.TooManyRedirects("loop de redirect"), id="redirects"),
+        pytest.param(
+            json.JSONDecodeError("Expecting value", "<html>502</html>", 0),
+            id="corpo_nao_json",
+        ),
+        pytest.param(httpx.InvalidURL("url malformada"), id="url_malformada"),
+        pytest.param(RuntimeError("caso escuso"), id="inesperado"),
+    ],
+)
+def test_falha_do_typesense_cai_no_google(search, monkeypatch, exc):
+    """Antes do CHATR-122, a exceção do Typesense matava a tool antes do fallback.
+
+    Cada caso exercita um ramo distinto de `_try_hub_search`, na ordem da hierarquia
+    do httpx. `InvalidURL` está fora da hierarquia de `HTTPError` e `JSONDecodeError`
+    deriva de `ValueError` — ambos precisam de ramo próprio para não escapar. Todos
+    devem degradar para o Google em vez de propagar.
+    """
 
     async def exploding_hub_search(request):
-        raise RuntimeError("HTTP 502 do Typesense")
+        raise exc
 
     monkeypatch.setattr(search.module, "hub_search", exploding_hub_search)
 
@@ -404,6 +437,23 @@ def test_falha_do_typesense_cai_no_google(search, monkeypatch):
 
     assert result["text"] == "resposta do google"
     assert result["id"] == "abc"
+
+
+def test_hierarquia_de_excecoes_do_httpx_nao_regrediu():
+    """A ordem dos ramos em `_try_hub_search` depende destas relações.
+
+    Se uma versão futura do httpx reorganizar a hierarquia, um ramo mais genérico
+    passaria na frente e engoliria o específico — sem quebrar nenhum outro teste.
+    """
+    assert issubclass(httpx.TimeoutException, httpx.TransportError)
+    assert issubclass(httpx.TransportError, httpx.RequestError)
+    assert issubclass(httpx.ConnectError, httpx.RequestError)
+    assert issubclass(httpx.TooManyRedirects, httpx.RequestError)
+    # Irmão de RequestError, não ancestral: precisa de ramo separado.
+    assert not issubclass(httpx.HTTPStatusError, httpx.RequestError)
+    # Fora da hierarquia de HTTPError: só o `except Exception` final o captura.
+    assert not issubclass(httpx.InvalidURL, httpx.HTTPError)
+    assert issubclass(json.JSONDecodeError, ValueError)
 
 
 def test_falha_do_gemini_propaga_success_e_error(search, monkeypatch):

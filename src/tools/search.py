@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import httpx
+
 from src.tools.google_search.gemini_service import gemini_service
 from src.utils.bigquery import save_response_in_bq_background
 from src.utils.typesense_api import HubSearchRequest, hub_search
@@ -49,18 +51,7 @@ async def get_google_search(query: str):
             # threshold_ai=params.get("threshold_ai", 0.85),
         )
 
-        # `hub_search` levanta em qualquer falha HTTP (raise_for_status). Sem este
-        # try/except, uma indisponibilidade do Typesense derrubava a tool inteira antes
-        # de chegar ao Google — o fallback só funcionava quando o Typesense respondia
-        # 200 com zero resultados. O erro segue reportado ao interceptor pelo decorator
-        # da própria `hub_search`.
-        try:
-            typesense_res = await hub_search(request=hub_request)
-        except Exception as e:
-            logger.warning(
-                f"Typesense indisponível ({e}). Caindo para o Google Search."
-            )
-            typesense_res = None
+        typesense_res = await _try_hub_search(hub_request)
 
         # Se encontrou resultados no Typesense
         if (
@@ -112,6 +103,64 @@ async def get_google_search(query: str):
     )
 
     return final_response
+
+
+async def _try_hub_search(hub_request: HubSearchRequest) -> dict | None:
+    """Consulta o Typesense, devolvendo `None` em vez de propagar a falha.
+
+    `hub_search` levanta em qualquer falha HTTP (`raise_for_status`). Sem este
+    tratamento, uma indisponibilidade do Typesense derrubava a tool inteira antes de
+    chegar ao Google — o fallback só funcionava quando o Typesense respondia 200 com
+    zero resultados. Em todos os ramos o erro já foi reportado ao interceptor pelo
+    decorator da própria `hub_search`; aqui só decidimos degradar para a busca no Google.
+
+    A ordem dos ramos segue a hierarquia do httpx e não pode ser trocada:
+    `TimeoutException` ⊂ `TransportError` ⊂ `RequestError`.
+    """
+    try:
+        return await hub_search(request=hub_request)
+
+    except httpx.HTTPStatusError as e:
+        # Typesense respondeu, mas com erro. 5xx é indisponibilidade dele; 4xx aponta
+        # requisição malformada nossa — nenhum dos dois melhora aqui.
+        logger.warning(
+            f"Typesense respondeu HTTP {e.response.status_code}. "
+            f"Caindo para o Google Search."
+        )
+
+    except httpx.TimeoutException as e:
+        # Estourou o timeout de 30s do client (connect/read/write/pool).
+        logger.warning(
+            f"Typesense excedeu o timeout ({type(e).__name__}). "
+            f"Caindo para o Google Search."
+        )
+
+    except httpx.RequestError as e:
+        # A requisição não completou: DNS, conexão recusada, proxy, violação de
+        # protocolo, excesso de redirects, falha de decodificação do corpo.
+        logger.warning(
+            f"Falha de transporte ao consultar o Typesense "
+            f"({type(e).__name__}: {e}). Caindo para o Google Search."
+        )
+
+    except ValueError as e:
+        # `response.json()` sobre corpo que não é JSON válido. `json.JSONDecodeError`
+        # e `UnicodeDecodeError` derivam de ValueError.
+        logger.warning(
+            f"Typesense devolveu corpo ilegível ({type(e).__name__}: {e}). "
+            f"Caindo para o Google Search."
+        )
+
+    except Exception:
+        # Rede de segurança. Cobre `httpx.InvalidURL` (fora da hierarquia de HTTPError
+        # — sinaliza TYPESENSE_HUB_SEARCH_URL malformada) e qualquer falha ao montar
+        # `results_clean` a partir de um payload inesperado. Traceback completo porque
+        # aqui é bug ou má configuração, não indisponibilidade.
+        logger.exception(
+            "Erro inesperado ao consultar o Typesense. Caindo para o Google Search."
+        )
+
+    return None
 
 
 def _get_typesense_params():
