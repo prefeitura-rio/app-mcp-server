@@ -1,3 +1,4 @@
+import json
 import importlib.util
 import sys
 import types
@@ -227,18 +228,71 @@ def test_options_de_botoes_nao_incluem_description(divida_ativa_modules):
     ]
 
 
-def test_options_de_whatsapp_flow_incluem_description(divida_ativa_modules):
+def test_options_de_listas_nao_incluem_description(divida_ativa_modules):
     schema = (
         divida_ativa_modules.models.MenuPagamentoCompletoPayload.model_json_schema()
     )
 
     options = schema["properties"]["opcao_menu"]["options"]
 
-    assert options[0] == {
-        "description": "Emitir guia para pagamento integral",
-        "label": "Pagar à vista",
-        "value": "pagar_a_vista",
+    assert schema["properties"]["opcao_menu"]["x-render"] == "list"
+    assert options[0] == {"label": "Pagar à vista", "value": "pagar_a_vista"}
+    assert all("description" not in option for option in options)
+
+
+@pytest.mark.asyncio
+async def test_tipo_consulta_retorna_lista_explicita(divida_ativa_modules):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+
+    schema = state.agent_response.payload_schema
+    options = schema["properties"]["tipo_consulta"]["options"]
+    assert schema["x-render"] == "list"
+    assert "tipo_consulta" in schema["properties"]
+    assert all("description" not in option for option in options)
+
+
+@pytest.mark.asyncio
+async def test_acao_resultado_retorna_botoes_explicitos(divida_ativa_modules):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
     }
+
+    state = await workflow.execute(state, {"acao_resultado": "outra_acao"})
+
+    assert state.agent_response.payload_schema["x-render"] == "buttons"
+    assert "acao_resultado" in state.agent_response.payload_schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_escolha_multipla_de_debitos_continua_texto_livre(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "lista_cdas": ["CDA-1"],
+        "lista_efs": ["EF-1"],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"opcao_pagar_a_vista": "escolher_debitos"},
+    )
+
+    schema = state.agent_response.payload_schema
+    campo = schema["properties"]["debitos_escolhidos"]
+    assert schema.get("x-render") is None
+    assert campo.get("enum") is None
+    assert campo.get("options") is None
 
 
 @pytest.mark.asyncio
@@ -380,6 +434,124 @@ async def test_payload_do_identificador_sem_debitos_mantem_mesmo_step(
 
 
 @pytest.mark.asyncio
+async def test_corrigir_ano_auto_infracao_descarta_consulta_anterior(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeDividaAtivaAPIService(
+        resultado=_resultado_divida(
+            cdas=[types.SimpleNamespace(cda_id="CDA-1", numero=None)]
+        )
+    )
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "auto_infracao"})
+    state = await workflow.execute(
+        state,
+        {"ano_auto_infracao": "2024", "numero_auto_infracao": "98765"},
+    )
+
+    assert "divida_ativa" in state.data
+    assert state.data["ano_auto_infracao"] == "2024"
+    assert state.data["numero_auto_infracao"] == "98765"
+
+    state = await workflow.execute(state, {"ano_auto_infracao": "2025"})
+
+    assert "divida_ativa" not in state.data
+    assert "numero_auto_infracao" not in state.data
+    assert state.data["ano_auto_infracao"] == "2025"
+    assert "ano_auto_infracao" in state.agent_response.payload_schema["properties"]
+    assert "numero_auto_infracao" in state.agent_response.payload_schema["properties"]
+    assert state.agent_response.data["proximo_payload"]["campos"] == [
+        "ano_auto_infracao",
+        "numero_auto_infracao",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reconsulta_identica_cpf_cnpj_reusa_cache_sem_chamar_api(
+    divida_ativa_modules,
+):
+    resultado = _resultado_divida(
+        cdas=[types.SimpleNamespace(cda_id="CDA-1", numero=None)],
+    )
+    api_service = FakeDividaAtivaAPIService(resultado=resultado)
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = api_service
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "cpf_cnpj"})
+    state = await workflow.execute(state, {"cpf_cnpj": "12345678901"})
+
+    assert api_service.consulta_calls == [("consultar_cpf_cnpj", "12345678901", {})]
+
+    state = await workflow.execute(state, {"cpf_cnpj": "12345678901"})
+
+    assert api_service.consulta_calls == [("consultar_cpf_cnpj", "12345678901", {})]
+    assert "acao_resultado" in state.agent_response.payload_schema["properties"]
+    assert "Tipo de consulta:" in state.agent_response.description
+
+
+@pytest.mark.asyncio
+async def test_reconsulta_identica_auto_infracao_reusa_cache_sem_chamar_api(
+    divida_ativa_modules,
+):
+    resultado = _resultado_divida(
+        cdas=[types.SimpleNamespace(cda_id="CDA-1", numero=None)],
+    )
+    api_service = FakeDividaAtivaAPIService(resultado=resultado)
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = api_service
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "auto_infracao"})
+    state = await workflow.execute(
+        state,
+        {"ano_auto_infracao": "2024", "numero_auto_infracao": "98765"},
+    )
+
+    assert api_service.consulta_calls == [
+        ("consultar_auto_infracao", "98765", {"ano": "2024"})
+    ]
+
+    state = await workflow.execute(
+        state,
+        {"ano_auto_infracao": "2024", "numero_auto_infracao": "98765"},
+    )
+
+    assert api_service.consulta_calls == [
+        ("consultar_auto_infracao", "98765", {"ano": "2024"})
+    ]
+    assert "acao_resultado" in state.agent_response.payload_schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_tipo_consulta_tem_precedencia_sobre_reconsulta_cacheada(
+    divida_ativa_modules,
+):
+    resultado = _resultado_divida(
+        cdas=[types.SimpleNamespace(cda_id="CDA-1", numero=None)],
+    )
+    api_service = FakeDividaAtivaAPIService(resultado=resultado)
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = api_service
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "cpf_cnpj"})
+    state = await workflow.execute(state, {"cpf_cnpj": "12345678901"})
+
+    state = await workflow.execute(
+        state,
+        {"tipo_consulta": "cda", "cpf_cnpj": "12345678901"},
+    )
+
+    assert state.data["tipo_consulta"] == "cda"
+    assert "divida_ativa" not in state.data
+    assert "cda" in state.agent_response.payload_schema["properties"]
+    assert api_service.consulta_calls == [("consultar_cpf_cnpj", "12345678901", {})]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     (
         "cdas",
@@ -457,6 +629,106 @@ async def test_resultado_da_api_formata_mensagem_e_opcoes_menu(
 
 
 @pytest.mark.asyncio
+async def test_agent_response_data_eh_compacto_apos_consulta(
+    divida_ativa_modules,
+):
+    resultado_api = _resultado_divida(
+        cdas=[
+            types.SimpleNamespace(cda_id=f"CDA-{index}", numero=None)
+            for index in range(1, 60)
+        ],
+        efs=[
+            types.SimpleNamespace(
+                numero_execucao_fiscal=f"EF-{index}",
+                numero_ef=None,
+            )
+            for index in range(1, 60)
+        ],
+    )
+    resultado_api["debitos_msg"] = ["linha de débito " * 100 for _ in range(100)]
+    resultado_api["url_pdf"] = "https://example.com/consulta.pdf"
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeDividaAtivaAPIService(resultado=resultado_api)
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "cpf_cnpj"})
+    state = await workflow.execute(state, {"cpf_cnpj": "12345678901"})
+
+    public_data = state.agent_response.data
+    public_json = json.dumps(public_data, ensure_ascii=False)
+    cache_json = json.dumps(state.internal["divida_ativa_cache"], ensure_ascii=False)
+
+    assert "dicionario_itens" not in state.data["divida_ativa"]
+    assert "dicionario_itens" in state.internal["divida_ativa_cache"]
+    assert "divida_ativa" not in public_data
+    assert "cpf_cnpj" not in public_data
+    assert "tipo_consulta" not in public_data
+    assert "dicionario_itens" not in public_json
+    assert "debitos_msg" not in public_json
+    assert "mensagem_divida_contribuinte" not in public_json
+    assert len(public_json) < len(cache_json) / 4
+    assert public_data["proximo_payload"]["campos"] == ["acao_resultado"]
+    assert public_data["proximo_payload"]["renderizacao"] == "buttons"
+
+
+@pytest.mark.asyncio
+async def test_agent_response_data_explica_voltar_e_corrigir(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["tipo_consulta"] = "cpf_cnpj"
+    state.data["cpf_cnpj"] = "12345678901"
+    state.data["divida_ativa"] = {
+        "tipo_consulta": "cpf_cnpj",
+        "valor_consulta": "12345678901",
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_completo,
+    }
+
+    state = await workflow.execute(state, {"acao_resultado": "pagar_agora"})
+
+    data = state.agent_response.data
+    assert data["proximo_payload"]["campo_principal"] == "opcao_menu"
+    assert data["proximo_payload"]["renderizacao"] == "list"
+    assert data["navegacao"]["pode_voltar"] is True
+    assert data["navegacao"]["payload_voltar"] == {"opcao_menu": "voltar"}
+    assert data["navegacao"]["volta_para"] == "acao_resultado"
+    assert any(
+        item["campos"] == ["tipo_consulta"]
+        for item in data["navegacao"]["corrigir"]
+    )
+    assert any(item["campos"] == ["cpf_cnpj"] for item in data["navegacao"]["corrigir"])
+
+
+@pytest.mark.asyncio
+async def test_agent_response_data_explica_corrigir_auto_infracao(
+    divida_ativa_modules,
+):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["tipo_consulta"] = "auto_infracao"
+    state.data["ano_auto_infracao"] = "2024"
+    state.data["numero_auto_infracao"] = "98765"
+    state.data["divida_ativa"] = {
+        "tipo_consulta": "auto_infracao",
+        "valor_consulta": "98765 2024",
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+    }
+
+    state = await workflow.execute(state, {"acao_resultado": "pagar_agora"})
+
+    assert any(
+        item["campos"] == ["ano_auto_infracao", "numero_auto_infracao"]
+        for item in state.agent_response.data["navegacao"]["corrigir"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_pagar_agora_retorna_menu_conforme_opcoes_menu(divida_ativa_modules):
     workflow = divida_ativa_modules.DividaAtivaWorkflow()
     state = _new_state(divida_ativa_modules)
@@ -470,14 +742,15 @@ async def test_pagar_agora_retorna_menu_conforme_opcoes_menu(divida_ativa_module
 
     schema = state.agent_response.payload_schema
     opcao_schema = schema["properties"]["opcao_menu"]
-    assert schema["x-render"] == "whatsapp_flow"
+    assert schema["x-render"] == "list"
     assert opcao_schema["enum"] == workflow.opcoes_menu_completo
     assert opcao_schema["options"][0]["label"] == "Pagar à vista"
-    assert state.data["divida_ativa"]["renderizacao_menu"] == "whatsapp_flow"
+    assert all("description" not in option for option in opcao_schema["options"])
+    assert state.data["divida_ativa"]["renderizacao_menu"] == "list"
 
 
 @pytest.mark.asyncio
-async def test_pagar_agora_parcelado_retorna_flow_pydantic(divida_ativa_modules):
+async def test_pagar_agora_parcelado_retorna_lista_pydantic(divida_ativa_modules):
     workflow = divida_ativa_modules.DividaAtivaWorkflow()
     state = _new_state(divida_ativa_modules)
     state.internal["consulta_realizada"] = True
@@ -490,10 +763,11 @@ async def test_pagar_agora_parcelado_retorna_flow_pydantic(divida_ativa_modules)
 
     schema = state.agent_response.payload_schema
     opcao_schema = schema["properties"]["opcao_menu"]
-    assert schema["x-render"] == "whatsapp_flow"
+    assert schema["x-render"] == "list"
     assert opcao_schema["enum"] == workflow.opcoes_menu_parcelado
     assert opcao_schema["options"][0]["label"] == "Parcelar débitos"
-    assert state.data["divida_ativa"]["renderizacao_menu"] == "whatsapp_flow"
+    assert all("description" not in option for option in opcao_schema["options"])
+    assert state.data["divida_ativa"]["renderizacao_menu"] == "list"
 
 
 @pytest.mark.asyncio
@@ -570,7 +844,7 @@ async def test_opcao_menu_voltar_descarta_ultima_opcao_e_volta_para_resultado(
     state.data["divida_ativa"] = {
         "mensagem_divida_contribuinte": "mensagem",
         "opcoes_menu": workflow.opcoes_menu_completo,
-        "renderizacao_menu": "whatsapp_flow",
+        "renderizacao_menu": "list",
         "opcao_menu_selecionada": "voltar",
     }
 
@@ -1012,10 +1286,18 @@ async def test_forma_pagamento_valida_salva_e_responde(
     assert "Beleza." in state.agent_response.description
     assert texto_esperado in state.agent_response.description
     assert state.agent_response.payload_schema is None
-    assert state.data["divida_ativa"]["forma_pagamento_a_vista"] == forma_pagamento
-    assert state.data["divida_ativa"]["guia_pagamento_a_vista"]["link"] == (
-        "https://example.com/guia.pdf"
-    )
+    assert state.status == "completed"
+    assert state.data == {}
+    assert state.internal == {}
+    assert state.agent_response.data == {
+        "status": "completed",
+        "guia_pagamento_a_vista": {
+            "data_vencimento": "10/09/2026",
+            "link": "https://example.com/guia.pdf",
+            "codigo_de_barras": "123456789",
+            "pix": "000201PIX",
+        },
+    }
     assert api_service.calls == [(["CDA-1"], ["EF-1"])]
 
 
@@ -1175,7 +1457,10 @@ async def test_opcoes_menu_informativas_retornam_mensagem(
 
     assert texto_esperado in state.agent_response.description
     assert state.agent_response.payload_schema is None
-    assert state.data["divida_ativa"]["opcao_menu_selecionada"] == opcao_menu
+    assert state.status == "completed"
+    assert state.data == {}
+    assert state.internal == {}
+    assert state.agent_response.data == {"status": "completed"}
 
 
 @pytest.mark.asyncio
@@ -1382,6 +1667,57 @@ async def test_fluxo_completo_pagar_tudo_boleto_bancario(
         ("consultar_cpf_cnpj", "12.345.678/0001-90", {})
     ]
     assert api_service.emissao_calls == [(["CDA-1"], ["EF-1"])]
+
+
+@pytest.mark.asyncio
+async def test_guia_emitida_retorna_payload_publico_compacto(
+    divida_ativa_modules,
+):
+    resultado = _resultado_divida(
+        cdas=[types.SimpleNamespace(cda_id="CDA-1", numero=None)],
+    )
+    api_service = FakeDividaAtivaAPIService(
+        resultado=resultado,
+        guias={
+            "api_resposta_sucesso": True,
+            "data_vencimento": "10/09/2026",
+            "link": "https://example.com/guia.pdf",
+            "codigo_de_barras": "123456789",
+            "pix": "000201PIX",
+            "arquivoBase64": "A" * 10000,
+        },
+    )
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = api_service
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "cpf_cnpj"})
+    state = await workflow.execute(state, {"cpf_cnpj": "12345678901"})
+    state = await workflow.execute(state, {"acao_resultado": "pagar_agora"})
+    state = await workflow.execute(state, {"opcao_menu": "pagar_a_vista"})
+    state = await workflow.execute(state, {"opcao_pagar_a_vista": "pagar_tudo"})
+    state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "boleto_bancario"},
+    )
+
+    data = state.agent_response.data
+    data_json = json.dumps(data, ensure_ascii=False)
+
+    assert state.status == "completed"
+    assert data["status"] == "completed"
+    assert state.data == {}
+    assert state.internal == {}
+    assert data["guia_pagamento_a_vista"] == {
+        "data_vencimento": "10/09/2026",
+        "link": "https://example.com/guia.pdf",
+        "codigo_de_barras": "123456789",
+        "pix": "000201PIX",
+    }
+    assert "arquivoBase64" not in data_json
+    assert "A" * 1000 not in data_json
+    assert "proximo_payload" not in data
 
 
 @pytest.mark.asyncio

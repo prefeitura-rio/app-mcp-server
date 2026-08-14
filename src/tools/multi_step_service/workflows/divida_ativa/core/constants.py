@@ -14,6 +14,7 @@ class DividaAtivaStateKey(StrEnum):
     TIPO_CONSULTA_CACHE = "tipo_consulta_cache"
     PAYLOAD_ESPERADO = "payload_esperado"
     CURRENT_VIEW = "current_view"
+    DIVIDA_ATIVA_CACHE = "divida_ativa_cache"
 
 
 # Configurações de Debug / API
@@ -24,6 +25,7 @@ STATE_CONSULTA_REALIZADA = DividaAtivaStateKey.CONSULTA_REALIZADA
 STATE_TIPO_CONSULTA_CACHE = DividaAtivaStateKey.TIPO_CONSULTA_CACHE
 STATE_PAYLOAD_ESPERADO = DividaAtivaStateKey.PAYLOAD_ESPERADO
 STATE_CURRENT_VIEW = DividaAtivaStateKey.CURRENT_VIEW
+STATE_DIVIDA_ATIVA_CACHE = DividaAtivaStateKey.DIVIDA_ATIVA_CACHE
 
 # Mensagens de Erro
 ERROR_ENTRADA_AUSENTE = "Documento/identificador não foi coletado corretamente"
