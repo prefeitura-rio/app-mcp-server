@@ -697,8 +697,7 @@ async def test_agent_response_data_explica_voltar_e_corrigir(
     assert data["navegacao"]["payload_voltar"] == {"opcao_menu": "voltar"}
     assert data["navegacao"]["volta_para"] == "acao_resultado"
     assert any(
-        item["campos"] == ["tipo_consulta"]
-        for item in data["navegacao"]["corrigir"]
+        item["campos"] == ["tipo_consulta"] for item in data["navegacao"]["corrigir"]
     )
     assert any(item["campos"] == ["cpf_cnpj"] for item in data["navegacao"]["corrigir"])
 

@@ -424,7 +424,9 @@ class DividaAtivaWorkflow(BaseWorkflow):
         context.update(self._get_public_divida_ativa(state))
         return context
 
-    def _set_divida_ativa_context(self, state: ServiceState, divida_ativa: dict) -> None:
+    def _set_divida_ativa_context(
+        self, state: ServiceState, divida_ativa: dict
+    ) -> None:
         state.data["divida_ativa"] = {
             key: value
             for key, value in divida_ativa.items()
@@ -433,7 +435,8 @@ class DividaAtivaWorkflow(BaseWorkflow):
         state.internal[STATE_DIVIDA_ATIVA_CACHE] = {
             key: value
             for key, value in divida_ativa.items()
-            if key not in self.divida_ativa_public_fields and value not in (None, "", [])
+            if key not in self.divida_ativa_public_fields
+            and value not in (None, "", [])
         }
 
     def _payload_reconsulta_identica(
@@ -521,7 +524,11 @@ class DividaAtivaWorkflow(BaseWorkflow):
         public_guia = {}
         for public_field, candidates in mapping.items():
             value = next(
-                (guia.get(candidate) for candidate in candidates if guia.get(candidate)),
+                (
+                    guia.get(candidate)
+                    for candidate in candidates
+                    if guia.get(candidate)
+                ),
                 None,
             )
             if value:
@@ -1770,9 +1777,12 @@ class DividaAtivaWorkflow(BaseWorkflow):
             tipo_consulta,
             valor_consulta,
         ):
-            mensagem = self._get_divida_ativa_context(state).get(
-                "mensagem_divida_contribuinte"
-            ) or DividaAtivaTemplates.consulta_realizada()
+            mensagem = (
+                self._get_divida_ativa_context(state).get(
+                    "mensagem_divida_contribuinte"
+                )
+                or DividaAtivaTemplates.consulta_realizada()
+            )
             state.internal.pop(STATE_TIPO_CONSULTA_CACHE, None)
             return self._action_response(state, mensagem)
 
