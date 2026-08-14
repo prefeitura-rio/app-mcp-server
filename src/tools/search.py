@@ -49,7 +49,18 @@ async def get_google_search(query: str):
             # threshold_ai=params.get("threshold_ai", 0.85),
         )
 
-        typesense_res = await hub_search(request=hub_request)
+        # `hub_search` levanta em qualquer falha HTTP (raise_for_status). Sem este
+        # try/except, uma indisponibilidade do Typesense derrubava a tool inteira antes
+        # de chegar ao Google — o fallback só funcionava quando o Typesense respondia
+        # 200 com zero resultados. O erro segue reportado ao interceptor pelo decorator
+        # da própria `hub_search`.
+        try:
+            typesense_res = await hub_search(request=hub_request)
+        except Exception as e:
+            logger.warning(
+                f"Typesense indisponível ({e}). Caindo para o Google Search."
+            )
+            typesense_res = None
 
         # Se encontrou resultados no Typesense
         if (
@@ -76,7 +87,7 @@ async def get_google_search(query: str):
             query=query,
             model=env.GEMINI_MODEL,
             temperature=0.0,
-            retry_attempts=2,
+            retry_attempts=env.GEMINI_SEARCH_RETRY_ATTEMPTS,
         )
         response_data = response_google
         final_response = {
@@ -84,7 +95,11 @@ async def get_google_search(query: str):
             "sources": response_google.get("sources"),
             "web_search_queries": response_google.get("web_search_queries"),
             "id": response_google.get("id"),
+            # Sinaliza ao agente que o `text` é uma falha tratada, não conteúdo de busca.
+            "success": response_google.get("success", True),
         }
+        if response_google.get("error"):
+            final_response["error"] = response_google["error"]
 
     # 4. Log em Background (BigQuery)
     asyncio.create_task(

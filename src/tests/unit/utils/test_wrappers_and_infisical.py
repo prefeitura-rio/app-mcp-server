@@ -315,6 +315,7 @@ async def test_search_uses_typesense_then_google_fallback(monkeypatch):
     env_module.TYPESENSE_HUB_SEARCH_URL = "https://typesense.local"
     env_module.TYPESENSE_PARAMETERS = '{"type":"hybrid","per_page":2}'
     env_module.GEMINI_MODEL = "gemini-test"
+    env_module.GEMINI_SEARCH_RETRY_ATTEMPTS = 4
     monkeypatch.setitem(sys.modules, "src.config.env", env_module)
     monkeypatch.setitem(
         sys.modules, "src.config", types.SimpleNamespace(env=env_module)
