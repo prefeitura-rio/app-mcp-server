@@ -5,6 +5,7 @@ Este módulo implementa a integração com a API real da Prefeitura do Rio
 para consulta de IPTU e geração de guias de pagamento.
 """
 
+import asyncio
 import re
 import json
 from typing import List, Optional, Dict, Any
@@ -36,12 +37,98 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.api.exceptions import
     AuthenticationError,
     InvalidInscricaoError,
 )
+from src.tools.multi_step_service.workflows.iptu_pagamento.core.constants import (
+    API_ASSINATURA_RECONEXAO,
+    API_BACKOFF_BASE_SECONDS,
+    API_CODIGO_RECONEXAO,
+    API_MAX_TENTATIVAS,
+    API_STATUS_ALERTA,
+    API_STATUS_TRANSITORIOS,
+)
 from src.tools.multi_step_service.workflows.iptu_pagamento.pix_page_service import (
     IPTUPixPageService,
 )
 
 from loguru import logger
 from src.utils.http_client import InterceptedHTTPClient
+
+
+def _corpo_resposta(response) -> str:
+    """Lê o corpo da resposta com segurança (respostas binárias podem falhar ao decodificar)."""
+    try:
+        return response.text or ""
+    except Exception:
+        return ""
+
+
+def _sanitizar_erro(mensagem: str) -> str:
+    """
+    Remove query strings da mensagem de erro antes de logar ou exibir.
+
+    O token da API vai na query string, e algumas exceções do httpx (TooManyRedirects,
+    UnsupportedProtocol, InvalidURL) embutem a URL completa na mensagem. Sem isso, o
+    token chegaria ao log, ao interceptor e ao bloco "Detalhes técnicos" que o cidadão
+    vê no chat.
+    """
+    return re.sub(r"\?[^\s'\"]*", "?<redacted>", mensagem or "")
+
+
+def _e_erro_transitorio(response) -> bool:
+    """
+    Indica se o erro é uma falha de conexão interna da fachada do IPTU (CHATR-121).
+
+    Gateway errors são sempre transitórios. Já um 500 só é considerado transitório
+    quando o corpo traz a assinatura de reconexão ("6000 - Connect required before
+    calling other methods.") — um 500 genérico costuma ser erro de dado e insistir
+    nele só atrasaria a resposta ao cidadão.
+    """
+    if response.status_code in API_STATUS_TRANSITORIOS:
+        return True
+
+    if response.status_code == 500:
+        corpo = _corpo_resposta(response).strip().lower()
+        return API_ASSINATURA_RECONEXAO in corpo or corpo.startswith(
+            API_CODIGO_RECONEXAO
+        )
+
+    return False
+
+
+def _tratar_resposta(endpoint: str, response, expect_json: bool) -> Any:
+    """
+    Converte a resposta da API no dado útil ou levanta a exceção de domínio correspondente.
+
+    Raises:
+        DataNotFoundError: Quando endpoint não existe (404)
+        AuthenticationError: Quando falha autenticação (401)
+        APIUnavailableError: Demais erros de comunicação
+    """
+    if response.status_code == 200:
+        if expect_json:
+            logger.info(f"API response successful for {endpoint}")
+            return response.json()
+
+        logger.info(f"API response successful for {endpoint} (binary/text)")
+        return response.text
+
+    if response.status_code == 404:
+        logger.warning(f"API endpoint not found: {endpoint}")
+        raise DataNotFoundError(f"Endpoint não encontrado: {endpoint}")
+
+    if response.status_code == 401:
+        logger.error(f"API authentication failed for {endpoint}")
+        raise AuthenticationError("Falha na autenticação do serviço IPTU")
+
+    if response.status_code in [500, 503]:
+        logger.error(f"API internal error for {endpoint}: {response.text}")
+        raise APIUnavailableError(
+            f"Serviço IPTU temporariamente indisponível (HTTP {response.status_code})"
+        )
+
+    logger.error(f"API error {response.status_code} for {endpoint}: {response.text}")
+    raise APIUnavailableError(
+        f"Erro ao comunicar com serviço IPTU (HTTP {response.status_code})"
+    )
 
 
 class IPTUAPIService:
@@ -68,11 +155,6 @@ class IPTUAPIService:
         self.user_id = user_id
 
         logger.info(f"IPTUAPIService initialized with API URL: {self.api_base_url}")
-        print(
-            "IPTU env debug - "
-            f"url_prefix={str(self.api_base_url)[:24]!r}, "
-            f"token_prefix={str(self.api_token)[:3]!r}"
-        )
 
     @staticmethod
     def _limpar_inscricao(inscricao: str) -> str:
@@ -91,9 +173,14 @@ class IPTUAPIService:
         self, endpoint: str, params: Dict[str, Any], expect_json: bool = True
     ) -> Optional[Any]:
         """
-        Faz requisição à API com tratamento de erros.
+        Faz requisição à API com tratamento de erros e retry de falhas transitórias.
 
         Usa InterceptedHTTPClient para interceptação automática de erros.
+
+        A fachada do IPTU pode responder HTTP 500 com "6000 - Connect required before
+        calling other methods." quando a conexão dela com o backend legado cai. Como o
+        erro é transitório, retentamos com backoff exponencial antes de desistir
+        (CHATR-121).
 
         Args:
             endpoint: Nome do endpoint (ex: "ConsultarGuias")
@@ -108,64 +195,71 @@ class IPTUAPIService:
             AuthenticationError: Quando falha autenticação (401)
             DataNotFoundError: Quando endpoint não existe (404)
         """
-        # Adiciona token aos parâmetros
-        params["token"] = self.api_token
-
         url = f"{self.api_base_url}/{endpoint}"
 
-        try:
-            async with InterceptedHTTPClient(
-                user_id=self.user_id,
-                source={
-                    "source": "mcp",
-                    "tool": "multi_step_service",
-                    "workflow": "iptu_pagamento",
-                },
-                proxy=self.proxy,
-                timeout=30.0,
-            ) as client:
-                # Erros de status code são automaticamente interceptados
-                response = await client.get(url, params=params)
+        for tentativa in range(API_MAX_TENTATIVAS):
+            e_ultima_tentativa = tentativa == API_MAX_TENTATIVAS - 1
 
-                if response.status_code == 200:
-                    if expect_json:
-                        data = response.json()
-                        logger.info(f"API response successful for {endpoint}")
-                        return data
-                    else:
-                        logger.info(
-                            f"API response successful for {endpoint} (binary/text)"
+            try:
+                # O token vai no client, e não em params, para que o httpx o inclua na
+                # query string sem que ele apareça no body reportado ao interceptor.
+                async with InterceptedHTTPClient(
+                    user_id=self.user_id,
+                    source={
+                        "source": "mcp",
+                        "tool": "multi_step_service",
+                        "workflow": "iptu_pagamento",
+                    },
+                    proxy=self.proxy,
+                    timeout=30.0,
+                    params={"token": self.api_token},
+                ) as client:
+                    # Só reporta ao interceptor na última tentativa, para não gerar
+                    # um alerta por retry de um erro que ainda pode se resolver
+                    response = await client.get(
+                        url,
+                        params=params,
+                        error_status_codes=API_STATUS_ALERTA
+                        if e_ultima_tentativa
+                        else None,
+                    )
+
+                    if _e_erro_transitorio(response) and not e_ultima_tentativa:
+                        espera = API_BACKOFF_BASE_SECONDS * (2**tentativa)
+                        logger.warning(
+                            f"Transient API error for {endpoint} "
+                            f"(HTTP {response.status_code}, "
+                            f"attempt {tentativa + 1}/{API_MAX_TENTATIVAS}): "
+                            f"{_corpo_resposta(response)[:200]} - "
+                            f"retrying in {espera}s"
                         )
-                        return response.text
-                elif response.status_code == 404:
-                    logger.warning(f"API endpoint not found: {endpoint}")
-                    raise DataNotFoundError(f"Endpoint não encontrado: {endpoint}")
-                elif response.status_code == 401:
-                    logger.error(f"API authentication failed for {endpoint}")
-                    raise AuthenticationError("Falha na autenticação do serviço IPTU")
-                elif response.status_code in [500, 503]:
-                    logger.error(f"API internal error for {endpoint}: {response.text}")
-                    raise APIUnavailableError(
-                        f"Serviço IPTU temporariamente indisponível (HTTP {response.status_code})"
-                    )
-                else:
-                    logger.error(
-                        f"API error {response.status_code} for {endpoint}: {response.text}"
-                    )
-                    raise APIUnavailableError(
-                        f"Erro ao comunicar com serviço IPTU (HTTP {response.status_code})"
-                    )
+                        await asyncio.sleep(espera)
+                        continue
 
-        except httpx.TimeoutException:
-            logger.error(f"Timeout calling API endpoint {endpoint}")
-            raise APIUnavailableError(
-                "Serviço IPTU não respondeu no tempo esperado. Por favor, tente novamente."
-            )
-        except (APIUnavailableError, AuthenticationError, DataNotFoundError):
-            raise
-        except Exception as e:
-            logger.error(f"Error calling API endpoint {endpoint}: {str(e)}")
-            raise APIUnavailableError(f"Erro ao comunicar com serviço IPTU: {str(e)}")
+                    return _tratar_resposta(endpoint, response, expect_json)
+
+            except httpx.TimeoutException:
+                # Não retenta: cada tentativa custa até 30s e estouraria o tempo de
+                # resposta do chatbot
+                logger.error(f"Timeout calling API endpoint {endpoint}")
+                raise APIUnavailableError(
+                    "Serviço IPTU não respondeu no tempo esperado. Por favor, tente novamente."
+                )
+            except (APIUnavailableError, AuthenticationError, DataNotFoundError):
+                raise
+            except Exception as e:
+                # Sanitiza: a mensagem pode embutir a URL completa, com o token
+                detalhe = _sanitizar_erro(str(e))
+                logger.error(f"Error calling API endpoint {endpoint}: {detalhe}")
+                raise APIUnavailableError(
+                    f"Erro ao comunicar com serviço IPTU: {detalhe}"
+                )
+
+        # Defensivo: a última tentativa nunca faz `continue`, então o loop sempre
+        # retorna ou levanta acima
+        raise APIUnavailableError(
+            f"Serviço IPTU indisponível após {API_MAX_TENTATIVAS} tentativas"
+        )
 
     @staticmethod
     def parse_brazilian_currency(value_str: str) -> float:
@@ -598,9 +692,10 @@ class IPTUAPIService:
         except (APIUnavailableError, AuthenticationError, InvalidInscricaoError):
             raise
         except Exception as e:
-            logger.error(f"Erro ao consultar dados do imóvel: {str(e)}")
+            detalhe = _sanitizar_erro(str(e))
+            logger.error(f"Erro ao consultar dados do imóvel: {detalhe}")
             raise APIUnavailableError(
-                f"Erro ao comunicar com serviço de dados do imóvel: {str(e)}"
+                f"Erro ao comunicar com serviço de dados do imóvel: {detalhe}"
             )
 
     async def get_divida_ativa_info(self, inscricao: str) -> Optional[DadosDividaAtiva]:
@@ -717,9 +812,10 @@ class IPTUAPIService:
         except (APIUnavailableError, AuthenticationError):
             raise
         except Exception as e:
-            logger.error(f"Erro ao consultar dívida ativa: {str(e)}")
+            detalhe = _sanitizar_erro(str(e))
+            logger.error(f"Erro ao consultar dívida ativa: {detalhe}")
             raise APIUnavailableError(
-                f"Erro ao comunicar com serviço de Dívida Ativa: {str(e)}"
+                f"Erro ao comunicar com serviço de Dívida Ativa: {detalhe}"
             )
 
     async def upload_base64_to_gcs(self, base64_content) -> str:
