@@ -44,10 +44,14 @@ GEMINI_SEARCH_RETRY_BASE_SECONDS = float(
     getenv_or_action("GEMINI_SEARCH_RETRY_BASE_SECONDS", default="2", action="ignore")
 )
 GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS = float(
-    getenv_or_action("GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS", default="16", action="ignore")
+    getenv_or_action(
+        "GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS", default="16", action="ignore"
+    )
 )
 GEMINI_SEARCH_RETRY_BUDGET_SECONDS = float(
-    getenv_or_action("GEMINI_SEARCH_RETRY_BUDGET_SECONDS", default="60", action="ignore")
+    getenv_or_action(
+        "GEMINI_SEARCH_RETRY_BUDGET_SECONDS", default="60", action="ignore"
+    )
 )
 
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
