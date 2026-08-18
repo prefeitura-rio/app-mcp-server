@@ -37,6 +37,24 @@ def passthrough_interceptor(*_args, **_kwargs):
     return decorator
 
 
+async def noop_send_api_error(*_args, **_kwargs):
+    """Stub de `send_api_error`, importado por `src/utils/http_client.py`."""
+    return None
+
+
+def fake_error_interceptor_module():
+    """Stub completo de `src.utils.error_interceptor`.
+
+    Precisa expor tudo que `src/utils/http_client.py` importa: o módulo real
+    é carregado de fato quando os wrappers sob teste são executados a partir
+    do arquivo.
+    """
+    module = types.ModuleType("src.utils.error_interceptor")
+    module.interceptor = passthrough_interceptor
+    module.send_api_error = noop_send_api_error
+    return module
+
+
 class FakeResponse:
     def __init__(self, payload):
         self._payload = payload
@@ -175,10 +193,8 @@ def build_wrapper_module(
     env_pkg.env = env_module
     monkeypatch.setitem(sys.modules, "src.config", env_pkg)
 
-    error_interceptor_module = types.ModuleType("src.utils.error_interceptor")
-    error_interceptor_module.interceptor = passthrough_interceptor
     monkeypatch.setitem(
-        sys.modules, "src.utils.error_interceptor", error_interceptor_module
+        sys.modules, "src.utils.error_interceptor", fake_error_interceptor_module()
     )
 
     return load_module(module_name, relative_path)
@@ -299,6 +315,7 @@ async def test_search_uses_typesense_then_google_fallback(monkeypatch):
     env_module.TYPESENSE_HUB_SEARCH_URL = "https://typesense.local"
     env_module.TYPESENSE_PARAMETERS = '{"type":"hybrid","per_page":2}'
     env_module.GEMINI_MODEL = "gemini-test"
+    env_module.GEMINI_SEARCH_RETRY_ATTEMPTS = 4
     monkeypatch.setitem(sys.modules, "src.config.env", env_module)
     monkeypatch.setitem(
         sys.modules, "src.config", types.SimpleNamespace(env=env_module)
@@ -352,7 +369,7 @@ async def test_search_uses_typesense_then_google_fallback(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "src.utils.error_interceptor",
-        types.SimpleNamespace(interceptor=passthrough_interceptor),
+        fake_error_interceptor_module(),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -422,7 +439,7 @@ def test_search_typesense_params_invalid_json(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "src.utils.error_interceptor",
-        types.SimpleNamespace(interceptor=passthrough_interceptor),
+        fake_error_interceptor_module(),
     )
 
     logs = {"info": [], "error": []}

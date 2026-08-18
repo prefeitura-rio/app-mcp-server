@@ -4,10 +4,13 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 
 # comment to trigger build
 
+import asyncio
 import json
 
+from contextlib import asynccontextmanager, suppress
+
 from fastapi import Request
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from typing import Optional, List, Union
 
 from src.tools.web_search_surkai import surkai_search
@@ -16,6 +19,11 @@ from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.hybrid_verifier import HybridTokenVerifier
 from src.observability.tracing import ToolCallTracingMiddleware, setup_tracing
+from src.health.checks import register_default_checks
+from src.health.external_tables import run_probe_loop
+from src.health.registry import health_registry
+from src.health.routes import register_health_routes
+from src.health.state import set_ready
 from src.tools.calculator import (
     add,
     subtract,
@@ -40,6 +48,10 @@ from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
     consultar_debitos,
+)
+from src.tools.divida_ativa_v2 import (
+    emitir_guia_a_vista_v2,
+    emitir_guia_regularizacao_v2,
 )
 from src.tools.langgraph_workflows import (
     multi_step_service as mss,
@@ -77,8 +89,10 @@ def create_app() -> FastMCP:
     auth_provider = None
     if not IS_LOCAL:
         valid_tokens = env.VALID_TOKENS
+        # Entradas vazias são descartadas: `"".split(",")` devolve `[""]`, o
+        # que colocaria um token vazio no set de tokens aceitos.
         static_tokens = (
-            [t.strip() for t in valid_tokens.split(",")]
+            [t.strip() for t in valid_tokens.split(",") if t.strip()]
             if isinstance(valid_tokens, str)
             else valid_tokens
         )
@@ -120,9 +134,63 @@ def create_app() -> FastMCP:
     if setup_tracing() and not IS_LOCAL:
         mcp_middleware.append(ToolCallTracingMiddleware())
 
+    @asynccontextmanager
+    async def health_lifespan(server):
+        """Sonda as dependências uma vez no startup e drena no shutdown.
+
+        A sondagem inicial é informativa: uma dependência fora do ar é logada
+        e o servidor sobe assim mesmo, porque falha de conectividade é
+        transitória e derrubar o pod por causa dela converteria degradação
+        parcial em indisponibilidade total. O que impede o boot são erros de
+        configuração, verificados antes disto por `run_startup_preflight()`.
+        """
+        try:
+            results = await health_registry.run_all(force=True)
+            for result in results:
+                logger.info(
+                    f"Health check '{result.name}': {result.status.value} "
+                    f"({result.latency_ms}ms)"
+                )
+        except Exception:
+            logger.exception("Falha ao sondar dependências no startup")
+
+        set_ready(True)
+
+        # Sonda das tabelas externas de Sheets (CHATR-119). Fica fora do
+        # `health_registry` de propósito: exige query real (o `dry_run` do
+        # `check_bigquery` não detecta "Spreadsheet not found") e custa
+        # segundos, acima do teto da rodada de `/health/detail`. O check
+        # homônimo lê o veredito que este laço produz. A referência é mantida
+        # em variável local viva pelo escopo do lifespan — sem ela, o GC pode
+        # coletar a task, já que a event loop guarda apenas referência fraca.
+        probe_task = None
+        if not IS_LOCAL:
+            probe_task = asyncio.create_task(run_probe_loop())
+
+        try:
+            yield {}
+        finally:
+            if probe_task is not None:
+                probe_task.cancel()
+                # `cancel()` só agenda a interrupção; aguardar aqui garante
+                # que o laço não sobreviva ao encerramento programático.
+                with suppress(asyncio.CancelledError):
+                    await probe_task
+
+            # Atenção: este bloco NÃO roda em SIGTERM. A uvicorn restaura o
+            # handler original do sinal e faz `signal.raise_signal()` ao sair
+            # de `serve()` (Server.capture_signals), então o processo morre
+            # pelo handler padrão antes de o lifespan do FastMCP desenrolar.
+            # Quem tira o pod do balanceador no encerramento é o próprio
+            # Kubernetes, ao marcá-lo como Terminating. Mantido porque está
+            # correto no encerramento programático (ex.: testes, embedding).
+            set_ready(False)
+            logger.info("Shutdown iniciado: readiness marcada como indisponível.")
+
     mcp_kwargs = {
         "name": Settings.SERVER_NAME,
         "auth": auth_provider,
+        "lifespan": health_lifespan,
         # "version": Settings.VERSION,
     }
     if mcp_middleware:
@@ -142,11 +210,10 @@ def create_app() -> FastMCP:
 
         return decorator
 
-    if not IS_LOCAL:
-
-        @mcp.custom_route("/health", methods=["GET"])
-        async def health_check(request: Request) -> PlainTextResponse:
-            return PlainTextResponse("OK")
+    # /health (liveness, trivial), /health/ready (readiness) e /health/detail
+    # (diagnóstico das dependências) — ver src/health/routes.py.
+    register_health_routes(mcp)
+    register_default_checks(mcp)
 
     # Configuração de logging
     logger.info(f"Inicializando {Settings.SERVER_NAME} v{Settings.VERSION}")
@@ -519,6 +586,9 @@ def create_app() -> FastMCP:
     async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de pagamento à vista
+
+        DEPRECATED: use POST /v2/emitir_guia, que valida a entrada com
+        Pydantic antes de chamar a PGM.
         """
         try:
             parameters = await request.json()
@@ -532,10 +602,43 @@ def create_app() -> FastMCP:
     async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de regularização
+
+        DEPRECATED: use POST /v2/emitir_guia_regularizacao, que valida a
+        entrada com Pydantic antes de chamar a PGM.
         """
         try:
             parameters = await request.json()
             result = await emitir_guia_regularizacao(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    # ===== DÍVIDA ATIVA V2 (entrada e saída validadas com Pydantic) =====
+    # Erros de validação retornam HTTP 200 com api_resposta_sucesso=false,
+    # mantendo o contrato que os consumidores (SFMC/LLM) já tratam.
+
+    @mcp.custom_route("/v2/emitir_guia", methods=["POST"])
+    async def da_emitir_guia_pagamento_a_vista_v2(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de pagamento à vista, com validação de entrada
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_a_vista_v2(parameters)
+            return JSONResponse(content=result, status_code=200)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    @mcp.custom_route("/v2/emitir_guia_regularizacao", methods=["POST"])
+    async def da_emitir_guia_regularizacao_v2(request: Request) -> JSONResponse:
+        """
+        Endpoint para emitir guia de regularização, com validação de entrada
+        """
+        try:
+            parameters = await request.json()
+            result = await emitir_guia_regularizacao_v2(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
             logger.error(f"Error processing request: {str(e)}")
@@ -558,6 +661,12 @@ def create_app() -> FastMCP:
             logger.warning("Não foi possível acessar a lista de tools registradas")
     except Exception as e:
         logger.warning(f"Erro ao listar tools: {e}")
+
+    # Fallback para modos de execução que não entram no lifespan: nada é
+    # servido por HTTP antes de `create_app()` retornar, então marcar aqui não
+    # abre janela para tráfego prematuro — e evita que `/health/ready` fique
+    # preso em 503 caso o lifespan não seja acionado.
+    set_ready(True)
 
     return mcp
 

@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 from src.utils.infisical import getenv_or_action
 
 
@@ -29,6 +31,27 @@ WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")
 GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
 GEMINI_MODEL = getenv_or_action(
     "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
+)
+
+# Política de retry da busca via Gemini (CHATR-122).
+# Erros 503/UNAVAILABLE do Gemini são transitórios: a janela de espera precisa ser larga
+# o bastante para atravessar um pico de saturação, mas curta o bastante para o chat.
+# Parametrizado por env para permitir recalibrar sem deploy de código.
+GEMINI_SEARCH_RETRY_ATTEMPTS = int(
+    getenv_or_action("GEMINI_SEARCH_RETRY_ATTEMPTS", default="4", action="ignore")
+)
+GEMINI_SEARCH_RETRY_BASE_SECONDS = float(
+    getenv_or_action("GEMINI_SEARCH_RETRY_BASE_SECONDS", default="2", action="ignore")
+)
+GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS = float(
+    getenv_or_action(
+        "GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS", default="16", action="ignore"
+    )
+)
+GEMINI_SEARCH_RETRY_BUDGET_SECONDS = float(
+    getenv_or_action(
+        "GEMINI_SEARCH_RETRY_BUDGET_SECONDS", default="60", action="ignore"
+    )
 )
 
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
@@ -200,7 +223,9 @@ SGRC_URL = getenv_or_action("SGRC_URL")
 SGRC_AUTHORIZATION_HEADER = getenv_or_action("SGRC_AUTHORIZATION_HEADER")
 SGRC_BODY_TOKEN = getenv_or_action("SGRC_BODY_TOKEN")
 GMAPS_API_TOKEN = getenv_or_action("GMAPS_API_TOKEN")
-DATA_DIR = getenv_or_action("DATA_DIR", default="scratch", action="ignore")
+# `Path` e não `str`: os consumidores fazem `env.DATA_DIR / "arquivo.json"`
+# (ver workflows/poda_de_arvore/api/api_service.py).
+DATA_DIR = Path(getenv_or_action("DATA_DIR"))
 
 TYPESENSE_ACTIVE = getenv_or_action("TYPESENSE_ACTIVE", default="false", action="warn")
 TYPESENSE_PARAMETERS = getenv_or_action("TYPESENSE_PARAMETERS")

@@ -24,6 +24,7 @@ Uso sync:
 """
 
 import asyncio
+import re
 import traceback as tb
 from typing import Any, Dict, Optional, Set, Union
 
@@ -35,6 +36,58 @@ from src.utils.error_interceptor import send_api_error
 
 # Status codes que devem ser interceptados por padrão
 DEFAULT_ERROR_STATUS_CODES: Set[int] = {400, 401, 403, 404, 500, 502, 503, 504}
+
+# Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro
+SENSITIVE_KEYS: Set[str] = {
+    "token",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "apikey",
+    "key",
+    "secret",
+    "password",
+    "senha",
+    "authorization",
+    "chaveacesso",
+    "chave_acesso",
+}
+
+_SENSITIVE_QUERY_RE = re.compile(
+    rf"((?:{'|'.join(SENSITIVE_KEYS)})=)[^&\s'\"]+",
+    re.IGNORECASE,
+)
+
+
+def redact_text(texto: Optional[str]) -> Optional[str]:
+    """
+    Redige valores sensíveis embutidos em texto livre.
+
+    Várias APIs (IPTU, entre outras) autenticam por query string, e exceções do httpx
+    como TooManyRedirects ou InvalidURL embutem a URL completa na mensagem. Sem isso,
+    a credencial acabaria no sistema de monitoramento.
+    """
+    if not texto:
+        return texto
+    return _SENSITIVE_QUERY_RE.sub(r"\1<redacted>", texto)
+
+
+def redact_body(body: Any) -> Any:
+    """Redige campos sensíveis de um body antes de reportá-lo ao interceptor."""
+    if isinstance(body, dict):
+        return {
+            chave: (
+                "<redacted>"
+                if str(chave).lower() in SENSITIVE_KEYS
+                else redact_body(valor)
+            )
+            for chave, valor in body.items()
+        }
+    if isinstance(body, (list, tuple)):
+        return [redact_body(item) for item in body]
+    if isinstance(body, str):
+        return redact_text(body)
+    return body
 
 
 def raise_for_status_except(response: httpx.Response, skip_codes: Set[int]) -> None:
@@ -125,15 +178,15 @@ class InterceptedHTTPClient:
         error_message: str,
         traceback_str: Optional[str] = None,
     ) -> None:
-        """Envia erro para o interceptor de forma assíncrona."""
+        """Envia erro para o interceptor de forma assíncrona, sem credenciais."""
         await send_api_error(
             user_id=self.user_id,
             source=self.source,
-            api_endpoint=str(url),
-            request_body=request_body,
+            api_endpoint=redact_text(str(url)),
+            request_body=redact_body(request_body),
             status_code=status_code,
-            error_message=error_message,
-            traceback=traceback_str,
+            error_message=redact_text(error_message),
+            traceback=redact_text(traceback_str),
         )
 
     def _intercept_error_sync(
@@ -144,18 +197,18 @@ class InterceptedHTTPClient:
         error_message: str,
         traceback_str: Optional[str] = None,
     ) -> None:
-        """Envia erro para o interceptor de forma síncrona."""
+        """Envia erro para o interceptor de forma síncrona, sem credenciais."""
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(
                 send_api_error(
                     user_id=self.user_id,
                     source=self.source,
-                    api_endpoint=str(url),
-                    request_body=request_body,
+                    api_endpoint=redact_text(str(url)),
+                    request_body=redact_body(request_body),
                     status_code=status_code,
-                    error_message=error_message,
-                    traceback=traceback_str,
+                    error_message=redact_text(error_message),
+                    traceback=redact_text(traceback_str),
                 )
             )
         except RuntimeError:
@@ -164,11 +217,11 @@ class InterceptedHTTPClient:
                     send_api_error(
                         user_id=self.user_id,
                         source=self.source,
-                        api_endpoint=str(url),
-                        request_body=request_body,
+                        api_endpoint=redact_text(str(url)),
+                        request_body=redact_body(request_body),
                         status_code=status_code,
-                        error_message=error_message,
-                        traceback=traceback_str,
+                        error_message=redact_text(error_message),
+                        traceback=redact_text(traceback_str),
                     )
                 )
             except Exception as e:

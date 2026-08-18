@@ -68,7 +68,26 @@ def _get_workflow_descriptions():
     return DESCRIPTION.replace("__replace__available_services__", description_replacer)
 
 
-tools_description = _get_workflow_descriptions()
+_tools_description_cache = None
+
+
+def __getattr__(name: str):
+    """`tools_description` é resolvida sob demanda (PEP 562).
+
+    Calculá-la em tempo de import instanciava um `Orchestrator`, que precisa da
+    lista `workflows` — fechando o ciclo `workflows` → `bank_account` → `core`
+    → `orchestrator` → `workflows` sempre que o pacote fosse importado pela
+    ponta de `workflows` (é o que os testes de `divida_ativa` fazem). Só não
+    quebrava porque `src/__init__.py` importava `src.app` de forma ansiosa e
+    aquecia o grafo pela ponta de `core`.
+    """
+    if name == "tools_description":
+        global _tools_description_cache
+        if _tools_description_cache is None:
+            _tools_description_cache = _get_workflow_descriptions()
+        return _tools_description_cache
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "BaseWorkflow",

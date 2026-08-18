@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: ghcr.io/prefeitura-rio/app-mcp-server:9e339be2e3bbbb02528b77b7a04679e697f6f73d@sha256:d97f70a69cf8c9df338dee86c97b63e8a1c74ead024fce413e9e7962161a9847  # Updated by deploy-staging workflow
+          image: ghcr.io/prefeitura-rio/app-mcp-server:eef9fd15a4e84d4b525cf85e4e8eaa112f17a566@sha256:e7477a2e4d34717d701515dcd17b3e7a3c9b782eb7f18f6513427cf640ce5649  # Updated by deploy-staging workflow
           ports:
             - containerPort: 80
           env:
@@ -43,20 +43,38 @@ spec:
               memory: "512Mi"
             limits:
               memory: "1536Mi"
+          # Cobre a inicialização, que carrega langgraph/geopandas/pandas e
+          # roda o preflight de configuração. Enquanto não passar, liveness e
+          # readiness ficam suspensos: um boot lento deixa de ser confundido
+          # com um processo travado.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 80
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 30  # até 150s para subir
+          # Liveness aponta para o endpoint trivial de propósito: ele não
+          # consulta dependência alguma. Se checasse Redis ou BigQuery, uma
+          # queda dessas dependências faria o kubelet matar o pod.
           livenessProbe:
             httpGet:
               path: /health
               port: 80
-            initialDelaySeconds: 5
             periodSeconds: 30
             timeoutSeconds: 5
             successThreshold: 1
             failureThreshold: 3
+          # Readiness reflete "inicialização concluída" — também sem depender
+          # de serviços externos. O estado das dependências fica em
+          # /health/detail, que nunca retorna 503. Apontar para uma rota
+          # própria desacopla as duas semânticas: verificações acrescentadas
+          # ao readiness no futuro não poderão matar o pod.
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: 80
-            initialDelaySeconds: 5
             periodSeconds: 30
             timeoutSeconds: 5
             successThreshold: 1
