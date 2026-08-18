@@ -33,6 +33,27 @@ GEMINI_MODEL = getenv_or_action(
     "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
 )
 
+# Política de retry da busca via Gemini (CHATR-122).
+# Erros 503/UNAVAILABLE do Gemini são transitórios: a janela de espera precisa ser larga
+# o bastante para atravessar um pico de saturação, mas curta o bastante para o chat.
+# Parametrizado por env para permitir recalibrar sem deploy de código.
+GEMINI_SEARCH_RETRY_ATTEMPTS = int(
+    getenv_or_action("GEMINI_SEARCH_RETRY_ATTEMPTS", default="4", action="ignore")
+)
+GEMINI_SEARCH_RETRY_BASE_SECONDS = float(
+    getenv_or_action("GEMINI_SEARCH_RETRY_BASE_SECONDS", default="2", action="ignore")
+)
+GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS = float(
+    getenv_or_action(
+        "GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS", default="16", action="ignore"
+    )
+)
+GEMINI_SEARCH_RETRY_BUDGET_SECONDS = float(
+    getenv_or_action(
+        "GEMINI_SEARCH_RETRY_BUDGET_SECONDS", default="60", action="ignore"
+    )
+)
+
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
 GOOGLE_MAPS_API_KEY = getenv_or_action("GOOGLE_MAPS_API_KEY")
 

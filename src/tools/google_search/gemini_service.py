@@ -17,11 +17,126 @@ from uuid import uuid4
 from datetime import datetime
 import httpx
 import random
+import time
 
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor, send_api_error
 from src.utils.http_client import InterceptedHTTPClient
 from google.genai import errors as genai_errors
+
+
+# Códigos 4xx que, apesar de "erro do cliente", são transitórios: 429 é saturação de
+# cota/capacidade e 408 é timeout do lado do servidor. Os demais 4xx não melhoram com
+# repetição.
+RETRYABLE_CLIENT_CODES = frozenset({408, 429})
+
+# Mensagens devolvidas ao agente quando a busca não pode ser concluída. Substituem a
+# exceção crua, que antes vazava para o usuário final (CHATR-122).
+SEARCH_UNAVAILABLE_MESSAGE = (
+    "A busca na web está temporariamente indisponível porque o serviço de pesquisa "
+    "está sobrecarregado neste momento. Informe ao usuário que houve uma instabilidade "
+    "momentânea e peça que tente novamente em alguns instantes. NÃO responda à "
+    "pergunta com informações não verificadas."
+)
+SEARCH_FAILED_MESSAGE = (
+    "Não foi possível concluir a busca na web neste momento por uma falha no serviço "
+    "de pesquisa. Informe ao usuário que houve um problema momentâneo e peça que tente "
+    "novamente em alguns instantes. NÃO responda à pergunta com informações não "
+    "verificadas."
+)
+
+# Falhas de capacidade/latência: o usuário deve ouvir "instabilidade momentânea", não
+# "erro". Qualquer outro tipo cai na mensagem genérica.
+TRANSIENT_ERROR_KINDS = frozenset(
+    {"gemini_unavailable", "gemini_rate_limited", "timeout"}
+)
+
+
+def classify_search_error(exc: BaseException) -> Dict[str, Any]:
+    """Classifica a exceção de uma tentativa de busca.
+
+    `genai.errors.APIError` expõe `code` (status HTTP) e `status` (ex.: "UNAVAILABLE").
+    O 503/UNAVAILABLE — a saturação de capacidade do Gemini, com a mensagem "high
+    demand" — ganha rótulo próprio para poder ser medido separado dos demais 5xx.
+    """
+    code = getattr(exc, "code", None)
+    code = code if isinstance(code, int) else None
+    status = getattr(exc, "status", None)
+    status = status if isinstance(status, str) else None
+
+    if isinstance(exc, genai_errors.ClientError):
+        retryable = code in RETRYABLE_CLIENT_CODES
+        kind = "gemini_rate_limited" if retryable else "gemini_client_error"
+    elif isinstance(exc, genai_errors.ServerError):
+        retryable = True
+        kind = (
+            "gemini_unavailable"
+            if code == 503 or status == "UNAVAILABLE"
+            else "gemini_server_error"
+        )
+    elif isinstance(exc, asyncio.TimeoutError):
+        retryable = True
+        kind = "timeout"
+    else:
+        retryable = True
+        kind = "unexpected_error"
+
+    return {"kind": kind, "status": status, "code": code, "retryable": retryable}
+
+
+def server_retry_delay(exc: BaseException) -> float | None:
+    """Extrai o `retryDelay` (google.rpc.RetryInfo) do corpo do erro, se houver.
+
+    Quando a própria API informa quanto esperar, esse valor vale mais que o backoff
+    que calculamos às cegas.
+    """
+    details = getattr(exc, "details", None)
+    if not isinstance(details, dict):
+        return None
+
+    error = details.get("error")
+    entries = error.get("details") if isinstance(error, dict) else None
+    if not isinstance(entries, list):
+        return None
+
+    for entry in entries:
+        if not isinstance(entry, dict) or "RetryInfo" not in str(
+            entry.get("@type", "")
+        ):
+            continue
+        raw = entry.get("retryDelay")
+        if raw is None:
+            continue
+        try:
+            return float(str(raw).rstrip("s"))
+        except ValueError:
+            logger.warning(f"retryDelay em formato inesperado: {raw!r}")
+
+    return None
+
+
+def backoff_seconds(attempt: int, base: float, cap: float) -> float:
+    """Backoff exponencial com teto e *equal jitter*.
+
+    O jitter existe para evitar o efeito manada: sem ele, todas as requisições que
+    falharam no mesmo segundo voltariam juntas e recriariam o pico que causou o 503.
+    """
+    window = min(base * (2**attempt), cap)
+    return window / 2 + random.uniform(0, window / 2)
+
+
+def next_wait_seconds(
+    exc: BaseException, attempt: int, base: float, cap: float
+) -> float:
+    """Quanto esperar antes da próxima tentativa.
+
+    Quando a própria API informa o tempo de espera, esse valor vale mais que o backoff
+    calculado às cegas — mas continua limitado pelo teto, para não travar o chat.
+    """
+    server_delay = server_retry_delay(exc)
+    if server_delay is not None:
+        return min(server_delay, cap)
+    return backoff_seconds(attempt, base, cap)
 
 
 class GeminiService:
@@ -40,11 +155,16 @@ class GeminiService:
         query: str,
         model: str = "gemini-2.5-flash",
         temperature: float = 0.0,
-        retry_attempts: int = 1,
+        retry_attempts: int | None = None,
     ):
         logger.info(f"Iniciando pesquisa Google para: {query}")
         request_id = str(uuid4())
         last_exception = None
+        last_error = None
+        attempt = 0
+        started_at = time.monotonic()
+        retry_attempts = max(1, retry_attempts or env.GEMINI_SEARCH_RETRY_ATTEMPTS)
+        backoff_cap = env.GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS
         formatted_prompt = web_searcher_instructions(research_topic=query)
         for attempt in range(retry_attempts):
             try:
@@ -83,6 +203,8 @@ class GeminiService:
                                 "web_search_queries": [],
                                 "tokens_metadata": {},
                                 "retry_attempts": attempt + 1,
+                                "success": False,
+                                "error": {"kind": "empty_response"},
                                 "model": model,
                                 "temperature": temperature,
                                 "query": query,
@@ -107,6 +229,7 @@ class GeminiService:
                             "web_search_queries": [],
                             "tokens_metadata": {},
                             "retry_attempts": attempt,
+                            "success": True,
                             "model": model,
                             "temperature": temperature,
                             "query": query,
@@ -139,6 +262,7 @@ class GeminiService:
                                 response=response
                             ),
                             "retry_attempts": attempt,
+                            "success": True,
                             "model": model,
                             "temperature": temperature,
                             "query": query,
@@ -154,6 +278,14 @@ class GeminiService:
                         )
                     tokens_metadata = self.get_tokens_metadata(response=response)
 
+                    if attempt > 0:
+                        logger.info(
+                            f"Pesquisa Google recuperada após retry | "
+                            f"outcome=success attempts_used={attempt + 1} "
+                            f"error_kind={(last_error or {}).get('kind')} "
+                            f"elapsed_ms={int((time.monotonic() - started_at) * 1000)}"
+                        )
+
                     logger.info(
                         f"Pesquisa concluída com {len(sources_gathered)} fontes"
                     )
@@ -165,51 +297,121 @@ class GeminiService:
                         "web_search_queries": web_search_queries,
                         "tokens_metadata": tokens_metadata,
                         "retry_attempts": attempt,
+                        "success": True,
                         "model": model,
                         "temperature": temperature,
                         "query": query,
                     }
 
-            except genai_errors.ClientError as e:
+            except Exception as e:  # classificado logo abaixo
                 last_exception = e
-                logger.error(
-                    f"Erro não recuperável na API Google (4xx): {e}. Não haverá nova tentativa."
-                )
-                break
+                last_error = classify_search_error(e)
 
-            except (genai_errors.ServerError, asyncio.TimeoutError) as e:
-                last_exception = e
+                if not last_error["retryable"]:
+                    logger.error(
+                        f"Erro não recuperável na API Google "
+                        f"({last_error['kind']}, code={last_error['code']}): {e}. "
+                        f"Não haverá nova tentativa."
+                    )
+                    break
+
                 logger.warning(
-                    f"Erro transiente na API Google (5xx/timeout): {e}. Tentando novamente..."
+                    f"Erro transitório na API Google "
+                    f"({last_error['kind']}, code={last_error['code']}): {e}."
                 )
 
-            except Exception as e:
-                last_exception = e
-                logger.error(f"Tipo da exceção: {type(e)}")
-                logger.error(f"Erro inesperado durante a pesquisa Google: {e}")
+                if attempt >= retry_attempts - 1:
+                    break
 
-            # Se não for a última tentativa, espera antes de tentar novamente
-            if attempt < retry_attempts - 1:
-                # Exponential backoff com jitter
-                wait_time = (2**attempt) + random.uniform(0, 1)
+                wait_time = next_wait_seconds(
+                    e, attempt, env.GEMINI_SEARCH_RETRY_BASE_SECONDS, backoff_cap
+                )
+                # Orçamento de latência: não iniciar uma tentativa que só terminaria
+                # depois de o usuário já ter desistido de esperar.
+                elapsed = time.monotonic() - started_at
+                if elapsed + wait_time > env.GEMINI_SEARCH_RETRY_BUDGET_SECONDS:
+                    logger.warning(
+                        f"Orçamento de retry esgotado após {elapsed:.2f}s "
+                        f"({attempt + 1}/{retry_attempts} tentativas). Desistindo."
+                    )
+                    break
+
                 logger.info(
                     f"Tentativa {attempt + 1}/{retry_attempts} falhou. "
                     f"Aguardando {wait_time:.2f}s para a próxima tentativa."
                 )
                 await asyncio.sleep(wait_time)
 
-        # Se todas as tentativas falharem
+        return await self._exhausted_search_response(
+            request_id=request_id,
+            query=query,
+            model=model,
+            temperature=temperature,
+            attempts_used=attempt + 1,
+            elapsed_ms=int((time.monotonic() - started_at) * 1000),
+            last_error=last_error,
+            last_exception=last_exception,
+        )
+
+    async def _exhausted_search_response(
+        self,
+        request_id: str,
+        query: str,
+        model: str,
+        temperature: float,
+        attempts_used: int,
+        elapsed_ms: int,
+        last_error: Dict[str, Any] | None,
+        last_exception: BaseException | None,
+    ) -> dict:
+        """Resposta devolvida quando a busca não se recupera dentro do orçamento.
+
+        Devolve uma mensagem tratada — nunca a exceção crua, que antes chegava ao
+        usuário final — e reporta a falha ao interceptor. O report é explícito porque
+        esta função *retorna* em vez de levantar, então o decorator `@interceptor` não
+        enxergaria nada aqui.
+        """
+        error_kind = (last_error or {}).get("kind", "unknown")
+        error_details = {
+            "kind": error_kind,
+            "status": (last_error or {}).get("status"),
+            "code": (last_error or {}).get("code"),
+            "attempts": attempts_used,
+            "elapsed_ms": elapsed_ms,
+        }
+
         logger.error(
-            f"Todas as {retry_attempts} tentativas de pesquisa falharam para a query: {query}. "
+            f"Todas as {attempts_used} tentativas de pesquisa falharam para a query: {query} | "
+            f"outcome=exhausted error_kind={error_kind} "
+            f"error_code={error_details['code']} elapsed_ms={elapsed_ms} | "
             f"Último erro: {last_exception}"
         )
+
+        await send_api_error(
+            user_id="unknown",
+            source={"source": "mcp", "tool": "gemini", "function": "google_search"},
+            api_endpoint=f"gemini:{model}:generate_content",
+            request_body={"query": query},
+            status_code=error_details["code"] or 0,
+            error_message=(
+                f"{error_kind}: busca Google falhou após {attempts_used} tentativas "
+                f"({elapsed_ms}ms). Último erro: {last_exception}"
+            ),
+        )
+
         return {
             "id": request_id,
-            "text": f"Erro na pesquisa Google após {retry_attempts} tentativas: {last_exception}",
+            "text": (
+                SEARCH_UNAVAILABLE_MESSAGE
+                if error_kind in TRANSIENT_ERROR_KINDS
+                else SEARCH_FAILED_MESSAGE
+            ),
             "sources": [],
             "web_search_queries": [],
             "tokens_metadata": {},
-            "retry_attempts": retry_attempts,
+            "retry_attempts": attempts_used,
+            "success": False,
+            "error": error_details,
             "model": model,
             "temperature": temperature,
             "query": query,
