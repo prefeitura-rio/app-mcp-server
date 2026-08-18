@@ -352,26 +352,66 @@ def test_reset_para_selecao_cotas():
     assert "dados_confirmados" not in state.internal
 
 
+class FakeClient:
+    """Client HTTP fake que devolve sempre a mesma resposta (ou levanta sempre o mesmo erro)."""
+
+    def __init__(self, response=None, error=None):
+        self.response = response
+        self.error = error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get(self, url, params=None, **kwargs):
+        if self.error:
+            raise self.error
+        return self.response
+
+
+class SequenceClient:
+    """Client HTTP fake que devolve uma resposta diferente a cada chamada e conta as chamadas."""
+
+    def __init__(self, respostas, contador):
+        self.respostas = respostas
+        self.contador = contador
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get(self, url, params=None, **kwargs):
+        indice = min(self.contador["chamadas"], len(self.respostas) - 1)
+        self.contador["chamadas"] += 1
+        self.contador["error_status_codes"].append(kwargs.get("error_status_codes"))
+        return self.respostas[indice]
+
+
+def sem_espera(module, monkeypatch):
+    """Neutraliza o backoff do retry para manter a suíte rápida."""
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+
+
+def resposta_reconexao():
+    """Resposta que reproduz o erro transitório da fachada do IPTU (CHATR-121)."""
+    return FakeResponse(
+        500, text="6000 - Connect required before calling other methods."
+    )
+
+
 @pytest.mark.asyncio
 async def test_iptu_api_service_request_variants(monkeypatch):
     module = prepare_service_module(monkeypatch)
     service = module.IPTUAPIService(user_id="u1")
-
-    class FakeClient:
-        def __init__(self, response=None, error=None):
-            self.response = response
-            self.error = error
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def get(self, url, params=None):
-            if self.error:
-                raise self.error
-            return self.response
+    sem_espera(module, monkeypatch)
 
     monkeypatch.setattr(
         module,
@@ -425,6 +465,158 @@ async def test_iptu_api_service_request_variants(monkeypatch):
     )
     with pytest.raises(module.APIUnavailableError, match="boom"):
         await service._make_api_request("ConsultarGuias", {"inscricao": "123"})
+
+
+def test_e_erro_transitorio(monkeypatch):
+    """CHATR-121: só erros de reconexão da fachada do IPTU devem ser retentados."""
+    module = prepare_service_module(monkeypatch, "test_iptu_transitorio_module")
+
+    assert module._e_erro_transitorio(resposta_reconexao()) is True
+    assert (
+        module._e_erro_transitorio(
+            FakeResponse(500, text="Connect required before calling other methods.")
+        )
+        is True
+    )
+    for status_code in (502, 503, 504):
+        assert module._e_erro_transitorio(FakeResponse(status_code, text="")) is True
+
+    # 500 genérico não é transitório: insistir só atrasaria a resposta ao cidadão
+    assert module._e_erro_transitorio(FakeResponse(500, text="erro")) is False
+    assert module._e_erro_transitorio(FakeResponse(200, {"ok": True})) is False
+    assert module._e_erro_transitorio(FakeResponse(404, text="")) is False
+
+
+@pytest.mark.asyncio
+async def test_retry_reconexao_sucesso_na_segunda_tentativa(monkeypatch):
+    """CHATR-121: o erro 6000 é transitório, então a tentativa seguinte deve passar."""
+    module = prepare_service_module(monkeypatch, "test_iptu_retry_sucesso_module")
+    service = module.IPTUAPIService(user_id="u1")
+    sem_espera(module, monkeypatch)
+
+    contador = {"chamadas": 0, "error_status_codes": []}
+    respostas = [resposta_reconexao(), FakeResponse(200, {"ok": True})]
+    monkeypatch.setattr(
+        module,
+        "InterceptedHTTPClient",
+        lambda **kwargs: SequenceClient(respostas, contador),
+    )
+
+    result = await service._make_api_request("ConsultarGuias", {"inscricao": "123"})
+
+    assert result == {"ok": True}
+    assert contador["chamadas"] == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_reconexao_esgotado(monkeypatch):
+    """CHATR-121: esgotadas as tentativas, o erro vira APIUnavailableError e gera alerta."""
+    module = prepare_service_module(monkeypatch, "test_iptu_retry_esgotado_module")
+    service = module.IPTUAPIService(user_id="u1")
+    sem_espera(module, monkeypatch)
+
+    contador = {"chamadas": 0, "error_status_codes": []}
+    monkeypatch.setattr(
+        module,
+        "InterceptedHTTPClient",
+        lambda **kwargs: SequenceClient([resposta_reconexao()], contador),
+    )
+
+    with pytest.raises(module.APIUnavailableError):
+        await service._make_api_request("ConsultarGuias", {"inscricao": "123"})
+
+    assert contador["chamadas"] == module.API_MAX_TENTATIVAS
+    # Só a última tentativa reporta ao interceptor, para não gerar um alerta por retry
+    assert contador["error_status_codes"][:-1] == [None] * (
+        module.API_MAX_TENTATIVAS - 1
+    )
+    assert contador["error_status_codes"][-1] == module.API_STATUS_ALERTA
+
+
+@pytest.mark.asyncio
+async def test_erro_nao_transitorio_falha_sem_retry(monkeypatch):
+    """CHATR-121: um 500 sem a assinatura de reconexão deve falhar na primeira tentativa."""
+    module = prepare_service_module(monkeypatch, "test_iptu_sem_retry_module")
+    service = module.IPTUAPIService(user_id="u1")
+    sem_espera(module, monkeypatch)
+
+    contador = {"chamadas": 0, "error_status_codes": []}
+    monkeypatch.setattr(
+        module,
+        "InterceptedHTTPClient",
+        lambda **kwargs: SequenceClient([FakeResponse(500, text="erro")], contador),
+    )
+
+    with pytest.raises(module.APIUnavailableError):
+        await service._make_api_request("ConsultarGuias", {"inscricao": "123"})
+
+    assert contador["chamadas"] == 1
+
+
+def test_sanitizar_erro_remove_query_string(monkeypatch):
+    """O token vai na query string, e algumas exceções do httpx embutem a URL completa."""
+    module = prepare_service_module(monkeypatch, "test_iptu_sanitizar_module")
+
+    sujo = (
+        "Exceeded maximum allowed redirects for url "
+        "'https://iptu.example/ConsultarGuias?token=SEGREDO&inscricao=123'"
+    )
+    limpo = module._sanitizar_erro(sujo)
+
+    assert "SEGREDO" not in limpo
+    assert "<redacted>" in limpo
+    assert "Exceeded maximum allowed redirects" in limpo
+
+    # Mensagens sem URL passam intactas
+    assert module._sanitizar_erro("falha de conexão") == "falha de conexão"
+    assert module._sanitizar_erro("") == ""
+
+
+@pytest.mark.asyncio
+async def test_excecao_com_url_nao_expoe_token(monkeypatch):
+    """A mensagem da APIUnavailableError chega ao cidadão via 'Detalhes técnicos'."""
+    module = prepare_service_module(monkeypatch, "test_iptu_excecao_url_module")
+    service = module.IPTUAPIService(user_id="u1")
+
+    erro = httpx.TooManyRedirects(
+        "Exceeded maximum allowed redirects for url "
+        "'https://iptu.example/ConsultarGuias?token=token-123&inscricao=123'"
+    )
+    monkeypatch.setattr(
+        module,
+        "InterceptedHTTPClient",
+        lambda **kwargs: FakeClient(error=erro),
+    )
+
+    with pytest.raises(module.APIUnavailableError) as exc_info:
+        await service._make_api_request("ConsultarGuias", {"inscricao": "123"})
+
+    assert "token-123" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_token_nao_vai_no_body_reportado(monkeypatch):
+    """CHATR-121: o token fica no client para não vazar no body enviado ao interceptor."""
+    module = prepare_service_module(monkeypatch, "test_iptu_token_module")
+    service = module.IPTUAPIService(user_id="u1")
+
+    capturado = {}
+
+    class ClientCapturaParams(FakeClient):
+        async def get(self, url, params=None, **kwargs):
+            capturado["params"] = params
+            return self.response
+
+    def make_client(**kwargs):
+        capturado["client_kwargs"] = kwargs
+        return ClientCapturaParams(FakeResponse(200, {"ok": True}))
+
+    monkeypatch.setattr(module, "InterceptedHTTPClient", make_client)
+
+    await service._make_api_request("ConsultarGuias", {"inscricao": "123"})
+
+    assert capturado["params"] == {"inscricao": "123"}
+    assert capturado["client_kwargs"]["params"] == {"token": "token-123"}
 
 
 @pytest.mark.asyncio

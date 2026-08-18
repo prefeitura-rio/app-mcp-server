@@ -18,6 +18,19 @@ INSCRICAO_PATTERN = r"^[0-9]+$"
 # Limites e Tentativas
 MAX_TENTATIVAS_ANO = 3  # Máximo de tentativas de ano antes de pedir nova inscrição
 
+# Retry de erros transitórios da API externa (CHATR-121)
+# A fachada HTTP do IPTU mantém conexão com um backend legado e não reconecta
+# quando ela cai, devolvendo HTTP 500 com "6000 - Connect required before calling
+# other methods." O erro é transitório, então vale retentar antes de desistir.
+API_MAX_TENTATIVAS = 3
+API_BACKOFF_BASE_SECONDS = 0.5
+API_STATUS_TRANSITORIOS = {502, 503, 504}
+API_ASSINATURA_RECONEXAO = "connect required"
+API_CODIGO_RECONEXAO = "6000"
+
+# Status codes reportados ao interceptor quando as tentativas se esgotam
+API_STATUS_ALERTA = {500, 502, 503, 504}
+
 # Tipos de Guias IPTU
 TIPO_GUIA_ORDINARIA = "ORDINÁRIA"
 TIPO_GUIA_EXTRAORDINARIA = "EXTRAORDINÁRIA"
