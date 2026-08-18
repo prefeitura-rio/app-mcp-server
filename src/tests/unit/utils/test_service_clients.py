@@ -314,7 +314,8 @@ async def test_typesense_api_search_and_by_id(monkeypatch):
     assert result["title"] == "Serviço"
 
 
-def test_bigquery_helpers(monkeypatch):
+@pytest.mark.asyncio
+async def test_bigquery_helpers(monkeypatch):
     ensure_package("src", PROJECT_ROOT / "src")
     ensure_package("src.config", PROJECT_ROOT / "src" / "config")
     ensure_package("src.utils", PROJECT_ROOT / "src" / "utils")
@@ -386,7 +387,7 @@ def test_bigquery_helpers(monkeypatch):
             return super().items()
 
     class FakeQueryJob:
-        def result(self, page_size=None):
+        def result(self, page_size=None, **_kwargs):
             return [
                 FakeRow(
                     {
@@ -397,26 +398,36 @@ def test_bigquery_helpers(monkeypatch):
                 )
             ]
 
-    query_client = types.SimpleNamespace(query=lambda query: FakeQueryJob())
+    query_client = types.SimpleNamespace(query=lambda query, **_kwargs: FakeQueryJob())
     monkeypatch.setattr(module, "get_bigquery_client", lambda: query_client)
-    rows = module.get_bigquery_result("select 1")
+    # `cache_ttl_seconds=0` em todas as chamadas: este teste troca o cliente do
+    # BigQuery a cada etapa e exige que a query seja de fato reexecutada. Hoje o
+    # cache já fica inerte por acidente — o `env` stub acima não tem `REDIS_URL`,
+    # então `get_async_redis_client()` devolve None. Explicitar o bypass evita
+    # que acrescentar `REDIS_URL` ao stub torne os asserts seguintes flaky:
+    # todas as etapas usam a mesma query e portanto a mesma chave de cache.
+    rows = await module.get_bigquery_result("select 1", cache_ttl_seconds=0)
     assert rows[0]["dt"].startswith("2026-04-08T10:00:00")
     assert rows[0]["d"] == "2026-04-08"
 
+    def _raise_not_found(*_a, **_k):
+        raise not_found("missing")
+
     class MissingClient:
-        def query(self, query):
-            raise not_found("missing")
+        query = _raise_not_found
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: MissingClient())
-    assert module.get_bigquery_result("select 1") == []
+    assert await module.get_bigquery_result("select 1", cache_ttl_seconds=0) == []
+
+    def _raise_error(*_a, **_k):
+        raise RuntimeError("boom")
 
     class ErrorClient:
-        def query(self, query):
-            raise RuntimeError("boom")
+        query = _raise_error
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: ErrorClient())
     with pytest.raises(Exception, match="Failed to execute BigQuery query"):
-        module.get_bigquery_result("select 1")
+        await module.get_bigquery_result("select 1", cache_ttl_seconds=0)
 
     # Erro conhecido do Google chega ao chamador com o tipo original, e não
     # envolvido em `Exception`: é o que permite a `pluscode_service` separar
@@ -427,7 +438,7 @@ def test_bigquery_helpers(monkeypatch):
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: BadRequestClient())
     with pytest.raises(BadRequest, match="Spreadsheet not found"):
-        module.get_bigquery_result("select 1")
+        await module.get_bigquery_result("select 1", cache_ttl_seconds=0)
 
 
 def test_bigquery_save_functions(monkeypatch):
@@ -652,6 +663,15 @@ async def test_bigquery_background_helpers(monkeypatch):
     )
     assert calls[1][0] is module.save_response_in_bq
 
+    # save_cor_alert_in_bq_background now enqueues rows to the batch buffer
+    # instead of writing directly; capture calls to enqueue_bigquery_row.
+    enqueued = []
+    monkeypatch.setattr(
+        module,
+        "enqueue_bigquery_row",
+        lambda table, row, **_kw: enqueued.append((table, row)),
+    )
+
     await module.save_cor_alert_in_bq_background(
         alert_id="a3",
         user_id="u4",
@@ -668,10 +688,11 @@ async def test_bigquery_background_helpers(monkeypatch):
         dataset_id="dataset",
         table_id="alerts",
     )
-    payload, table_name = saved_payloads[-1]
+    assert len(enqueued) == 1
+    table_name, row = enqueued[-1]
     assert table_name == "rj-iplanrio.dataset.alerts"
-    assert payload[0]["bairro_normalizado"] == "jardim america"
-    assert payload[0]["bairro_raw"] == "jardim america"
+    assert row["bairro_normalizado"] == "jardim america"
+    assert row["bairro_raw"] == "jardim america"
 
     await module.save_cor_alert_to_queue_background(
         alert_id="a4",

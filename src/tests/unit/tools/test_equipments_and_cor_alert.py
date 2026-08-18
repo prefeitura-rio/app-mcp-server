@@ -388,7 +388,7 @@ async def test_instrucoes_degradam_quando_a_tabela_externa_cai(monkeypatch):
     atravessa a degradação de `get_bigquery_result` e chegaria à tool.
     """
 
-    def bigquery_quebrado(query):
+    async def bigquery_quebrado(query, query_parameters=None):
         raise BadRequest(
             "400 Error while reading table: "
             "rj-iplanrio.plus_codes.equipamentos_instrucoes, error message: "
@@ -417,7 +417,7 @@ async def test_instrucoes_degradam_tambem_em_erro_inesperado(monkeypatch):
     que planilha fora do ar e defeito de código não se confundam na busca.
     """
 
-    def bigquery_com_bug(query):
+    async def bigquery_com_bug(query, query_parameters=None):
         raise RuntimeError("boom")
 
     module = _load_pluscode_service(monkeypatch, bigquery_com_bug)
@@ -435,10 +435,10 @@ async def test_instrucoes_degradam_tambem_em_erro_inesperado(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_instrucoes_retornam_os_dados_quando_a_tabela_responde(monkeypatch):
-    queries = []
+    chamadas = []
 
-    def bigquery_ok(query):
-        queries.append(query)
+    async def bigquery_ok(query, query_parameters=None):
+        chamadas.append((query, query_parameters))
         return [{"tema": "educacao", "instrucoes": "..."}]
 
     module = _load_pluscode_service(monkeypatch, bigquery_ok)
@@ -446,7 +446,10 @@ async def test_instrucoes_retornam_os_dados_quando_a_tabela_responde(monkeypatch
     resultado = await module.get_tematic_instructions_for_equipments(tema="educacao")
 
     assert resultado == [{"tema": "educacao", "instrucoes": "..."}]
-    assert "WHERE tema = 'educacao'" in queries[0]
+    query, parametros = chamadas[0]
+    # O tema vai por parâmetro do BigQuery, nunca interpolado no texto do SQL.
+    assert "educacao" not in query
+    assert [(p.name, p.value) for p in parametros] == [("tema", "educacao")]
 
 
 def test_openlocationcode_roundtrip_and_helpers():

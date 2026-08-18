@@ -52,7 +52,8 @@ def test_save_response_in_bq_serializes_datetime_time_payload(monkeypatch):
     assert decoded["inaugurado_em"] == "2010-01-01"
 
 
-def test_get_bigquery_result_converts_time_column_to_iso_string(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_bigquery_result_converts_time_column_to_iso_string(monkeypatch):
     """Regression test for CHATR-108.
 
     get_bigquery_result must convert datetime.time values (BigQuery TIME
@@ -68,7 +69,7 @@ def test_get_bigquery_result_converts_time_column_to_iso_string(monkeypatch):
             return self._data.items()
 
     class FakeQueryJob:
-        def result(self, page_size=None):
+        def result(self, page_size=None, **_kwargs):
             return [
                 FakeRow(
                     {
@@ -83,12 +84,12 @@ def test_get_bigquery_result_converts_time_column_to_iso_string(monkeypatch):
             ]
 
     class FakeClient:
-        def query(self, query):
+        def query(self, query, **_kwargs):
             return FakeQueryJob()
 
     monkeypatch.setattr(bigquery_module, "get_bigquery_client", lambda: FakeClient())
 
-    rows = bigquery_module.get_bigquery_result("SELECT * FROM equipamentos")
+    rows = await bigquery_module.get_bigquery_result("SELECT * FROM equipamentos")
 
     assert rows == [
         {

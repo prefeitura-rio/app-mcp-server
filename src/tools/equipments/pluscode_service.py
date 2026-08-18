@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from google.api_core.exceptions import GoogleAPIError
+from google.cloud import bigquery
 
 from src.tools.equipments.utils import get_plus8_coords_from_address
 from src.utils.bigquery import get_bigquery_result
@@ -20,7 +21,7 @@ async def get_pluscode_coords_equipments(
     if plus8:
         latitude = coords["lat"]
         longitude = coords["lng"]
-        query = f"""
+        query = """
             with
             equipamentos as (
                 select
@@ -48,7 +49,7 @@ async def get_pluscode_coords_equipments(
                     eq.updated_at,
                 from `rj-iplanrio.plus_codes.codes` t, unnest(equipamentos) as eq
                 where eq.use = TRUE 
-                and t.plus8 = "{plus8}"
+                and t.plus8 = @plus8
                 __replace_categories__
                 qualify
                     row_number() over (
@@ -72,7 +73,7 @@ async def get_pluscode_coords_equipments(
                     CAST(NULL as STRING) as plus8_grid,
                     eq.plus8,
                     eq.plus10,
-                    CAST(st_distance(ST_GEOGPOINT(eq.longitude,eq.latitude), ST_GEOGPOINT({longitude}, {latitude})) AS INT64) as distancia_metros,
+                    CAST(st_distance(ST_GEOGPOINT(eq.longitude,eq.latitude), ST_GEOGPOINT(@longitude, @latitude)) AS INT64) as distancia_metros,
                     t.secretaria_responsavel,
                     t.categoria,
                     eq.id_equipamento,
@@ -93,7 +94,7 @@ async def get_pluscode_coords_equipments(
                     eq.updated_at,
                 FROM tb_territorio t
                 where eq.use = TRUE 
-                and ST_WITHIN(ST_GEOGPOINT({longitude}, {latitude}), geometry)
+                and ST_WITHIN(ST_GEOGPOINT(@longitude, @latitude), geometry)
                 __replace_categories__
                 order by eq.secretaria_responsavel, eq.categoria
             ),
@@ -119,33 +120,23 @@ async def get_pluscode_coords_equipments(
             order by secretaria_responsavel, categoria
         """
 
+    query_parameters = [
+        bigquery.ScalarQueryParameter("plus8", "STRING", plus8),
+        bigquery.ScalarQueryParameter("longitude", "FLOAT64", float(longitude)),
+        bigquery.ScalarQueryParameter("latitude", "FLOAT64", float(latitude)),
+    ]
+
     if categories:
-        # logger.info(f"Categories: {categories}")
-
-        # If either "CF" or "CMS" in categories, ensure all 3 are included
-        # target_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
-        # if any(cat in categories for cat in target_categories):
-        #     required_categories = ["CF", "CMS", "EQUIPE DA FAMILIA"]
-        #     for cat in required_categories:
-        #         if cat not in categories:
-        #             categories.append(cat)
-
-        categorias_filter = "and t.categoria in ("
-        for i in range(len(categories)):
-            if i != len(categories) - 1:
-                categorias_filter += f"'{categories[i]}', "
-            else:
-                categorias_filter += f"'{categories[i]}'"
-
-        categorias_filter += ")"
+        categorias_filter = "and t.categoria in UNNEST(@categories)"
         query = query.replace("__replace_categories__", categorias_filter)
+        query_parameters.append(
+            bigquery.ArrayQueryParameter("categories", "STRING", categories)
+        )
     else:
-        # logger.info("No categories provided. Returning all categories.")
         query = query.replace("__replace_categories__", "")
 
     try:
-        # print(query)
-        data = get_bigquery_result(query=query)
+        data = await get_bigquery_result(query=query, query_parameters=query_parameters)
 
         return {
             "inputs": {
@@ -189,7 +180,7 @@ async def get_category_equipments() -> dict:
     order by eq.secretaria_responsavel, eq.categoria
     """
 
-    data = get_bigquery_result(query=query)
+    data = await get_bigquery_result(query=query)
     categories = {}
     for d in data:
         if d["secretaria_responsavel"] not in categories:
@@ -220,15 +211,21 @@ def _instrucoes_indisponiveis() -> List[dict]:
 
 @interceptor(source={"source": "mcp", "tool": "equipments"})
 async def get_tematic_instructions_for_equipments(tema: str = "geral") -> List[dict]:
-    where_clause = f"WHERE tema = '{tema}'" if tema != "geral" else ""
-    query = f"""
+    # NULL means "no filter" — the WHERE clause handles both cases without
+    # any string interpolation of user-supplied values into the SQL text.
+    tema_param = tema if tema != "geral" else None
+
+    query = """
         SELECT
             *
         FROM `rj-iplanrio.plus_codes.equipamentos_instrucoes`
-        {where_clause}
+        WHERE @tema IS NULL OR tema = @tema
     """
+    query_parameters = [
+        bigquery.ScalarQueryParameter("tema", "STRING", tema_param),
+    ]
     try:
-        return get_bigquery_result(query=query)
+        return await get_bigquery_result(query=query, query_parameters=query_parameters)
     except GoogleAPIError as e:
         # Caso esperado. `equipamentos_instrucoes` é tabela externa sobre uma
         # Google Sheet (CHATR-119): perder acesso à planilha vira um 400 do
