@@ -1,12 +1,50 @@
+import asyncio
+import functools
 from typing import List, Optional
 
 from google.api_core.exceptions import GoogleAPIError
 from google.cloud import bigquery
 
 from src.tools.equipments.utils import get_plus8_coords_from_address
-from src.utils.bigquery import get_bigquery_result
+from src.utils.bigquery import (
+    BigQueryQueryError,
+    BigQueryTimeoutError,
+    get_bigquery_result,
+)
 from src.utils.error_interceptor import interceptor
 from src.utils.log import logger
+
+
+class GeocodingError(Exception):
+    """O endereço não pôde ser convertido em coordenadas + plus8.
+
+    Subclasse de `Exception` para não mudar o contrato de quem já captura
+    largo, mas com tipo próprio para que o chamador consiga distinguir
+    "endereço não geolocalizado" de uma falha do BigQuery.
+    """
+
+
+async def _geocodificar(address: str):
+    """Roda a geocodificação, que é síncrona e de rede, fora do event loop.
+
+    `get_plus8_coords_from_address` faz um HTTP **bloqueante** (o
+    `InterceptedHTTPClient` é construído com `sync=True` e `timeout=10.0`).
+    Chamada direto de dentro de uma corrotina, ela congelava o loop inteiro
+    pela duração da resposta do Google Maps — medido: 1s de geocodificação,
+    1,02s de loop parado, com todas as outras requisições do pod paradas
+    junto. É o mesmo defeito que o CHATR-125 corrigiu na leitura do BigQuery,
+    na mesma função, só que na metade que ninguém tinha olhado — e esta roda
+    em toda chamada, inclusive nas que depois acertam o cache.
+
+    Vai para o executor default (e não para o pool de leitura do BigQuery):
+    são recursos diferentes, e misturá-los faria uma geocodificação lenta
+    consumir vaga de query. O teto de tempo continua sendo o `timeout=10.0`
+    do próprio cliente HTTP.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, functools.partial(get_plus8_coords_from_address, address=address)
+    )
 
 
 @interceptor(source={"source": "mcp", "tool": "equipments"})
@@ -14,14 +52,21 @@ async def get_pluscode_coords_equipments(
     address, categories: Optional[List[str]] = None
 ) -> dict:
     categories = categories or []
-    plus8, coords = get_plus8_coords_from_address(address=address)
+    plus8, coords = await _geocodificar(address)
     if not coords:
-        raise Exception("No coords found")
+        raise GeocodingError("No coords found")
 
-    if plus8:
-        latitude = coords["lat"]
-        longitude = coords["lng"]
-        query = """
+    # `plus8` vazio com `coords` preenchido deixava `query`, `latitude` e
+    # `longitude` sem valor e a função estourava `UnboundLocalError` na
+    # montagem dos parâmetros — fora do `try`, portanto sem virar o dict de
+    # erro que a tool espera. O guarda original (`if plus8:`) admitia que o
+    # caso existia, mas não tratava o ramo negativo.
+    if not plus8:
+        raise GeocodingError(f"No plus8 code for address: {address}")
+
+    latitude = coords["lat"]
+    longitude = coords["lng"]
+    query = """
             with
             equipamentos as (
                 select
@@ -164,10 +209,49 @@ async def get_pluscode_coords_equipments(
             "plus8": plus8,
             "data": data,
         }
-    except Exception as e:
+    # Escalonamento do mais específico para o mais genérico. Os três primeiros
+    # ramos existem porque o CHATR-125 criou tipos justamente para separar
+    # estes desfechos; capturar só `Exception` os achatava de volta num único
+    # dict e obrigava quem lê o log a inspecionar a mensagem para saber se a
+    # causa foi prazo, infraestrutura ou bug nosso.
+    except BigQueryTimeoutError as e:
+        # Transitório: a consulta demorou mais que o orçamento, normalmente sob
+        # concorrência. `warning`, não `error` — é degradação prevista, e
+        # repetir a chamada tem chance real de funcionar.
+        logger.warning(f"Timeout na consulta de equipamentos (plus8={plus8}): {e}")
+        return {
+            "error": "Consulta ao BigQuery excedeu o tempo limite",
+            "message": str(e),
+        }
+    except GoogleAPIError as e:
+        # Falha conhecida de infraestrutura (400 de tabela externa, 403 do
+        # Drive). Mantém o texto histórico de `error`: é o que já está gravado
+        # nos logs do BigQuery e o que o agente já sabe interpretar.
         logger.error(f"Erro no request do bigquery: {e}")
         return {
             "error": "Erro no request do bigquery",
+            "message": str(e),
+        }
+    except BigQueryQueryError as e:
+        # A camada de leitura classificou como "não era prazo nem falha
+        # conhecida". `exception` para levar o traceback junto: `__cause__`
+        # carrega a exceção original, que é a única pista do que de fato houve.
+        logger.exception(
+            f"Erro INESPERADO na consulta de equipamentos (plus8={plus8}): {e!r}"
+        )
+        return {
+            "error": "Erro inesperado na consulta ao BigQuery",
+            "message": str(e),
+        }
+    except Exception as e:
+        # Rede de segurança para o que nem passou pelo BigQuery — montagem da
+        # resposta, por exemplo. O contrato com a tool é o mesmo: falha vira
+        # dado, nunca exceção que estoura o tool call.
+        logger.exception(
+            f"Erro INESPERADO ao buscar equipamentos (plus8={plus8}): {e!r}"
+        )
+        return {
+            "error": "Erro inesperado ao buscar equipamentos",
             "message": str(e),
         }
 

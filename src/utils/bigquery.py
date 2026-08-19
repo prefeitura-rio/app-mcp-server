@@ -5,6 +5,7 @@ import functools
 import hashlib
 import random
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from google.cloud import bigquery
 from google.api_core.exceptions import GoogleAPIError, NotFound
@@ -121,7 +122,18 @@ _sync_redis_lock = threading.Lock()
 
 
 def _get_sync_redis_client():
-    """Return a process-wide synchronous Redis client, or None if unavailable."""
+    """Return a process-wide synchronous Redis client, or None if unavailable.
+
+    Os timeouts de socket são obrigatórios pelo mesmo motivo do cliente async
+    do cache (ver ``get_async_redis_client``), mas com uma consequência pior:
+    este cliente roda em thread do executor default, chamado por
+    ``_persist_to_dlq`` no caminho de falha de escrita. Sem timeout, um Redis
+    que aceita a conexão e para de responder prende a thread indefinidamente —
+    e, como a chamada nunca retorna, o fallback em arquivo logo abaixo (que
+    existe justamente para quando o Redis não está disponível) nunca chega a
+    ser tentado. O resultado é o pior possível: thread perdida *e* registro
+    perdido.
+    """
     global _sync_redis_client
     if _sync_redis_client is not None:
         return _sync_redis_client
@@ -133,8 +145,12 @@ def _get_sync_redis_client():
 
             redis_url = getattr(env, "REDIS_URL", None)
             if redis_url:
+                timeout = getattr(env, "REDIS_DLQ_TIMEOUT_SECONDS", 5.0)
                 _sync_redis_client = _redis_lib.Redis.from_url(
-                    redis_url, decode_responses=True
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=timeout,
+                    socket_timeout=timeout,
                 )
         except Exception as e:
             logger.warning(f"Could not initialize sync Redis client: {e}")
@@ -709,19 +725,65 @@ async def get_async_redis_client():
 CACHE_KEY_PREFIX = "bq_cache"
 
 
+# Caracteres que a chave usa como estrutura. Precisam ser escapados dentro dos
+# valores, senão um valor consegue se disfarçar de outro. `%` vem primeiro por
+# ser o próprio caractere de escape — inverter a ordem tornaria a codificação
+# ambígua (`a%20b` literal viraria indistinguível de `a b`).
+_ESCAPES_DA_CHAVE = (("%", "%25"), (":", "%3A"), (",", "%2C"), (" ", "%20"))
+
+
 def _normalize_cache_part(value) -> str:
-    """Reduz um valor de chave a texto estável e sem os separadores da chave.
+    """Reduz um valor de chave a texto estável, escapando os separadores.
 
     Coleções são ordenadas: o chamador só deve passar coleção quando a ordem
     não altera o resultado da query (é o caso de um filtro ``IN UNNEST``, onde
     ``["A","B"]`` e ``["B","A"]`` devolvem o mesmo). Ordenar transforma essas
     duas chamadas em um único acerto de cache em vez de duas entradas.
+
+    O escape é injetivo de propósito. Substituir os separadores por ``_``,
+    como antes, fazia valores distintos colapsarem na mesma chave sem qualquer
+    sinal: ``"ASSISTENCIA SOCIAL"`` e ``"ASSISTENCIA_SOCIAL"`` viravam a mesma
+    entrada, e ``["A,B"]`` virava a mesma que ``["A","B"]``. O desfecho é o
+    pior possível para depurar — resposta errada, sem erro e sem log.
+
+    Percent-encoding em vez de hash porque a chave precisa continuar legível e
+    varrível por prefixo, que é a alavanca de invalidação por região. `%` não
+    tem significado em glob de ``SCAN``, então os padrões não mudam.
     """
     if value is None:
         return ""
     if isinstance(value, (list, tuple, set, frozenset)):
         return ",".join(sorted(_normalize_cache_part(v) for v in value))
-    return str(value).replace(":", "_").replace(" ", "_")
+    texto = str(value)
+    for bruto, escapado in _ESCAPES_DA_CHAVE:
+        texto = texto.replace(bruto, escapado)
+    return texto
+
+
+def _sql_fingerprint(query: str) -> str:
+    """Hash curto do texto da query, usado como parte fixa da chave semântica.
+
+    Sem ele, a chave é definida só pelo namespace mais os parâmetros
+    semânticos — e nada garante que esse par identifique *uma* query. Dois
+    problemas concretos, ambos silenciosos:
+
+    * Um segundo chamador que reaproveite o mesmo namespace (o caso de
+      `equipments_categories`, que hoje não passa nenhuma parte e portanto tem
+      a chave inteira igual ao namespace) passa a dividir uma entrada com o
+      primeiro: quem gravar antes decide o que o outro lê, por todo o TTL.
+    * Um deploy que altere o SQL continua servindo o formato antigo até o TTL
+      expirar, porque a chave não se mexeu.
+
+    Com o fingerprint, cada texto de query tem seu próprio espaço e um deploy
+    que muda a query invalida sozinho o que mudou. A varredura por prefixo
+    continua funcionando — `SCAN MATCH bq_cache:equipments:*` pega as duas
+    gerações —, então a invalidação manual descrita em `_generate_cache_key`
+    não é afetada.
+
+    8 hexes (32 bits) bastam: o espaço é o punhado de queries do repositório,
+    não entrada adversarial.
+    """
+    return hashlib.sha256(query.encode("utf-8")).hexdigest()[:8]
 
 
 def _generate_cache_key(
@@ -753,6 +815,7 @@ def _generate_cache_key(
             f"{nome}={_normalize_cache_part(valor)}"
             for nome, valor in sorted((cache_key_parts or {}).items())
         ]
+        partes.append(f"sql={_sql_fingerprint(query)}")
         return ":".join([CACHE_KEY_PREFIX, cache_namespace, *partes])
 
     params_str = ""
@@ -784,17 +847,47 @@ _inflight_refs: dict = {}
 
 
 @contextlib.asynccontextmanager
-async def _single_flight(key: str):
-    """Serializa, dentro do processo, as chamadas que disputam a mesma chave."""
+async def _single_flight(key: str, deadline: float = None):
+    """Serializa, dentro do processo, as chamadas que disputam a mesma chave.
+
+    `deadline` é um instante de `loop.time()`, não uma duração: é o mesmo
+    prazo que limita a query, compartilhado com ela. Sem esse limite a espera
+    aqui não tinha teto nenhum — o `asyncio.wait_for` da query fica *dentro*
+    do lock, então ele limitava a query e não a fila. Com uma query lenta na
+    frente, a enésima chamada da mesma chave esperava n × timeout, e o
+    critério de aceite do CHATR-125 ("não trava o tool call indefinidamente")
+    não se sustentava justamente sob a concorrência que o cache existe para
+    atender: todo mundo pedindo a mesma região ao mesmo tempo.
+    """
+    loop = asyncio.get_running_loop()
     lock = _inflight_locks.get(key)
     if lock is None:
         lock = asyncio.Lock()
         _inflight_locks[key] = lock
     _inflight_refs[key] = _inflight_refs.get(key, 0) + 1
+    adquirido = False
     try:
-        async with lock:
-            yield
+        if deadline is None:
+            await lock.acquire()
+        else:
+            restante = deadline - loop.time()
+            if restante <= 0:
+                raise BigQueryTimeoutError(
+                    f"BigQuery single-flight wait timed out for key {key}"
+                )
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=restante)
+            except asyncio.TimeoutError:
+                # `from None`: o TimeoutError do wait_for não acrescenta nada
+                # ao daqui, e encadear os dois só polui o traceback.
+                raise BigQueryTimeoutError(
+                    f"BigQuery single-flight wait timed out for key {key}"
+                ) from None
+        adquirido = True
+        yield
     finally:
+        if adquirido:
+            lock.release()
         _inflight_refs[key] = _inflight_refs.get(key, 1) - 1
         if _inflight_refs[key] <= 0:
             _inflight_refs.pop(key, None)
@@ -856,6 +949,100 @@ class _QueryOutcome(NamedTuple):
     cacheable: bool
 
 
+class BigQueryTimeoutError(TimeoutError):
+    """Estouro de prazo numa leitura do BigQuery.
+
+    Subclasse de `TimeoutError` para não mudar o contrato de quem já captura
+    o tipo embutido — mas precisa mesmo ser subclasse, e não o `TimeoutError`
+    puro, por causa de `asyncio.futures._convert_future_exc`::
+
+        if exc_class is concurrent.futures.TimeoutError:
+            return exceptions.TimeoutError(*exc.args)
+
+    A comparação é de identidade de classe. Uma exceção levantada dentro do
+    executor cujo tipo seja *exatamente* `TimeoutError` (que em 3.11+ é o
+    mesmo objeto que `concurrent.futures.TimeoutError`) é descartada e
+    reconstruída do zero na travessia thread → event loop, junto com
+    `__cause__` e `__traceback__`. Ou seja: o `from e` do outro lado da
+    fronteira simplesmente não sobrevive. Com uma subclasse, o `else` daquele
+    trecho devolve a exceção original intacta.
+    """
+
+
+class BigQueryQueryError(Exception):
+    """Falha inesperada ao executar uma leitura no BigQuery.
+
+    Separa o desfecho "não sei o que aconteceu" dos dois que o chamador
+    consegue tratar: `GoogleAPIError` (falha conhecida de infraestrutura,
+    repassada com o tipo original) e `TimeoutError` (estouro de prazo, venha
+    ele do relógio do `wait_for` ou do relógio do `.result()`).
+
+    Antes os três chegavam como `Exception` crua, o que obrigava todo chamador
+    a olhar a *mensagem* para decidir o que fazer — e fazia a mesma condição
+    (query lenta) chegar ora como `TimeoutError`, ora como `Exception`,
+    dependendo de qual dos dois relógios disparasse primeiro.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Executor dedicado às leituras.
+#
+# O `wait_for` libera o `await` no prazo, mas não mata a thread: ela segue
+# ocupada até a query terminar sozinha. Com o executor default do loop, essas
+# threads presas são as mesmas que `save_response_in_bq_background`,
+# `save_feedback_in_bq_background` e `save_cor_alert_in_bq_background` usam —
+# ou seja, um BigQuery lento na *leitura* acabava enfileirando a gravação de
+# log e de alerta do COR, que não têm nada a ver com o problema.
+#
+# Pool próprio e limitado: leitura travada só atrapalha leitura. E o limite é
+# desejável, não um efeito colateral — quando ele satura, a espera pela vaga
+# corre dentro do mesmo deadline da chamada, então o excesso vira TimeoutError
+# rápido em vez de fila invisível.
+# ---------------------------------------------------------------------------
+
+_read_executor: ThreadPoolExecutor = None
+_read_executor_lock = threading.Lock()
+
+
+def _get_read_executor() -> ThreadPoolExecutor:
+    """Devolve (criando na primeira vez) o pool de threads das leituras."""
+    global _read_executor
+    if _read_executor is not None:
+        return _read_executor
+    with _read_executor_lock:
+        if _read_executor is None:
+            max_workers = int(getattr(env, "BIGQUERY_READ_MAX_WORKERS", 8))
+            _read_executor = ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="bq-read"
+            )
+    return _read_executor
+
+
+def _shutdown_read_executor() -> None:
+    """Encerra o pool no fim do processo, sem esperar query pendurada."""
+    global _read_executor
+    executor, _read_executor = _read_executor, None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _cancelar_job(query_job) -> None:
+    """Pede ao BigQuery para cancelar um job cujo resultado ninguém vai mais ler.
+
+    Estourado o prazo, o job continuaria varrendo bytes do lado do Google e
+    sendo cobrado por isso — o cliente desistiu, o servidor não sabe disso. O
+    cancelamento é best-effort de propósito: já estamos no caminho de erro e
+    falhar aqui só substituiria o timeout (que é a informação útil) por outra
+    exceção qualquer.
+    """
+    if query_job is None:
+        return
+    try:
+        query_job.cancel()
+    except Exception as e:
+        logger.warning(f"Não foi possível cancelar o job do BigQuery: {e}")
+
+
 def _execute_bigquery_query(
     query: str,
     query_parameters: list = None,
@@ -873,6 +1060,7 @@ def _execute_bigquery_query(
     client = get_bigquery_client()
 
     tracer = get_tracer()
+    query_job = None
     with tracer.start_as_current_span("bigquery.query") as span:
         span.set_attribute("bigquery.page_size", page_size)
         span.set_attribute("bigquery.query_length", len(query))
@@ -882,10 +1070,17 @@ def _execute_bigquery_query(
             if query_parameters:
                 job_config = bigquery.QueryJobConfig(query_parameters=query_parameters)
 
+            # O `timeout` aqui é o da chamada HTTP que *cria* o job, e é
+            # distinto do `.result()` logo abaixo, que espera o job terminar.
+            # Sem ele, uma submissão pendurada segurava a thread para sempre:
+            # o `wait_for` do chamador devolvia o controle no prazo, mas a
+            # vaga no pool só voltava quando a API respondesse.
             if job_config is not None:
-                query_job = client.query(query, job_config=job_config)
+                query_job = client.query(
+                    query, job_config=job_config, timeout=timeout_seconds
+                )
             else:
-                query_job = client.query(query)
+                query_job = client.query(query, timeout=timeout_seconds)
 
             results = query_job.result(page_size=page_size, timeout=timeout_seconds)
 
@@ -911,6 +1106,25 @@ def _execute_bigquery_query(
             # hora transformaria o incidente em resposta errada muito depois de
             # ele ter passado.
             return _QueryOutcome([], cacheable=False)
+        except TimeoutError as e:
+            # É o que `query_job.result(timeout=...)` levanta quando o job não
+            # termina no prazo (em 3.11+ `concurrent.futures.TimeoutError` é o
+            # `TimeoutError` embutido). Precisa vir antes do `except Exception`
+            # abaixo: sem este bloco, o estouro de prazo *interno* virava
+            # `BigQueryQueryError` enquanto o estouro no `wait_for` do chamador
+            # virava `TimeoutError` — a mesma condição com dois tipos, e qual
+            # deles chegava dependia de qual relógio disparasse primeiro.
+            span.set_attribute("bigquery.success", False)
+            span.set_attribute("bigquery.timeout", True)
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            logger.error(
+                f"Timeout de {timeout_seconds}s ao aguardar o job do BigQuery: {e}"
+            )
+            _cancelar_job(query_job)
+            raise BigQueryTimeoutError(
+                f"BigQuery query execution timed out after {timeout_seconds}s"
+            ) from e
         except GoogleAPIError as e:
             span.set_attribute("bigquery.success", False)
             span.record_exception(e)
@@ -926,7 +1140,12 @@ def _execute_bigquery_query(
             span.record_exception(e)
             span.set_status(Status(StatusCode.ERROR, str(e)))
             logger.error(f"Erro ao executar query no BigQuery: {str(e)}")
-            raise Exception(f"Failed to execute BigQuery query: {str(e)}")
+            # `from e` preserva a causa: `BigQueryQueryError` diz "não era
+            # falha conhecida nem prazo", e o traceback original continua
+            # disponível para descobrir o que de fato era.
+            raise BigQueryQueryError(
+                f"Failed to execute BigQuery query: {str(e)}"
+            ) from e
 
 
 _CACHE_MISS = object()
@@ -951,9 +1170,25 @@ async def _cache_read(cache_key: str, span):
         cached_data = await redis_client.get(cache_key)
         if cached_data is None:
             return _CACHE_MISS
-        if isinstance(cached_data, bytes):
-            cached_data = cached_data.decode("utf-8")
-        return json.loads(cached_data)
+        try:
+            if isinstance(cached_data, bytes):
+                cached_data = cached_data.decode("utf-8")
+            return json.loads(cached_data)
+        except ValueError as e:
+            # `ValueError` cobre os dois modos de corrupção: `JSONDecodeError`
+            # (texto que não é JSON) e `UnicodeDecodeError` (bytes que não são
+            # UTF-8) são ambos subclasses dele.
+            # Valor ilegível é MISS, não indisponibilidade. A diferença importa
+            # porque `_CACHE_UNAVAILABLE` faz o chamador pular a gravação: a
+            # chave envenenada sobreviveria até o TTL e *toda* requisição pagaria
+            # uma query nesse intervalo. Como MISS, a query roda uma vez e
+            # sobrescreve o lixo. O Redis aqui está saudável — ele respondeu.
+            span.set_attribute("cache.corrupt_value", type(e).__name__)
+            logger.warning(
+                f"Valor inválido no cache do BigQuery (chave {cache_key}), "
+                f"tratando como miss e sobrescrevendo: {e}"
+            )
+            return _CACHE_MISS
     except Exception as e:
         # Atributo próprio para leitura: quando o Redis está fora, a escrita
         # logo em seguida também falha, e um atributo único faria a segunda
@@ -963,9 +1198,30 @@ async def _cache_read(cache_key: str, span):
         return _CACHE_UNAVAILABLE
 
 
-async def _cache_write(cache_key: str, rows: List[dict], ttl: int, span) -> None:
-    """Grava no cache, com jitter no TTL. Falha aqui nunca derruba a query."""
-    try:
+async def _cache_write(
+    cache_key: str, rows: List[dict], ttl: int, span, restante: float = None
+) -> None:
+    """Grava no cache, com jitter no TTL. Falha aqui nunca derruba a query.
+
+    `restante` é o que sobrou do orçamento da chamada. Sem esse limite a
+    gravação corria *fora* do prazo que `get_bigquery_result` promete: ela
+    acontece depois de a query já ter respondido, então com o Redis mudo o
+    tool call somava o timeout do BigQuery mais o timeout de socket do Redis
+    (medido: +4,0s sobre um orçamento de 5s, porque o cliente ainda tenta
+    reconectar). Com o limite, o teto da chamada volta a ser o timeout
+    configurado, que era o critério do CHATR-125.
+
+    Estourar o prazo aqui não é erro e não vira exceção: as linhas já estão na
+    mão do chamador e serão devolvidas de qualquer jeito. O único efeito é a
+    próxima requisição pagar outro miss. Cancelar no meio é seguro — o cliente
+    do Redis derruba a conexão em `BaseException` justamente para não devolver
+    ao pool uma conexão com resposta pendente.
+    """
+    if restante is not None and restante <= 0:
+        span.set_attribute("cache.write_skipped", "budget_exhausted")
+        return
+
+    async def _gravar() -> None:
         redis_client = await get_async_redis_client()
         if redis_client is None:
             return
@@ -974,6 +1230,21 @@ async def _cache_write(cache_key: str, rows: List[dict], ttl: int, span) -> None
         await redis_client.setex(cache_key, ttl_efetivo, serialized)
         span.set_attribute("cache.written", True)
         span.set_attribute("cache.ttl_seconds", ttl_efetivo)
+
+    try:
+        # `timeout=None` é "sem limite", então o caminho sem orçamento continua
+        # se comportando como antes.
+        await asyncio.wait_for(_gravar(), timeout=restante)
+    except asyncio.TimeoutError:
+        # Precisa vir antes do `except Exception`: `asyncio.TimeoutError` é
+        # subclasse de `Exception` e cairia no ramo de erro do Redis, que
+        # descreve outra coisa — o Redis pode estar perfeitamente saudável e
+        # só não ter sobrado prazo.
+        span.set_attribute("cache.write_timeout", True)
+        logger.warning(
+            f"Orçamento esgotado antes de gravar o cache do BigQuery "
+            f"(chave {cache_key}); resultado devolvido sem cachear."
+        )
     except Exception as e:
         span.set_attribute("cache.write_error", type(e).__name__)
         logger.warning(f"Erro ao gravar cache no Redis para BigQuery: {e}")
@@ -984,12 +1255,39 @@ async def _run_query_com_timeout(
     query_parameters: list,
     page_size: int,
     timeout: float,
+    orcamento: float = None,
 ) -> _QueryOutcome:
+    """Roda a query no executor de leitura, limitada a `timeout` segundos.
+
+    São dois números porque são duas coisas distintas:
+
+    * `timeout` é o que *sobrou* do prazo — o cache e a fila do single-flight
+      já podem ter consumido parte dele. É ele que limita a execução.
+    * `orcamento` é o prazo configurado para a chamada inteira, e serve só
+      para as mensagens. Quem lê um log ou trata a exceção quer saber que
+      estourou o limite de 10s, não que restavam 9.87431s quando a query
+      começou.
+
+    O `except` aqui pega os dois relógios — o do `wait_for` e o do
+    `.result()`, que chega pela thread — e os converte no mesmo `TimeoutError`
+    com a mesma mensagem. Era essa a inconsistência do CHATR-125: a mesma
+    condição chegava ao chamador com tipo diferente conforme quem disparasse
+    primeiro, e como os dois usam o mesmo prazo, isso era decidido por corrida.
+    """
+    orcamento = timeout if orcamento is None else orcamento
+    if timeout <= 0:
+        # O prazo acabou antes de a query começar — normalmente esperando na
+        # fila do single-flight. Levantar aqui evita mandar ao BigQuery um
+        # trabalho cujo resultado ninguém mais vai esperar.
+        raise BigQueryTimeoutError(
+            f"BigQuery query execution timed out after {orcamento}s"
+        )
+
     loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
             loop.run_in_executor(
-                None,
+                _get_read_executor(),
                 _execute_bigquery_query,
                 query,
                 query_parameters,
@@ -998,9 +1296,13 @@ async def _run_query_com_timeout(
             ),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout de {timeout}s excedido ao executar query BigQuery")
-        raise TimeoutError(f"BigQuery query execution timed out after {timeout}s")
+    except asyncio.TimeoutError as e:
+        logger.error(f"Timeout de {orcamento}s excedido ao executar query BigQuery")
+        # `from e` preserva a cadeia: quando quem estourou foi o `.result()`,
+        # `e` já carrega a exceção original do cliente do BigQuery.
+        raise BigQueryTimeoutError(
+            f"BigQuery query execution timed out after {orcamento}s"
+        ) from e
 
 
 @interceptor(source={"source": "mcp", "tool": "bigquery"})
@@ -1036,14 +1338,22 @@ async def get_bigquery_result(
     ttl = cache_ttl_seconds if cache_ttl_seconds is not None else default_ttl
     timeout = timeout_seconds if timeout_seconds is not None else default_timeout
 
+    # Um único orçamento para a chamada inteira: leitura de cache, espera na
+    # fila do single-flight e execução da query saem todos daqui. É o que dá
+    # ao tool call um teto de latência igual ao timeout configurado,
+    # independente de quantas requisições disputem a mesma chave (CHATR-125).
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+
     tracer = get_tracer()
     with tracer.start_as_current_span("bigquery.read") as span:
         span.set_attribute("cache.enabled", ttl > 0)
+        span.set_attribute("bigquery.timeout_budget_seconds", timeout)
 
         if ttl <= 0:
             span.set_attribute("cache.hit", False)
             outcome = await _run_query_com_timeout(
-                query, query_parameters, page_size, timeout
+                query, query_parameters, page_size, deadline - loop.time(), timeout
             )
             return outcome.rows
 
@@ -1067,7 +1377,7 @@ async def get_bigquery_result(
         # Só uma execução por chave dentro deste processo. Quem chegar junto
         # espera e é atendido pela leitura de cache logo abaixo, em vez de
         # disparar a mesma query em paralelo.
-        async with _single_flight(cache_key):
+        async with _single_flight(cache_key, deadline):
             if not redis_indisponivel:
                 cached = await _cache_read(cache_key, span)
                 if cached is not _CACHE_MISS and cached is not _CACHE_UNAVAILABLE:
@@ -1077,7 +1387,7 @@ async def get_bigquery_result(
 
             span.set_attribute("cache.hit", False)
             outcome = await _run_query_com_timeout(
-                query, query_parameters, page_size, timeout
+                query, query_parameters, page_size, deadline - loop.time(), timeout
             )
 
             if redis_indisponivel:
@@ -1085,7 +1395,11 @@ async def get_bigquery_result(
             elif not outcome.cacheable:
                 span.set_attribute("cache.write_skipped", "degraded_result")
             else:
-                await _cache_write(cache_key, outcome.rows, ttl, span)
+                # A gravação sai do mesmo orçamento da chamada: é o que mantém
+                # o teto de latência do tool call igual ao timeout configurado.
+                await _cache_write(
+                    cache_key, outcome.rows, ttl, span, deadline - loop.time()
+                )
 
             return outcome.rows
 
@@ -1098,6 +1412,9 @@ async def get_bigquery_result(
 # Flush remaining rows on clean process exit (atexit fires before interpreter
 # shutdown; gunicorn/uvicorn trigger it on SIGTERM for each worker).
 atexit.register(_stop_batch_flush_thread)
+
+# Encerra o pool de leituras no mesmo momento (não espera query pendurada).
+atexit.register(_shutdown_read_executor)
 
 # Start the periodic background flush thread for the lifetime of this process.
 _start_batch_flush_thread()

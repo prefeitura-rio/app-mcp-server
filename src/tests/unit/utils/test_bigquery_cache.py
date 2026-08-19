@@ -238,8 +238,12 @@ def test_chave_semantica_e_legivel_e_varrivel_por_prefixo(monkeypatch):
         cache_key_parts={"plus8": "589R3QWR+", "cats": ["SAUDE", "EDUCACAO"]},
     )
 
-    assert chave == "bq_cache:equipments:cats=EDUCACAO,SAUDE:plus8=589R3QWR+"
+    fp = module._sql_fingerprint("select 1")
+    assert chave == f"bq_cache:equipments:cats=EDUCACAO,SAUDE:plus8=589R3QWR+:sql={fp}"
     assert chave.startswith(f"{module.CACHE_KEY_PREFIX}:equipments:")
+    # O fingerprint entra no fim justamente para não atrapalhar a varredura
+    # por prefixo, que é a alavanca de invalidação por região.
+    assert len(fp) == 8
 
 
 def test_ordem_das_categorias_nao_muda_a_chave(monkeypatch):
@@ -315,7 +319,8 @@ def test_parte_nula_da_chave_vira_vazio(monkeypatch):
         "select 1", None, cache_namespace="equipments", cache_key_parts={"cats": None}
     )
 
-    assert chave == "bq_cache:equipments:cats="
+    fp = module._sql_fingerprint("select 1")
+    assert chave == f"bq_cache:equipments:cats=:sql={fp}"
 
 
 def test_separador_no_valor_nao_quebra_a_estrutura_da_chave(monkeypatch):
@@ -329,18 +334,63 @@ def test_separador_no_valor_nao_quebra_a_estrutura_da_chave(monkeypatch):
         cache_key_parts={"t": "a:b c"},
     )
 
-    assert chave == "bq_cache:equipments:t=a_b_c"
+    fp = module._sql_fingerprint("select 1")
+    assert chave == f"bq_cache:equipments:t=a%3Ab%20c:sql={fp}"
+    # A estrutura continua sendo `prefixo:namespace:parte=valor`: nenhum `:`
+    # extra apareceu por causa do valor.
+    assert chave.count(":") == 3
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("ASSISTENCIA SOCIAL", "ASSISTENCIA_SOCIAL"),
+        ("a:b", "a b"),
+        ("100%", "100%25"),
+    ],
+    ids=["espaco-vs-underscore", "dois-pontos-vs-espaco", "porcento-literal"],
+)
+def test_valores_distintos_nunca_colapsam_na_mesma_chave(monkeypatch, a, b):
+    """Escape injetivo: valor diferente, chave diferente, sempre.
+
+    Trocar separador por `_` fazia esses pares colidirem — duas consultas
+    semanticamente distintas dividindo uma entrada, servindo o resultado uma
+    da outra por todo o TTL, sem erro e sem log.
+    """
+    module = _load_bigquery_module(monkeypatch, f"bq_cache_injetivo_{hash((a, b))}")
+
+    def chave(valor):
+        return module._generate_cache_key("select 1", None, "equipments", {"t": valor})
+
+    assert chave(a) != chave(b)
+
+
+def test_lista_nao_colide_com_valor_unico_que_contem_virgula(monkeypatch):
+    """`["A,B"]` e `["A","B"]` são filtros diferentes e viravam a mesma chave.
+
+    A vírgula é o separador interno das coleções; sem escapá-la, um valor que
+    a contenha se disfarça de dois valores.
+    """
+    module = _load_bigquery_module(monkeypatch, "bq_cache_virgula")
+
+    def chave(cats):
+        return module._generate_cache_key(
+            "select 1", None, "equipments", {"cats": cats}
+        )
+
+    assert chave(["A,B"]) != chave(["A", "B"])
 
 
 @pytest.mark.asyncio
-async def test_chave_semantica_ignora_mudanca_no_texto_do_sql(monkeypatch):
-    """Consequência aceita no CHATR-115: a chave não versiona o SQL.
+async def test_mudanca_no_sql_invalida_a_entrada_sozinha(monkeypatch):
+    """A chave versiona o SQL: deploy que muda a query não serve dado velho.
 
-    Duas queries diferentes com a mesma identidade semântica compartilham a
-    entrada. É o que permite varrer por região, e é por isso que um deploy que
-    altere a query precisa apagar o namespace se não puder esperar o TTL.
+    Antes o texto do SQL não entrava na chave semântica, e a consequência era
+    aceita "desde que o deploy apague o namespace" — passo que nunca existiu
+    em `k8s/` nem nos workflows. Na prática, mudar uma coluna significava
+    servir o formato antigo por até uma hora.
     """
-    module, cliente, _ = _montar(monkeypatch, "bq_cache_chave_sem_versao")
+    module, cliente, _ = _montar(monkeypatch, "bq_cache_chave_versionada")
 
     partes = {"cache_namespace": "equipments", "cache_key_parts": {"plus8": "X"}}
     await module.get_bigquery_result("select 1", cache_ttl_seconds=120, **partes)
@@ -348,7 +398,42 @@ async def test_chave_semantica_ignora_mudanca_no_texto_do_sql(monkeypatch):
         "select 1 -- query alterada", cache_ttl_seconds=120, **partes
     )
 
+    assert cliente.execucoes == 2
+
+
+@pytest.mark.asyncio
+async def test_mesmo_sql_continua_compartilhando_a_entrada(monkeypatch):
+    """O outro lado: versionar o SQL não pode custar o acerto de cache normal.
+
+    Duas chamadas iguais têm de continuar sendo uma query só — se o
+    fingerprint variasse entre chamadas (por espaço em branco, por exemplo), o
+    cache pararia de acertar e a mudança teria trocado um problema por outro.
+    """
+    module, cliente, _ = _montar(monkeypatch, "bq_cache_chave_versionada_estavel")
+
+    partes = {"cache_namespace": "equipments", "cache_key_parts": {"plus8": "X"}}
+    for _ in range(3):
+        await module.get_bigquery_result("select 1", cache_ttl_seconds=120, **partes)
+
     assert cliente.execucoes == 1
+
+
+def test_namespace_sem_partes_nao_vira_slot_global(monkeypatch):
+    """Dois chamadores no mesmo namespace não podem dividir uma entrada.
+
+    `get_category_equipments` usa namespace sem `cache_key_parts`, então a
+    chave era literalmente o namespace. Um segundo chamador que copiasse esse
+    padrão com outra query passaria a dividir o mesmo slot: quem gravasse
+    primeiro decidiria o que o outro lê, por todo o TTL, sem erro nem log.
+    """
+    module = _load_bigquery_module(monkeypatch, "bq_cache_ns_sem_partes")
+
+    a = module._generate_cache_key("select categorias", None, "equipments_categories")
+    b = module._generate_cache_key("select outra coisa", None, "equipments_categories")
+
+    assert a != b
+    assert a.startswith("bq_cache:equipments_categories:")
+    assert b.startswith("bq_cache:equipments_categories:")
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +725,74 @@ async def test_valor_em_bytes_vindo_do_redis_e_decodificado(monkeypatch):
 
     assert cliente.execucoes == 1
     assert primeira == segunda == [{"n": 1}]
+
+
+# ---------------------------------------------------------------------------
+# Valor corrompido no Redis
+#
+# Cair no `except Exception` genérico junto com falha de conexão classificava
+# lixo como "Redis fora do ar" — e, como indisponibilidade faz o chamador pular
+# a gravação, a chave envenenada sobrevivia até o TTL com *toda* requisição
+# pagando uma query. É MISS: o Redis respondeu, ele só respondeu bobagem.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "lixo",
+    ["isto-nao-e-json", "", "{truncado", b"\xff\xfe nao e utf-8"],
+    ids=["texto", "vazio", "json-truncado", "bytes-invalidos"],
+)
+async def test_valor_corrompido_e_miss_e_nao_indisponibilidade(monkeypatch, lixo):
+    """A query roda e sobrescreve o lixo, em vez de conviver com ele até o TTL."""
+    redis = _RedisFalso()
+    module, cliente, _ = _montar(monkeypatch, "bq_cache_lixo", redis=redis)
+    chave = module._generate_cache_key("select 1", None, None, None)
+    redis.store[chave] = lixo
+
+    linhas = await module.get_bigquery_result("select 1", cache_ttl_seconds=120)
+
+    assert linhas == [{"n": 1}]
+    assert cliente.execucoes == 1
+    # O que separa MISS de indisponibilidade: a gravação acontece.
+    assert len(redis.setex_calls) == 1
+    assert json.loads(redis.store[chave]) == [{"n": 1}]
+
+
+@pytest.mark.asyncio
+async def test_chave_corrompida_nao_repete_query_na_proxima_chamada(monkeypatch):
+    """A consequência que motivou a correção, medida em número de queries.
+
+    Tratado como indisponibilidade, o lixo nunca era sobrescrito e cada
+    requisição custava uma query nova. Duas chamadas seguidas têm de custar
+    uma só.
+    """
+    redis = _RedisFalso()
+    module, cliente, _ = _montar(monkeypatch, "bq_cache_lixo_persist", redis=redis)
+    redis.store[module._generate_cache_key("select 1", None, None, None)] = "{"
+
+    await module.get_bigquery_result("select 1", cache_ttl_seconds=120)
+    await module.get_bigquery_result("select 1", cache_ttl_seconds=120)
+
+    assert cliente.execucoes == 1
+
+
+@pytest.mark.asyncio
+async def test_valor_corrompido_aparece_no_span_como_corrupcao(monkeypatch):
+    """Diagnóstico: lixo no cache não pode se disfarçar de erro de leitura."""
+    redis = _RedisFalso()
+    module, _cliente, _ = _montar(monkeypatch, "bq_cache_lixo_span", redis=redis)
+    redis.store[module._generate_cache_key("select 1", None, None, None)] = "nao-json"
+    tracer = _TracerFalso()
+    monkeypatch.setattr(module, "get_tracer", lambda: tracer)
+
+    await module.get_bigquery_result("select 1", cache_ttl_seconds=120)
+
+    span = tracer.spans["bigquery.read"][0]
+    assert span.attrs["cache.corrupt_value"] == "JSONDecodeError"
+    # `cache.read_error` é o canal do Redis inacessível — não é o caso aqui.
+    assert "cache.read_error" not in span.attrs
+    assert span.attrs["cache.hit"] is False
 
 
 @pytest.mark.asyncio

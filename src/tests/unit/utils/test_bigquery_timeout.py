@@ -107,9 +107,11 @@ class _ClienteLento:
     def __init__(self, delay: float):
         self.delay = delay
         self.kwargs_do_result = []
+        self.kwargs_do_query = []
         self.terminou = threading.Event()
 
-    def query(self, _query, **_kwargs):
+    def query(self, _query, **kwargs):
+        self.kwargs_do_query.append(kwargs)
         outer = self
 
         class Job:
@@ -221,6 +223,12 @@ async def test_timeout_e_repassado_ao_result_do_bigquery(monkeypatch):
 
     O `asyncio.wait_for` libera o `await`, mas não cancela a thread — quem
     limita a thread é o timeout do próprio `.result()`.
+
+    A comparação é aproximada de propósito: o que desce para o `.result()` é o
+    que *sobrou* do orçamento, já descontado o que a leitura de cache e a fila
+    do single-flight consumiram. Exigir 7.5 exato voltaria a descrever o
+    comportamento antigo, em que cada etapa recebia o prazo cheio e o total
+    podia passar de várias vezes o configurado.
     """
     module, cliente, _redis = _montar(monkeypatch, "bq_timeout_repasse", delay=0.01)
 
@@ -228,7 +236,27 @@ async def test_timeout_e_repassado_ao_result_do_bigquery(monkeypatch):
         "select 1", cache_ttl_seconds=0, timeout_seconds=7.5
     )
 
-    assert cliente.kwargs_do_result[0]["timeout"] == 7.5
+    repassado = cliente.kwargs_do_result[0]["timeout"]
+    assert repassado == pytest.approx(7.5, abs=0.2)
+    assert repassado <= 7.5  # nunca mais do que o orçamento
+
+
+@pytest.mark.asyncio
+async def test_timeout_repassado_ao_criar_o_job(monkeypatch):
+    """`client.query()` também precisa de prazo, não só o `.result()`.
+
+    São duas chamadas HTTP distintas: uma cria o job, a outra espera ele
+    terminar. Sem prazo na primeira, uma submissão pendurada segurava a vaga
+    no pool de leitura para sempre — o chamador era liberado pelo `wait_for`,
+    mas a thread não voltava.
+    """
+    module, cliente, _redis = _montar(monkeypatch, "bq_timeout_submissao", delay=0.01)
+
+    await module.get_bigquery_result(
+        "select 1", cache_ttl_seconds=0, timeout_seconds=7.5
+    )
+
+    assert cliente.kwargs_do_query[0]["timeout"] == pytest.approx(7.5, abs=0.2)
 
 
 # ---------------------------------------------------------------------------

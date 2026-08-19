@@ -196,9 +196,36 @@ async def test_grava_no_redis_com_a_chave_semantica_esperada(monkeypatch, redis_
     finally:
         await _fechar(module)
 
-    esperada = f"bq_cache:{NS}:cats=EDUCACAO,SAUDE:plus8=589R3QWR+"
+    fp = module._sql_fingerprint("select * from equipamentos")
+    esperada = f"bq_cache:{NS}:cats=EDUCACAO,SAUDE:plus8=589R3QWR+:sql={fp}"
     assert redis_cli.exists(esperada) == 1
     assert cliente.execucoes == 1
+
+
+@pytest.mark.asyncio
+async def test_query_alterada_ocupa_chave_propria_no_servidor(monkeypatch, redis_cli):
+    """Deploy que muda o SQL cria entrada nova em vez de reusar a velha.
+
+    O dublê prova que as chaves diferem; aqui o que se verifica é o efeito no
+    servidor: as duas gerações coexistem sob o mesmo prefixo, então a leitura
+    nova não enxerga o formato antigo e a varredura por região continua
+    pegando as duas para invalidação.
+    """
+    module, cliente = _montar(monkeypatch, "it_bq_versao_sql")
+    partes = {"cache_namespace": NS, "cache_key_parts": {"plus8": "589R3QWR+"}}
+    try:
+        await module.get_bigquery_result(
+            "select a from t", cache_ttl_seconds=300, **partes
+        )
+        await module.get_bigquery_result(
+            "select a, b from t", cache_ttl_seconds=300, **partes
+        )
+    finally:
+        await _fechar(module)
+
+    chaves = sorted(redis_cli.scan_iter(match=f"bq_cache:{NS}:*plus8=589R3QWR+*"))
+    assert len(chaves) == 2, chaves
+    assert cliente.execucoes == 2
 
 
 @pytest.mark.asyncio
@@ -245,8 +272,9 @@ async def test_ttl_chega_ao_servidor_com_jitter(monkeypatch, redis_cli):
 async def test_invalidacao_por_regiao_com_scan_e_del(monkeypatch, redis_cli):
     """A alavanca operacional que a chave semântica existe para permitir.
 
-    Como a chave não versiona o SQL, é assim que um deploy que altere a query
-    (ou uma correção de dado) força a releitura sem esperar o TTL.
+    Mudança de SQL já se invalida sozinha pelo fingerprint; o que ainda
+    precisa desta varredura é a correção de dado — a tabela mudou, a query
+    não, e ninguém quer esperar o TTL.
     """
     module, cliente = _montar(monkeypatch, "it_bq_invalidacao")
     regiao = {"plus8": "589R3QWR+", "cats": ["SAUDE"]}
