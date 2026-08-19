@@ -1,15 +1,18 @@
-# Virtual Environments
+# Rascunhos de teste soltos na raiz do repo.
+#
+# Ancorados em `/` de propósito: sem a barra, o padrão casa em qualquer nível e
+# passa a ignorar a suíte inteira em `src/tests/`. Quando isso acontecia, todo
+# arquivo de teste só entrava no repo com `git add -f`, e um `git add -A` deixava
+# testes novos de fora em silêncio — sem aparecer no `git status`, sem chegar ao
+# CI. Não voltar a usar `test*.py` ou `**/**/test*.py`.
+/test*.py
+/test*.ipynb
+/test*.md
+/test*.json
 
-test*.py
-test*.ipynb
-test*.md
-test*.json
-
-**/**/test*.py
-**/**/test*.ipynb
-**/**/test*.md
 src/tools/multi_step_service/data
 
+# Virtual Environments
 .venv/
 venv/
 ENV/

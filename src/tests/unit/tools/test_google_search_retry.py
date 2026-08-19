@@ -119,9 +119,7 @@ def gemini(monkeypatch, env_stub):
         reported_errors.append(kwargs)
         return True
 
-    monkeypatch.setitem(
-        sys.modules, "src.config", types.SimpleNamespace(env=env_stub)
-    )
+    monkeypatch.setitem(sys.modules, "src.config", types.SimpleNamespace(env=env_stub))
     monkeypatch.setitem(sys.modules, "src.config.env", env_stub)
     monkeypatch.setitem(
         sys.modules, "src.utils.log", types.SimpleNamespace(logger=_silent_logger())
@@ -130,7 +128,7 @@ def gemini(monkeypatch, env_stub):
         sys.modules,
         "src.utils.error_interceptor",
         types.SimpleNamespace(
-            interceptor=lambda *_a, **_k: (lambda func: func),
+            interceptor=lambda *_a, **_k: lambda func: func,
             send_api_error=fake_send_api_error,
         ),
     )
@@ -343,9 +341,7 @@ def search(monkeypatch, env_stub):
     async def fake_hub_search(request):  # sobrescrito em cada teste
         raise AssertionError("hub_search não configurado")
 
-    monkeypatch.setitem(
-        sys.modules, "src.config", types.SimpleNamespace(env=env_stub)
-    )
+    monkeypatch.setitem(sys.modules, "src.config", types.SimpleNamespace(env=env_stub))
     monkeypatch.setitem(sys.modules, "src.config.env", env_stub)
     monkeypatch.setitem(
         sys.modules, "src.utils.log", types.SimpleNamespace(logger=_silent_logger())
@@ -353,7 +349,7 @@ def search(monkeypatch, env_stub):
     monkeypatch.setitem(
         sys.modules,
         "src.utils.error_interceptor",
-        types.SimpleNamespace(interceptor=lambda *_a, **_k: (lambda func: func)),
+        types.SimpleNamespace(interceptor=lambda *_a, **_k: lambda func: func),
     )
     monkeypatch.setitem(
         sys.modules,

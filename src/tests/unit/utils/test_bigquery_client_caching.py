@@ -22,8 +22,6 @@ import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
@@ -102,9 +100,7 @@ def test_get_bigquery_client_returns_same_instance_on_repeated_calls(monkeypatch
     The bigquery.Client constructor must be invoked exactly once, not once per
     call (CHATR-114 fix: cache the client to prevent per-call memory leak).
     """
-    module = _load_fresh_bigquery_module(
-        monkeypatch, "bq_cache_test_same_instance"
-    )
+    module = _load_fresh_bigquery_module(monkeypatch, "bq_cache_test_same_instance")
 
     constructor_call_count = 0
     sentinel_client = object()  # unique sentinel so we can use `is`
@@ -153,9 +149,7 @@ def test_get_bigquery_client_cache_clear_allows_fresh_construction(monkeypatch):
     test-isolation fixtures and for operational cache invalidation if ever
     required).
     """
-    module = _load_fresh_bigquery_module(
-        monkeypatch, "bq_cache_test_cache_clear"
-    )
+    module = _load_fresh_bigquery_module(monkeypatch, "bq_cache_test_cache_clear")
 
     constructor_call_count = 0
 
@@ -196,9 +190,7 @@ def test_get_bigquery_client_cache_clear_allows_fresh_construction(monkeypatch):
 
 def test_get_bigquery_client_many_calls_single_construction(monkeypatch):
     """N repeated calls should result in exactly 1 constructor invocation."""
-    module = _load_fresh_bigquery_module(
-        monkeypatch, "bq_cache_test_many_calls"
-    )
+    module = _load_fresh_bigquery_module(monkeypatch, "bq_cache_test_many_calls")
 
     call_count = 0
 
@@ -241,9 +233,7 @@ def test_get_bigquery_client_has_lru_cache_interface(monkeypatch):
     Specifically, cache_clear() and cache_info() must be callable — this is
     required by test-isolation fixtures and documents the contract.
     """
-    module = _load_fresh_bigquery_module(
-        monkeypatch, "bq_cache_test_interface"
-    )
+    module = _load_fresh_bigquery_module(monkeypatch, "bq_cache_test_interface")
 
     # The decorated function must expose these lru_cache attributes
     assert callable(getattr(module.get_bigquery_client, "cache_clear", None)), (
