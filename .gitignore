@@ -91,4 +91,5 @@ dmypy.json
 # uv.lock is kept intentionally
 /skills
 .codex
+.claude/
 docs/
