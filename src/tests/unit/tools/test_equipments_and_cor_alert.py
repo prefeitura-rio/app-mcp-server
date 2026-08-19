@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from google.api_core.exceptions import BadRequest
+from google.cloud import bigquery
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -342,8 +343,13 @@ async def test_equipments_tools_instructions_and_whitelist(monkeypatch):
     assert created_tasks
 
 
-def _load_pluscode_service(monkeypatch, get_bigquery_result):
-    """Carrega `pluscode_service` com as dependências externas trocadas."""
+def _load_pluscode_service(monkeypatch, get_bigquery_result, plus8_coords=(None, None)):
+    """Carrega `pluscode_service` com as dependências externas trocadas.
+
+    `plus8_coords` é o par devolvido por `get_plus8_coords_from_address`. O
+    default `(None, None)` mantém o atalho usado pelos testes de instruções
+    temáticas, que não chegam a montar a query de equipamentos.
+    """
     ensure_package("src", PROJECT_ROOT / "src")
     ensure_package("src.tools", PROJECT_ROOT / "src" / "tools")
     ensure_package(
@@ -355,7 +361,7 @@ def _load_pluscode_service(monkeypatch, get_bigquery_result):
         sys.modules,
         "src.tools.equipments.utils",
         types.SimpleNamespace(
-            get_plus8_coords_from_address=lambda address: (None, None)
+            get_plus8_coords_from_address=lambda address: plus8_coords
         ),
     )
     monkeypatch.setitem(
@@ -450,6 +456,163 @@ async def test_instrucoes_retornam_os_dados_quando_a_tabela_responde(monkeypatch
     # O tema vai por parâmetro do BigQuery, nunca interpolado no texto do SQL.
     assert "educacao" not in query
     assert [(p.name, p.value) for p in parametros] == [("tema", "educacao")]
+
+
+# ---------------------------------------------------------------------------
+# CHATR-117 — `get_pluscode_coords_equipments`
+#
+# É a única query do serviço que carrega dados vindos da chamada do agente: o
+# endereço (virado plus8 + coordenadas) e a lista de categorias. O filtro de
+# categorias já foi montado por f-string interpolada direto na cláusula `IN`;
+# os testes abaixo existem para que voltar àquele formato quebre o CI.
+# ---------------------------------------------------------------------------
+
+_PLUS8 = "589R2QCH"
+_COORDS = {"lat": -22.9035, "lng": -43.2096}
+
+# Hostis de propósito. Hoje `categories` vem de uma lista controlada, mas o dia
+# em que a origem afrouxar, é este valor que aparece no SQL se a parametrização
+# for desfeita — contra uma service account com escopo `cloud-platform`.
+_CATEGORIAS_HOSTIS = ["SAUDE') OR 1=1 --", "EDUCACAO"]
+
+
+def _pluscode_capturando_query(monkeypatch, dados=None, plus8_coords=(_PLUS8, _COORDS)):
+    """Carrega o serviço com um `get_bigquery_result` que grava o que recebeu."""
+    chamadas = []
+
+    async def bigquery_ok(query=None, query_parameters=None, **_kwargs):
+        chamadas.append((query, query_parameters))
+        return [] if dados is None else dados
+
+    module = _load_pluscode_service(monkeypatch, bigquery_ok, plus8_coords)
+    return module, chamadas
+
+
+def _por_nome(parametros):
+    return {p.name: p for p in parametros}
+
+
+@pytest.mark.asyncio
+async def test_categorias_vao_por_parametro_e_nunca_no_texto_do_sql(monkeypatch):
+    """CHATR-117: categorias são parâmetro nomeado, não interpolação de string.
+
+    O assert que carrega o teste é o negativo: nenhum pedaço dos valores pode
+    aparecer no SQL enviado. É ele que falha se a f-string voltar.
+    """
+    module, chamadas = _pluscode_capturando_query(monkeypatch)
+
+    await module.get_pluscode_coords_equipments("Rua A", categories=_CATEGORIAS_HOSTIS)
+
+    query, parametros = chamadas[0]
+    assert "OR 1=1" not in query
+    assert "EDUCACAO" not in query
+
+    categorias = _por_nome(parametros)["categories"]
+    assert isinstance(categorias, bigquery.ArrayQueryParameter)
+    assert categorias.array_type == "STRING"
+    assert list(categorias.values) == _CATEGORIAS_HOSTIS
+
+
+@pytest.mark.asyncio
+async def test_filtro_de_categorias_entra_nas_duas_ctes(monkeypatch):
+    """O placeholder aparece duas vezes (grid e território) e ambas contam.
+
+    Trocar só a primeira ocorrência deixaria o território sem filtro: resultado
+    errado, não erro de sintaxe — portanto invisível sem este assert.
+    """
+    module, chamadas = _pluscode_capturando_query(monkeypatch)
+
+    await module.get_pluscode_coords_equipments("Rua A", categories=["SAUDE"])
+
+    query, _ = chamadas[0]
+    assert query.count("UNNEST(@categories)") == 2
+    assert "__replace_categories__" not in query
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sem_categorias", [None, []])
+async def test_sem_categorias_nao_sobra_placeholder_nem_parametro(
+    monkeypatch, sem_categorias
+):
+    """Sem filtro o placeholder tem de sumir — ele é sintaxe inválida no BigQuery."""
+    module, chamadas = _pluscode_capturando_query(monkeypatch)
+
+    await module.get_pluscode_coords_equipments("Rua A", categories=sem_categorias)
+
+    query, parametros = chamadas[0]
+    assert "__replace_categories__" not in query
+    assert "UNNEST(@categories)" not in query
+    assert "categories" not in _por_nome(parametros)
+
+
+@pytest.mark.asyncio
+async def test_plus8_e_coordenadas_tambem_vao_por_parametro(monkeypatch):
+    """O endereço do cidadão vira plus8/coordenadas — que também não são interpolados."""
+    module, chamadas = _pluscode_capturando_query(monkeypatch)
+
+    await module.get_pluscode_coords_equipments("Rua A")
+
+    query, parametros = chamadas[0]
+    por_nome = _por_nome(parametros)
+    assert (por_nome["plus8"].type_, por_nome["plus8"].value) == ("STRING", _PLUS8)
+    assert (por_nome["longitude"].type_, por_nome["longitude"].value) == (
+        "FLOAT64",
+        _COORDS["lng"],
+    )
+    assert (por_nome["latitude"].type_, por_nome["latitude"].value) == (
+        "FLOAT64",
+        _COORDS["lat"],
+    )
+    assert _PLUS8 not in query
+    assert str(_COORDS["lng"]) not in query
+
+
+@pytest.mark.asyncio
+async def test_retorno_devolve_inputs_coords_plus8_e_dados(monkeypatch):
+    """O contrato com a tool: os dados vêm acompanhados do que os originou."""
+    linhas = [{"nome_oficial": "UPA Copacabana", "distancia_metros": 120}]
+    module, _ = _pluscode_capturando_query(monkeypatch, dados=linhas)
+
+    resultado = await module.get_pluscode_coords_equipments(
+        "Rua A", categories=["SAUDE"]
+    )
+
+    assert resultado == {
+        "inputs": {"address": "Rua A", "categories": ["SAUDE"]},
+        "coords": _COORDS,
+        "plus8": _PLUS8,
+        "data": linhas,
+    }
+
+
+@pytest.mark.asyncio
+async def test_falha_do_bigquery_vira_dict_de_erro_e_nao_excecao(monkeypatch):
+    """O tool call não pode estourar: o agente recebe a falha como dado."""
+
+    async def bigquery_quebrado(query=None, query_parameters=None, **_kwargs):
+        raise BadRequest("400 Error while reading table")
+
+    module = _load_pluscode_service(monkeypatch, bigquery_quebrado, (_PLUS8, _COORDS))
+    erros = _capturar_erros(monkeypatch, module)
+
+    resultado = await module.get_pluscode_coords_equipments("Rua A")
+
+    assert resultado["error"] == "Erro no request do bigquery"
+    assert "400" in resultado["message"]
+    assert len(erros) == 1
+
+
+@pytest.mark.asyncio
+async def test_endereco_sem_coordenadas_nao_chega_ao_bigquery(monkeypatch):
+    """Sem geocodificação não há query: a falha vem antes de gastar BigQuery."""
+    module, chamadas = _pluscode_capturando_query(
+        monkeypatch, plus8_coords=(None, None)
+    )
+
+    with pytest.raises(Exception, match="No coords found"):
+        await module.get_pluscode_coords_equipments("Endereço inexistente")
+
+    assert chamadas == []
 
 
 def test_openlocationcode_roundtrip_and_helpers():
