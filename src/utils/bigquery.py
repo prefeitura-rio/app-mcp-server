@@ -1,13 +1,16 @@
 import asyncio
 import atexit
+import contextlib
 import functools
 import hashlib
+import random
 import threading
+from decimal import Decimal
 from google.cloud import bigquery
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.oauth2 import service_account
 from opentelemetry.trace import Status, StatusCode
-from typing import List
+from typing import List, NamedTuple
 import base64
 import json
 import src.config.env as env
@@ -672,7 +675,16 @@ _async_redis_client = None
 
 
 async def get_async_redis_client():
-    """Get or create process-wide async Redis client instance."""
+    """Get or create process-wide async Redis client instance.
+
+    Os timeouts de socket não são opcionais aqui. Sem eles, um Redis que aceita
+    a conexão mas para de responder (partição de rede, não recusa) pendura o
+    ``await`` do cache indefinidamente — e a leitura do cache acontece *fora* do
+    ``asyncio.wait_for`` que protege a query, então o timeout do BigQuery não
+    cobre esse caso. O cache existe para economizar tempo; sem timeout ele vira
+    o caminho mais lento possível. Mesmo padrão já usado pelo backend de sessão
+    em ``src/tools/multi_step_service/core/state.py``.
+    """
     global _async_redis_client
     if _async_redis_client is None:
         try:
@@ -681,8 +693,12 @@ async def get_async_redis_client():
             redis_url = getattr(env, "REDIS_URL", None)
 
             if redis_url:
+                timeout = getattr(env, "REDIS_CACHE_TIMEOUT_SECONDS", 2.0)
                 _async_redis_client = redis.Redis.from_url(
-                    redis_url, decode_responses=True
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=timeout,
+                    socket_timeout=timeout,
                 )
         except Exception as e:
             logger.warning(f"Could not initialize async Redis client: {e}")
@@ -690,7 +706,55 @@ async def get_async_redis_client():
     return _async_redis_client
 
 
-def _generate_cache_key(query: str, query_parameters: list = None) -> str:
+CACHE_KEY_PREFIX = "bq_cache"
+
+
+def _normalize_cache_part(value) -> str:
+    """Reduz um valor de chave a texto estável e sem os separadores da chave.
+
+    Coleções são ordenadas: o chamador só deve passar coleção quando a ordem
+    não altera o resultado da query (é o caso de um filtro ``IN UNNEST``, onde
+    ``["A","B"]`` e ``["B","A"]`` devolvem o mesmo). Ordenar transforma essas
+    duas chamadas em um único acerto de cache em vez de duas entradas.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return ",".join(sorted(_normalize_cache_part(v) for v in value))
+    return str(value).replace(":", "_").replace(" ", "_")
+
+
+def _generate_cache_key(
+    query: str,
+    query_parameters: list = None,
+    cache_namespace: str = None,
+    cache_key_parts: dict = None,
+) -> str:
+    """Monta a chave do cache.
+
+    Com ``cache_namespace``, a chave é semântica e legível — o que permite
+    varrer e invalidar por prefixo::
+
+        bq_cache:equipments:cats=EDUCACAO,SAUDE:plus8=849VVQCH
+
+        SCAN MATCH bq_cache:equipments:*plus8=849VVQCH*   -> uma região
+        SCAN MATCH bq_cache:equipments:*                  -> a tool inteira
+
+    A chave *não* carrega versão do SQL (decisão registrada no CHATR-115): um
+    deploy que altere o texto da query continua servindo o resultado anterior
+    até o TTL expirar. Quando isso não for aceitável, o caminho é apagar o
+    namespace com o ``SCAN``/``DEL`` acima como passo do deploy.
+
+    Sem ``cache_namespace`` cai no hash de SQL + parâmetros, que mantém os
+    chamadores genéricos funcionando (e nunca colide entre queries distintas).
+    """
+    if cache_namespace:
+        partes = [
+            f"{nome}={_normalize_cache_part(valor)}"
+            for nome, valor in sorted((cache_key_parts or {}).items())
+        ]
+        return ":".join([CACHE_KEY_PREFIX, cache_namespace, *partes])
+
     params_str = ""
     if query_parameters:
         parts = []
@@ -702,7 +766,94 @@ def _generate_cache_key(query: str, query_parameters: list = None) -> str:
         params_str = "|".join(parts)
     raw_key = f"{query}:{params_str}"
     key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
-    return f"bq_cache:{key_hash}"
+    return f"{CACHE_KEY_PREFIX}:{key_hash}"
+
+
+# ---------------------------------------------------------------------------
+# Single-flight: uma query por chave, por processo.
+#
+# Sem isso, quando o TTL de uma região popular expira todas as requisições
+# concorrentes daquele instante vão juntas ao BigQuery — exatamente o custo que
+# o cache deveria estar cortando. O lock é por processo (não distribuído): com
+# poucas réplicas o teto de queries duplicadas passa a ser o número de pods, o
+# que resolve o problema sem o round trip e os locks órfãos de um lock no Redis.
+# ---------------------------------------------------------------------------
+
+_inflight_locks: dict = {}
+_inflight_refs: dict = {}
+
+
+@contextlib.asynccontextmanager
+async def _single_flight(key: str):
+    """Serializa, dentro do processo, as chamadas que disputam a mesma chave."""
+    lock = _inflight_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _inflight_locks[key] = lock
+    _inflight_refs[key] = _inflight_refs.get(key, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        _inflight_refs[key] = _inflight_refs.get(key, 1) - 1
+        if _inflight_refs[key] <= 0:
+            _inflight_refs.pop(key, None)
+            _inflight_locks.pop(key, None)
+
+
+def _ttl_com_jitter(ttl: int) -> int:
+    """Encurta o TTL em até 10%, de forma aleatória.
+
+    Entradas gravadas na mesma janela expiram juntas e recriam o pico que o
+    single-flight acabou de evitar — só que uma hora depois. O jitter é sempre
+    para baixo para que o TTL configurado continue sendo um teto de quão velho
+    um dado pode ser servido.
+    """
+    if ttl <= 1:
+        return ttl
+    return max(1, int(ttl * random.uniform(0.9, 1.0)))
+
+
+def _normalize_bq_value(value):
+    """Converte um valor do BigQuery para algo que sobrevive a ida e volta em JSON.
+
+    A conversão é *recursiva* de propósito. Um resultado que passa pelo cache é
+    serializado e desserializado; um que não passa volta como o objeto Python
+    cru. Se a normalização parasse no primeiro nível, um ``TIMESTAMP`` dentro de
+    um ``STRUCT`` voltaria como `datetime` em cache miss e como string ISO em
+    cache hit — o mesmo tool call devolvendo tipos diferentes conforme o estado
+    do cache, que é a classe de bug mais difícil de reproduzir. Normalizando
+    aqui, hit e miss devolvem exatamente a mesma estrutura.
+
+    `Decimal` (NUMERIC) vira float e `bytes` (BYTES) vira base64: nenhum dos dois
+    é serializável em JSON, então sem isso a gravação no cache falharia em
+    silêncio — e a resposta da própria tool também, já que ela também é
+    serializada para JSON antes de chegar ao agente.
+    """
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode("ascii")
+    if isinstance(value, dict):
+        return {k: _normalize_bq_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize_bq_value(v) for v in value]
+    return value
+
+
+class _QueryOutcome(NamedTuple):
+    """Resultado da query mais a informação de se ele pode ser cacheado.
+
+    `[]` vindo de uma tabela ausente é indistinguível de `[]` vindo de uma query
+    que legitimamente não achou nada — e cachear o primeiro por uma hora congela
+    uma falha transitória de infraestrutura em resposta vazia para todo mundo.
+    Este flag é o que separa os dois casos.
+    """
+
+    rows: List[dict]
+    cacheable: bool
 
 
 def _execute_bigquery_query(
@@ -710,7 +861,7 @@ def _execute_bigquery_query(
     query_parameters: list = None,
     page_size: int = None,
     timeout_seconds: float = None,
-) -> List[dict]:
+) -> _QueryOutcome:
     """Synchronous execution of BigQuery query, designed to run in thread executor."""
     default_page_size = getattr(env, "GOOGLE_BIGQUERY_PAGE_SIZE", 100)
     default_timeout = getattr(env, "BIGQUERY_TIMEOUT_SECONDS", 10.0)
@@ -738,30 +889,28 @@ def _execute_bigquery_query(
 
             results = query_job.result(page_size=page_size, timeout=timeout_seconds)
 
-            # Convert results to list of dictionaries
-            rows = []
-            for row in results:
-                row_dict = {}
-                for key, value in row.items():
-                    if isinstance(value, (datetime, date, time)):
-                        row_dict[key] = value.isoformat()
-                    else:
-                        row_dict[key] = value
-                rows.append(row_dict)
+            rows = [
+                {key: _normalize_bq_value(value) for key, value in row.items()}
+                for row in results
+            ]
 
             logger.info(f"Query executada com sucesso. {len(rows)} linhas retornadas.")
             span.set_attribute("bigquery.row_count", len(rows))
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
-            return rows
+            return _QueryOutcome(rows, cacheable=True)
         except NotFound as e:
             span.set_attribute("bigquery.row_count", 0)
             span.set_attribute("bigquery.table_not_found", True)
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
             logger.warning(f"Tabela não encontrada no BigQuery: {str(e)}")
-            # Return empty list when table doesn't exist yet - allows graceful degradation
-            return []
+            # Degradação: devolve vazio para não derrubar a tool, mas marca como
+            # não-cacheável. Tabela ausente costuma ser transitória (recriação,
+            # permissão, tabela externa fora do ar) e cachear esse vazio por uma
+            # hora transformaria o incidente em resposta errada muito depois de
+            # ele ter passado.
+            return _QueryOutcome([], cacheable=False)
         except GoogleAPIError as e:
             span.set_attribute("bigquery.success", False)
             span.record_exception(e)
@@ -780,51 +929,65 @@ def _execute_bigquery_query(
             raise Exception(f"Failed to execute BigQuery query: {str(e)}")
 
 
-@interceptor(source={"source": "mcp", "tool": "bigquery"})
-async def get_bigquery_result(
+_CACHE_MISS = object()
+# Distinto de `_CACHE_MISS`: "não tinha" e "não deu para perguntar" levam a
+# decisões diferentes na hora de gravar.
+_CACHE_UNAVAILABLE = object()
+
+
+async def _cache_read(cache_key: str, span):
+    """Lê do cache. Devolve `_CACHE_MISS` quando não há valor utilizável.
+
+    Qualquer falha do Redis é degradação, não erro: o BigQuery continua sendo a
+    fonte da verdade. O que muda em relação a só logar um warning é o atributo
+    no span — sem ele, um cache 100% inoperante é indistinguível de um cache
+    que só não teve acertos.
+    """
+    try:
+        redis_client = await get_async_redis_client()
+        if redis_client is None:
+            span.set_attribute("cache.available", False)
+            return _CACHE_MISS
+        cached_data = await redis_client.get(cache_key)
+        if cached_data is None:
+            return _CACHE_MISS
+        if isinstance(cached_data, bytes):
+            cached_data = cached_data.decode("utf-8")
+        return json.loads(cached_data)
+    except Exception as e:
+        # Atributo próprio para leitura: quando o Redis está fora, a escrita
+        # logo em seguida também falha, e um atributo único faria a segunda
+        # apagar a primeira — escondendo justamente onde a degradação começou.
+        span.set_attribute("cache.read_error", type(e).__name__)
+        logger.warning(f"Erro ao ler cache do Redis para BigQuery: {e}")
+        return _CACHE_UNAVAILABLE
+
+
+async def _cache_write(cache_key: str, rows: List[dict], ttl: int, span) -> None:
+    """Grava no cache, com jitter no TTL. Falha aqui nunca derruba a query."""
+    try:
+        redis_client = await get_async_redis_client()
+        if redis_client is None:
+            return
+        serialized = json.dumps(rows, cls=CustomJSONEncoder)
+        ttl_efetivo = _ttl_com_jitter(ttl)
+        await redis_client.setex(cache_key, ttl_efetivo, serialized)
+        span.set_attribute("cache.written", True)
+        span.set_attribute("cache.ttl_seconds", ttl_efetivo)
+    except Exception as e:
+        span.set_attribute("cache.write_error", type(e).__name__)
+        logger.warning(f"Erro ao gravar cache no Redis para BigQuery: {e}")
+
+
+async def _run_query_com_timeout(
     query: str,
-    query_parameters: list = None,
-    page_size: int = None,
-    cache_ttl_seconds: int = None,
-    timeout_seconds: float = None,
-) -> List[dict]:
-    """
-    Executes a BigQuery query with caching and non-blocking executor execution.
-
-    Args:
-        query: SQL query to execute
-        query_parameters: List of BigQuery QueryParameter objects
-        page_size: Number of rows per page (optional, uses env default)
-        cache_ttl_seconds: Cache TTL in seconds (0 to bypass cache)
-        timeout_seconds: Query execution timeout in seconds
-
-    Returns:
-        List of dictionaries with query results
-    """
-    default_ttl = getattr(env, "BIGQUERY_CACHE_TTL_SECONDS", 3600)
-    default_timeout = getattr(env, "BIGQUERY_TIMEOUT_SECONDS", 10.0)
-
-    ttl = cache_ttl_seconds if cache_ttl_seconds is not None else default_ttl
-    timeout = timeout_seconds if timeout_seconds is not None else default_timeout
-
-    cache_key = None
-    if ttl > 0:
-        cache_key = _generate_cache_key(query, query_parameters)
-        try:
-            redis_client = await get_async_redis_client()
-            if redis_client is not None:
-                cached_data = await redis_client.get(cache_key)
-                if cached_data is not None:
-                    logger.info(f"BigQuery cache hit para chave: {cache_key}")
-                    if isinstance(cached_data, bytes):
-                        cached_data = cached_data.decode("utf-8")
-                    return json.loads(cached_data)
-        except Exception as e:
-            logger.warning(f"Erro ao ler cache do Redis para BigQuery: {e}")
-
+    query_parameters: list,
+    page_size: int,
+    timeout: float,
+) -> _QueryOutcome:
     loop = asyncio.get_running_loop()
     try:
-        rows = await asyncio.wait_for(
+        return await asyncio.wait_for(
             loop.run_in_executor(
                 None,
                 _execute_bigquery_query,
@@ -839,16 +1002,92 @@ async def get_bigquery_result(
         logger.error(f"Timeout de {timeout}s excedido ao executar query BigQuery")
         raise TimeoutError(f"BigQuery query execution timed out after {timeout}s")
 
-    if ttl > 0 and cache_key is not None:
-        try:
-            redis_client = await get_async_redis_client()
-            if redis_client is not None:
-                serialized = json.dumps(rows, cls=CustomJSONEncoder)
-                await redis_client.setex(cache_key, ttl, serialized)
-        except Exception as e:
-            logger.warning(f"Erro ao gravar cache no Redis para BigQuery: {e}")
 
-    return rows
+@interceptor(source={"source": "mcp", "tool": "bigquery"})
+async def get_bigquery_result(
+    query: str,
+    query_parameters: list = None,
+    page_size: int = None,
+    cache_ttl_seconds: int = None,
+    timeout_seconds: float = None,
+    cache_namespace: str = None,
+    cache_key_parts: dict = None,
+) -> List[dict]:
+    """
+    Executes a BigQuery query with caching and non-blocking executor execution.
+
+    Args:
+        query: SQL query to execute
+        query_parameters: List of BigQuery QueryParameter objects
+        page_size: Number of rows per page (optional, uses env default)
+        cache_ttl_seconds: Cache TTL in seconds (0 to bypass cache)
+        timeout_seconds: Query execution timeout in seconds
+        cache_namespace: Prefixo semântico da chave de cache (ex.: "equipments").
+            Sem ele a chave cai no hash do SQL — ver `_generate_cache_key`.
+        cache_key_parts: Parâmetros semânticos que identificam a consulta
+            (ex.: `{"plus8": ..., "cats": [...]}`).
+
+    Returns:
+        List of dictionaries with query results
+    """
+    default_ttl = getattr(env, "BIGQUERY_CACHE_TTL_SECONDS", 3600)
+    default_timeout = getattr(env, "BIGQUERY_TIMEOUT_SECONDS", 10.0)
+
+    ttl = cache_ttl_seconds if cache_ttl_seconds is not None else default_ttl
+    timeout = timeout_seconds if timeout_seconds is not None else default_timeout
+
+    tracer = get_tracer()
+    with tracer.start_as_current_span("bigquery.read") as span:
+        span.set_attribute("cache.enabled", ttl > 0)
+
+        if ttl <= 0:
+            span.set_attribute("cache.hit", False)
+            outcome = await _run_query_com_timeout(
+                query, query_parameters, page_size, timeout
+            )
+            return outcome.rows
+
+        cache_key = _generate_cache_key(
+            query, query_parameters, cache_namespace, cache_key_parts
+        )
+        span.set_attribute("cache.key", cache_key)
+
+        cached = await _cache_read(cache_key, span)
+        if cached is not _CACHE_MISS and cached is not _CACHE_UNAVAILABLE:
+            span.set_attribute("cache.hit", True)
+            logger.info(f"BigQuery cache hit para chave: {cache_key}")
+            return cached
+
+        # Redis que acabou de falhar na leitura vai falhar na escrita também, e
+        # cada tentativa custa o timeout de socket inteiro. Pular a gravação
+        # corta o pior caso pela metade — de outro modo toda requisição paga
+        # dois timeouts enquanto o Redis estiver mudo.
+        redis_indisponivel = cached is _CACHE_UNAVAILABLE
+
+        # Só uma execução por chave dentro deste processo. Quem chegar junto
+        # espera e é atendido pela leitura de cache logo abaixo, em vez de
+        # disparar a mesma query em paralelo.
+        async with _single_flight(cache_key):
+            if not redis_indisponivel:
+                cached = await _cache_read(cache_key, span)
+                if cached is not _CACHE_MISS and cached is not _CACHE_UNAVAILABLE:
+                    span.set_attribute("cache.hit", True)
+                    span.set_attribute("cache.coalesced", True)
+                    return cached
+
+            span.set_attribute("cache.hit", False)
+            outcome = await _run_query_com_timeout(
+                query, query_parameters, page_size, timeout
+            )
+
+            if redis_indisponivel:
+                span.set_attribute("cache.write_skipped", "redis_unavailable")
+            elif not outcome.cacheable:
+                span.set_attribute("cache.write_skipped", "degraded_result")
+            else:
+                await _cache_write(cache_key, outcome.rows, ttl, span)
+
+            return outcome.rows
 
 
 # ---------------------------------------------------------------------------

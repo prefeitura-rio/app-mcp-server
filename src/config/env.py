@@ -170,6 +170,13 @@ REDIS_TTL_SECONDS = int(getenv_or_action("REDIS_TTL_SECONDS"))
 BIGQUERY_CACHE_TTL_SECONDS = int(
     getenv_or_action("BIGQUERY_CACHE_TTL_SECONDS", default="3600", action="ignore")
 )
+# Timeout de socket do cliente Redis usado como cache do BigQuery. Baixo de
+# propósito: o cache existe para economizar tempo, então esperar por ele mais
+# do que a própria query custaria é o pior dos mundos. Um Redis que aceita a
+# conexão e não responde precisa falhar rápido e cair para o BigQuery.
+REDIS_CACHE_TIMEOUT_SECONDS = float(
+    getenv_or_action("REDIS_CACHE_TIMEOUT_SECONDS", default="2.0", action="ignore")
+)
 BIGQUERY_TIMEOUT_SECONDS = float(
     getenv_or_action("BIGQUERY_TIMEOUT_SECONDS", default="10.0", action="ignore")
 )

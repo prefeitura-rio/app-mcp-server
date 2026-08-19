@@ -136,7 +136,24 @@ async def get_pluscode_coords_equipments(
         query = query.replace("__replace_categories__", "")
 
     try:
-        data = await get_bigquery_result(query=query, query_parameters=query_parameters)
+        # Chave de cache por plus8 + categorias, e não pelas coordenadas exatas
+        # (CHATR-115). A célula plus8 tem ~278m x 256m, então endereços distintos
+        # dentro dela compartilham a mesma entrada — é justamente o que dá volume
+        # de acerto, já que muita gente consulta a mesma região.
+        #
+        # O preço, decidido conscientemente: a query usa lat/lng exatos em
+        # `ST_WITHIN` (quais territórios contêm o ponto) e em `st_distance`
+        # (`distancia_metros`). Quem for atendido pelo cache recebe os valores
+        # calculados a partir do ponto de quem populou a entrada — distância com
+        # erro de até ~275m e, junto a uma fronteira de território, possivelmente
+        # o conjunto da célula vizinha. Trocar por chave com coordenadas
+        # arredondadas é o caminho se isso passar a incomodar.
+        data = await get_bigquery_result(
+            query=query,
+            query_parameters=query_parameters,
+            cache_namespace="equipments",
+            cache_key_parts={"plus8": plus8, "cats": categories},
+        )
 
         return {
             "inputs": {
@@ -180,7 +197,10 @@ async def get_category_equipments() -> dict:
     order by eq.secretaria_responsavel, eq.categoria
     """
 
-    data = await get_bigquery_result(query=query)
+    # Query sem parâmetros: o namespace sozinho já identifica a consulta.
+    data = await get_bigquery_result(
+        query=query, cache_namespace="equipments_categories"
+    )
     categories = {}
     for d in data:
         if d["secretaria_responsavel"] not in categories:
@@ -225,7 +245,14 @@ async def get_tematic_instructions_for_equipments(tema: str = "geral") -> List[d
         bigquery.ScalarQueryParameter("tema", "STRING", tema_param),
     ]
     try:
-        return await get_bigquery_result(query=query, query_parameters=query_parameters)
+        # `tema` (e não `tema_param`) na chave: os dois são equivalentes um a um,
+        # e "geral" é mais legível numa varredura do que a ausência de valor.
+        return await get_bigquery_result(
+            query=query,
+            query_parameters=query_parameters,
+            cache_namespace="equipments_instructions",
+            cache_key_parts={"tema": tema},
+        )
     except GoogleAPIError as e:
         # Caso esperado. `equipamentos_instrucoes` é tabela externa sobre uma
         # Google Sheet (CHATR-119): perder acesso à planilha vira um 400 do

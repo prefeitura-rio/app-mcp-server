@@ -394,7 +394,7 @@ async def test_instrucoes_degradam_quando_a_tabela_externa_cai(monkeypatch):
     atravessa a degradação de `get_bigquery_result` e chegaria à tool.
     """
 
-    async def bigquery_quebrado(query, query_parameters=None):
+    async def bigquery_quebrado(query, query_parameters=None, **_kwargs):
         raise BadRequest(
             "400 Error while reading table: "
             "rj-iplanrio.plus_codes.equipamentos_instrucoes, error message: "
@@ -423,7 +423,7 @@ async def test_instrucoes_degradam_tambem_em_erro_inesperado(monkeypatch):
     que planilha fora do ar e defeito de código não se confundam na busca.
     """
 
-    async def bigquery_com_bug(query, query_parameters=None):
+    async def bigquery_com_bug(query, query_parameters=None, **_kwargs):
         raise RuntimeError("boom")
 
     module = _load_pluscode_service(monkeypatch, bigquery_com_bug)
@@ -443,8 +443,8 @@ async def test_instrucoes_degradam_tambem_em_erro_inesperado(monkeypatch):
 async def test_instrucoes_retornam_os_dados_quando_a_tabela_responde(monkeypatch):
     chamadas = []
 
-    async def bigquery_ok(query, query_parameters=None):
-        chamadas.append((query, query_parameters))
+    async def bigquery_ok(query, query_parameters=None, **kwargs):
+        chamadas.append((query, query_parameters, kwargs))
         return [{"tema": "educacao", "instrucoes": "..."}]
 
     module = _load_pluscode_service(monkeypatch, bigquery_ok)
@@ -452,10 +452,14 @@ async def test_instrucoes_retornam_os_dados_quando_a_tabela_responde(monkeypatch
     resultado = await module.get_tematic_instructions_for_equipments(tema="educacao")
 
     assert resultado == [{"tema": "educacao", "instrucoes": "..."}]
-    query, parametros = chamadas[0]
+    query, parametros, kwargs = chamadas[0]
     # O tema vai por parâmetro do BigQuery, nunca interpolado no texto do SQL.
     assert "educacao" not in query
     assert [(p.name, p.value) for p in parametros] == [("tema", "educacao")]
+    # CHATR-115: a chave de cache é semântica, e o tema faz parte da identidade
+    # da consulta — sem ele, todos os temas dividiriam a mesma entrada.
+    assert kwargs["cache_namespace"] == "equipments_instructions"
+    assert kwargs["cache_key_parts"] == {"tema": "educacao"}
 
 
 # ---------------------------------------------------------------------------
