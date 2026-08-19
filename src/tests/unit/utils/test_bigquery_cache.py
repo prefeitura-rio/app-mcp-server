@@ -752,6 +752,32 @@ async def test_span_registra_falha_do_redis(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_redis_que_le_mas_recusa_gravar_nao_derruba_a_consulta(monkeypatch):
+    """Cenário do `noeviction` sob pressão: leitura funciona, escrita é recusada.
+
+    Um Redis cheio com `maxmemory-policy noeviction` responde `GET` normalmente
+    e rejeita `SETEX` com OOM. A consulta tem de sair mesmo assim, e a falha
+    precisa aparecer no span — senão o cache fica inoperante em silêncio.
+    """
+
+    class RedisCheio(_RedisFalso):
+        async def setex(self, *_args):
+            raise MemoryError("OOM command not allowed when used memory > 'maxmemory'")
+
+    module, cliente, _ = _montar(monkeypatch, "bq_cache_oom", redis=RedisCheio())
+    tracer = _TracerFalso()
+    monkeypatch.setattr(module, "get_tracer", lambda: tracer)
+
+    linhas = await module.get_bigquery_result("select 1", cache_ttl_seconds=120)
+
+    assert linhas == [{"n": 1}]
+    assert cliente.execucoes == 1
+    span = tracer.spans["bigquery.read"][0]
+    assert span.attrs["cache.write_error"] == "MemoryError"
+    assert "cache.written" not in span.attrs
+
+
+@pytest.mark.asyncio
 async def test_falha_na_leitura_nao_tenta_gravar(monkeypatch):
     """Redis mudo custa um timeout de socket por operação.
 
