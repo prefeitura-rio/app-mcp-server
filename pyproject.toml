@@ -28,7 +28,6 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.36.0",
     "opentelemetry-instrumentation-asgi>=0.57b0",
     "opentelemetry-sdk>=1.36.0",
-    "pytest>=9.0.1",
     "pandas>=2.3.3",
     "async-googlemaps>=0.0.10",
     # `async_googlemaps` importa `googlemaps` em runtime mas não o declara
@@ -51,6 +50,7 @@ where = ["."]
 [dependency-groups]
 dev = [
     "pre-commit>=4.0.0",
+    "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=6.0.0",
 ]

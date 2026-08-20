@@ -1,0 +1,60 @@
+# Contexto de build da imagem de produção.
+#
+# Sem este arquivo o `COPY . /app` do Dockerfile leva para dentro da imagem
+# tudo que estiver na árvore de trabalho — inclusive `src/config/.env`, que
+# em qualquer máquina de desenvolvimento contém segredos reais. Camada de
+# imagem é imutável e vai para o GHCR: um segredo que entra aqui não sai mais.
+
+# --- Segredos: primeiro, e sem exceção ---
+.env
+.env.*
+*.env
+src/config/.env
+src/config/.env.*
+**/.env
+**/*.pem
+**/*.key
+**/*credentials*.json
+**/service-account*.json
+
+# --- Ambientes virtuais e artefatos de build local ---
+.venv/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+**/__pycache__/
+*.py[cod]
+
+# --- Suíte de testes e seus artefatos (não rodam em produção) ---
+src/tests/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+pytest.xml
+
+# --- Ferramental de desenvolvimento ---
+.git/
+.github/
+.gitignore
+.ruff_cache/
+.pre-commit-config.yaml
+.coderabbit.yaml
+sonar-project.properties
+.vscode/
+.idea/
+.claude/
+
+# --- Documentação e manifestos que não são consumidos em runtime ---
+docs/
+k8s/
+*.md
+!README.md
+debug_mcp_server.py
+
+# --- Sistema operacional ---
+.DS_Store
+Thumbs.db
