@@ -388,6 +388,62 @@ async def test_desistir_na_fila_nao_vaza_lock(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_desistir_no_instante_da_entrega_nao_trava_a_chave(monkeypatch):
+    """A borda: o dono libera o lock no mesmo instante em que o prazo estoura.
+
+    É a única janela em que "desistir" e "adquirir" podem acontecer na mesma
+    iteração do event loop. Se o `acquire()` conseguir o lock e o chamador
+    ainda assim sair pelo caminho do estouro, ninguém chama o `release()` — e
+    a chave (na prática um `plus8` específico) fica travada até o processo
+    reiniciar, transformando um timeout isolado em pane permanente naquela
+    região.
+
+    O teste varre um punhado de deslocamentos em torno do prazo para cair dos
+    dois lados da janela, e cobra sempre a mesma invariante: acabou a chamada,
+    o lock está livre.
+    """
+    module = _load_bigquery_module(monkeypatch, "bq_deadline_corrida_entrega")
+    loop = asyncio.get_running_loop()
+    prazo = 0.02
+
+    for i, desvio in enumerate((-0.002, -0.0005, 0.0, 0.0005, 0.002)):
+        chave = f"bq_cache:corrida:{i}"
+        lock = asyncio.Lock()
+        module._inflight_locks[chave] = lock
+        module._inflight_refs[chave] = 1  # o dono, simulado à mão
+        await lock.acquire()
+
+        deadline = loop.time() + prazo
+
+        async def esperador():
+            try:
+                async with module._single_flight(chave, deadline=deadline):
+                    return "adquiriu"
+            except module.BigQueryTimeoutError:
+                return "estourou"
+
+        loop.call_at(deadline + desvio, lock.release)
+        tarefa = asyncio.create_task(esperador())
+
+        assert await tarefa in ("adquiriu", "estourou")
+
+        # Deixa o `release` agendado disparar antes de olhar para o lock:
+        # com desvio positivo ele ainda não rodou quando a tarefa termina.
+        await asyncio.sleep(max(0.0, deadline + desvio - loop.time()) + 0.005)
+
+        # O dono sai de cena; o que sobra é só o estado do lock.
+        module._inflight_refs[chave] = module._inflight_refs.get(chave, 1) - 1
+        if module._inflight_refs[chave] <= 0:
+            module._inflight_refs.pop(chave, None)
+            module._inflight_locks.pop(chave, None)
+
+        assert not lock.locked(), f"lock ficou preso com desvio={desvio}"
+
+    assert module._inflight_locks == {}
+    assert module._inflight_refs == {}
+
+
+@pytest.mark.asyncio
 async def test_event_loop_segue_livre_com_a_fila_cheia(monkeypatch):
     """A fila é de corrotinas esperando, não de threads travando o loop."""
     module, _cliente, _redis = _montar(monkeypatch, "bq_deadline_loop_livre")

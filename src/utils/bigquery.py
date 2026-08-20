@@ -876,10 +876,20 @@ async def _single_flight(key: str, deadline: float = None):
                     f"BigQuery single-flight wait timed out for key {key}"
                 )
             try:
-                await asyncio.wait_for(lock.acquire(), timeout=restante)
+                # `asyncio.timeout` e não `wait_for`: o `wait_for` embrulha o
+                # `acquire()` numa Task separada e cancela *essa* Task quando
+                # o prazo estoura, então quem decide o que fazer com um lock
+                # que acabou de ser entregue é código fora do nosso escopo.
+                # Aqui o cancelamento chega direto neste corpo — ou o
+                # `acquire()` retorna e a linha seguinte (sem nenhum `await`
+                # no meio) marca `adquirido`, ou ele levanta e não seguramos
+                # nada. As duas coisas não têm como divergir, que é o que
+                # garante que o `finally` sempre libere o que foi adquirido.
+                async with asyncio.timeout(restante):
+                    await lock.acquire()
             except asyncio.TimeoutError:
-                # `from None`: o TimeoutError do wait_for não acrescenta nada
-                # ao daqui, e encadear os dois só polui o traceback.
+                # `from None`: o TimeoutError do prazo não acrescenta nada ao
+                # daqui, e encadear os dois só polui o traceback.
                 raise BigQueryTimeoutError(
                     f"BigQuery single-flight wait timed out for key {key}"
                 ) from None
