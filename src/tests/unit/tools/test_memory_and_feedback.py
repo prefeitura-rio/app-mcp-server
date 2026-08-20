@@ -219,12 +219,19 @@ async def test_feedback_tool_paths(monkeypatch):
 
     created = []
 
-    def fake_create_task(coro):
+    def fake_disparar(coro, nome=None):
         created.append(coro)
         coro.close()
         return None
 
-    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+    # Ver `src/utils/background.py`: a tool não usa `asyncio.create_task` direto,
+    # porque a task perderia a única referência forte e poderia ser coletada
+    # antes de gravar o feedback.
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.background",
+        types.SimpleNamespace(disparar_em_background=fake_disparar),
+    )
 
     monkeypatch.setitem(
         sys.modules,

@@ -934,3 +934,223 @@ def test_item_sem_payload_e_descartado_sem_travar(monkeypatch):
     assert resumo["itens"] == 1
     assert len(chamadas) == 1
     assert redis.listas["bq_dlq:proj.ds.tbl"] == []
+
+
+# ---------------------------------------------------------------------------
+# Paridade do fallback em arquivo com o Redis
+#
+# O caminho em arquivo roda exatamente quando o Redis — a proteção principal —
+# está fora. Ele tinha três furos que o caminho no Redis já não tinha: item
+# recusado era descartado, o arquivo crescia sem teto e nada expirava. Os três
+# são perda de dado ou risco operacional no momento de maior fragilidade.
+# ---------------------------------------------------------------------------
+
+
+def test_item_recusado_vai_para_arquivo_de_poison_em_vez_de_sumir(
+    monkeypatch, tmp_path
+):
+    """Antes, a linha recusada era pulada e sumia no rewrite final do arquivo."""
+    module = _carregar_bigquery(
+        monkeypatch, "bq_poison_arquivo", DATA_DIR=str(tmp_path), REDIS_URL=None
+    )
+    _espionar_bigquery(monkeypatch, module, erro=BadRequest("schema inválido"))
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir()
+    (dlq_dir / "dlq_proj_ds_tbl.jsonl").write_text(_item_dlq() + "\n", encoding="utf-8")
+
+    resumo = module._replay_dlq_arquivos(limite=10)
+
+    assert resumo["poison"] == 1
+    poison = dlq_dir / "dlq_proj_ds_tbl.poison.jsonl"
+    assert poison.exists(), "o payload recusado foi descartado"
+    assert _item_dlq() in poison.read_text(encoding="utf-8")
+
+
+def test_linha_ilegivel_em_arquivo_vai_para_poison(monkeypatch, tmp_path):
+    """Entrada corrompida também é dado — some da fila, não do disco."""
+    module = _carregar_bigquery(
+        monkeypatch, "bq_poison_ilegivel", DATA_DIR=str(tmp_path), REDIS_URL=None
+    )
+    _espionar_bigquery(monkeypatch, module)
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir()
+    (dlq_dir / "dlq_proj_ds_tbl.jsonl").write_text(
+        "{isso não é json}\n", encoding="utf-8"
+    )
+
+    resumo = module._replay_dlq_arquivos(limite=10)
+
+    assert resumo["poison"] == 1
+    poison = dlq_dir / "dlq_proj_ds_tbl.poison.jsonl"
+    assert "{isso não é json}" in poison.read_text(encoding="utf-8")
+
+
+def test_arquivo_de_poison_nao_e_reprocessado(monkeypatch, tmp_path):
+    """`dlq_*.jsonl` casa com o nome do poison; reprocessá-lo seria um laço."""
+    module = _carregar_bigquery(
+        monkeypatch, "bq_poison_nao_reprocessa", DATA_DIR=str(tmp_path), REDIS_URL=None
+    )
+    chamadas = _espionar_bigquery(monkeypatch, module)
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir()
+    poison = dlq_dir / "dlq_proj_ds_tbl.poison.jsonl"
+    poison.write_text(_item_dlq() + "\n", encoding="utf-8")
+
+    resumo = module._replay_dlq_arquivos(limite=10)
+
+    assert chamadas == [], "o BigQuery foi chamado com um payload já recusado"
+    assert resumo["itens"] == 0
+    assert poison.exists(), "o arquivo de poison foi consumido"
+
+
+def test_poison_em_arquivo_conta_como_poison_na_profundidade(monkeypatch, tmp_path):
+    """`check_bigquery_dlq` usa a distinção para dizer se precisa de gente."""
+    module = _carregar_bigquery(
+        monkeypatch, "bq_profundidade_poison_arquivo", DATA_DIR=str(tmp_path)
+    )
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: None)
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir()
+    (dlq_dir / "dlq_proj_ds_a.jsonl").write_text(_item_dlq() + "\n", encoding="utf-8")
+    (dlq_dir / "dlq_proj_ds_a.poison.jsonl").write_text(
+        _item_dlq() + "\n" + _item_dlq() + "\n", encoding="utf-8"
+    )
+
+    profundidade = module.get_dlq_depth()
+
+    assert profundidade["arquivos"] == 1
+    assert profundidade["poison"] == 2
+    assert profundidade["total"] == 3
+
+
+def test_dlq_em_arquivo_respeita_o_teto_de_itens(monkeypatch, tmp_path):
+    """Sem teto, uma indisponibilidade longa do Redis enche o disco do pod."""
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_teto_arquivo",
+        DATA_DIR=str(tmp_path),
+        REDIS_URL=None,
+        BIGQUERY_DLQ_MAX_ITEMS=3,
+    )
+    # Força a conferência a cada append, em vez de esperar o arquivo passar de
+    # `max_items * _DLQ_LINHA_MEDIA_BYTES`.
+    monkeypatch.setattr(module, "_DLQ_LINHA_MEDIA_BYTES", 1)
+
+    criticos = []
+    monkeypatch.setattr(
+        module.logger, "critical", lambda msg, *_a, **_k: criticos.append(msg)
+    )
+
+    for i in range(6):
+        module._persist_to_dlq("proj.ds.tbl", [{"i": i}], "erro")
+
+    linhas = [
+        json.loads(linha)
+        for linha in (tmp_path / "bq_dlq" / "dlq_proj_ds_tbl.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if linha.strip()
+    ]
+
+    assert len(linhas) == 3, "o teto não foi aplicado"
+    # As mais antigas é que saem, como no `LTRIM(-max, -1)` do Redis.
+    assert [linha["payload"][0]["i"] for linha in linhas] == [3, 4, 5]
+    assert any("DESCARTADOS" in msg for msg in criticos), (
+        "descarte de DLQ passou sem log crítico"
+    )
+
+
+def test_arquivo_de_dlq_expira_apos_o_ttl(monkeypatch, tmp_path):
+    """O TTL limita disco e, sobretudo, a retenção do dado pessoal do payload."""
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_ttl_arquivo",
+        DATA_DIR=str(tmp_path),
+        REDIS_URL=None,
+        BIGQUERY_DLQ_TTL_SECONDS=100,
+    )
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir()
+    velho = dlq_dir / "dlq_proj_ds_velho.jsonl"
+    novo = dlq_dir / "dlq_proj_ds_novo.jsonl"
+    velho.write_text(_item_dlq() + "\n", encoding="utf-8")
+    novo.write_text(_item_dlq() + "\n", encoding="utf-8")
+
+    import os
+
+    antigo = module._time.time() - 500
+    os.utime(velho, (antigo, antigo))
+
+    module._expirar_arquivos_dlq()
+
+    assert not velho.exists(), "arquivo vencido continuou em disco"
+    assert novo.exists(), "arquivo dentro da validade foi removido"
+
+
+def test_arquivo_que_ainda_recebe_escrita_nao_expira(monkeypatch, tmp_path):
+    """O relógio é o `mtime`: append renova, como o `EXPIRE` renova no Redis."""
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_ttl_renova",
+        DATA_DIR=str(tmp_path),
+        REDIS_URL=None,
+        BIGQUERY_DLQ_TTL_SECONDS=100,
+    )
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir()
+    arquivo = dlq_dir / "dlq_proj_ds_tbl.jsonl"
+    arquivo.write_text(_item_dlq() + "\n", encoding="utf-8")
+
+    import os
+
+    antigo = module._time.time() - 500
+    os.utime(arquivo, (antigo, antigo))
+
+    module._persist_to_dlq("proj.ds.tbl", [{"novo": 1}], "erro")
+    module._expirar_arquivos_dlq()
+
+    assert arquivo.exists(), "o append não renovou a validade do arquivo"
+
+
+# ---------------------------------------------------------------------------
+# Contadores expostos
+# ---------------------------------------------------------------------------
+
+
+def test_taxa_de_agrupamento_mede_o_criterio_de_aceite(monkeypatch):
+    """`rows_written / insert_calls` é o CHATR-118 em um número."""
+    module = _carregar_bigquery(monkeypatch, "bq_taxa", BIGQUERY_BATCH_SIZE=5)
+    _espionar_bigquery(monkeypatch, module)
+
+    for i in range(10):
+        module.enqueue_bigquery_row("proj.ds.tbl", {"i": i})
+
+    metricas = module.get_bigquery_write_metrics()
+
+    assert metricas["insert_calls"] == 2
+    assert metricas["rows_written"] == 10
+    assert metricas["taxa_agrupamento"] == 5.0
+
+
+def test_metricas_nao_penduram_quando_o_buffer_esta_travado(monkeypatch):
+    """A leitura roda na event loop (`/health/detail`); não pode esperar sem teto."""
+    module = _carregar_bigquery(monkeypatch, "bq_metricas_lock")
+    monkeypatch.setattr(module, "_METRICS_LOCK_TIMEOUT_SECONDS", 0.01)
+
+    module._batch_buffer_lock.acquire()
+    try:
+        metricas = module.get_bigquery_write_metrics()
+    finally:
+        module._batch_buffer_lock.release()
+
+    # `None`, e não `0`: quem lê precisa distinguir "buffer vazio" de "não deu
+    # para medir" — o contrário faria concluir que não há linha parada.
+    assert metricas["rows_buffered"] is None
+    assert metricas["tables_buffered"] is None
+    assert "rows_enqueued" in metricas

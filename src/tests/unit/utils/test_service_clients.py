@@ -666,8 +666,9 @@ async def test_bigquery_background_helpers(monkeypatch):
     )
     assert calls[1][0] is module.save_response_in_bq
 
-    # save_cor_alert_in_bq_background now enqueues rows to the batch buffer
-    # instead of writing directly; capture calls to enqueue_bigquery_row.
+    # Alerta de severidade alta/crítica não passa pelo buffer: é o registro que
+    # alguém procura durante a ocorrência, e esperar o flush o deixaria
+    # inexistente por até BIGQUERY_FLUSH_INTERVAL_SECONDS. Vai direto ao insert.
     enqueued = []
     monkeypatch.setattr(
         module,
@@ -691,11 +692,31 @@ async def test_bigquery_background_helpers(monkeypatch):
         dataset_id="dataset",
         table_id="alerts",
     )
-    assert len(enqueued) == 1
-    table_name, row = enqueued[-1]
+    assert enqueued == []
+    payload, table_name = saved_payloads[-1]
     assert table_name == "rj-iplanrio.dataset.alerts"
+    row = payload[0]
     assert row["bairro_normalizado"] == "jardim america"
     assert row["bairro_raw"] == "jardim america"
+
+    # Severidade baixa/média continua agrupada: é onde está o volume, e portanto
+    # onde o batching entrega a redução de inserts que o CHATR-118 pede.
+    await module.save_cor_alert_in_bq_background(
+        alert_id="a3b",
+        user_id="u4",
+        alert_type="alagamento",
+        severity="Média",
+        description="descrição",
+        address="Rua do Jd América, 10",
+        latitude=-22.9,
+        longitude=-43.2,
+        timestamp="2026-04-08T15:00:00",
+        environment="prod",
+        dataset_id="dataset",
+        table_id="alerts",
+    )
+    assert len(enqueued) == 1
+    assert enqueued[-1][0] == "rj-iplanrio.dataset.alerts"
 
     await module.save_cor_alert_to_queue_background(
         alert_id="a4",

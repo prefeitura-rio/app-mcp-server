@@ -151,6 +151,42 @@ async def test_detail_traz_metadados_de_operacao(registry):
     assert isinstance(body["ready"], bool)
 
 
+@pytest.mark.asyncio
+async def test_detail_expoe_os_contadores_de_escrita_do_bigquery(registry, monkeypatch):
+    """O critério de aceite do CHATR-118 exige medir o volume de inserts.
+
+    Os contadores já existiam desde o batching; o que faltava era saída. Sem
+    este bloco, conferir a taxa de agrupamento em produção dependia de abrir um
+    REPL dentro do pod — e um buffer que parou de escoar (que também reduz
+    inserts) ficaria indistinguível do ganho que se quer demonstrar.
+    """
+    monkeypatch.setattr(
+        routes,
+        "_bigquery_write_metrics",
+        lambda: {"rows_enqueued": 100, "insert_calls": 2, "taxa_agrupamento": 50.0},
+    )
+
+    body = _body(await routes.detail(None))
+
+    assert body["bigquery_write"]["taxa_agrupamento"] == 50.0
+    assert body["bigquery_write"]["insert_calls"] == 2
+
+
+def test_bloco_de_metricas_nunca_derruba_o_diagnostico(monkeypatch):
+    """O bloco é informativo: se ele quebrar, o resto do payload ainda importa."""
+
+    def explode():
+        raise RuntimeError("buffer inacessível")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.bigquery",
+        types.SimpleNamespace(get_bigquery_write_metrics=explode),
+    )
+
+    assert routes._bigquery_write_metrics() == {"erro": "RuntimeError"}
+
+
 def test_register_health_routes_registra_as_tres_rotas():
     registradas = []
 

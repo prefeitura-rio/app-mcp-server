@@ -196,12 +196,18 @@ async def test_equipments_tools_instructions_and_whitelist(monkeypatch):
 
     created_tasks = []
 
-    def fake_create_task(coro):
+    def fake_disparar(coro, nome=None):
         created_tasks.append(coro)
         coro.close()
         return None
 
-    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+    # Ver `src/utils/background.py`: as tools disparam a escrita por este helper
+    # justamente para a task não ser coletada antes de rodar.
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.background",
+        types.SimpleNamespace(disparar_em_background=fake_disparar),
+    )
 
     monkeypatch.setitem(
         sys.modules,

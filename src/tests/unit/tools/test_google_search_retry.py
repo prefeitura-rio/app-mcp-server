@@ -376,8 +376,13 @@ def search(monkeypatch, env_stub):
     module = _load_module("test_search_retry_module", SEARCH_MODULE_PATH)
 
     created_tasks = []
+    # A escrita vai por `disparar_em_background` (ver `src/utils/background.py`),
+    # que guarda referência forte da task — `asyncio.create_task` direto deixava
+    # a corrotina exposta ao coletor de lixo antes de gravar.
     monkeypatch.setattr(
-        module.asyncio, "create_task", lambda coro: created_tasks.append(coro)
+        module,
+        "disparar_em_background",
+        lambda coro, nome=None: created_tasks.append(coro),
     )
 
     def run(query="iptu"):
