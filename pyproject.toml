@@ -54,3 +54,36 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=6.0.0",
 ]
+
+[tool.pytest.ini_options]
+# `testpaths` evita que o pytest varra a árvore inteira à procura de `test_*.py`
+# e acabe importando código de aplicação por acidente (foi o caso de
+# `src/utils/test_agent.py`, removido em CHATR-105).
+testpaths = ["src/tests"]
+# `strict` exige `@pytest.mark.asyncio` explícito: um teste async sem a marca
+# falha em vez de passar sem nunca ter rodado.
+asyncio_mode = "strict"
+addopts = "--strict-markers --strict-config"
+# Silencia só o ruído conhecido de terceiros. Um `ignore::DeprecationWarning`
+# amplo esconderia avisos de quebra futura nas nossas próprias dependências.
+filterwarnings = [
+    "ignore:authlib.jose module is deprecated:DeprecationWarning",
+    "ignore:The default value of `allowed_objects` will change:PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = false
+# A própria suíte fora do denominador: cobertura deve medir código de produção.
+omit = [
+    "src/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
