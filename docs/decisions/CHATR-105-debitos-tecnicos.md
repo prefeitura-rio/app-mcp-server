@@ -299,6 +299,54 @@ confirmado por import), a aplicação real subindo com só essas dependências e
 registrando as mesmas 14 tools, e os padrões do `.dockerignore` conferidos
 contra a lista de arquivos críticos e necessários.
 
+### Duas implementações de `FastMCP` conforme o ambiente
+
+Achado colateral do smoke test acima, que só apareceu quando o CI rodou —
+vale registrar porque é risco real, não curiosidade.
+
+`src/app.py` faz:
+
+```python
+if IS_LOCAL:
+    from mcp.server.fastmcp import FastMCP   # SDK oficial do MCP
+else:
+    from fastmcp import FastMCP              # pacote fastmcp
+```
+
+São **classes diferentes**, de pacotes diferentes, com APIs internas
+diferentes: o SDK guarda as rotas em `_custom_starlette_routes`, o pacote em
+`_additional_http_routes`; o builder do app ASGI é `streamable_http_app()` num
+e `http_app()` no outro. `IS_LOCAL` tem default `"false"` e nenhum manifesto
+de `k8s/` o define, então **produção e CI usam o pacote `fastmcp`** — quem
+diverge é a máquina de desenvolvimento, onde `src/config/.env` costuma trazer
+`IS_LOCAL=true`.
+
+Ou seja: o desenvolvedor exercita localmente um servidor que não é o que roda
+em produção. A primeira versão do smoke test passou aqui e quebrou no CI
+exatamente por isso.
+
+O teste agora é agnóstico — constrói o app ASGI pela API pública, seja qual
+for a implementação, e lê as rotas efetivamente servidas em vez de espiar
+atributo privado. Unificar as duas implementações fica como follow-up: é
+mudança de comportamento do servidor, não limpeza.
+
+**Lição de método:** validar mudanças com `uv run --frozen` e reproduzir as
+variáveis de ambiente do CI antes de empurrar. O venv local também estava com
+21 pacotes órfãos instalados por estar dessincronizado do lock — não foi o que
+causou a falha, mas é o mesmo tipo de divergência.
+
+### Cobertura por ambiente
+
+Medida nos dois, para conferir que a baseline serve aos dois:
+
+| Ambiente | Cobertura |
+|---|---|
+| CI/produção (`IS_LOCAL=false`, só `user_feedback` excluída) | 68,50% |
+| Local (`IS_LOCAL=true`, três tools excluídas) | 68,42% |
+
+Os 0,08pp de diferença cabem folgadamente na tolerância de 0,1pp do ratchet
+contra a baseline 68,4.
+
 ### `src/app.py` estava com 0% de cobertura
 
 231 linhas, o factory que monta o servidor e registra as tools — o caminho que
@@ -332,6 +380,12 @@ Registrados para não se perderem.
   stubar o módulo inteiro.
 - **`api_service_fake.py`** (200 linhas, 10% de cobertura) é código de mock
   vivendo na árvore de produção, dentro de `iptu_pagamento/api/`.
+- **Duas implementações de `FastMCP` selecionadas por `IS_LOCAL`.** Unificar
+  exige decidir qual fica e validar o comportamento do servidor nos dois modos
+  de execução; é mudança de runtime, não limpeza.
+- **`EXCLUDED_TOOLS` aceita nomes que não existem em silêncio.** Um typo
+  desliga nada e ninguém percebe. O smoke test agora afirma que todo nome
+  configurado pertence ao catálogo, mas a aplicação em si segue sem validar.
 - **Container roda como root.** Trocar por usuário não-privilegiado exige antes
   mudar a porta do `EXPOSE 80` (bind em porta <1024 precisa de root ou
   `CAP_NET_BIND_SERVICE`), então é mudança coordenada com os manifestos de
