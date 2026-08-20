@@ -2370,7 +2370,19 @@ def get_dlq_depth() -> dict:
     É o que faltava para alguém *descobrir* que há dado parado: até aqui a DLQ
     só aparecia em linha de log no instante da falha, que ninguém revisita.
     """
-    profundidade = {"redis": 0, "poison": 0, "arquivos": 0, "total": 0}
+    profundidade = {
+        "redis": 0,
+        "poison": 0,
+        "arquivos": 0,
+        "total": 0,
+        # Quais tabelas e quanto tempo resta antes de o TTL apagar o poison.
+        # Sem isso, a mensagem do health check dizia que havia item parado sem
+        # dizer onde nem até quando — e o operador descobria o prazo só quando
+        # ele já tinha vencido, porque a expiração no Redis não deixa rastro.
+        "poison_tabelas": [],
+        "poison_expira_em_s": None,
+    }
+    prazos = []
 
     r = _get_sync_redis_client()
     if r is not None:
@@ -2379,10 +2391,19 @@ def get_dlq_depth() -> dict:
                 if chave != _DLQ_DRAIN_LOCK_KEY:
                     profundidade["redis"] += r.llen(chave)
             for chave in r.scan_iter(match=f"{DLQ_POISON_KEY_PREFIX}:*", count=100):
-                profundidade["poison"] += r.llen(chave)
+                quantos = r.llen(chave)
+                if not quantos:
+                    continue
+                profundidade["poison"] += quantos
+                profundidade["poison_tabelas"].append(chave.split(":", 1)[-1])
+                with contextlib.suppress(Exception):
+                    restante = r.ttl(chave)
+                    if isinstance(restante, int) and restante > 0:
+                        prazos.append(restante)
         except Exception as e:
             logger.warning(f"Não foi possível medir a profundidade da DLQ: {e}")
 
+    ttl_arquivo = int(getattr(env, "BIGQUERY_DLQ_TTL_SECONDS", 604800))
     with contextlib.suppress(Exception):
         dlq_dir = _dlq_dir()
         if dlq_dir.is_dir():
@@ -2390,20 +2411,405 @@ def get_dlq_depth() -> dict:
                 # O arquivo de poison entra no mesmo balde do poison do Redis:
                 # é a distinção que `check_bigquery_dlq` usa para dizer "isto
                 # escoa sozinho" ou "isto precisa de gente".
-                balde = "poison" if ".poison." in arquivo.name else "arquivos"
+                e_poison = ".poison." in arquivo.name
+                balde = "poison" if e_poison else "arquivos"
                 with open(arquivo, "r", encoding="utf-8") as f:
-                    profundidade[balde] += sum(1 for linha in f if linha.strip())
+                    quantos = sum(1 for linha in f if linha.strip())
+                profundidade[balde] += quantos
+                if e_poison and quantos:
+                    profundidade["poison_tabelas"].append(arquivo.name)
+                    if ttl_arquivo > 0:
+                        restante = arquivo.stat().st_mtime + ttl_arquivo - _time.time()
+                        if restante > 0:
+                            prazos.append(int(restante))
 
+    profundidade["poison_tabelas"] = sorted(set(profundidade["poison_tabelas"]))
+    # O menor prazo é o que importa: é o primeiro dado a sumir.
+    profundidade["poison_expira_em_s"] = min(prazos) if prazos else None
     profundidade["total"] = (
         profundidade["redis"] + profundidade["poison"] + profundidade["arquivos"]
     )
     return profundidade
 
 
+def formatar_duracao(segundos) -> str:
+    """Segundos em "6d3h" / "4h12m" / "45s", para mensagem de operação."""
+    if segundos is None:
+        return "sem prazo"
+    segundos = int(segundos)
+    if segundos <= 0:
+        return "vencido"
+    dias, resto = divmod(segundos, 86400)
+    horas, resto = divmod(resto, 3600)
+    minutos = resto // 60
+    if dias:
+        return f"{dias}d{horas}h"
+    if horas:
+        return f"{horas}h{minutos}m"
+    if minutos:
+        return f"{minutos}m"
+    return f"{segundos}s"
+
+
 async def get_dlq_depth_async() -> dict:
     """`get_dlq_depth` fora da event loop — o cliente Redis aqui é síncrono."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_get_write_executor(), get_dlq_depth)
+
+
+# ---------------------------------------------------------------------------
+# Operação sobre o poison.
+#
+# Até aqui o poison era write-only: `_mover_para_poison` e
+# `_mover_linha_para_poison` escreviam, e nada lia de volta — nem o worker de
+# drain, nem o CLI. A única saída era o TTL expirando, em silêncio no caso do
+# Redis. É o mesmo defeito que a D3 corrigiu para a DLQ principal ("persistir o
+# payload sem caminho de retorno só troca 'dado perdido' por 'dado parado numa
+# lista que ninguém lê"), reproduzido um nível abaixo — e com o agravante de
+# que o critério de aceite do CHATR-126, "payload fica disponível para
+# reprocessamento manual ou automático", não era cumprido para esses itens.
+#
+# São três operações, todas manuais e explícitas, porque as três exigem um
+# julgamento que nenhum worker pode fazer sozinho: ler para diagnosticar,
+# devolver à fila depois de corrigir a causa, e descartar quando a conclusão
+# for que o payload é irrecuperável.
+# ---------------------------------------------------------------------------
+
+_POISON_LIMITE_INSPECAO = 20
+
+
+def _poison_redis_keys(r, table_full_name: str = None) -> List[str]:
+    """Chaves de poison no Redis, opcionalmente filtradas por tabela."""
+    if table_full_name:
+        return [_dlq_poison_key(table_full_name)]
+    try:
+        return sorted(r.scan_iter(match=f"{DLQ_POISON_KEY_PREFIX}:*", count=100))
+    except Exception as e:
+        logger.warning(f"Não foi possível listar as chaves de poison: {e}")
+        return []
+
+
+def _poison_file_paths(table_full_name: str = None) -> list:
+    """Arquivos de poison do fallback, opcionalmente filtrados por tabela."""
+    dlq_dir = _dlq_dir()
+    if not dlq_dir.is_dir():
+        return []
+    if table_full_name:
+        alvo = _sanitize_table_name(table_full_name).replace(".", "_")
+        caminho = dlq_dir / f"dlq_{alvo}.poison.jsonl"
+        return [caminho] if caminho.is_file() else []
+    return sorted(dlq_dir.glob("dlq_*.poison.jsonl"))
+
+
+def _resumir_item_poison(bruto: str, origem: str, tabela_padrao: str) -> dict:
+    """Descreve um item de poison sem expor o conteúdo do payload.
+
+    O payload carrega dado pessoal — `user_id` é telefone, alerta do COR tem
+    endereço e coordenada. Esta função é servida por um CLI cuja saída vai para
+    o terminal do operador e, com frequência, para o scrollback ou para o log de
+    um job. Despejar o payload ali por padrão espalharia o dado justamente para
+    fora dos lugares onde ele é controlado (Redis com TTL, tabela do BigQuery).
+
+    O que sai por padrão é o que basta para diagnosticar um erro de schema: a
+    mensagem do BigQuery, que nomeia o campo recusado, e a lista de campos
+    presentes. Nome de campo é estrutura, não dado da pessoa. O conteúdo só sai
+    sob pedido explícito (`--mostrar-payload`).
+    """
+    resumo = {"origem": origem, "tabela": tabela_padrao, "linhas": 0, "campos": []}
+    try:
+        item = json.loads(bruto)
+    except (ValueError, TypeError):
+        resumo["erro"] = "entrada ilegível (não é JSON)"
+        return resumo
+
+    payload = item.get("payload") or []
+    resumo["tabela"] = item.get("table_full_name") or tabela_padrao
+    resumo["failed_at"] = item.get("failed_at")
+    resumo["erro"] = item.get("error")
+    resumo["linhas"] = len(payload)
+    campos = set()
+    for linha in payload:
+        if isinstance(linha, dict):
+            campos.update(linha)
+    resumo["campos"] = sorted(campos)
+    return resumo
+
+
+def inspecionar_poison(
+    limite: int = None, table_full_name: str = None, incluir_payload: bool = False
+) -> dict:
+    """Lê o poison sem consumir nada. Bloqueante — chame de thread ou de CLI.
+
+    Não remove, não reprocessa e não altera TTL: é a operação que vem antes de
+    decidir entre devolver à fila e descartar.
+    """
+    limite = int(limite if limite is not None else _POISON_LIMITE_INSPECAO)
+    resultado = {"itens": [], "total": 0, "erros": []}
+
+    r = _get_sync_redis_client()
+    if r is not None:
+        for chave in _poison_redis_keys(r, table_full_name):
+            try:
+                brutos = r.lrange(
+                    chave, 0, max(limite - len(resultado["itens"]), 0) - 1
+                )
+            except Exception as e:
+                resultado["erros"].append(f"{chave}: {e}")
+                continue
+            for bruto in brutos:
+                resumo = _resumir_item_poison(bruto, "redis", chave.split(":", 1)[-1])
+                resumo["chave"] = chave
+                if incluir_payload:
+                    with contextlib.suppress(ValueError, TypeError):
+                        resumo["payload"] = json.loads(bruto).get("payload")
+                resultado["itens"].append(resumo)
+                if len(resultado["itens"]) >= limite:
+                    break
+            if len(resultado["itens"]) >= limite:
+                break
+
+    for arquivo in _poison_file_paths(table_full_name):
+        if len(resultado["itens"]) >= limite:
+            break
+        try:
+            linhas = [
+                linha
+                for linha in arquivo.read_text(encoding="utf-8").splitlines()
+                if linha.strip()
+            ]
+        except OSError as e:
+            resultado["erros"].append(f"{arquivo.name}: {e}")
+            continue
+        for linha in linhas:
+            resumo = _resumir_item_poison(linha, "arquivo", arquivo.stem)
+            resumo["chave"] = arquivo.name
+            if incluir_payload:
+                with contextlib.suppress(ValueError, TypeError):
+                    resumo["payload"] = json.loads(linha).get("payload")
+            resultado["itens"].append(resumo)
+            if len(resultado["itens"]) >= limite:
+                break
+
+    resultado["total"] = len(resultado["itens"])
+    return resultado
+
+
+def reenfileirar_poison(limite: int = None, table_full_name: str = None) -> dict:
+    """Devolve itens do poison para a DLQ normal. Bloqueante.
+
+    Existe para o caminho em que a causa foi corrigida — schema ajustado, coluna
+    criada — e o payload passa a ser aceitável. O item volta para `bq_dlq:` e o
+    worker de drain o entrega na varredura seguinte, sem intervenção adicional.
+
+    Não valida se a causa de fato foi corrigida, porque não tem como: se não
+    foi, o drain recusa o item mais uma vez e ele volta ao poison. O laço é
+    finito e visível (cada passagem loga), e o custo de errar é uma tentativa
+    perdida — bem menor que o de não haver caminho de volta nenhum.
+    """
+    limite = int(
+        limite
+        if limite is not None
+        else int(getattr(env, "BIGQUERY_DLQ_DRAIN_BATCH", 100))
+    )
+    resumo = {"itens": 0, "linhas": 0, "pendentes": 0, "erros": []}
+    max_items = int(getattr(env, "BIGQUERY_DLQ_MAX_ITEMS", 1000))
+    ttl = int(getattr(env, "BIGQUERY_DLQ_TTL_SECONDS", 604800))
+
+    r = _get_sync_redis_client()
+    if r is not None:
+        for chave in _poison_redis_keys(r, table_full_name):
+            # Limitado por iterações, e não por sucessos: um item cuja remoção
+            # falha em silêncio ficaria na cabeça da lista e o laço nunca
+            # terminaria, segurando uma thread do pool. Mesmo motivo do
+            # `_replay_dlq_redis`.
+            processados = 0
+            while processados < limite and resumo["itens"] < limite:
+                processados += 1
+                try:
+                    brutos = r.lrange(chave, 0, 0)
+                except Exception as e:
+                    resumo["erros"].append(f"{chave}: {e}")
+                    break
+                if not brutos:
+                    break
+
+                bruto = brutos[0]
+                tabela = table_full_name
+                linhas = 0
+                try:
+                    item = json.loads(bruto)
+                    tabela = item.get("table_full_name") or tabela
+                    linhas = len(item.get("payload") or [])
+                except (ValueError, TypeError):
+                    # Entrada ilegível não tem para onde voltar: reenfileirá-la
+                    # só a devolveria ao poison na varredura seguinte. Fica onde
+                    # está, para `--purge-poison` ou para o TTL.
+                    resumo["erros"].append(f"{chave}: entrada ilegível, mantida")
+                    break
+
+                destino = (
+                    _dlq_key(tabela)
+                    if tabela
+                    else chave.replace(DLQ_POISON_KEY_PREFIX, DLQ_KEY_PREFIX, 1)
+                )
+                try:
+                    # RPUSH no destino e LPOP na origem na mesma pipeline, na
+                    # mesma ordem do `_mover_para_poison`: numa falha parcial o
+                    # item fica nas duas chaves, nunca ausente das duas.
+                    pipe = r.pipeline()
+                    pipe.rpush(destino, bruto)
+                    pipe.ltrim(destino, -max_items, -1)
+                    if ttl > 0:
+                        pipe.expire(destino, ttl)
+                    pipe.lpop(chave)
+                    pipe.execute()
+                except Exception as e:
+                    resumo["erros"].append(f"{chave}: {e}")
+                    break
+
+                resumo["itens"] += 1
+                resumo["linhas"] += linhas
+
+            with contextlib.suppress(Exception):
+                resumo["pendentes"] += r.llen(chave)
+
+    for arquivo in _poison_file_paths(table_full_name):
+        if resumo["itens"] >= limite:
+            with contextlib.suppress(OSError):
+                resumo["pendentes"] += len(
+                    [
+                        linha
+                        for linha in arquivo.read_text(encoding="utf-8").splitlines()
+                        if linha.strip()
+                    ]
+                )
+            continue
+        # Mesma proteção do `_replay_dlq_arquivos`: renomear antes de ler separa
+        # o que está sendo devolvido do que continua chegando, para o rewrite
+        # final não apagar linha nova. `.poison.` continua no nome, então o
+        # reprocessamento normal segue ignorando o arquivo.
+        trabalho = arquivo.with_name(arquivo.name + _SUFIXO_EM_PROCESSAMENTO)
+        try:
+            arquivo.rename(trabalho)
+        except OSError as e:
+            resumo["erros"].append(f"{arquivo.name}: {e}")
+            continue
+
+        try:
+            linhas = [
+                linha
+                for linha in trabalho.read_text(encoding="utf-8").splitlines()
+                if linha.strip()
+            ]
+        except OSError as e:
+            resumo["erros"].append(f"{trabalho.name}: {e}")
+            continue
+
+        restantes: List[str] = []
+        for indice, linha in enumerate(linhas):
+            if resumo["itens"] >= limite:
+                restantes.extend(linhas[indice:])
+                break
+            try:
+                item = json.loads(linha)
+                tabela = item.get("table_full_name")
+                qtd = len(item.get("payload") or [])
+            except (ValueError, TypeError):
+                restantes.append(linha)
+                continue
+            if not tabela:
+                restantes.append(linha)
+                continue
+            try:
+                _anexar_com_teto(_dlq_file_path(tabela), linha, tabela)
+            except OSError as e:
+                resumo["erros"].append(f"{tabela}: {e}")
+                restantes.extend(linhas[indice:])
+                break
+            resumo["itens"] += 1
+            resumo["linhas"] += qtd
+
+        try:
+            if restantes:
+                trabalho.write_text("\n".join(restantes) + "\n", encoding="utf-8")
+                trabalho.rename(arquivo)
+                resumo["pendentes"] += len(restantes)
+            else:
+                trabalho.unlink(missing_ok=True)
+        except OSError as e:
+            resumo["erros"].append(f"{trabalho.name}: {e}")
+
+    if resumo["itens"]:
+        logger.warning(
+            f"{resumo['itens']} item(ns) devolvidos do poison para a DLQ "
+            f"({resumo['linhas']} linha(s)). Se a causa não tiver sido corrigida, "
+            f"o drain vai recusá-los de novo."
+        )
+    return resumo
+
+
+def descartar_poison(table_full_name: str = None) -> dict:
+    """Apaga o poison em definitivo. Bloqueante.
+
+    Só existe para a conclusão de que o payload é irrecuperável. Diferente do
+    TTL, que faz a mesma coisa em silêncio, aqui o descarte é decidido por
+    alguém e fica registrado — daí o `logger.critical` com a contagem.
+    """
+    resumo = {"itens": 0, "chaves": 0, "erros": []}
+
+    r = _get_sync_redis_client()
+    if r is not None:
+        for chave in _poison_redis_keys(r, table_full_name):
+            try:
+                quantos = r.llen(chave)
+                if not quantos:
+                    continue
+                r.delete(chave)
+            except Exception as e:
+                resumo["erros"].append(f"{chave}: {e}")
+                continue
+            resumo["itens"] += quantos
+            resumo["chaves"] += 1
+
+    for arquivo in _poison_file_paths(table_full_name):
+        try:
+            quantos = len(
+                [
+                    linha
+                    for linha in arquivo.read_text(encoding="utf-8").splitlines()
+                    if linha.strip()
+                ]
+            )
+            arquivo.unlink(missing_ok=True)
+        except OSError as e:
+            resumo["erros"].append(f"{arquivo.name}: {e}")
+            continue
+        resumo["itens"] += quantos
+        resumo["chaves"] += 1
+
+    if resumo["itens"]:
+        logger.critical(
+            f"{resumo['itens']} item(ns) do poison DESCARTADOS definitivamente por "
+            f"operação manual ({resumo['chaves']} chave(s)/arquivo(s); "
+            f"tabela: {table_full_name or 'todas'})."
+        )
+    return resumo
+
+
+async def inspecionar_poison_async(
+    limite: int = None, table_full_name: str = None, incluir_payload: bool = False
+) -> dict:
+    """`inspecionar_poison` fora da event loop — o cliente Redis é síncrono."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _get_write_executor(),
+        functools.partial(
+            inspecionar_poison,
+            limite=limite,
+            table_full_name=table_full_name,
+            incluir_payload=incluir_payload,
+        ),
+    )
 
 
 async def drain_bigquery_dlq_loop() -> None:

@@ -142,7 +142,10 @@ def _stub_dlq(monkeypatch, profundidade):
     monkeypatch.setitem(
         sys.modules,
         "src.utils.bigquery",
-        types.SimpleNamespace(get_dlq_depth_async=_get_dlq_depth_async),
+        types.SimpleNamespace(
+            get_dlq_depth_async=_get_dlq_depth_async,
+            formatar_duracao=lambda s: "PRAZO" if s else "sem prazo",
+        ),
     )
 
 
@@ -162,12 +165,42 @@ async def test_dlq_com_pendencia_degrada(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dlq_com_poison_aponta_correcao_manual(monkeypatch):
-    """Poison não escoa sozinho — a mensagem precisa dizer isso."""
-    _stub_dlq(monkeypatch, {"redis": 1, "poison": 2, "arquivos": 0, "total": 3})
+async def test_dlq_com_poison_diz_onde_ate_quando_e_o_que_fazer(monkeypatch):
+    """Degradar a partir do primeiro item só se sustenta se a saída for óbvia.
+
+    O check fica vermelho até alguém agir. Para que "agir" não exija
+    investigação prévia, a mensagem carrega a tabela afetada, o prazo até o TTL
+    apagar o payload e o comando que resolve — os três dados que o operador
+    precisaria descobrir por conta própria.
+    """
+    _stub_dlq(
+        monkeypatch,
+        {
+            "redis": 1,
+            "poison": 2,
+            "arquivos": 0,
+            "total": 3,
+            "poison_tabelas": ["proj.ds.tbl"],
+            "poison_expira_em_s": 540000,
+        },
+    )
     with pytest.raises(HealthCheckError) as exc:
         await checks.check_bigquery_dlq()
-    assert "manual" in str(exc.value)
+
+    mensagem = str(exc.value)
+    assert "proj.ds.tbl" in mensagem
+    assert "PRAZO" in mensagem
+    assert "--requeue-poison" in mensagem
+    assert "--purge-poison" in mensagem
+
+
+@pytest.mark.asyncio
+async def test_poison_sem_metadado_nao_quebra_a_mensagem(monkeypatch):
+    """Profundidade de uma versão anterior (ou Redis mudo) não pode virar erro."""
+    _stub_dlq(monkeypatch, {"redis": 0, "poison": 1, "arquivos": 0, "total": 1})
+    with pytest.raises(HealthCheckError) as exc:
+        await checks.check_bigquery_dlq()
+    assert "1 item" in str(exc.value)
 
 
 def test_registro_local_omite_dependencias_de_rede(monkeypatch, fake_env):

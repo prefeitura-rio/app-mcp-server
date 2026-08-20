@@ -156,15 +156,29 @@ async def check_bigquery_dlq() -> CheckStatus:
     inteira. O worker de drain (`drain_bigquery_dlq_loop`) tende a zerar isto
     sozinho assim que o BigQuery volta; o que este check pega é justamente o
     caso em que ele não zera.
+
+    Item em poison degrada a partir do primeiro, e isso é deliberado — mas só
+    passou a ser defensável depois que o poison ganhou saída operacional. Antes,
+    "degradado" significava esperar o TTL de sete dias, e um único payload
+    malformado mascarava toda outra degradação no agregado por uma semana; um
+    check permanentemente vermelho é um check que ninguém lê. Agora significa
+    "rode `python -m src.utils.bq_dlq_replay --poison`", e some quando alguém
+    reprocessa ou descarta. A mensagem carrega tabela e prazo justamente para
+    que a ação seja possível sem investigação prévia.
     """
-    from src.utils.bigquery import get_dlq_depth_async
+    from src.utils.bigquery import formatar_duracao, get_dlq_depth_async
 
     profundidade = await get_dlq_depth_async()
 
     if profundidade["poison"]:
+        tabelas = ", ".join(profundidade.get("poison_tabelas") or []) or "?"
+        prazo = formatar_duracao(profundidade.get("poison_expira_em_s"))
         raise HealthCheckError(
             f"{profundidade['poison']} item(ns) recusado(s) definitivamente pelo "
-            f"BigQuery aguardam correção manual; {profundidade['total']} na DLQ ao todo"
+            f"BigQuery aguardam ação em {tabelas} (o mais próximo expira em "
+            f"{prazo}); use `bq_dlq_replay --poison` para inspecionar, "
+            f"`--requeue-poison` após corrigir a causa ou `--purge-poison` para "
+            f"descartar. {profundidade['total']} na DLQ ao todo"
         )
     if profundidade["total"]:
         raise HealthCheckError(

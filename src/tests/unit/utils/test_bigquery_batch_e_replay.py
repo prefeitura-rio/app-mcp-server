@@ -422,6 +422,7 @@ class _RedisFalso:
     def __init__(self, listas=None):
         self.listas = {k: list(v) for k, v in (listas or {}).items()}
         self.strings = {}
+        self.ttls = {}
 
     def set(self, chave, valor, nx=False, ex=None):
         if nx and chave in self.strings:
@@ -455,6 +456,10 @@ class _RedisFalso:
     def rpush(self, chave, valor):
         self.listas.setdefault(chave, []).append(valor)
         return len(self.listas[chave])
+
+    def ttl(self, chave):
+        # `-1` é o que o Redis devolve para chave sem validade definida.
+        return self.ttls.get(chave, -1)
 
     def pipeline(self):
         return _PipelineReal(self)
@@ -1154,3 +1159,158 @@ def test_metricas_nao_penduram_quando_o_buffer_esta_travado(monkeypatch):
     assert metricas["rows_buffered"] is None
     assert metricas["tables_buffered"] is None
     assert "rows_enqueued" in metricas
+
+
+# ---------------------------------------------------------------------------
+# Operação sobre o poison
+#
+# O poison era write-only: escrito por `_mover_para_poison`, nunca lido de
+# volta. A única saída era o TTL expirando — em silêncio, no caso do Redis. É o
+# mesmo defeito que a D3 corrigiu para a DLQ principal, um nível abaixo, e
+# deixava o critério "disponível para reprocessamento manual" do CHATR-126 sem
+# atender para esses itens.
+# ---------------------------------------------------------------------------
+
+
+def test_inspecao_de_poison_nao_consome_a_fila(monkeypatch):
+    """É a operação que vem antes de decidir; não pode alterar nada."""
+    module = _carregar_bigquery(monkeypatch, "bq_poison_inspeciona")
+    redis = _RedisFalso({"bq_dlq_poison:proj.ds.tbl": [_item_dlq(), _item_dlq()]})
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+
+    resultado = module.inspecionar_poison()
+
+    assert resultado["total"] == 2
+    assert len(redis.listas["bq_dlq_poison:proj.ds.tbl"]) == 2, "a inspeção consumiu"
+
+
+def test_inspecao_omite_o_payload_por_padrao(monkeypatch):
+    """O payload carrega telefone, endereço e coordenada.
+
+    A saída do CLI vai para o terminal do operador e, com frequência, para o
+    scrollback ou para o log de um job — espalhar o dado pessoal ali seria
+    tirá-lo justamente dos lugares onde ele é controlado. O nome do campo é
+    estrutura e basta para diagnosticar schema; o valor é que não sai.
+    """
+    module = _carregar_bigquery(monkeypatch, "bq_poison_sem_payload")
+    item = json.dumps(
+        {
+            "table_full_name": "proj.ds.tbl",
+            "failed_at": "2026-08-20T10:00:00.000000",
+            "error": "campo user_id inválido",
+            "payload": [{"user_id": "5521999999999", "feedback": "texto"}],
+        }
+    )
+    redis = _RedisFalso({"bq_dlq_poison:proj.ds.tbl": [item]})
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+
+    resultado = module.inspecionar_poison()
+    primeiro = resultado["itens"][0]
+
+    assert "payload" not in primeiro
+    assert "5521999999999" not in json.dumps(resultado, ensure_ascii=False)
+    # O que sobra é o que resolve um erro de schema.
+    assert primeiro["campos"] == ["feedback", "user_id"]
+    assert primeiro["erro"] == "campo user_id inválido"
+    assert primeiro["linhas"] == 1
+
+
+def test_inspecao_inclui_o_payload_sob_pedido_explicito(monkeypatch):
+    module = _carregar_bigquery(monkeypatch, "bq_poison_com_payload")
+    redis = _RedisFalso({"bq_dlq_poison:proj.ds.tbl": [_item_dlq()]})
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+
+    resultado = module.inspecionar_poison(incluir_payload=True)
+
+    assert resultado["itens"][0]["payload"] == [{"a": 1}]
+
+
+def test_reenfileirar_devolve_o_poison_para_a_dlq(monkeypatch):
+    """O critério do CHATR-126 aplicado ao poison: existe caminho de volta."""
+    module = _carregar_bigquery(monkeypatch, "bq_poison_requeue")
+    redis = _RedisFalso({"bq_dlq_poison:proj.ds.tbl": [_item_dlq()]})
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+
+    resumo = module.reenfileirar_poison(limite=10)
+
+    assert resumo["itens"] == 1
+    assert redis.listas["bq_dlq_poison:proj.ds.tbl"] == [], "o item ficou no poison"
+    assert redis.listas["bq_dlq:proj.ds.tbl"] == [_item_dlq()]
+
+
+def test_reenfileirar_nao_perde_item_com_entrada_ilegivel(monkeypatch):
+    """Sem tabela de destino não há para onde voltar — fica, não some."""
+    module = _carregar_bigquery(monkeypatch, "bq_poison_requeue_ilegivel")
+    redis = _RedisFalso({"bq_dlq_poison:proj.ds.tbl": ["{quebrado}"]})
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+
+    resumo = module.reenfileirar_poison(limite=10)
+
+    assert resumo["itens"] == 0
+    assert resumo["erros"], "a entrada ilegível passou sem ser reportada"
+    assert redis.listas["bq_dlq_poison:proj.ds.tbl"] == ["{quebrado}"]
+
+
+def test_reenfileirar_poison_em_arquivo(monkeypatch, tmp_path):
+    module = _carregar_bigquery(
+        monkeypatch, "bq_poison_requeue_arquivo", DATA_DIR=str(tmp_path)
+    )
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: None)
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir()
+    poison = dlq_dir / "dlq_proj_ds_tbl.poison.jsonl"
+    poison.write_text(_item_dlq() + "\n", encoding="utf-8")
+
+    resumo = module.reenfileirar_poison(limite=10)
+
+    assert resumo["itens"] == 1
+    assert not poison.exists(), "o arquivo de poison não foi consumido"
+    devolvido = dlq_dir / "dlq_proj_ds_tbl.jsonl"
+    assert _item_dlq() in devolvido.read_text(encoding="utf-8")
+
+
+def test_descartar_poison_apaga_e_registra(monkeypatch):
+    """O TTL faz o mesmo em silêncio; aqui a perda é decidida e fica no log."""
+    module = _carregar_bigquery(monkeypatch, "bq_poison_purge")
+    redis = _RedisFalso({"bq_dlq_poison:proj.ds.tbl": [_item_dlq(), _item_dlq()]})
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+
+    criticos = []
+    monkeypatch.setattr(
+        module.logger, "critical", lambda msg, *_a, **_k: criticos.append(msg)
+    )
+
+    resumo = module.descartar_poison()
+
+    assert resumo["itens"] == 2
+    assert redis.llen("bq_dlq_poison:proj.ds.tbl") == 0
+    assert any("DESCARTADOS" in msg for msg in criticos)
+
+
+def test_profundidade_reporta_tabela_e_prazo_do_poison(monkeypatch, tmp_path):
+    """Sem prazo, o operador só descobre o TTL quando ele já venceu."""
+    module = _carregar_bigquery(
+        monkeypatch, "bq_poison_prazo", DATA_DIR=str(tmp_path), REDIS_URL=None
+    )
+    redis = _RedisFalso({"bq_dlq_poison:proj.ds.tbl": [_item_dlq()]})
+    redis.ttls["bq_dlq_poison:proj.ds.tbl"] = 540000
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+
+    profundidade = module.get_dlq_depth()
+
+    assert profundidade["poison"] == 1
+    assert profundidade["poison_tabelas"] == ["proj.ds.tbl"]
+    assert profundidade["poison_expira_em_s"] == 540000
+
+
+def test_formatar_duracao_cobre_as_faixas_uteis(monkeypatch):
+    """Carregado isolado como os demais: o import real exigiria o env da aplicação."""
+    module = _carregar_bigquery(monkeypatch, "bq_duracao")
+
+    assert module.formatar_duracao(540000) == "6d6h"
+    assert module.formatar_duracao(3700) == "1h1m"
+    assert module.formatar_duracao(90) == "1m"
+    assert module.formatar_duracao(5) == "5s"
+    assert module.formatar_duracao(0) == "vencido"
+    assert module.formatar_duracao(None) == "sem prazo"
