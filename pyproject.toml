@@ -15,36 +15,28 @@ dependencies = [
     "dotenv>=0.9.9",
     "google-genai>=1.25.0",
     "requests>=2.32.4",
-    "google-cloud>=0.34.0",
     "google-cloud-storage>=2.18,<3",
     "google-cloud-bigquery>=3.35.0",
-    "google-cloud-bigquery-storage>=2.32.0",
     "crawl4ai>=0.7.2",
     "pydantic>=2.11.7",
     "redis>=7.0.1",
     "langgraph==0.6.4",
-    "google-cloud-aiplatform[agent-engines]>=1.133.0",
     "httpx>=0.27.0",
     "langchain==0.3.30",
     "langchain-core==0.3.86",
-    "langchain-google-cloud-sql-pg==0.14.1",
-    "langchain-google-genai>=2.1.9",
-    "langchain-google-vertexai==2.1.2",
     "langchain-mcp-adapters>=0.1.9",
     "opentelemetry-exporter-otlp-proto-http>=1.36.0",
-    "opentelemetry-instrumentation-langchain>=0.45.6",
     "opentelemetry-instrumentation-asgi>=0.57b0",
     "opentelemetry-sdk>=1.36.0",
-    "pytest>=9.0.1",
     "pandas>=2.3.3",
-    "async>=0.6.2",
-    "googlemaps>=4.10.0",
     "async-googlemaps>=0.0.10",
+    # `async_googlemaps` importa `googlemaps` em runtime mas não o declara
+    # no próprio metadata; sem esta linha o import quebra na coleta.
+    "googlemaps>=4.10.0",
     "geopandas>=1.1.2",
     "jellyfish>=1.2.1",
     "num2words>=0.5.14",
     "prefeitura-rio>=1.1.2",
-    "pendulum>=2.1.2",
 ]
 
 
@@ -58,6 +50,40 @@ where = ["."]
 [dependency-groups]
 dev = [
     "pre-commit>=4.0.0",
+    "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=6.0.0",
+]
+
+[tool.pytest.ini_options]
+# `testpaths` evita que o pytest varra a árvore inteira à procura de `test_*.py`
+# e acabe importando código de aplicação por acidente (foi o caso de
+# `src/utils/test_agent.py`, removido em CHATR-105).
+testpaths = ["src/tests"]
+# `strict` exige `@pytest.mark.asyncio` explícito: um teste async sem a marca
+# falha em vez de passar sem nunca ter rodado.
+asyncio_mode = "strict"
+addopts = "--strict-markers --strict-config"
+# Silencia só o ruído conhecido de terceiros. Um `ignore::DeprecationWarning`
+# amplo esconderia avisos de quebra futura nas nossas próprias dependências.
+filterwarnings = [
+    "ignore:authlib.jose module is deprecated:DeprecationWarning",
+    "ignore:The default value of `allowed_objects` will change:PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = false
+# A própria suíte fora do denominador: cobertura deve medir código de produção.
+omit = [
+    "src/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
 ]

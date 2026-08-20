@@ -208,22 +208,13 @@ PROXY_URL = getenv_or_action("PROXY_URL")
 MCP_SERVER_URL = getenv_or_action("MCP_SERVER_URL", action="ignore")
 MCP_API_TOKEN = getenv_or_action("MCP_API_TOKEN", action="ignore")
 
-EAI_AGENT_URL = getenv_or_action("EAI_AGENT_URL", action="ignore")
-EAI_AGENT_TOKEN = getenv_or_action("EAI_AGENT_TOKEN", action="ignore")
 
 EAI_GATEWAY_API_URL = getenv_or_action("EAI_GATEWAY_API_URL", action="ignore")
 EAI_GATEWAY_API_TOKEN = getenv_or_action("EAI_GATEWAY_API_TOKEN", action="ignore")
 
 PROJECT_ID = getenv_or_action("PROJECT_ID", action="ignore")
-LOCATION = getenv_or_action("LOCATION", action="ignore")
-INSTANCE = getenv_or_action("INSTANCE", action="ignore")
-DATABASE = getenv_or_action("DATABASE", action="ignore")
-DATABASE_USER = getenv_or_action("DATABASE_USER", action="ignore")
-DATABASE_PASSWORD = getenv_or_action("DATABASE_PASSWORD", action="ignore")
 GCS_BUCKET = getenv_or_action("GCS_BUCKET", action="ignore")
 
-PROJECT_NUMBER = getenv_or_action("PROJECT_NUMBER", action="ignore")
-REASONING_ENGINE_ID = getenv_or_action("REASONING_ENGINE_ID", action="ignore")
 
 OTEL_SERVICE_NAME = getenv_or_action(
     "OTEL_SERVICE_NAME", default="app-mcp-server", action="ignore"

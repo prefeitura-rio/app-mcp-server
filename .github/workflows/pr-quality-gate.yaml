@@ -18,6 +18,18 @@ permissions:
   security-events: write
   pull-requests: write
 
+env:
+  # Fonte única da verdade do piso de cobertura. Antes o valor estava
+  # duplicado entre o script do gate e o comentário de resumo, e os dois
+  # saíram de sincronia: o gate exigia 75% enquanto o comentário reportava
+  # 50% e calculava o status contra esse número — podia dizer "Passed" com o
+  # job de teste vermelho.
+  #
+  # 62,0 é medido contra código de produção apenas. Os 75,0 anteriores eram
+  # calibrados sobre um denominador que incluía a própria suíte de testes;
+  # ver docs/decisions/CHATR-105-debitos-tecnicos.md.
+  COVERAGE_MINIMUM: "62.0"
+
 jobs:
   lint:
     name: Lint
@@ -122,6 +134,7 @@ jobs:
       coverage: ${{ steps.coverage.outputs.coverage }}
       baseline: ${{ steps.coverage.outputs.baseline }}
       delta: ${{ steps.coverage.outputs.delta }}
+      minimum: ${{ steps.coverage.outputs.minimum }}
 
     steps:
       - name: Checkout code
@@ -188,7 +201,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           tolerance = 0.1
-          minimum_coverage = 50.0
+          minimum_coverage = float(os.environ["COVERAGE_MINIMUM"])
           baseline_path = ".github/coverage-baseline.json"
           xml_path = "coverage.xml"
 
@@ -284,6 +297,19 @@ jobs:
     steps:
       - name: Create or update PR summary comment
         uses: actions/github-script@v7
+        # Valores passam por `env`, não por interpolação `${{ }}` dentro do
+        # corpo do script: `toJSON` de uma string embute aspas literais, então
+        # `Number('"80.04"')` dava NaN e o status saía sempre "Unknown". Ler de
+        # `process.env` também elimina a superfície de injeção no script.
+        env:
+          COVERAGE_CURRENT: ${{ needs.test.outputs.coverage }}
+          COVERAGE_BASELINE: ${{ needs.test.outputs.baseline }}
+          COVERAGE_DELTA: ${{ needs.test.outputs.delta }}
+          COVERAGE_MINIMUM: ${{ needs.test.outputs.minimum }}
+          RESULT_LINT: ${{ needs.lint.result }}
+          RESULT_SECURITY: ${{ needs['security-scan'].result }}
+          RESULT_TEST: ${{ needs.test.result }}
+          RESULT_BUILD: ${{ needs.build.result }}
         with:
           script: |
             const formatStatus = (result) => {
@@ -294,10 +320,10 @@ jobs:
               return result || "Unknown";
             };
 
-            const coverageCurrent = `${{ toJSON(needs.test.outputs.coverage) }}`;
-            const coverageBaseline = `${{ toJSON(needs.test.outputs.baseline) }}`;
-            const coverageDelta = `${{ toJSON(needs.test.outputs.delta) }}`;
-            const coverageMinimum = "50.00";
+            const coverageCurrent = process.env.COVERAGE_CURRENT || "";
+            const coverageBaseline = process.env.COVERAGE_BASELINE || "";
+            const coverageDelta = process.env.COVERAGE_DELTA || "";
+            const coverageMinimum = process.env.COVERAGE_MINIMUM || "";
 
             const formatCoverageDelta = (delta) => {
               const numeric = Number(delta);
@@ -318,13 +344,12 @@ jobs:
               return "Passed";
             };
 
-            const hasCoverage =
-              coverageCurrent !== "" &&
-              coverageCurrent !== "null" &&
-              coverageBaseline !== "" &&
-              coverageBaseline !== "null" &&
-              coverageDelta !== "" &&
-              coverageDelta !== "null";
+            const hasCoverage = [
+              coverageCurrent,
+              coverageBaseline,
+              coverageDelta,
+              coverageMinimum,
+            ].every((v) => v !== "" && v !== "null" && !Number.isNaN(Number(v)));
 
             const coverageBlock = hasCoverage
               ? [
@@ -340,11 +365,14 @@ jobs:
                   "- Coverage data was not produced for this run.",
                 ].join("\n");
 
-            const allPassed =
-              "${{ needs.lint.result }}" === "success" &&
-              "${{ needs['security-scan'].result }}" === "success" &&
-              "${{ needs.test.result }}" === "success" &&
-              "${{ needs.build.result }}" === "success";
+            const results = {
+              lint: process.env.RESULT_LINT,
+              security: process.env.RESULT_SECURITY,
+              test: process.env.RESULT_TEST,
+              build: process.env.RESULT_BUILD,
+            };
+
+            const allPassed = Object.values(results).every((r) => r === "success");
 
             const marker = "<!-- pr-quality-gate-summary -->";
             const body = `${marker}
@@ -352,10 +380,10 @@ jobs:
 
             | Check | Result |
             |---|---|
-            | Lint | ${formatStatus("${{ needs.lint.result }}")} |
-            | Security Scan | ${formatStatus("${{ needs['security-scan'].result }}")} |
-            | Tests + Coverage | ${formatStatus("${{ needs.test.result }}")} |
-            | Build + Image Scan | ${formatStatus("${{ needs.build.result }}")} |
+            | Lint | ${formatStatus(results.lint)} |
+            | Security Scan | ${formatStatus(results.security)} |
+            | Tests + Coverage | ${formatStatus(results.test)} |
+            | Build + Image Scan | ${formatStatus(results.build)} |
 
             ${coverageBlock}
 
