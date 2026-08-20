@@ -171,7 +171,13 @@ def _modo_inspecionar_poison(args) -> int:
                 f"  [{item['origem']}] {item.get('tabela')} — "
                 f"{item.get('linhas', 0)} linha(s), falhou em {item.get('failed_at')}"
             )
+            # `erro` é a recusa definitiva, que nomeia o que corrigir. O
+            # original só aparece quando difere: um item pode ter entrado na
+            # DLQ por indisponibilidade e só depois ser recusado por schema, e
+            # aí as duas mensagens contam partes diferentes da história.
             print(f"      erro: {item.get('erro')}")
+            if item.get("erro_original"):
+                print(f"      erro na entrada da DLQ: {item['erro_original']}")
             if item.get("campos"):
                 print(f"      campos: {', '.join(item['campos'])}")
             if "payload" in item:

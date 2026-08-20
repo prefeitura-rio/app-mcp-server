@@ -207,6 +207,53 @@ def _shutdown_write_executor() -> None:
         executor.shutdown(wait=False, cancel_futures=True)
 
 
+def _drenar_pool_de_escrita(timeout: float) -> None:
+    """Espera, com prazo, o que já foi submetido ao pool chegar ao buffer.
+
+    Roda *antes* do flush final, e é o que fecha a última janela de perda do
+    caminho de escrita. Uma escrita disparada em background é submetida ao pool
+    e só entra no buffer quando a thread de fato executa `save_*_in_bq`. No
+    encerramento, o que ainda estava na fila do executor era cancelado por
+    `_shutdown_write_executor` (`cancel_futures=True`): a linha não estava no
+    buffer, então o flush não a alcançava, e nunca chegou a falhar no BigQuery,
+    então também não ia para a DLQ. Sumia em silêncio — a mesma perda que todo
+    o resto deste módulo existe para eliminar, um passo depois da proteção.
+
+    O prazo é obrigatório e curto. Esta função roda na thread principal, dentro
+    do handler de sinal: esperar sem teto converteria uma escrita pendurada em
+    pod que não termina, e o SIGKILL que viria em seguida levaria junto o buffer
+    inteiro. Quem não escoou dentro do prazo é cancelado logo depois, como já
+    era — o prazo aumenta o que se salva, não garante tudo.
+
+    `shutdown(wait=True)` bloqueia sem opção de teto, por isso a espera vai para
+    uma thread auxiliar e o prazo é aplicado no `Event`. Fechar o pool para
+    novas submissões aqui é justamente o desejado: neste ponto o processo está
+    terminando, e o flush seguinte escreve direto, sem passar pelo executor.
+    """
+    executor = _write_executor
+    if executor is None or timeout <= 0:
+        return
+
+    drenado = threading.Event()
+
+    def _esperar() -> None:
+        try:
+            executor.shutdown(wait=True)
+        except Exception:
+            pass
+        finally:
+            drenado.set()
+
+    threading.Thread(target=_esperar, name="bq-write-drain", daemon=True).start()
+
+    if not drenado.wait(timeout):
+        logger.warning(
+            f"Pool de escrita do BigQuery não escoou em {timeout}s no encerramento; "
+            "as escritas ainda na fila serão canceladas. As que já entraram no "
+            "buffer seguem para o flush final."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Buffer de agrupamento.
 #
@@ -284,8 +331,14 @@ def _stop_batch_flush_thread() -> None:
     tentativa que falha cai imediatamente na DLQ, que é recuperável; insistir
     com backoff arriscaria o SIGKILL no meio do caminho e aí não sobraria nem a
     DLQ.
+
+    A ordem dos três passos é o que faz o encerramento não perder linha:
+    primeiro deixa o pool escoar (o que estava na fila entra no buffer), depois
+    esvazia o buffer, e só então cancela o que sobrou. Invertida, cada etapa
+    descartaria o trabalho da anterior.
     """
     _flush_stop_event.set()
+    _drenar_pool_de_escrita(float(getattr(env, "BIGQUERY_SHUTDOWN_DRAIN_SECONDS", 3.0)))
     try:
         flush_bigquery_batch_buffer(
             max_retries=1,
@@ -2051,7 +2104,38 @@ def _dlq_redis_keys(r, table_full_name: str = None) -> List[str]:
         return []
 
 
-def _mover_para_poison(r, chave: str, bruto: str, table_full_name: str) -> bool:
+def _marcar_motivo_do_poison(bruto: str, motivo: str) -> str:
+    """Anota no item por que ele foi recusado em definitivo.
+
+    O campo `error` do item da DLQ guarda a falha que o levou *para a DLQ*, que
+    não é necessariamente a que o tornou irrecuperável: um item pode entrar por
+    indisponibilidade do BigQuery e só depois, numa varredura do drain, ser
+    recusado por schema. Sem esta anotação, a listagem do poison mostraria ao
+    operador a mensagem errada — e a D15 promete exatamente o contrário, que o
+    erro exibido nomeie o campo recusado.
+
+    O `error` original é preservado: os dois juntos contam a história completa
+    do item. Entrada ilegível volta como está, porque não há onde anotar.
+    """
+    if not motivo:
+        return bruto
+    try:
+        item = json.loads(bruto)
+        if not isinstance(item, dict):
+            return bruto
+    except (ValueError, TypeError):
+        return bruto
+    item["poison_error"] = motivo
+    item["poison_at"] = get_datetime()
+    try:
+        return json.dumps(item, cls=CustomJSONEncoder)
+    except (TypeError, ValueError):
+        return bruto
+
+
+def _mover_para_poison(
+    r, chave: str, bruto: str, table_full_name: str, motivo: str = None
+) -> bool:
     """Tira da fila principal um item que nunca vai ser aceito.
 
     Sem isto, um único payload malformado na cabeça da lista bloquearia para
@@ -2067,7 +2151,7 @@ def _mover_para_poison(r, chave: str, bruto: str, table_full_name: str) -> bool:
     ttl = int(getattr(env, "BIGQUERY_DLQ_TTL_SECONDS", 604800))
     try:
         pipe = r.pipeline()
-        pipe.rpush(chave_poison, bruto)
+        pipe.rpush(chave_poison, _marcar_motivo_do_poison(bruto, motivo))
         pipe.ltrim(chave_poison, -max_items, -1)
         if ttl > 0:
             pipe.expire(chave_poison, ttl)
@@ -2128,7 +2212,13 @@ def _replay_dlq_redis(
                     resumo["poison"] += 1
                     if dry_run:
                         break  # nada é consumido em dry-run; sair evita laço infinito
-                    if not _mover_para_poison(r, chave, bruto, chave.split(":", 1)[-1]):
+                    if not _mover_para_poison(
+                        r,
+                        chave,
+                        bruto,
+                        chave.split(":", 1)[-1],
+                        motivo="entrada ilegível (não é JSON)",
+                    ):
                         resumo["erros"].append(f"{chave}: falha ao mover para poison")
                         break
                     continue
@@ -2156,7 +2246,9 @@ def _replay_dlq_redis(
                 except Exception as e:
                     if _e_falha_permanente(e):
                         resumo["poison"] += 1
-                        if not _mover_para_poison(r, chave, bruto, tabela):
+                        if not _mover_para_poison(
+                            r, chave, bruto, tabela, motivo=str(e)
+                        ):
                             resumo["erros"].append(
                                 f"{tabela}: falha ao mover para poison"
                             )
@@ -2203,7 +2295,9 @@ def _mover_linha_para_poison(trabalho, linha: str, motivo: str) -> None:
     destino = trabalho.with_name(base.replace(".jsonl", ".poison.jsonl", 1))
 
     try:
-        _anexar_com_teto(destino, linha, destino.stem)
+        # Mesma anotação do caminho no Redis: quem inspeciona precisa ver a
+        # recusa definitiva, não a falha que apenas levou o item à DLQ.
+        _anexar_com_teto(destino, _marcar_motivo_do_poison(linha, motivo), destino.stem)
     except OSError as e:
         # Sem destino para o item, o menos ruim é deixar o payload no log: é
         # recuperável por quem estiver lendo, e some do arquivo de qualquer jeito.
@@ -2525,7 +2619,15 @@ def _resumir_item_poison(bruto: str, origem: str, tabela_padrao: str) -> dict:
     payload = item.get("payload") or []
     resumo["tabela"] = item.get("table_full_name") or tabela_padrao
     resumo["failed_at"] = item.get("failed_at")
-    resumo["erro"] = item.get("error")
+    # `poison_error` primeiro: é a recusa definitiva, que nomeia o campo a
+    # corrigir. `error` é a falha que levou o item à DLQ, e pode ser outra —
+    # indisponibilidade transitória, por exemplo, que não diz nada sobre o que
+    # fazer agora. Quando os dois coincidem, mostrar um só não perde nada.
+    resumo["erro"] = item.get("poison_error") or item.get("error")
+    if item.get("poison_error") and item.get("error") != item.get("poison_error"):
+        resumo["erro_original"] = item.get("error")
+    if item.get("poison_at"):
+        resumo["poison_at"] = item.get("poison_at")
     resumo["linhas"] = len(payload)
     campos = set()
     for linha in payload:
@@ -2812,6 +2914,32 @@ async def inspecionar_poison_async(
     )
 
 
+# Espera antes da primeira varredura do drain. Curta o bastante para não deixar
+# a DLQ herdada de um pod anterior parada sem motivo, longa o bastante para o
+# boot terminar antes. Ver `drain_bigquery_dlq_loop`.
+_PRIMEIRA_VARREDURA_SEGUNDOS = 15.0
+
+
+async def expirar_arquivos_dlq_async() -> None:
+    """`_expirar_arquivos_dlq` fora da event loop — a varredura toca o disco.
+
+    Existe para que a expiração não dependa do worker de drain. Ela rodava só
+    dentro de `_replay_dlq_arquivos`, o que deixava dois casos sem nenhuma
+    limpeza: `BIGQUERY_DLQ_DRAIN_ENABLED=false` e execução local. Nesses casos o
+    arquivo de DLQ ficava indefinidamente — e o TTL não é só higiene de disco, é
+    o que limita a retenção do dado pessoal que vai no payload (`user_id` é
+    telefone; alerta do COR tem endereço e coordenada).
+
+    Chamada no startup do lifespan. Nunca propaga exceção: limpeza de disco não
+    pode ser motivo de o servidor não subir.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_get_write_executor(), _expirar_arquivos_dlq)
+    except Exception:
+        logger.exception("Falha ao expirar arquivos da DLQ no startup")
+
+
 async def drain_bigquery_dlq_loop() -> None:
     """Worker que devolve a DLQ ao BigQuery periodicamente.
 
@@ -2825,11 +2953,27 @@ async def drain_bigquery_dlq_loop() -> None:
     """
     intervalo = float(getattr(env, "BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS", 300.0))
     loop = asyncio.get_running_loop()
-    logger.info(f"Worker de drain da DLQ iniciado (intervalo: {intervalo}s).")
+
+    # A primeira varredura não espera o intervalo cheio. O cenário que a torna
+    # urgente é o restart: a DLQ do Redis sobrevive ao pod, então o que ficou
+    # parado do processo anterior já está lá quando este sobe, e nada justifica
+    # segurá-lo por mais cinco minutos. O intervalo folgado existe para não
+    # empilhar tentativa enquanto o BigQuery está fora — preocupação da
+    # varredura recorrente, não da primeira.
+    #
+    # A espera curta, e não zero, dá lugar ao preflight e à sondagem inicial de
+    # dependências: começar um drain no mesmo instante do boot faria as duas
+    # coisas disputarem o pool de escrita justo quando ele é criado.
+    espera = min(_PRIMEIRA_VARREDURA_SEGUNDOS, intervalo)
+    logger.info(
+        f"Worker de drain da DLQ iniciado (primeira varredura em {espera}s, "
+        f"depois a cada {intervalo}s)."
+    )
 
     while True:
         try:
-            await asyncio.sleep(intervalo)
+            await asyncio.sleep(espera)
+            espera = intervalo
             resumo = await loop.run_in_executor(
                 _get_write_executor(), replay_bigquery_dlq
             )

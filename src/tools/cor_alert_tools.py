@@ -1,13 +1,16 @@
+import asyncio
 import unicodedata
 import uuid
 from typing import Any, Dict
 
+from src.utils.background import disparar_em_background
 from src.utils.bigquery import (
     save_cor_alert_in_bq_background,
     save_cor_alert_to_queue_background,
     get_datetime,
 )
 from src.config.env import (
+    COR_ALERT_WRITE_DEADLINE_SECONDS,
     ENVIRONMENT,
     GOOGLE_MAPS_API_URL,
     GOOGLE_MAPS_API_KEY,
@@ -62,6 +65,52 @@ def _extract_google_neighborhood(result: Dict[str, Any]) -> str:
                     component.get("long_name") or component.get("short_name") or ""
                 )
     return ""
+
+
+async def _registrar_com_prazo(coro, *, nome: str, descricao: str) -> bool:
+    """Espera a escrita do alerta por um prazo; estourado, ela segue sozinha.
+
+    Alerta de severidade alta/crítica não passa pelo buffer de agrupamento (ver
+    `_SEVERIDADES_SEM_LOTE` em `src/utils/bigquery.py`), justamente para existir
+    numa tabela consultável durante a ocorrência. O efeito colateral é que a
+    tool passava a esperar um insert direto com retry: com o BigQuery fora, são
+    três tentativas com backoff, duas vezes (registro e fila de despacho) —
+    dezenas de segundos de espera para quem está relatando uma emergência.
+
+    O `shield` é o ponto central e não é decoração. `wait_for` sozinho cancela a
+    corrotina ao estourar o prazo, e uma escrita cancelada antes de a thread do
+    pool começar não deixa rastro nenhum: não há linha no buffer nem item na
+    DLQ, porque ela nunca chegou a falhar no BigQuery. Com o shield, o prazo
+    vale só para *esperar* — a escrita continua e a durabilidade segue com
+    retry e DLQ, como em qualquer outra escrita do módulo.
+
+    A task vem de `disparar_em_background`, que a mantém referenciada até o fim.
+    Sem isso, ao descartar o shield o único dono da task sumiria e o coletor de
+    lixo poderia levá-la no meio do caminho.
+
+    Returns:
+        bool: `True` se a escrita terminou dentro do prazo. O retorno existe
+        para o log de quem chama não afirmar "registrado" sobre algo que ainda
+        está em voo — a mesma razão pela qual o span de escrita passou a
+        distinguir enfileiramento de gravação (ver `_gravar_linha`).
+    """
+    task = disparar_em_background(coro, nome=nome)
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(task), timeout=COR_ALERT_WRITE_DEADLINE_SECONDS
+        )
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"{descricao} não confirmou em {COR_ALERT_WRITE_DEADLINE_SECONDS}s; "
+            "a escrita segue em background (retry e DLQ cuidam da durabilidade)."
+        )
+    except Exception:
+        # A corrotina de escrita já trata e registra as próprias falhas; este
+        # ramo existe para que nada que escape dela derrube a resposta da tool
+        # ao usuário, que é o registro do alerta em si.
+        logger.exception(f"{descricao} falhou")
+    return False
 
 
 async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict:
@@ -280,25 +329,8 @@ async def create_cor_alert(
     timestamp = get_datetime()
 
     # All alerts are saved to cor_alerts table
-    await save_cor_alert_in_bq_background(
-        alert_id=alert_id,
-        user_id=user_id.strip(),
-        alert_type=alert_type_lower,
-        severity=severity_lower,
-        description=description.strip(),
-        address=resolved_address,
-        latitude=latitude,
-        longitude=longitude,
-        timestamp=timestamp,
-        environment=ENVIRONMENT,
-        bairro_raw=bairro_raw,
-        bairro_normalizado=bairro_normalizado,
-    )
-    logger.info(f"Alerta {alert_id} registrado na tabela cor_alerts")
-
-    # Only alta/critica alerts are queued for dispatch to COR
-    if severity_lower in ["alta", "critica"]:
-        await save_cor_alert_to_queue_background(
+    confirmado = await _registrar_com_prazo(
+        save_cor_alert_in_bq_background(
             alert_id=alert_id,
             user_id=user_id.strip(),
             alert_type=alert_type_lower,
@@ -311,8 +343,35 @@ async def create_cor_alert(
             environment=ENVIRONMENT,
             bairro_raw=bairro_raw,
             bairro_normalizado=bairro_normalizado,
+        ),
+        nome=f"bq:cor_alert:{alert_id}",
+        descricao=f"Registro do alerta {alert_id} em cor_alerts",
+    )
+    if confirmado:
+        logger.info(f"Alerta {alert_id} registrado na tabela cor_alerts")
+
+    # Only alta/critica alerts are queued for dispatch to COR
+    if severity_lower in ["alta", "critica"]:
+        enfileirado = await _registrar_com_prazo(
+            save_cor_alert_to_queue_background(
+                alert_id=alert_id,
+                user_id=user_id.strip(),
+                alert_type=alert_type_lower,
+                severity=severity_lower,
+                description=description.strip(),
+                address=resolved_address,
+                latitude=latitude,
+                longitude=longitude,
+                timestamp=timestamp,
+                environment=ENVIRONMENT,
+                bairro_raw=bairro_raw,
+                bairro_normalizado=bairro_normalizado,
+            ),
+            nome=f"bq:cor_alert_queue:{alert_id}",
+            descricao=f"Enfileiramento do alerta {alert_id} para despacho",
         )
-        logger.info(f"Alerta {alert_id} salvo na fila para agregação")
+        if enfileirado:
+            logger.info(f"Alerta {alert_id} salvo na fila para agregação")
 
     return {
         "success": True,

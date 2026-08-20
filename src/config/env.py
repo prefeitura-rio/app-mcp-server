@@ -245,6 +245,20 @@ BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS = float(
         "BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS", default="5.0", action="ignore"
     )
 )
+# Prazo, no encerramento, para o que já foi submetido ao pool de escrita chegar
+# ao buffer antes de o flush final acontecer. Sem esta espera, uma linha que
+# ficou na fila do executor e ainda não começou a rodar é cancelada junto com o
+# pool: ela não está no buffer (logo, o flush não a alcança) nem na DLQ (que só
+# recebe o que chegou a falhar no BigQuery). Seria a mesma perda silenciosa que
+# o CHATR-103 existe para eliminar, um passo depois de toda a proteção.
+#
+# Teto próprio, e não `BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS`, porque os orçamentos
+# são de naturezas diferentes: aquele mede uma chamada de rede, este mede o
+# escoamento de uma fila local. Somados, cabem com folga nos 60s de
+# `terminationGracePeriodSeconds`.
+BIGQUERY_SHUTDOWN_DRAIN_SECONDS = float(
+    getenv_or_action("BIGQUERY_SHUTDOWN_DRAIN_SECONDS", default="3.0", action="ignore")
+)
 # Teto de itens por chave da DLQ no Redis. A DLQ divide instância com o cache
 # de queries: sem teto, uma indisponibilidade longa do BigQuery encheria a
 # memória do Redis e derrubaria o cache junto — falha de escrita virando
@@ -276,6 +290,16 @@ BIGQUERY_DLQ_DRAIN_BATCH = int(
 # Liga/desliga o worker automático de drain. Desligar deixa a DLQ apenas sob
 # reprocessamento manual (`python -m src.utils.bq_dlq_replay`).
 BIGQUERY_DLQ_DRAIN_ENABLED = getenv_bool("BIGQUERY_DLQ_DRAIN_ENABLED", default="true")
+# Prazo que a tool de alerta do COR espera pelo registro no BigQuery antes de
+# responder. Alerta de severidade alta/crítica não passa pelo lote (ver
+# `_SEVERIDADES_SEM_LOTE`), então é insert direto com retry: sem teto, uma
+# indisponibilidade do BigQuery deixaria a tool pendurada por dezenas de
+# segundos — durante a ocorrência, que é justamente quando a resposta importa.
+# Estourado o prazo, a escrita continua em background e a durabilidade fica com
+# retry e DLQ; o que se abre mão é só da confirmação síncrona.
+COR_ALERT_WRITE_DEADLINE_SECONDS = float(
+    getenv_or_action("COR_ALERT_WRITE_DEADLINE_SECONDS", default="8.0", action="ignore")
+)
 
 PROXY_URL = getenv_or_action("PROXY_URL")
 

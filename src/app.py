@@ -156,6 +156,16 @@ def create_app() -> FastMCP:
 
         set_ready(True)
 
+        # Expiração dos arquivos de fallback da DLQ (CHATR-126). Roda aqui, e
+        # não só dentro do worker de drain, porque o TTL desses arquivos é o que
+        # limita a retenção do dado pessoal que vai no payload — e com o drain
+        # desligado (`BIGQUERY_DLQ_DRAIN_ENABLED=false`) ou em execução local
+        # nada os apagava. Aguardado de propósito: é uma varredura de diretório,
+        # rápida, e falha sua não impede o boot (a função engole a exceção).
+        from src.utils.bigquery import expirar_arquivos_dlq_async
+
+        await expirar_arquivos_dlq_async()
+
         # Sonda das tabelas externas de Sheets (CHATR-119). Fica fora do
         # `health_registry` de propósito: exige query real (o `dry_run` do
         # `check_bigquery` não detecta "Spreadsheet not found") e custa
