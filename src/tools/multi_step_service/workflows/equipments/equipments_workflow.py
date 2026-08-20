@@ -12,44 +12,25 @@ from src.tools.equipments_tools import (
     get_equipments_instructions,
     get_equipments_categories,
 )
-from src.tools.cor_alert_tools import (
-    _extract_google_neighborhood,
-    normalize_neighborhood,
-)
+from src.tools.cor_alert_tools import get_coordinates_google
 
 
 # Allowed neighborhoods for pontos de apoio (support points)
 ALLOWED_NEIGHBORHOODS_PONTOS_APOIO = ["acari", "guaratiba", "jardim america"]
 
 
-def _geocode_and_extract_neighborhood(address: str) -> Optional[str]:
+async def _geocode_and_extract_neighborhood(address: str) -> Optional[str]:
     """
     Geocodifica endereço e extrai bairro normalizado.
     Retorna bairro normalizado ou None se não conseguir geocodificar.
+
+    Delega para `get_coordinates_google`, que já é a geocodificação assíncrona
+    do projeto (httpx via `InterceptedHTTPClient`, com timeout e reporte de
+    erro). A versão anterior duplicava essa lógica com `requests.get`
+    síncrono, bloqueando o event loop por até 10s a cada chamada.
     """
-    import requests
-    from src.config import env
-    from src.utils.log import logger
-
-    # Geocodificar com Google Maps (mesma lógica que equipments já usa)
-    address_full = address + " - Rio de Janeiro, RJ"
-    params = {"address": address_full, "key": env.GOOGLE_MAPS_API_KEY}
-
-    try:
-        response = requests.get(env.GOOGLE_MAPS_API_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        if data["status"] == "OK":
-            first_result = data["results"][0]
-            # Extrair bairro usando função do cor_alert_tools
-            bairro_raw = _extract_google_neighborhood(first_result)
-            if bairro_raw:
-                return normalize_neighborhood(bairro_raw)
-    except Exception as e:
-        logger.warning(f"Erro ao geocodificar endereço: {e}")
-
-    return None
+    coordinates = await get_coordinates_google(address)
+    return coordinates.get("bairro_normalizado") or None
 
 
 class EquipmentsWorkflow(BaseWorkflow):
@@ -181,7 +162,7 @@ class EquipmentsWorkflow(BaseWorkflow):
 
         if is_pontos_apoio:
             # Geocodificar e extrair bairro
-            bairro_normalizado = _geocode_and_extract_neighborhood(address)
+            bairro_normalizado = await _geocode_and_extract_neighborhood(address)
 
             # Verificar se bairro está na whitelist
             if (
