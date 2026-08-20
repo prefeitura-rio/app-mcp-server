@@ -918,7 +918,7 @@ def test_falha_ao_mover_para_poison_nao_vira_laco_infinito(monkeypatch):
     monkeypatch.setattr(
         module,
         "_mover_para_poison",
-        lambda *_a: False,  # Redis recusa a remoção
+        lambda *_a, **_k: False,  # Redis recusa a remoção
     )
 
     resumo = module._replay_dlq_redis(limite=10)
@@ -969,7 +969,13 @@ def test_item_recusado_vai_para_arquivo_de_poison_em_vez_de_sumir(
     assert resumo["poison"] == 1
     poison = dlq_dir / "dlq_proj_ds_tbl.poison.jsonl"
     assert poison.exists(), "o payload recusado foi descartado"
-    assert _item_dlq() in poison.read_text(encoding="utf-8")
+
+    # O payload chega inteiro, e o item ganha o motivo da recusa definitiva —
+    # que é o que o operador precisa ler para corrigir a causa. Comparar a
+    # linha byte a byte com a original prenderia a ausência dessa anotação.
+    gravado = json.loads(poison.read_text(encoding="utf-8").strip())
+    assert gravado["payload"] == json.loads(_item_dlq())["payload"]
+    assert "schema inválido" in gravado["poison_error"]
 
 
 def test_linha_ilegivel_em_arquivo_vai_para_poison(monkeypatch, tmp_path):
@@ -1314,3 +1320,260 @@ def test_formatar_duracao_cobre_as_faixas_uteis(monkeypatch):
     assert module.formatar_duracao(5) == "5s"
     assert module.formatar_duracao(0) == "vencido"
     assert module.formatar_duracao(None) == "sem prazo"
+
+
+def _relogio() -> float:
+    """Relógio monotônico, para medir prazo sem depender do relógio de parede."""
+    import time
+
+    return time.monotonic()
+
+
+def _relogio_parede() -> float:
+    """Relógio de parede — é o que o `mtime` do arquivo usa."""
+    import time
+
+    return time.time()
+
+
+# ---------------------------------------------------------------------------
+# Encerramento: o que já foi submetido ao pool ainda entra no buffer
+# ---------------------------------------------------------------------------
+
+
+def test_encerramento_espera_a_fila_do_pool_antes_do_flush(monkeypatch):
+    """A última janela de perda do caminho de escrita.
+
+    Uma escrita disparada em background é submetida ao pool e só entra no
+    buffer quando a thread executa. No encerramento, o que ainda estava na fila
+    do executor era cancelado: a linha não estava no buffer (o flush não a
+    alcançava) e nunca chegou a falhar no BigQuery (a DLQ não a recebia). Sumia
+    sem log nenhum — a mesma perda que o resto do módulo existe para eliminar,
+    um passo depois de toda a proteção.
+    """
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_dreno_encerramento",
+        BIGQUERY_WRITE_MAX_WORKERS=1,
+        BIGQUERY_SHUTDOWN_DRAIN_SECONDS=5.0,
+    )
+    chamadas = _espionar_bigquery(monkeypatch, module)
+
+    # Uma única thread no pool: o primeiro job segura a fila enquanto o segundo
+    # espera. É o segundo que o encerramento perdia.
+    liberar = threading.Event()
+    executor = module._get_write_executor()
+    executor.submit(liberar.wait)
+    futuro = executor.submit(
+        module.enqueue_bigquery_row, "proj.ds.tbl", {"id": "na-fila"}
+    )
+
+    # Enquanto o job não roda, a linha não existe em lugar nenhum.
+    with module._batch_buffer_lock:
+        assert module._batch_buffer.get("proj.ds.tbl") is None
+
+    liberar.set()
+    module._stop_batch_flush_thread()
+
+    assert futuro.done() and futuro.exception() is None
+    linhas = [linha for _tabela, lote in chamadas for linha in lote]
+    assert {"id": "na-fila"} in linhas, (
+        "a linha que estava na fila do pool não chegou ao BigQuery"
+    )
+
+
+def test_dreno_do_pool_respeita_o_prazo(monkeypatch):
+    """Esperar sem teto converteria escrita pendurada em pod que não termina.
+
+    E aí o SIGKILL levaria o buffer inteiro — a perda que o dreno existe para
+    reduzir. O prazo é o que mantém o encerramento dentro do
+    `terminationGracePeriod`.
+    """
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_dreno_prazo",
+        BIGQUERY_WRITE_MAX_WORKERS=1,
+        BIGQUERY_SHUTDOWN_DRAIN_SECONDS=0.2,
+    )
+
+    travar = threading.Event()
+    module._get_write_executor().submit(travar.wait)
+
+    inicio = _relogio()
+    module._drenar_pool_de_escrita(0.2)
+    decorrido = _relogio() - inicio
+
+    travar.set()
+    assert decorrido < 3.0, f"o dreno ignorou o prazo e esperou {decorrido:.1f}s"
+
+
+def test_dreno_sem_pool_criado_e_no_op(monkeypatch):
+    """Encerramento antes da primeira escrita não pode custar prazo nenhum."""
+    module = _carregar_bigquery(monkeypatch, "bq_dreno_sem_pool")
+
+    assert module._write_executor is None
+    inicio = _relogio()
+    module._drenar_pool_de_escrita(5.0)
+    assert _relogio() - inicio < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Manutenção: primeira varredura e expiração independente do drain
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_primeira_varredura_nao_espera_o_intervalo_cheio(monkeypatch):
+    """A DLQ do Redis sobrevive ao pod; a do processo anterior já está lá no boot.
+
+    Com a espera inicial igual ao intervalo, esse dado ficava parado cinco
+    minutos sem motivo. O intervalo folgado existe para não empilhar tentativa
+    enquanto o BigQuery está fora — problema da varredura recorrente, não da
+    primeira.
+    """
+    import asyncio
+
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_drain_primeira",
+        BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS=3600,
+    )
+    monkeypatch.setattr(module, "_PRIMEIRA_VARREDURA_SEGUNDOS", 0.01)
+
+    varreduras = []
+    monkeypatch.setattr(
+        module,
+        "replay_bigquery_dlq",
+        lambda: (
+            varreduras.append(True)
+            or {"itens": 0, "linhas": 0, "poison": 0, "pendentes": 0, "erros": []}
+        ),
+    )
+
+    task = asyncio.create_task(module.drain_bigquery_dlq_loop())
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if varreduras:
+            break
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert varreduras, "a primeira varredura esperou o intervalo cheio"
+
+
+@pytest.mark.asyncio
+async def test_apos_a_primeira_o_worker_volta_ao_intervalo_normal(monkeypatch):
+    """A espera curta é só da primeira: repeti-la viraria varredura de 15s."""
+    import asyncio
+
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_drain_cadencia",
+        BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS=3600,
+    )
+    monkeypatch.setattr(module, "_PRIMEIRA_VARREDURA_SEGUNDOS", 0.01)
+
+    esperas = []
+    sleep_real = asyncio.sleep
+
+    async def _sleep_espiao(segundos):
+        esperas.append(segundos)
+        await sleep_real(0 if segundos > 1 else segundos)
+
+    monkeypatch.setattr(module.asyncio, "sleep", _sleep_espiao)
+    monkeypatch.setattr(
+        module,
+        "replay_bigquery_dlq",
+        lambda: {"itens": 0, "linhas": 0, "poison": 0, "pendentes": 0, "erros": []},
+    )
+
+    task = asyncio.create_task(module.drain_bigquery_dlq_loop())
+    for _ in range(200):
+        await sleep_real(0.01)
+        if len(esperas) >= 2:
+            break
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert esperas[0] == 0.01
+    assert esperas[1] == 3600
+
+
+@pytest.mark.asyncio
+async def test_expiracao_de_arquivos_independe_do_worker_de_drain(
+    monkeypatch, tmp_path
+):
+    """O TTL do arquivo é o que limita a retenção de dado pessoal.
+
+    Rodando só dentro de `_replay_dlq_arquivos`, ele não acontecia com o drain
+    desligado nem em execução local — e o payload (telefone, endereço,
+    coordenada) ficava em disco indefinidamente.
+    """
+    module = _carregar_bigquery(
+        monkeypatch,
+        "bq_expira_startup",
+        DATA_DIR=str(tmp_path),
+        REDIS_URL=None,
+        BIGQUERY_DLQ_TTL_SECONDS=60,
+    )
+
+    dlq_dir = tmp_path / "bq_dlq"
+    dlq_dir.mkdir(parents=True, exist_ok=True)
+    vencido = dlq_dir / "dlq_proj_ds_tbl.jsonl"
+    vencido.write_text(json.dumps(_item_dlq()) + "\n", encoding="utf-8")
+    import os
+
+    antigo = _relogio_parede() - 3600
+    os.utime(vencido, (antigo, antigo))
+
+    await module.expirar_arquivos_dlq_async()
+
+    assert not vencido.exists(), "arquivo vencido sobreviveu à expiração no startup"
+
+
+@pytest.mark.asyncio
+async def test_expiracao_no_startup_nao_derruba_o_boot(monkeypatch):
+    """Limpeza de disco não pode ser motivo de o servidor não subir."""
+    module = _carregar_bigquery(monkeypatch, "bq_expira_falha")
+
+    def _explodir():
+        raise OSError("disco indisponível")
+
+    monkeypatch.setattr(module, "_expirar_arquivos_dlq", _explodir)
+
+    await module.expirar_arquivos_dlq_async()
+
+
+def test_motivo_do_poison_e_anotado_sem_apagar_o_erro_original(monkeypatch):
+    """A recusa definitiva não é necessariamente a falha que levou à DLQ.
+
+    Um item pode entrar por indisponibilidade do BigQuery e só depois, numa
+    varredura do drain, ser recusado por schema. Mostrar ao operador a mensagem
+    da entrada faria a listagem do poison apontar para o lugar errado — e a
+    correção proposta pela D15 é justamente ler o campo recusado no erro.
+    """
+    module = _carregar_bigquery(monkeypatch, "bq_poison_motivo")
+
+    anotado = json.loads(
+        module._marcar_motivo_do_poison(_item_dlq(), "400 no such field: cep")
+    )
+
+    assert anotado["poison_error"] == "400 no such field: cep"
+    assert anotado["error"] == "falha anterior", "o erro original foi sobrescrito"
+    assert anotado["payload"] == json.loads(_item_dlq())["payload"]
+    assert anotado["poison_at"]
+
+    resumo = module._resumir_item_poison(json.dumps(anotado), "redis", "proj.ds.tbl")
+    assert resumo["erro"] == "400 no such field: cep"
+    assert resumo["erro_original"] == "falha anterior"
+
+
+def test_entrada_ilegivel_vai_para_poison_sem_alteracao(monkeypatch):
+    """Não há onde anotar num item que não é JSON — e ele não pode ser perdido."""
+    module = _carregar_bigquery(monkeypatch, "bq_poison_motivo_ilegivel")
+
+    bruto = "{isso não é json}"
+    assert module._marcar_motivo_do_poison(bruto, "qualquer motivo") == bruto
+    assert module._marcar_motivo_do_poison(_item_dlq(), None) == _item_dlq()

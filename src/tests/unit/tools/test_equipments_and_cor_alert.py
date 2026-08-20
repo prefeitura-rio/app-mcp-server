@@ -78,6 +78,9 @@ async def test_cor_alert_normalization_geocode_and_create(monkeypatch):
         ENVIRONMENT="test",
         GOOGLE_MAPS_API_URL="https://maps.googleapis.com/maps/api/geocode/json",
         GOOGLE_MAPS_API_KEY="google-key",
+        # Prazo generoso: estes testes exercitam o fluxo do alerta, não o
+        # estouro do prazo (que tem cobertura própria em test_cor_alert_prazo).
+        COR_ALERT_WRITE_DEADLINE_SECONDS=30.0,
     )
     monkeypatch.setitem(sys.modules, "src.config.env", env_module)
     monkeypatch.setitem(
