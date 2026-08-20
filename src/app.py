@@ -156,6 +156,16 @@ def create_app() -> FastMCP:
 
         set_ready(True)
 
+        # Expiração dos arquivos de fallback da DLQ (CHATR-126). Roda aqui, e
+        # não só dentro do worker de drain, porque o TTL desses arquivos é o que
+        # limita a retenção do dado pessoal que vai no payload — e com o drain
+        # desligado (`BIGQUERY_DLQ_DRAIN_ENABLED=false`) ou em execução local
+        # nada os apagava. Aguardado de propósito: é uma varredura de diretório,
+        # rápida, e falha sua não impede o boot (a função engole a exceção).
+        from src.utils.bigquery import expirar_arquivos_dlq_async
+
+        await expirar_arquivos_dlq_async()
+
         # Sonda das tabelas externas de Sheets (CHATR-119). Fica fora do
         # `health_registry` de propósito: exige query real (o `dry_run` do
         # `check_bigquery` não detecta "Spreadsheet not found") e custa
@@ -167,15 +177,28 @@ def create_app() -> FastMCP:
         if not IS_LOCAL:
             probe_task = asyncio.create_task(run_probe_loop())
 
+        # Worker que devolve ao BigQuery as escritas que caíram na DLQ
+        # (CHATR-126). Sem ele a DLQ só acumula: o payload deixa de se perder,
+        # mas também nunca chega à tabela de destino. Mesma precaução de
+        # referência viva do `probe_task` acima — a event loop guarda apenas
+        # referência fraca para as tasks.
+        dlq_drain_task = None
+        if not IS_LOCAL and getattr(env, "BIGQUERY_DLQ_DRAIN_ENABLED", True):
+            from src.utils.bigquery import drain_bigquery_dlq_loop
+
+            dlq_drain_task = asyncio.create_task(drain_bigquery_dlq_loop())
+
         try:
             yield {}
         finally:
-            if probe_task is not None:
-                probe_task.cancel()
+            for task in (probe_task, dlq_drain_task):
+                if task is None:
+                    continue
+                task.cancel()
                 # `cancel()` só agenda a interrupção; aguardar aqui garante
                 # que o laço não sobreviva ao encerramento programático.
                 with suppress(asyncio.CancelledError):
-                    await probe_task
+                    await task
 
             # Atenção: este bloco NÃO roda em SIGTERM. A uvicorn restaura o
             # handler original do sinal e faz `signal.raise_signal()` ao sair
@@ -184,6 +207,12 @@ def create_app() -> FastMCP:
             # Quem tira o pod do balanceador no encerramento é o próprio
             # Kubernetes, ao marcá-lo como Terminating. Mantido porque está
             # correto no encerramento programático (ex.: testes, embedding).
+            #
+            # Trabalho que PRECISA acontecer em SIGTERM não pode morar aqui.
+            # O flush do buffer de escrita do BigQuery se encaixa nisso e usa
+            # o outro caminho: `src/utils/bigquery.py` instala o próprio
+            # handler antes de a uvicorn capturar os sinais, justamente para
+            # ser o "handler anterior" que ela restaura e re-levanta.
             set_ready(False)
             logger.info("Shutdown iniciado: readiness marcada como indisponível.")
 

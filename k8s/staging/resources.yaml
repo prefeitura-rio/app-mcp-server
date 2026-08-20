@@ -80,6 +80,17 @@ spec:
             successThreshold: 1
             failureThreshold: 3
       restartPolicy: Always
+      # Orçamento de encerramento, explícito porque o flush do buffer de escrita
+      # do BigQuery depende dele. Em SIGTERM, `src/utils/bigquery.py` drena o
+      # buffer de forma síncrona com teto de BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS
+      # (5s) por chamada de insert, uma por tabela em buffer. Estourar este
+      # prazo significa SIGKILL no meio do flush — e aí não sobra nem a DLQ,
+      # que é justamente a rede que o CHATR-103 construiu.
+      #
+      # 60s dá folga sobre o pior caso observável (4 tabelas x 5s = 20s) sem
+      # atrasar rollout de forma perceptível: o pod sai assim que termina, o
+      # valor é teto e não espera.
+      terminationGracePeriodSeconds: 60
 
 ---
 apiVersion: policy/v1

@@ -128,6 +128,81 @@ async def test_data_files_presentes_viram_up(monkeypatch):
     assert await checks.check_data_files() is CheckStatus.UP
 
 
+def _stub_dlq(monkeypatch, profundidade):
+    """Injeta um `src.utils.bigquery` mínimo, só com a leitura de profundidade.
+
+    O módulo real puxa `src.config.env` e o client do BigQuery; o check só
+    depende de um número, então trazer tudo isso para o teste só acrescentaria
+    acoplamento.
+    """
+
+    async def _get_dlq_depth_async():
+        return profundidade
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.bigquery",
+        types.SimpleNamespace(
+            get_dlq_depth_async=_get_dlq_depth_async,
+            formatar_duracao=lambda s: "PRAZO" if s else "sem prazo",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_dlq_vazia_vira_up(monkeypatch):
+    _stub_dlq(monkeypatch, {"redis": 0, "poison": 0, "arquivos": 0, "total": 0})
+    assert await checks.check_bigquery_dlq() is CheckStatus.UP
+
+
+@pytest.mark.asyncio
+async def test_dlq_com_pendencia_degrada(monkeypatch):
+    """A visibilidade que faltava: sem isto, dado parado na DLQ não aparece."""
+    _stub_dlq(monkeypatch, {"redis": 7, "poison": 0, "arquivos": 0, "total": 7})
+    with pytest.raises(HealthCheckError) as exc:
+        await checks.check_bigquery_dlq()
+    assert "7" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_dlq_com_poison_diz_onde_ate_quando_e_o_que_fazer(monkeypatch):
+    """Degradar a partir do primeiro item só se sustenta se a saída for óbvia.
+
+    O check fica vermelho até alguém agir. Para que "agir" não exija
+    investigação prévia, a mensagem carrega a tabela afetada, o prazo até o TTL
+    apagar o payload e o comando que resolve — os três dados que o operador
+    precisaria descobrir por conta própria.
+    """
+    _stub_dlq(
+        monkeypatch,
+        {
+            "redis": 1,
+            "poison": 2,
+            "arquivos": 0,
+            "total": 3,
+            "poison_tabelas": ["proj.ds.tbl"],
+            "poison_expira_em_s": 540000,
+        },
+    )
+    with pytest.raises(HealthCheckError) as exc:
+        await checks.check_bigquery_dlq()
+
+    mensagem = str(exc.value)
+    assert "proj.ds.tbl" in mensagem
+    assert "PRAZO" in mensagem
+    assert "--requeue-poison" in mensagem
+    assert "--purge-poison" in mensagem
+
+
+@pytest.mark.asyncio
+async def test_poison_sem_metadado_nao_quebra_a_mensagem(monkeypatch):
+    """Profundidade de uma versão anterior (ou Redis mudo) não pode virar erro."""
+    _stub_dlq(monkeypatch, {"redis": 0, "poison": 1, "arquivos": 0, "total": 1})
+    with pytest.raises(HealthCheckError) as exc:
+        await checks.check_bigquery_dlq()
+    assert "1 item" in str(exc.value)
+
+
 def test_registro_local_omite_dependencias_de_rede(monkeypatch, fake_env):
     from src.health.registry import HealthRegistry
 
@@ -139,6 +214,7 @@ def test_registro_local_omite_dependencias_de_rede(monkeypatch, fake_env):
 
     assert "redis" not in registry.names
     assert "bigquery" not in registry.names
+    assert "bigquery_dlq" not in registry.names
     assert "tool_registry" in registry.names
 
 
@@ -151,4 +227,4 @@ def test_registro_em_producao_inclui_redis_e_bigquery(monkeypatch, fake_env):
 
     checks.register_default_checks(mcp, registry)
 
-    assert {"redis", "bigquery", "keycloak_jwks"} <= set(registry.names)
+    assert {"redis", "bigquery", "keycloak_jwks", "bigquery_dlq"} <= set(registry.names)

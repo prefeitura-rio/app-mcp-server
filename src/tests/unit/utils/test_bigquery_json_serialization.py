@@ -22,7 +22,7 @@ def test_save_response_in_bq_serializes_datetime_time_payload(monkeypatch):
     captured = {}
 
     class FakeClient:
-        def insert_rows_json(self, table_full_name, json_data):
+        def insert_rows_json(self, table_full_name, json_data, **_kwargs):
             captured["table_full_name"] = table_full_name
             captured["json_data"] = json_data
             return []

@@ -2,8 +2,8 @@
 Ferramentas de feedback para o servidor FastMCP.
 """
 
-import asyncio
 from typing import Dict, Any
+from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_feedback_in_bq_background, get_datetime
 from src.utils.log import logger
 from src.config.env import ENVIRONMENT
@@ -57,13 +57,14 @@ async def store_user_feedback(user_id: str, feedback: str) -> Dict[str, Any]:
         timestamp = get_datetime()
 
         # Salva no BigQuery de forma assíncrona
-        asyncio.create_task(
+        disparar_em_background(
             save_feedback_in_bq_background(
                 user_id=user_id.strip(),
                 feedback=feedback.strip(),
                 timestamp=timestamp,
                 environment=ENVIRONMENT,
-            )
+            ),
+            nome="bq:feedback",
         )
 
         logger.info(f"Feedback do usuário {user_id} salvo com sucesso no BigQuery")
