@@ -92,4 +92,8 @@ dmypy.json
 /skills
 .codex
 .claude/
-docs/
+# `docs/` é area de rascunho local, mas os registros de decisao (ADRs) sao
+# versionados: sao o criterio de aceite de varias historias. Sem esta excecao
+# todo novo doc em docs/decisions/ so entra no repo com `git add -f`.
+docs/*
+!docs/decisions/

@@ -188,7 +188,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           tolerance = 0.1
-          minimum_coverage = 50.0
+          minimum_coverage = 75.0
           baseline_path = ".github/coverage-baseline.json"
           xml_path = "coverage.xml"
 
