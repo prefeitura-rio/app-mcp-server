@@ -191,6 +191,62 @@ Agora são 60s declarados em `k8s/prod` e `k8s/staging`: folga sobre o pior caso
 observável (4 tabelas × 5s de `BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS`) sem atrasar
 rollout, já que o valor é teto e não espera — o pod sai assim que termina.
 
+### D15 — O poison também ganha volta
+
+O poison era write-only. `_mover_para_poison` e `_mover_linha_para_poison`
+escreviam; nada lia de volta — nem o worker de drain, nem o CLI. A única saída
+era o TTL expirando, e no Redis isso acontece **sem deixar rastro**.
+
+É o mesmo defeito que a D3 corrigiu para a DLQ principal ("persistir o payload
+sem caminho de retorno só troca 'dado perdido' por 'dado parado numa lista que
+ninguém lê"), reproduzido um nível abaixo — e com o agravante de que o critério
+de aceite do CHATR-126, *payload fica disponível para reprocessamento manual ou
+automático*, não era cumprido para esses itens.
+
+São três operações, todas manuais e explícitas, porque as três exigem um
+julgamento que nenhum worker pode fazer sozinho:
+
+| Operação | Para quê | Cuidado |
+|---|---|---|
+| `--poison` | ler o erro do BigQuery e os campos do payload para diagnosticar | não consome, não altera TTL |
+| `--requeue-poison` | devolver à DLQ normal depois de corrigir a causa | não valida a correção — se não foi feita, o drain recusa de novo |
+| `--purge-poison` | descartar o que se concluiu ser irrecuperável | exige `--confirmar`; sai em `logger.critical` |
+
+O reprocesso não valida se a causa foi de fato corrigida porque não tem como. Se
+não foi, o drain recusa o item mais uma vez e ele volta ao poison: o laço é
+finito, cada passagem fica no log, e o custo de errar é uma tentativa perdida —
+muito menor que o de não haver caminho de volta nenhum.
+
+**O conteúdo do payload não sai por padrão.** A saída do CLI vai para o terminal
+do operador e, com frequência, para o scrollback ou para o log de um job;
+despejar `user_id` (telefone), endereço e coordenada ali seria tirar o dado
+justamente dos lugares onde ele é controlado — Redis com TTL, tabela do
+BigQuery. O que sai é o que resolve um erro de schema: a mensagem do BigQuery,
+que nomeia o campo recusado, e a lista de campos presentes. Nome de campo é
+estrutura, não dado da pessoa. O conteúdo exige `--mostrar-payload`.
+
+### D16 — Poison degrada a partir do primeiro item, agora que há saída
+
+A degradação a partir de 1 item só passou a ser defensável depois da D15. Antes,
+"degradado" significava esperar sete dias de TTL, e um único payload malformado
+mascarava toda outra degradação no agregado por uma semana — um check
+permanentemente vermelho é um check que ninguém lê.
+
+Agora significa "rode `bq_dlq_replay --poison`", e some quando alguém reprocessa
+ou descarta. Para que agir não exija investigação prévia, a mensagem carrega os
+três dados que o operador teria de descobrir sozinho: a tabela afetada, o prazo
+até o TTL apagar o payload e o comando que resolve.
+
+O prazo tem um segundo papel: a expiração no Redis não deixa rastro nenhum.
+Sem ele exposto em `get_dlq_depth`, o operador só descobriria o TTL depois de
+ele ter vencido — ou seja, depois de o dado já ter sumido.
+
+Alternativas descartadas: **limiar configurável**, que só move o número em que o
+mascaramento começa e silencia o caso de um payload isolado — que é exatamente o
+que se quer ver; e **tirar o poison do agregado**, que elimina o mascaramento
+mas devolve o poison à condição de "aparece só numa linha de log que ninguém
+revisita", o problema que o check existe para resolver.
+
 ## Limitação conhecida
 
 O fallback em arquivo da DLQ (`DATA_DIR/bq_dlq/*.jsonl`) grava numa camada efêmera: não há volume montado no `k8s/`. No cenário exato em que ele é acionado — Redis fora —, um restart do pod leva o arquivo junto. Ele segue valendo como rede de segurança dentro da vida do pod (o worker de drain o reprocessa), mas **não** é armazenamento durável. Tornar durável exige um PVC, que é decisão de infraestrutura e ficou fora deste escopo.
@@ -230,4 +286,24 @@ kubectl exec -it deploy/mcp -- uv run python -m src.utils.bq_dlq_replay --depth-
 kubectl exec -it deploy/mcp -- uv run python -m src.utils.bq_dlq_replay --limit 500
 ```
 
-`check_bigquery_dlq` degrada `/health/detail` quando há item pendente, e não é `critical`: item na DLQ significa log atrasado, não servidor incapaz de atender — derrubar o pod por isso trocaria perda de log por indisponibilidade da aplicação.
+Quando o check apontar item em **poison** — payload que o BigQuery recusou em
+definitivo, e que o drain automático nunca reprocessa porque repeti-lo não muda
+o desfecho:
+
+```bash
+# 1. diagnosticar: erro do BigQuery e campos do payload (conteúdo omitido)
+kubectl exec -it deploy/mcp -- uv run python -m src.utils.bq_dlq_replay --poison
+
+# 2a. corrigida a causa (schema ajustado, coluna criada), devolver à DLQ
+kubectl exec -it deploy/mcp -- uv run python -m src.utils.bq_dlq_replay \
+  --requeue-poison --table rj-iplanrio.brutos_eai_logs.feedback
+
+# 2b. ou, se for irrecuperável, descartar (irreversível, exige --confirmar)
+kubectl exec -it deploy/mcp -- uv run python -m src.utils.bq_dlq_replay \
+  --purge-poison --table rj-iplanrio.brutos_eai_logs.feedback --confirmar
+```
+
+`--mostrar-payload` inclui o conteúdo na listagem. É opt-in porque o payload
+carrega dado pessoal; use só quando o erro do BigQuery não bastar.
+
+`check_bigquery_dlq` degrada `/health/detail` quando há item pendente, e não é `critical`: item na DLQ significa log atrasado, não servidor incapaz de atender — derrubar o pod por isso trocaria perda de log por indisponibilidade da aplicação. Item em poison degrada a partir do primeiro e só sai com uma das ações acima — ver D16.
