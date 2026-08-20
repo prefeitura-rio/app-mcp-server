@@ -88,6 +88,43 @@ def _load_bigquery_module(monkeypatch, alias: str, **env_extra):
     return module
 
 
+class _PipelineFake:
+    """Pipeline de Redis que registra os comandos em vez de executá-los.
+
+    `_persist_to_dlq` grava payload, teto (`LTRIM`) e validade (`EXPIRE`) numa
+    pipeline só — um fake com apenas `rpush` não representa mais o contrato.
+    """
+
+    def __init__(self, registro, tamanho_apos_push=1):
+        self._registro = registro
+        self._comandos = []
+        self._tamanho = tamanho_apos_push
+
+    def rpush(self, chave, valor):
+        self._comandos.append(("rpush", chave, valor))
+        return self
+
+    def ltrim(self, chave, inicio, fim):
+        self._comandos.append(("ltrim", chave, inicio, fim))
+        return self
+
+    def expire(self, chave, ttl):
+        self._comandos.append(("expire", chave, ttl))
+        return self
+
+    def execute(self):
+        self._registro.extend(self._comandos)
+        # O primeiro retorno é o do RPUSH: o tamanho da lista após o push, que
+        # é como `_persist_to_dlq` descobre se o teto descartou item.
+        return [self._tamanho] + [True] * (len(self._comandos) - 1)
+
+
+def _redis_fake(registro, tamanho_apos_push=1):
+    return types.SimpleNamespace(
+        pipeline=lambda: _PipelineFake(registro, tamanho_apos_push)
+    )
+
+
 def _capturar_from_url(monkeypatch, module):
     """Troca `redis.Redis.from_url` por um espião dos kwargs recebidos."""
     import redis as redis_sync
@@ -96,7 +133,7 @@ def _capturar_from_url(monkeypatch, module):
 
     def _from_url(url, **kwargs):
         chamadas.append((url, kwargs))
-        return types.SimpleNamespace(rpush=lambda *_a, **_k: 1)
+        return _redis_fake([])
 
     monkeypatch.setattr(redis_sync.Redis, "from_url", staticmethod(_from_url))
     module._sync_redis_client = None
@@ -189,11 +226,11 @@ def test_falha_do_redis_cai_para_o_arquivo(monkeypatch, tmp_path):
     )
 
     def _redis_que_falha():
-        return types.SimpleNamespace(
-            rpush=lambda *_a, **_k: (_ for _ in ()).throw(
-                TimeoutError("Timeout reading from localhost:6379")
-            )
-        )
+        class _PipelineQueTrava(_PipelineFake):
+            def execute(self):
+                raise TimeoutError("Timeout reading from localhost:6379")
+
+        return types.SimpleNamespace(pipeline=lambda: _PipelineQueTrava([]))
 
     monkeypatch.setattr(module, "_get_sync_redis_client", _redis_que_falha)
 
@@ -215,16 +252,11 @@ def test_redis_disponivel_nao_escreve_arquivo(monkeypatch, tmp_path):
         REDIS_URL="redis://localhost:6379/0",
         DATA_DIR=str(tmp_path),
     )
-    empurrados = []
-    monkeypatch.setattr(
-        module,
-        "_get_sync_redis_client",
-        lambda: types.SimpleNamespace(
-            rpush=lambda chave, valor: empurrados.append((chave, valor))
-        ),
-    )
+    comandos = []
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: _redis_fake(comandos))
 
     module._persist_to_dlq("proj.ds.tbl", [{"a": 1}], "erro de escrita")
 
-    assert empurrados[0][0] == "bq_dlq:proj.ds.tbl"
+    assert comandos[0][0] == "rpush"
+    assert comandos[0][1] == "bq_dlq:proj.ds.tbl"
     assert not (tmp_path / "bq_dlq").exists()

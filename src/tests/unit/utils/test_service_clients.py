@@ -493,7 +493,7 @@ def test_bigquery_save_functions(monkeypatch):
     saved_payloads = []
 
     class FakeClient:
-        def insert_rows_json(self, table_name, payload):
+        def insert_rows_json(self, table_name, payload, **_kwargs):
             saved_payloads.append((payload, table_name))
             return []  # No errors
 
@@ -643,7 +643,7 @@ async def test_bigquery_background_helpers(monkeypatch):
     saved_payloads = []
 
     class FakeClient:
-        def insert_rows_json(self, table_name, payload):
+        def insert_rows_json(self, table_name, payload, **_kwargs):
             saved_payloads.append((payload, table_name))
             return []  # No errors
 
