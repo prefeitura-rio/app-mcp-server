@@ -115,9 +115,7 @@ async def test_tool_registry_usa_list_tools_no_modo_local():
 
 @pytest.mark.asyncio
 async def test_data_files_ausentes_falham(monkeypatch):
-    monkeypatch.setattr(
-        checks.preflight, "check_data_files", lambda: ["arquivo sumiu"]
-    )
+    monkeypatch.setattr(checks.preflight, "check_data_files", lambda: ["arquivo sumiu"])
 
     with pytest.raises(HealthCheckError):
         await checks.check_data_files()

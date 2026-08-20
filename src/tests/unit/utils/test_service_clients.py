@@ -433,7 +433,10 @@ async def test_bigquery_helpers(monkeypatch):
     # envolvido em `Exception`: é o que permite a `pluscode_service` separar
     # tabela externa fora do ar de bug nosso (revisão do PR #149).
     class BadRequestClient:
-        def query(self, query):
+        # `**_kwargs` porque a produção passa `timeout=` ao criar o job: sem
+        # prazo na submissão, uma chamada pendurada segurava a thread do pool
+        # de leitura mesmo depois de o chamador ter desistido.
+        def query(self, query, **_kwargs):
             raise BadRequest("400 Error while reading table: Spreadsheet not found")
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: BadRequestClient())

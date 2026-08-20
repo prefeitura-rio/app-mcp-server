@@ -482,7 +482,11 @@ async def test_caminho_feliz_nao_reporta_nada(pgm_mock, interceptor_mock):
     [
         ({}, "payload sem nenhum campo"),
         (
-            {"dicionario_itens": {"1": CDA}, "lista_cdas": [CDA], "apenas_um_item": "9"},
+            {
+                "dicionario_itens": {"1": CDA},
+                "lista_cdas": [CDA],
+                "apenas_um_item": "9",
+            },
             "sequencial fora do dicionario_itens",
         ),
         (

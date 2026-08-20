@@ -170,8 +170,33 @@ REDIS_TTL_SECONDS = int(getenv_or_action("REDIS_TTL_SECONDS"))
 BIGQUERY_CACHE_TTL_SECONDS = int(
     getenv_or_action("BIGQUERY_CACHE_TTL_SECONDS", default="3600", action="ignore")
 )
+# Timeout de socket do cliente Redis usado como cache do BigQuery. Baixo de
+# propósito: o cache existe para economizar tempo, então esperar por ele mais
+# do que a própria query custaria é o pior dos mundos. Um Redis que aceita a
+# conexão e não responde precisa falhar rápido e cair para o BigQuery.
+REDIS_CACHE_TIMEOUT_SECONDS = float(
+    getenv_or_action("REDIS_CACHE_TIMEOUT_SECONDS", default="2.0", action="ignore")
+)
+# Timeout de socket do cliente Redis síncrono usado pela DLQ de escrita. Mais
+# folgado que o do cache porque a escolha aqui é outra: o cache que desiste cedo
+# cai para o BigQuery, que é a fonte da verdade, enquanto a DLQ que desiste cedo
+# cai para arquivo local — em pod efêmero, isso é perder o registro no próximo
+# restart. Vale esperar um pouco mais para gravar no Redis. Mas precisa ter
+# teto: sem ele, um Redis particionado prende a thread do executor para sempre
+# e o fallback em arquivo nunca chega a rodar.
+REDIS_DLQ_TIMEOUT_SECONDS = float(
+    getenv_or_action("REDIS_DLQ_TIMEOUT_SECONDS", default="5.0", action="ignore")
+)
 BIGQUERY_TIMEOUT_SECONDS = float(
     getenv_or_action("BIGQUERY_TIMEOUT_SECONDS", default="10.0", action="ignore")
+)
+# Tamanho do pool de threads dedicado às leituras do BigQuery. Separado do
+# executor default de propósito: uma leitura que estourou o prazo mantém a
+# thread ocupada até a query terminar sozinha, e no pool default essas threads
+# são as mesmas que gravam log, feedback e alerta do COR. Com pool próprio, a
+# leitura lenta só atrapalha leitura.
+BIGQUERY_READ_MAX_WORKERS = int(
+    getenv_or_action("BIGQUERY_READ_MAX_WORKERS", default="8", action="ignore")
 )
 BIGQUERY_BATCH_SIZE = int(
     getenv_or_action("BIGQUERY_BATCH_SIZE", default="50", action="ignore")
