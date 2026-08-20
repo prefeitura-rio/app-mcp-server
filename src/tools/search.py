@@ -1,9 +1,9 @@
-import asyncio
 import json
 
 import httpx
 
 from src.tools.google_search.gemini_service import gemini_service
+from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_response_in_bq_background
 from src.utils.typesense_api import HubSearchRequest, hub_search
 from src.utils.error_interceptor import interceptor
@@ -93,13 +93,14 @@ async def get_google_search(query: str):
             final_response["error"] = response_google["error"]
 
     # 4. Log em Background (BigQuery)
-    asyncio.create_task(
+    disparar_em_background(
         save_response_in_bq_background(
             data={"source": source, "response": response_data},
             endpoint="/tools/google_search",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
-        )
+        ),
+        nome="bq:google_search",
     )
 
     return final_response

@@ -1,4 +1,3 @@
-import asyncio
 from asyncio.log import logger
 from typing import Optional, List
 from src.tools.equipments.pluscode_service import (
@@ -6,6 +5,7 @@ from src.tools.equipments.pluscode_service import (
     get_tematic_instructions_for_equipments,
     get_pluscode_coords_equipments,
 )
+from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_response_in_bq_background
 from src.config.env import EQUIPMENTS_VALID_THEMES
 
@@ -243,13 +243,14 @@ async def get_equipments_with_instructions(
 
 async def get_equipments_categories() -> dict:
     response = await get_category_equipments()
-    asyncio.create_task(
+    disparar_em_background(
         save_response_in_bq_background(
             data=response,
             endpoint="/tools/equipments_categories",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
-        )
+        ),
+        nome="bq:equipments_categories",
     )
     return response
 
@@ -275,13 +276,14 @@ async def get_equipments(
     response = await get_pluscode_coords_equipments(
         address=address, categories=categories
     )
-    asyncio.create_task(
+    disparar_em_background(
         save_response_in_bq_background(
             data=response,
             endpoint="/tools/equipments",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
-        )
+        ),
+        nome="bq:equipments",
     )
 
     if response.get("data", None):
@@ -325,24 +327,26 @@ async def get_equipments_instructions(tema: str = "geral") -> List[dict]:
         else:
             response = [error_response, response]
 
-        asyncio.create_task(
+        disparar_em_background(
             save_response_in_bq_background(
                 data=response,
                 endpoint="/tools/equipments_instructions",
                 dataset_id="brutos_eai_logs",
                 table_id="mcp",
-            )
+            ),
+            nome="bq:equipments_instructions",
         )
         return response
 
     # Se o tema é válido, proceder normalmente
     response = await get_tematic_instructions_for_equipments(tema=tema)
-    asyncio.create_task(
+    disparar_em_background(
         save_response_in_bq_background(
             data=response,
             endpoint="/tools/equipments_instructions",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
-        )
+        ),
+        nome="bq:equipments_instructions",
     )
     return response

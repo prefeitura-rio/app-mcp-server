@@ -113,12 +113,43 @@ def _bump_metric(name: str, amount: int = 1) -> None:
 
 
 def get_bigquery_write_metrics() -> dict:
-    """Fotografia dos contadores, incluindo o que ainda está em memória."""
+    """Fotografia dos contadores, incluindo o que ainda está em memória.
+
+    O lock do buffer é adquirido com prazo, como em todo o resto do módulo. A
+    razão aqui é específica: esta função é servida por `/health/detail`, ou
+    seja, roda na event loop. Um `acquire()` sem teto converteria contenção do
+    buffer — que acontece justamente durante um flush lento — em rota de
+    diagnóstico pendurada, e o diagnóstico ficaria indisponível exatamente no
+    momento em que é preciso. Sem o lock, devolvemos o resto dos contadores e
+    sinalizamos a ausência em vez de mentir um zero.
+
+    `taxa_agrupamento` é o critério de aceite do CHATR-118 em um número:
+    quantas linhas, em média, cada chamada de insert levou. Antes do batching
+    valia 1,0 por construção.
+    """
     with _metrics_lock:
         snapshot = dict(_write_metrics)
-    with _batch_buffer_lock:
-        snapshot["rows_buffered"] = sum(len(rows) for rows in _batch_buffer.values())
-        snapshot["tables_buffered"] = sum(1 for rows in _batch_buffer.values() if rows)
+
+    if _batch_buffer_lock.acquire(timeout=_METRICS_LOCK_TIMEOUT_SECONDS):
+        try:
+            snapshot["rows_buffered"] = sum(
+                len(rows) for rows in _batch_buffer.values()
+            )
+            snapshot["tables_buffered"] = sum(
+                1 for rows in _batch_buffer.values() if rows
+            )
+        finally:
+            _batch_buffer_lock.release()
+    else:
+        # `None` e não `0`: quem lê precisa distinguir "buffer vazio" de "não
+        # deu para medir", sob risco de concluir que não há linha parada.
+        snapshot["rows_buffered"] = None
+        snapshot["tables_buffered"] = None
+
+    chamadas = snapshot.get("insert_calls") or 0
+    snapshot["taxa_agrupamento"] = (
+        round(snapshot.get("rows_written", 0) / chamadas, 2) if chamadas else 0.0
+    )
     return snapshot
 
 
@@ -191,6 +222,14 @@ _batch_buffer_lock = threading.Lock()
 _batch_buffer: dict = {}
 
 _BUFFER_LOCK_TIMEOUT_SECONDS = 5.0
+
+# Prazo bem mais curto para a leitura de métricas, que roda na event loop
+# (`/health/detail`). O buffer nunca é segurado durante I/O — tanto
+# `enqueue_bigquery_row` quanto `flush_bigquery_batch_buffer` soltam o lock
+# antes de falar com o BigQuery —, então a seção crítica é só CPU e 250ms já é
+# folgado. O que este teto compra é o pior caso: a rota de diagnóstico não
+# segura a event loop por mais que isso, aconteça o que acontecer no buffer.
+_METRICS_LOCK_TIMEOUT_SECONDS = 0.25
 
 # ---------------------------------------------------------------------------
 # Background flush thread — drains the batch buffer periodically so rows are
@@ -409,6 +448,113 @@ def _dlq_file_path(table_full_name: str):
     return _dlq_dir() / f"dlq_{nome}.jsonl"
 
 
+# Tamanho suposto de uma linha da DLQ, usado só para decidir *quando* conferir o
+# teto — nunca para decidir o que cortar. Ver `_anexar_com_teto`.
+_DLQ_LINHA_MEDIA_BYTES = 2048
+
+# Sufixo do arquivo em reprocessamento. Ver `_replay_dlq_arquivos`: renomear
+# antes de ler é o que separa o que está sendo drenado do que continua
+# chegando, para o rewrite final não apagar linha nova.
+_SUFIXO_EM_PROCESSAMENTO = ".processing"
+
+
+def _anexar_com_teto(caminho, linha: str, rotulo: str) -> None:
+    """Acrescenta uma linha ao arquivo mantendo o teto de itens da DLQ.
+
+    Mesmo teto do Redis (`BIGQUERY_DLQ_MAX_ITEMS`) e mesma consequência: o que
+    for cortado é perda definitiva e sai como `logger.critical`. Sem isto, o
+    fallback em arquivo — que roda justamente quando o Redis está fora, ou seja,
+    pode rodar por muito tempo — cresceria até encher o disco do container.
+
+    O teto é conferido por tamanho em bytes e aplicado por número de linhas. A
+    razão é custo: contar linhas exige ler o arquivo inteiro, e este código roda
+    no caminho de falha de escrita, que pode estar sendo exercitado a cada
+    requisição. Um `stat()` por append é barato; a leitura completa só acontece
+    quando o arquivo passa de `BIGQUERY_DLQ_MAX_ITEMS * _DLQ_LINHA_MEDIA_BYTES`.
+
+    A consequência do atalho é conhecida e aceitável: com linhas bem menores que
+    a média suposta, o arquivo pode passar do teto em número de itens antes da
+    primeira conferência — mas, nesse caso, ele é pequeno em bytes, que é o que
+    ameaça o disco. Nem o limite de disco nem a retenção de dado pessoal (que o
+    TTL cobre) ficam expostos.
+    """
+    max_items = int(getattr(env, "BIGQUERY_DLQ_MAX_ITEMS", 1000))
+
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    with open(caminho, "a", encoding="utf-8") as f:
+        f.write(linha + "\n")
+
+    if max_items <= 0:
+        return
+
+    try:
+        if caminho.stat().st_size <= max_items * _DLQ_LINHA_MEDIA_BYTES:
+            return
+    except OSError:
+        return
+
+    try:
+        linhas = [
+            existente
+            for existente in caminho.read_text(encoding="utf-8").splitlines()
+            if existente.strip()
+        ]
+        if len(linhas) <= max_items:
+            return
+        descartadas = len(linhas) - max_items
+        # Corta as mais antigas, como o `LTRIM(-max, -1)` do Redis.
+        caminho.write_text("\n".join(linhas[-max_items:]) + "\n", encoding="utf-8")
+    except OSError as e:
+        logger.error(f"Não foi possível aplicar o teto em {caminho.name}: {e}")
+        return
+
+    logger.critical(
+        f"DLQ em arquivo de {rotulo} atingiu o teto de {max_items} itens: "
+        f"{descartadas} item(ns) mais antigo(s) foram DESCARTADOS definitivamente "
+        f"({caminho.name}). Reprocesse a DLQ ou aumente BIGQUERY_DLQ_MAX_ITEMS."
+    )
+
+
+def _expirar_arquivos_dlq() -> None:
+    """Remove arquivos de DLQ mais velhos que `BIGQUERY_DLQ_TTL_SECONDS`.
+
+    Contrapartida do `EXPIRE` aplicado às chaves do Redis, e existe pelos dois
+    mesmos motivos: impedir que o fallback ocupe disco indefinidamente e limitar
+    por quanto tempo o payload — que carrega dado pessoal (`user_id` é telefone,
+    alerta do COR tem endereço e coordenada) — fica retido.
+
+    O relógio é o `mtime`, que avança a cada append: um arquivo que ainda recebe
+    escrita nunca expira, igual à chave do Redis, cujo TTL é renovado a cada
+    gravação. Só some o que parou de ser alimentado e ninguém reprocessou.
+    """
+    ttl = int(getattr(env, "BIGQUERY_DLQ_TTL_SECONDS", 604800))
+    if ttl <= 0:
+        return
+
+    dlq_dir = _dlq_dir()
+    if not dlq_dir.is_dir():
+        return
+
+    limite = _time.time() - ttl
+    for arquivo in dlq_dir.glob("dlq_*.jsonl*"):
+        try:
+            if arquivo.stat().st_mtime >= limite:
+                continue
+            linhas = sum(
+                1
+                for linha in arquivo.read_text(encoding="utf-8").splitlines()
+                if linha.strip()
+            )
+            arquivo.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning(f"Não foi possível expirar {arquivo.name}: {e}")
+            continue
+        logger.critical(
+            f"DLQ em arquivo {arquivo.name} expirou após {ttl}s sem escrita nem "
+            f"reprocessamento: {linhas} item(ns) DESCARTADOS definitivamente."
+        )
+
+
 def _persist_to_dlq(
     table_full_name: str, json_data: List[dict], error_msg: str
 ) -> None:
@@ -472,9 +618,7 @@ def _persist_to_dlq(
     if not pushed:
         try:
             dlq_file = _dlq_file_path(table_full_name)
-            dlq_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(dlq_file, "a", encoding="utf-8") as f:
-                f.write(serialized + "\n")
+            _anexar_com_teto(dlq_file, serialized, table_full_name)
             logger.error(
                 f"Falha definitiva de escrita no BigQuery ({table_full_name}). "
                 f"{len(json_data)} registro(s) salvos na DLQ em arquivo ({dlq_file}). Erro: {error_msg}"
@@ -934,6 +1078,12 @@ def save_cor_alert_in_bq(
             raise
 
 
+# Severidades que não passam pelo buffer de agrupamento. Comparadas já
+# normalizadas (sem acento, minúsculas), porque o valor chega da tool como
+# texto livre e "Crítica", "critica" e "CRÍTICA" são o mesmo alerta.
+_SEVERIDADES_SEM_LOTE = frozenset({"alta", "critica"})
+
+
 async def save_cor_alert_in_bq_background(
     alert_id: str,
     user_id: str,
@@ -985,6 +1135,17 @@ async def save_cor_alert_in_bq_background(
     if final_bairro_normalizado == "jd america":
         final_bairro_normalizado = "jardim america"
 
+    # Agrupar é a escolha certa para o volume, não para a emergência. Um alerta
+    # de severidade alta/crítica pode esperar até `BIGQUERY_FLUSH_INTERVAL_SECONDS`
+    # no buffer antes de existir em qualquer lugar consultável — e é justamente
+    # o registro que alguém vai procurar durante a ocorrência. Estes vão direto;
+    # baixa/média continuam agrupados, que é onde está o volume e, portanto, o
+    # ganho de custo que o CHATR-118 persegue.
+    #
+    # O despacho ao COR não muda: `save_cor_alert_to_queue_background` já era
+    # imediato. O que se fecha aqui é a tabela de registro, que ficava atrás.
+    em_lote = _normalize(severity) not in _SEVERIDADES_SEM_LOTE
+
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
@@ -1005,7 +1166,7 @@ async def save_cor_alert_in_bq_background(
             dataset_id,
             table_id,
             "rj-iplanrio",
-            True,  # use_batch=True
+            em_lote,
         )
     except Exception:
         logger.exception(
@@ -2024,11 +2185,53 @@ def _replay_dlq_redis(
     return resumo
 
 
+def _mover_linha_para_poison(trabalho, linha: str, motivo: str) -> None:
+    """Guarda numa chave à parte a linha que o BigQuery nunca vai aceitar.
+
+    Espelha o `_mover_para_poison` do Redis. Antes desta função, o caminho em
+    arquivo apenas logava e seguia — e, como o arquivo é reescrito ao fim da
+    varredura sem as linhas puladas, o payload sumia. Era a perda silenciosa que
+    o CHATR-126 existe para eliminar, sobrevivendo justamente no caminho de
+    fallback, que roda quando o Redis (a proteção principal) está fora.
+
+    O item não volta ao reprocessamento: `_replay_dlq_arquivos` ignora arquivos
+    `.poison.` de propósito. Ele fica para inspeção e correção manual, com o
+    mesmo teto e a mesma validade das demais filas.
+    """
+    # `dlq_<tabela>.jsonl` ou `dlq_<tabela>.jsonl.processing` -> `dlq_<tabela>.poison.jsonl`
+    base = trabalho.name.removesuffix(_SUFIXO_EM_PROCESSAMENTO)
+    destino = trabalho.with_name(base.replace(".jsonl", ".poison.jsonl", 1))
+
+    try:
+        _anexar_com_teto(destino, linha, destino.stem)
+    except OSError as e:
+        # Sem destino para o item, o menos ruim é deixar o payload no log: é
+        # recuperável por quem estiver lendo, e some do arquivo de qualquer jeito.
+        logger.critical(
+            f"Não foi possível mover item da DLQ em arquivo para poison "
+            f"({destino.name}): {e}. Motivo original: {motivo}. Payload: {linha}"
+        )
+        return
+
+    logger.critical(
+        f"Item da DLQ em arquivo movido para {destino.name} — exige correção "
+        f"manual. Motivo: {motivo}"
+    )
+
+
 def _replay_dlq_arquivos(
     limite: int, table_full_name: str = None, dry_run: bool = False
 ) -> dict:
     """Devolve ao BigQuery o que caiu no fallback em arquivo. Bloqueante."""
     resumo = {"itens": 0, "linhas": 0, "poison": 0, "pendentes": 0, "erros": []}
+
+    if not dry_run:
+        # Antes de reprocessar: o que passou da validade não deve ser tentado,
+        # nem continuar em disco. Fica aqui porque esta é a única varredura
+        # periódica que toca o diretório — o worker de drain a chama por ciclo.
+        with contextlib.suppress(Exception):
+            _expirar_arquivos_dlq()
+
     dlq_dir = _dlq_dir()
     if not dlq_dir.is_dir():
         return resumo
@@ -2041,22 +2244,28 @@ def _replay_dlq_arquivos(
 
     # `.processing` primeiro: são sobras de uma execução anterior que morreu no
     # meio. Ficam à frente para não envelhecerem indefinidamente.
-    arquivos = sorted(dlq_dir.glob("dlq_*.jsonl.processing")) + sorted(
+    arquivos = sorted(dlq_dir.glob(f"dlq_*.jsonl{_SUFIXO_EM_PROCESSAMENTO}")) + sorted(
         dlq_dir.glob("dlq_*.jsonl")
     )
 
     for arquivo in arquivos:
+        # `dlq_*.jsonl` também casa com `dlq_<tabela>.poison.jsonl`. Reprocessar
+        # o arquivo de poison seria um laço: são exatamente as linhas que o
+        # BigQuery já recusou em definitivo, e cada passagem as devolveria a
+        # ele para serem recusadas de novo.
+        if ".poison." in arquivo.name:
+            continue
         if alvo and f"dlq_{alvo}.jsonl" not in arquivo.name:
             continue
 
-        if arquivo.suffix == ".processing":
+        if arquivo.suffix == _SUFIXO_EM_PROCESSAMENTO:
             trabalho = arquivo
         else:
             # Renomear antes de ler é o que evita perder linha: `_persist_to_dlq`
             # continua acrescentando ao nome original, que a partir daqui é um
             # arquivo novo. Sem isso, reescrever o arquivo no fim apagaria tudo
             # que tivesse sido acrescentado durante o reprocessamento.
-            trabalho = arquivo.with_name(arquivo.name + ".processing")
+            trabalho = arquivo.with_name(arquivo.name + _SUFIXO_EM_PROCESSAMENTO)
             if dry_run:
                 trabalho = arquivo
             else:
@@ -2092,8 +2301,8 @@ def _replay_dlq_arquivos(
                 item = json.loads(linha)
             except (ValueError, TypeError):
                 resumo["poison"] += 1
-                logger.critical(
-                    f"Linha ilegível na DLQ em arquivo ({trabalho.name}) descartada."
+                _mover_linha_para_poison(
+                    trabalho, linha, f"linha ilegível em {trabalho.name}"
                 )
                 continue
 
@@ -2106,9 +2315,8 @@ def _replay_dlq_arquivos(
             except Exception as e:
                 if _e_falha_permanente(e):
                     resumo["poison"] += 1
-                    logger.critical(
-                        f"Item da DLQ em arquivo recusado definitivamente por "
-                        f"{tabela}: {e}. Descartado do arquivo."
+                    _mover_linha_para_poison(
+                        trabalho, linha, f"recusado definitivamente por {tabela}: {e}"
                     )
                     continue
                 resumo["erros"].append(f"{tabela}: {e}")
@@ -2179,8 +2387,12 @@ def get_dlq_depth() -> dict:
         dlq_dir = _dlq_dir()
         if dlq_dir.is_dir():
             for arquivo in dlq_dir.glob("dlq_*.jsonl*"):
+                # O arquivo de poison entra no mesmo balde do poison do Redis:
+                # é a distinção que `check_bigquery_dlq` usa para dizer "isto
+                # escoa sozinho" ou "isto precisa de gente".
+                balde = "poison" if ".poison." in arquivo.name else "arquivos"
                 with open(arquivo, "r", encoding="utf-8") as f:
-                    profundidade["arquivos"] += sum(1 for linha in f if linha.strip())
+                    profundidade[balde] += sum(1 for linha in f if linha.strip())
 
     profundidade["total"] = (
         profundidade["redis"] + profundidade["poison"] + profundidade["arquivos"]
