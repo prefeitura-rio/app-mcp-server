@@ -4,7 +4,7 @@
 - **Status**: Implementado
 - **Data**: 2026-08-20
 - **Relacionados**: CHATR-102 (orçamento de tempo das leituras), CHATR-114 (cache do client), [CHATR-119](health-checks-e-preflight.md) (health checks)
-- **Escopo**: `src/utils/bigquery.py`, `src/utils/bq_dlq_replay.py` (novo), `src/config/env.py`, `src/app.py`, `src/health/checks.py`, 3 arquivos de teste.
+- **Escopo**: `src/utils/bigquery.py`, `src/utils/bq_dlq_replay.py` (novo), `src/utils/background.py` (novo), `src/config/env.py`, `src/app.py`, `src/health/checks.py`, `src/health/routes.py`, `src/tools/{search,feedback_tools,equipments_tools}.py`, `k8s/{prod,staging}/resources.yaml`, arquivos de teste.
 
 ## Problema
 
@@ -90,9 +90,112 @@ Antes, `save_response_in_bq` marcava `success = True` e `row_count = 1` no insta
 
 Nomes de tabela vêm de constantes internas, nunca de entrada de usuário. Mas o nome vira nome de arquivo e chave de Redis, e uma travessia de diretório ali seria escrita arbitrária no container. A allowlist (`[A-Za-z0-9_.\-]`) custa nada e fecha a categoria inteira, sem depender de a origem continuar confiável no futuro.
 
+### D10 — Os contadores saem em `/health/detail`
+
+O critério de aceite do CHATR-118 é que o volume de inserts caia "de forma
+mensurável". Os contadores existiam desde o batching, mas nada os lia: conferir
+a taxa de agrupamento exigia abrir um REPL dentro do pod. Sem saída, o critério
+não era verificável — e, pior, um buffer que parou de escoar também reduz
+inserts, então "menos chamadas" sozinho não distingue ganho de regressão.
+
+`bigquery_write` entra no corpo de `/health/detail`, ao lado dos checks:
+`taxa_agrupamento` (`rows_written / insert_calls`) é o número que responde ao
+critério, e `rows_buffered` diz o que está em memória naquele instante.
+
+Fica fora do `health_registry` de propósito — o registry existe para check com
+I/O e timeout próprio, e aqui não há chamada de rede nenhuma. Pelo mesmo motivo
+o bloco nunca propaga exceção: ele é informativo e não pode ser a razão de a
+rota de diagnóstico falhar.
+
+A leitura roda na event loop, e é isso que obriga o lock do buffer a ter prazo
+próprio (`_METRICS_LOCK_TIMEOUT_SECONDS`, 250ms, contra os 5s do resto do
+módulo). O buffer nunca é segurado durante I/O, então a seção crítica é só CPU;
+o teto curto garante que a rota não segure a event loop nem no pior caso. Sem o
+lock, `rows_buffered` sai como `null` — e não `0`, que faria concluir que não há
+linha parada.
+
+### D11 — Alerta do COR de severidade alta ou crítica não passa pelo lote
+
+É o trade-off que o CHATR-118 pede explicitamente. Agrupar é a escolha certa
+para o volume, não para a emergência: um alerta de enchente podia ficar até
+`BIGQUERY_FLUSH_INTERVAL_SECONDS` no buffer antes de existir em qualquer lugar
+consultável — justamente o registro que alguém procura durante a ocorrência.
+
+| Severidade | `cor_alerts` | `cor_alerts_queue` (despacho) |
+|---|---|---|
+| alta, crítica | direto | direto (já era) |
+| baixa, média | em lote | não é enfileirado |
+
+O volume está em baixa/média, e é lá que o batching entrega a redução de custo.
+A comparação usa a severidade normalizada (sem acento, minúscula), porque o
+valor chega da tool como texto livre.
+
+### D12 — O fallback em arquivo ganha as mesmas proteções do Redis
+
+O caminho em arquivo roda exatamente quando o Redis — a proteção principal —
+está fora. Ele tinha três furos que o caminho no Redis já não tinha, e todos no
+momento de maior fragilidade:
+
+| Furo | Consequência | Fechado com |
+|---|---|---|
+| Item recusado por schema era pulado e sumia no rewrite final | Perda definitiva e silenciosa — o defeito que o CHATR-126 existe para eliminar | `dlq_<tabela>.poison.jsonl`, par do `bq_dlq_poison:` do Redis |
+| Arquivo sem teto | Enche o disco do container durante indisponibilidade longa | `BIGQUERY_DLQ_MAX_ITEMS`, com `logger.critical` no corte |
+| Nada expirava | Disco e, sobretudo, retenção indefinida de dado pessoal | `BIGQUERY_DLQ_TTL_SECONDS` sobre o `mtime` |
+
+Sem variável de ambiente nova: são as mesmas duas do Redis, para não haver dois
+modelos mentais para a mesma fila. O relógio do TTL é o `mtime`, que avança a
+cada append — um arquivo que ainda recebe escrita não expira, igual à chave do
+Redis, cujo `EXPIRE` é renovado a cada gravação.
+
+O teto é conferido por bytes e aplicado por linhas. É custo: contar linhas exige
+ler o arquivo inteiro, e este código roda no caminho de falha de escrita, que
+pode estar sendo exercitado a cada requisição. Um `stat()` por append é barato;
+a leitura completa só acontece quando o arquivo passa de
+`BIGQUERY_DLQ_MAX_ITEMS * _DLQ_LINHA_MEDIA_BYTES`. Com linhas bem menores que a
+média suposta o arquivo pode passar do teto em número de itens antes da primeira
+conferência — mas aí ele é pequeno em bytes, que é o que ameaça o disco.
+
+O arquivo de poison é ignorado pelo reprocessamento (`dlq_*.jsonl` casaria com o
+nome dele): são as linhas que o BigQuery já recusou em definitivo, e cada
+passagem as devolveria a ele para serem recusadas de novo.
+
+### D13 — Escrita em background com referência forte
+
+`asyncio.create_task` devolve a task, mas a event loop guarda dela apenas
+referência **fraca**. Uma task criada e não guardada em lugar nenhum pode ser
+coletada antes de terminar — sem erro, sem log e sem rastro.
+
+Os seis call sites de log/feedback/alerta nos tools faziam exatamente isso.
+Nenhuma das redes construídas aqui alcança essa perda: agrupamento, retry,
+dead-letter e flush no encerramento só entram em ação depois que a corrotina
+começa a rodar. Era a mesma perda de registro, um passo antes de toda a
+proteção.
+
+`src/utils/background.py` mantém a referência viva até o fim e a solta no
+done-callback (segurar para sempre trocaria perda de dado por vazamento de
+memória). Consumir o resultado ali serve a um segundo propósito: sem isso, uma
+exceção só apareceria no destrutor, como "Task exception was never retrieved" —
+sem contexto e fora de ordem.
+
+O padrão já estava em `src/app.py`, nas tasks do lifespan; este módulo é a
+versão reutilizável, para call sites que não têm um escopo longo onde segurar a
+referência.
+
+### D14 — `terminationGracePeriodSeconds` explícito
+
+O flush de encerramento (D1, D2) depende desse prazo, mas ele estava no default
+implícito de 30s. Estourá-lo significa SIGKILL no meio do flush — e aí não sobra
+nem a DLQ, que é a rede que este trabalho inteiro construiu.
+
+Agora são 60s declarados em `k8s/prod` e `k8s/staging`: folga sobre o pior caso
+observável (4 tabelas × 5s de `BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS`) sem atrasar
+rollout, já que o valor é teto e não espera — o pod sai assim que termina.
+
 ## Limitação conhecida
 
 O fallback em arquivo da DLQ (`DATA_DIR/bq_dlq/*.jsonl`) grava numa camada efêmera: não há volume montado no `k8s/`. No cenário exato em que ele é acionado — Redis fora —, um restart do pod leva o arquivo junto. Ele segue valendo como rede de segurança dentro da vida do pod (o worker de drain o reprocessa), mas **não** é armazenamento durável. Tornar durável exige um PVC, que é decisão de infraestrutura e ficou fora deste escopo.
+
+O TTL de D12 limita por quanto tempo o payload fica ali, o que resolve a retenção de dado pessoal mesmo sem volume durável — mas não torna o arquivo sobrevivente a restart.
 
 Para reduzir a janela, o `replay_dlq_arquivos` renomeia o arquivo para `.processing` antes de lê-lo: assim `_persist_to_dlq` segue acrescentando ao nome original e o reprocessamento não apaga o que chegou durante a varredura. Sobras de uma execução interrompida são adotadas na varredura seguinte.
 
