@@ -201,6 +201,81 @@ BIGQUERY_READ_MAX_WORKERS = int(
 BIGQUERY_BATCH_SIZE = int(
     getenv_or_action("BIGQUERY_BATCH_SIZE", default="50", action="ignore")
 )
+# Intervalo do flush periódico do buffer de escrita. Existe porque o gatilho
+# por tamanho (`BIGQUERY_BATCH_SIZE`) sozinho deixa linha parada em memória
+# quando o volume é baixo: sem este laço, a última linha de um horário de pouco
+# tráfego só chegaria ao BigQuery na próxima rajada. Parametrizado para permitir
+# recalibrar o par (tamanho, intervalo) sem deploy de código.
+BIGQUERY_FLUSH_INTERVAL_SECONDS = float(
+    getenv_or_action("BIGQUERY_FLUSH_INTERVAL_SECONDS", default="30", action="ignore")
+)
+# Teto de linhas mantidas em memória somando todas as tabelas. É uma trava de
+# segurança contra crescimento sem limite: se o flush parar de escoar (BigQuery
+# fora, thread morta), o buffer cresceria até estourar a memória do pod — e o
+# limite de 1536Mi do container transformaria perda de log em OOMKill do
+# servidor inteiro. Ao bater o teto as linhas mais antigas vão para a DLQ, que
+# é recuperável, em vez de simplesmente somirem.
+BIGQUERY_BATCH_MAX_BUFFERED_ROWS = int(
+    getenv_or_action(
+        "BIGQUERY_BATCH_MAX_BUFFERED_ROWS", default="10000", action="ignore"
+    )
+)
+# Tamanho do pool de threads dedicado às escritas (log/feedback/alerta e drain
+# da DLQ). Mesmo motivo do pool de leitura: o retry com backoff de
+# `insert_rows_json_with_retry_and_dlq` segura a thread em `time.sleep`, e no
+# executor default essas threads são as mesmas que atendem qualquer outra
+# chamada bloqueante do app. Pequeno de propósito — escrita é assíncrona ao
+# usuário e não precisa de paralelismo alto.
+BIGQUERY_WRITE_MAX_WORKERS = int(
+    getenv_or_action("BIGQUERY_WRITE_MAX_WORKERS", default="4", action="ignore")
+)
+# Teto de tempo de cada chamada de insert. Sem ele, o `insert_rows_json` herda
+# o default do transporte e pode não voltar — o que é grave num ponto
+# específico: o flush de encerramento roda dentro do handler de sinal, e uma
+# chamada pendurada ali segura o processo até o Kubernetes perder a paciência e
+# mandar SIGKILL. Aí não sobra nem o que a DLQ salvaria.
+BIGQUERY_WRITE_TIMEOUT_SECONDS = float(
+    getenv_or_action("BIGQUERY_WRITE_TIMEOUT_SECONDS", default="10.0", action="ignore")
+)
+# Teto por chamada no flush de encerramento — mais curto que o normal porque o
+# orçamento ali é o `terminationGracePeriod` do pod, não a vontade de escrever.
+# Uma tentativa que estoura o prazo cai na DLQ, que é recuperável.
+BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS = float(
+    getenv_or_action(
+        "BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS", default="5.0", action="ignore"
+    )
+)
+# Teto de itens por chave da DLQ no Redis. A DLQ divide instância com o cache
+# de queries: sem teto, uma indisponibilidade longa do BigQuery encheria a
+# memória do Redis e derrubaria o cache junto — falha de escrita virando
+# degradação de leitura.
+BIGQUERY_DLQ_MAX_ITEMS = int(
+    getenv_or_action("BIGQUERY_DLQ_MAX_ITEMS", default="1000", action="ignore")
+)
+# Validade das chaves da DLQ. Além de evitar chave órfã, é o que limita a
+# retenção do dado pessoal que vai no payload (user_id é telefone; alerta do
+# COR carrega endereço e coordenada). O relógio conta a partir da última
+# gravação na chave, não por item.
+BIGQUERY_DLQ_TTL_SECONDS = int(
+    getenv_or_action("BIGQUERY_DLQ_TTL_SECONDS", default="604800", action="ignore")
+)
+# Intervalo entre varreduras do worker que devolve a DLQ ao BigQuery. Folgado
+# porque o cenário que enche a DLQ é indisponibilidade do BigQuery: reprocessar
+# de minuto em minuto só empilharia falha sobre falha enquanto ele não volta.
+BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS = float(
+    getenv_or_action(
+        "BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS", default="300", action="ignore"
+    )
+)
+# Quantos itens de DLQ o worker reprocessa por varredura. Limita o tamanho do
+# lote que ocupa uma thread de escrita de cada vez, para o drain não competir
+# com a gravação corrente.
+BIGQUERY_DLQ_DRAIN_BATCH = int(
+    getenv_or_action("BIGQUERY_DLQ_DRAIN_BATCH", default="100", action="ignore")
+)
+# Liga/desliga o worker automático de drain. Desligar deixa a DLQ apenas sob
+# reprocessamento manual (`python -m src.utils.bq_dlq_replay`).
+BIGQUERY_DLQ_DRAIN_ENABLED = getenv_bool("BIGQUERY_DLQ_DRAIN_ENABLED", default="true")
 
 PROXY_URL = getenv_or_action("PROXY_URL")
 

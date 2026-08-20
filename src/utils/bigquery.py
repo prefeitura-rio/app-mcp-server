@@ -4,11 +4,23 @@ import contextlib
 import functools
 import hashlib
 import random
+import re
+import signal
 import threading
+import uuid
+
+# `time` (o módulo) sob alias porque `datetime.time` (a classe) já ocupa o nome
+# neste módulo — ver o import de `datetime` mais abaixo e `_normalize_bq_value`.
+import time as _time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from google.cloud import bigquery
-from google.api_core.exceptions import GoogleAPIError, NotFound
+from google.api_core.exceptions import (
+    ClientError,
+    GoogleAPIError,
+    NotFound,
+    TooManyRequests,
+)
 from google.oauth2 import service_account
 from opentelemetry.trace import Status, StatusCode
 from typing import List, NamedTuple
@@ -71,8 +83,114 @@ def get_datetime() -> str:
     return timestamp.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
+# ---------------------------------------------------------------------------
+# Contadores de escrita.
+#
+# O critério de aceite do CHATR-118 é que o volume de inserts caia "de forma
+# mensurável" — o que exige medir. Sem isto o ganho do batching é indistinguível
+# de uma regressão silenciosa (buffer que não escoa também reduz inserts).
+# `rows_enqueued / insert_calls` é a taxa de agrupamento efetiva; a diferença
+# entre `rows_enqueued` e `rows_written + rows_dropped_to_dlq` é o que está
+# parado em memória neste instante.
+# ---------------------------------------------------------------------------
+
+_metrics_lock = threading.Lock()
+_write_metrics = {
+    "rows_enqueued": 0,  # linhas que entraram no buffer
+    "rows_written": 0,  # linhas confirmadas no BigQuery
+    "insert_calls": 0,  # chamadas de insert_rows_json efetivamente feitas
+    "flush_calls": 0,  # execuções do flush (periódico, por tamanho ou shutdown)
+    "rows_to_dlq": 0,  # linhas que caíram na DLQ após esgotar o retry
+    "rows_evicted": 0,  # linhas expulsas do buffer por estouro de teto
+    "rows_replayed": 0,  # linhas devolvidas ao BigQuery a partir da DLQ
+}
+
+
+def _bump_metric(name: str, amount: int = 1) -> None:
+    """Incrementa um contador. Chamado de várias threads, por isso o lock."""
+    with _metrics_lock:
+        _write_metrics[name] = _write_metrics.get(name, 0) + amount
+
+
+def get_bigquery_write_metrics() -> dict:
+    """Fotografia dos contadores, incluindo o que ainda está em memória."""
+    with _metrics_lock:
+        snapshot = dict(_write_metrics)
+    with _batch_buffer_lock:
+        snapshot["rows_buffered"] = sum(len(rows) for rows in _batch_buffer.values())
+        snapshot["tables_buffered"] = sum(1 for rows in _batch_buffer.values() if rows)
+    return snapshot
+
+
+def reset_bigquery_write_metrics() -> None:
+    """Zera os contadores. Existe para isolamento entre testes."""
+    with _metrics_lock:
+        for key in _write_metrics:
+            _write_metrics[key] = 0
+
+
+# ---------------------------------------------------------------------------
+# Executor dedicado às escritas.
+#
+# Simétrico ao pool de leitura (ver `_get_read_executor`), e pelo mesmo motivo
+# invertido: `insert_rows_json_with_retry_and_dlq` dorme em `_time.sleep` entre
+# as tentativas, então uma indisponibilidade do BigQuery segura cada thread por
+# até ~1,5s. No executor default do loop — que é o que estas escritas usavam —
+# essas threads são as mesmas de qualquer outra chamada bloqueante do app, e uma
+# rajada de falha de log passava a atrasar coisa que nada tem a ver com log.
+#
+# Pequeno de propósito: escrita de log é assíncrona ao usuário, não precisa de
+# paralelismo alto, e um teto baixo mantém a fila visível em vez de espalhar a
+# espera por todo o pool.
+# ---------------------------------------------------------------------------
+
+_write_executor: ThreadPoolExecutor = None
+_write_executor_lock = threading.Lock()
+
+
+def _get_write_executor() -> ThreadPoolExecutor:
+    """Devolve (criando na primeira vez) o pool de threads das escritas."""
+    global _write_executor
+    if _write_executor is not None:
+        return _write_executor
+    with _write_executor_lock:
+        if _write_executor is None:
+            max_workers = int(getattr(env, "BIGQUERY_WRITE_MAX_WORKERS", 4))
+            _write_executor = ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="bq-write"
+            )
+    return _write_executor
+
+
+def _shutdown_write_executor() -> None:
+    """Encerra o pool no fim do processo, sem esperar escrita pendurada.
+
+    Roda *depois* do flush final: quem chama é `_stop_batch_flush_thread`, que
+    já drenou o buffer de forma síncrona. Aqui só restam threads presas em
+    chamada que não voltou, e esperar por elas atrasaria o encerramento do pod
+    sem salvar nada.
+    """
+    global _write_executor
+    executor, _write_executor = _write_executor, None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+# ---------------------------------------------------------------------------
+# Buffer de agrupamento.
+#
+# O lock é adquirido com prazo em vez de indefinidamente. O motivo é o caminho
+# de shutdown: o flush final roda dentro de um handler de sinal, ou seja, na
+# thread principal, entre bytecodes de qualquer coisa que estivesse rodando.
+# Um `acquire()` sem teto ali converteria contenção momentânea em pod que não
+# termina — e o Kubernetes resolveria isso com SIGKILL, que é exatamente o
+# cenário de perda que este trabalho existe para eliminar.
+# ---------------------------------------------------------------------------
+
 _batch_buffer_lock = threading.Lock()
 _batch_buffer: dict = {}
+
+_BUFFER_LOCK_TIMEOUT_SECONDS = 5.0
 
 # ---------------------------------------------------------------------------
 # Background flush thread — drains the batch buffer periodically so rows are
@@ -84,12 +202,23 @@ _batch_buffer: dict = {}
 _flush_thread: threading.Thread | None = None
 _flush_stop_event = threading.Event()
 
-_FLUSH_INTERVAL_SECONDS = 30  # override via env at start-up if needed
+
+def _flush_interval_seconds() -> float:
+    """Intervalo do flush periódico, lido do ambiente a cada início de laço.
+
+    Lido por chamada, e não uma vez em constante de módulo, para que o valor
+    valha também quando o módulo é recarregado com um `env` sintético — é assim
+    que os testes exercitam o laço sem esperar 30 segundos reais.
+    """
+    try:
+        return float(getattr(env, "BIGQUERY_FLUSH_INTERVAL_SECONDS", 30.0))
+    except (TypeError, ValueError):
+        return 30.0
 
 
 def _flush_loop() -> None:
     """Run in a daemon thread; flushes all pending rows every interval."""
-    while not _flush_stop_event.wait(timeout=_FLUSH_INTERVAL_SECONDS):
+    while not _flush_stop_event.wait(timeout=_flush_interval_seconds()):
         try:
             flush_bigquery_batch_buffer()
         except Exception:
@@ -109,12 +238,98 @@ def _start_batch_flush_thread() -> None:
 
 
 def _stop_batch_flush_thread() -> None:
-    """Signal the flush thread to stop and do a final flush (called on shutdown)."""
+    """Sinaliza a parada do laço e faz o flush final, síncrono.
+
+    `max_retries=1` no flush de encerramento é deliberado: aqui o orçamento não
+    é "conseguir escrever", é "não estourar o `terminationGracePeriod`". Uma
+    tentativa que falha cai imediatamente na DLQ, que é recuperável; insistir
+    com backoff arriscaria o SIGKILL no meio do caminho e aí não sobraria nem a
+    DLQ.
+    """
     _flush_stop_event.set()
     try:
-        flush_bigquery_batch_buffer()
+        flush_bigquery_batch_buffer(
+            max_retries=1,
+            initial_delay=0.0,
+            timeout=float(getattr(env, "BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS", 5.0)),
+        )
     except Exception:
         pass
+    _shutdown_write_executor()
+
+
+# ---------------------------------------------------------------------------
+# Flush no encerramento por sinal.
+#
+# `atexit` sozinho não cobre o caso real. Como `src/app.py` já documenta, a
+# uvicorn instala o próprio handler de SIGTERM e, ao sair de `serve()`,
+# restaura o handler anterior e faz `signal.raise_signal()`. Se o handler
+# anterior for o default, o processo morre ali — sem passar por `atexit` — e
+# tudo que estava no buffer some em silêncio a cada rollout.
+#
+# A saída é instalar o nosso handler *antes* da uvicorn: é ele que a uvicorn
+# guarda como "anterior", restaura e re-levanta. Assim o flush acontece no
+# caminho que de fato executa, e em seguida delegamos ao handler que estava lá
+# antes de nós, preservando a semântica original de encerramento.
+# ---------------------------------------------------------------------------
+
+_previous_signal_handlers: dict = {}
+_signal_handlers_installed = False
+
+
+def _handle_shutdown_signal(signum, frame) -> None:
+    """Drena o buffer e devolve o controle ao handler anterior."""
+    try:
+        _stop_batch_flush_thread()
+    except Exception:
+        pass  # nunca deixar o encerramento falhar por causa do flush
+
+    previous = _previous_signal_handlers.get(signum, signal.SIG_DFL)
+    if callable(previous):
+        previous(signum, frame)
+        return
+    if previous == signal.SIG_IGN:
+        return
+    # SIG_DFL (ou None, que o CPython usa para "handler default"): restaura o
+    # comportamento padrão e re-levanta, para o processo morrer com o mesmo
+    # código de saída que teria sem a nossa interposição.
+    with contextlib.suppress(Exception):
+        signal.signal(signum, signal.SIG_DFL)
+        signal.raise_signal(signum)
+
+
+# Marca o handler como nosso. Serve para reconhecê-lo quando este módulo é
+# carregado mais de uma vez no mesmo processo (os testes recarregam o arquivo
+# sob outro nome para exercitá-lo com um `env` sintético): sem a marca, cada
+# carga encadearia mais um handler sobre o anterior e o encerramento passaria
+# por uma pilha de flushes de módulos-fantasma.
+_handle_shutdown_signal._bq_flush_handler = True
+
+
+def _install_shutdown_signal_handlers() -> None:
+    """Instala o flush em SIGTERM/SIGINT (idempotente e best-effort).
+
+    `signal.signal` só funciona na thread principal; em worker, em teste sob
+    pytest-xdist ou em uso embarcado deste módulo a instalação simplesmente não
+    acontece, e o `atexit` volta a ser a única rede — que é o comportamento
+    anterior, não uma regressão.
+    """
+    global _signal_handlers_installed
+    if _signal_handlers_installed:
+        return
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            atual = signal.getsignal(sig)
+            if getattr(atual, "_bq_flush_handler", False):
+                # Já há um handler nosso (outra carga deste módulo). Encadear
+                # em cima dele não acrescenta nada e só alonga o encerramento.
+                continue
+            _previous_signal_handlers[sig] = signal.signal(sig, _handle_shutdown_signal)
+        except (ValueError, OSError, RuntimeError) as e:
+            logger.warning(f"Não foi possível instalar handler para {sig!r}: {e}")
+    _signal_handlers_installed = True
 
 
 _sync_redis_client = None
@@ -126,7 +341,7 @@ def _get_sync_redis_client():
 
     Os timeouts de socket são obrigatórios pelo mesmo motivo do cliente async
     do cache (ver ``get_async_redis_client``), mas com uma consequência pior:
-    este cliente roda em thread do executor default, chamado por
+    este cliente roda em thread do executor de escrita, chamado por
     ``_persist_to_dlq`` no caminho de falha de escrita. Sem timeout, um Redis
     que aceita a conexão e para de responder prende a thread indefinidamente —
     e, como a chamada nunca retorna, o fallback em arquivo logo abaixo (que
@@ -157,6 +372,43 @@ def _get_sync_redis_client():
     return _sync_redis_client
 
 
+# Nomes de tabela vêm de constantes internas, nunca de entrada de usuário — mas
+# o nome vira caminho de arquivo e chave de Redis, e uma travessia de diretório
+# aqui seria escrita arbitrária no container. A allowlist custa nada e fecha a
+# categoria inteira, sem depender de a origem continuar confiável no futuro.
+_TABELA_SEGURA = re.compile(r"[^A-Za-z0-9_.\-]")
+
+DLQ_KEY_PREFIX = "bq_dlq"
+DLQ_POISON_KEY_PREFIX = "bq_dlq_poison"
+
+
+def _sanitize_table_name(table_full_name: str) -> str:
+    """Reduz o nome da tabela ao conjunto seguro para chave e nome de arquivo."""
+    return _TABELA_SEGURA.sub("_", str(table_full_name))[:200]
+
+
+def _dlq_key(table_full_name: str) -> str:
+    return f"{DLQ_KEY_PREFIX}:{_sanitize_table_name(table_full_name)}"
+
+
+def _dlq_poison_key(table_full_name: str) -> str:
+    return f"{DLQ_POISON_KEY_PREFIX}:{_sanitize_table_name(table_full_name)}"
+
+
+def _dlq_dir():
+    """Diretório do fallback em arquivo da DLQ."""
+    from pathlib import Path
+
+    data_dir_path = getattr(env, "DATA_DIR", None) or "scratch"
+    return Path(data_dir_path) / "bq_dlq"
+
+
+def _dlq_file_path(table_full_name: str):
+    """Caminho do arquivo de fallback da DLQ para uma tabela."""
+    nome = _sanitize_table_name(table_full_name).replace(".", "_")
+    return _dlq_dir() / f"dlq_{nome}.jsonl"
+
+
 def _persist_to_dlq(
     table_full_name: str, json_data: List[dict], error_msg: str
 ) -> None:
@@ -166,9 +418,13 @@ def _persist_to_dlq(
     Priority:
     1. Redis (reuses process-wide singleton client)
     2. Local .jsonl file under DATA_DIR/bq_dlq/ (always has a safe default path)
-    """
-    from pathlib import Path
 
+    A gravação no Redis leva teto de itens e validade junto, na mesma pipeline.
+    O teto protege a instância — que é compartilhada com o cache de queries — de
+    virar refém de uma indisponibilidade longa do BigQuery; a validade limita
+    por quanto tempo o payload, que carrega dado pessoal (user_id é telefone,
+    alerta do COR tem endereço e coordenada), fica retido.
+    """
     dlq_item = {
         "table_full_name": table_full_name,
         "failed_at": get_datetime(),
@@ -176,27 +432,47 @@ def _persist_to_dlq(
         "payload": json_data,
     }
     serialized = json.dumps(dlq_item, cls=CustomJSONEncoder)
+    _bump_metric("rows_to_dlq", len(json_data))
 
     pushed = False
     try:
         r = _get_sync_redis_client()
         if r is not None:
-            r.rpush(f"bq_dlq:{table_full_name}", serialized)
+            chave = _dlq_key(table_full_name)
+            max_items = int(getattr(env, "BIGQUERY_DLQ_MAX_ITEMS", 1000))
+            ttl = int(getattr(env, "BIGQUERY_DLQ_TTL_SECONDS", 604800))
+
+            pipe = r.pipeline()
+            pipe.rpush(chave, serialized)
+            pipe.ltrim(chave, -max_items, -1)
+            if ttl > 0:
+                pipe.expire(chave, ttl)
+            resultado = pipe.execute()
             pushed = True
+
+            # O RPUSH devolve o tamanho *antes* do LTRIM: se passou do teto, a
+            # diferença é exatamente o que foi descartado. Descarte de DLQ é
+            # perda definitiva de dado — precisa aparecer como tal no log.
+            tamanho_apos_push = resultado[0] if resultado else 0
+            if isinstance(tamanho_apos_push, int) and tamanho_apos_push > max_items:
+                logger.critical(
+                    f"DLQ de {table_full_name} atingiu o teto de {max_items} itens: "
+                    f"{tamanho_apos_push - max_items} item(ns) mais antigo(s) foram "
+                    f"DESCARTADOS definitivamente. Reprocesse a DLQ ou aumente "
+                    f"BIGQUERY_DLQ_MAX_ITEMS."
+                )
+
             logger.error(
                 f"Falha definitiva de escrita no BigQuery ({table_full_name}). "
-                f"{len(json_data)} registro(s) salvos na DLQ Redis (chave: bq_dlq:{table_full_name}). Erro: {error_msg}"
+                f"{len(json_data)} registro(s) salvos na DLQ Redis (chave: {chave}). Erro: {error_msg}"
             )
     except Exception as redis_err:
         logger.warning(f"Não foi possível salvar na DLQ do Redis: {redis_err}")
 
     if not pushed:
         try:
-            data_dir_path = getattr(env, "DATA_DIR", None) or "scratch"
-            dlq_dir = Path(data_dir_path) / "bq_dlq"
-            dlq_dir.mkdir(parents=True, exist_ok=True)
-            safe_table_name = table_full_name.replace(".", "_")
-            dlq_file = dlq_dir / f"dlq_{safe_table_name}.jsonl"
+            dlq_file = _dlq_file_path(table_full_name)
+            dlq_file.parent.mkdir(parents=True, exist_ok=True)
             with open(dlq_file, "a", encoding="utf-8") as f:
                 f.write(serialized + "\n")
             logger.error(
@@ -207,39 +483,108 @@ def _persist_to_dlq(
             logger.error(f"CRÍTICO: Falha ao salvar DLQ em arquivo: {file_err}")
 
 
-def insert_rows_json_with_retry_and_dlq(
+class BigQueryRowRejectedError(Exception):
+    """Linha recusada pelo BigQuery por conteúdo (schema, tipo, valor).
+
+    Separada das falhas de transporte porque a decisão de reprocessamento é
+    oposta: repetir uma linha malformada nunca vai dar certo, então insistir só
+    trava a fila atrás dela. Ver `_e_falha_permanente`.
+    """
+
+
+def _e_falha_permanente(exc: BaseException) -> bool:
+    """Diz se repetir esta escrita é inútil.
+
+    Erro 4xx do BigQuery (fora 429) e linha recusada por schema não melhoram
+    com o tempo. Sem essa distinção, um único payload malformado no início da
+    DLQ bloquearia para sempre tudo o que veio depois dele.
+    """
+    if isinstance(exc, BigQueryRowRejectedError):
+        return True
+    if isinstance(exc, TooManyRequests):
+        return False
+    return isinstance(exc, ClientError)
+
+
+def _insert_rows_json_raw(
     table_full_name: str,
     json_data: List[dict],
     max_retries: int = 3,
     initial_delay: float = 0.5,
+    timeout: float = None,
 ) -> None:
+    """Insere no BigQuery com backoff exponencial e propaga a falha.
+
+    Sem DLQ de propósito: é o núcleo compartilhado entre a escrita corrente
+    (que encaminha para a DLQ ao falhar) e o reprocessamento da DLQ (que
+    precisa deixar o item onde está para tentar de novo depois).
+
+    O `timeout` não é opcional na prática. Sem ele a chamada herda o default do
+    transporte e pode simplesmente não voltar — e este mesmo caminho é usado
+    pelo flush de encerramento, que roda dentro do handler de sinal: uma
+    chamada pendurada ali segura o processo até o SIGKILL, que é exatamente a
+    perda que a DLQ existe para evitar.
     """
-    Inserts rows into BigQuery with exponential backoff retries and Dead-Letter Queue (DLQ) fallback.
-    """
+    if not json_data:
+        return
+
+    if timeout is None:
+        timeout = float(getattr(env, "BIGQUERY_WRITE_TIMEOUT_SECONDS", 10.0))
+
     client = get_bigquery_client()
     last_exception = None
 
     for attempt in range(1, max_retries + 1):
         try:
-            errors = client.insert_rows_json(table_full_name, json_data)
+            _bump_metric("insert_calls")
+            errors = client.insert_rows_json(
+                table_full_name, json_data, timeout=timeout
+            )
             if not errors:
+                _bump_metric("rows_written", len(json_data))
                 return
             error_msgs = [
                 f"Row {e.get('index', '?')}: {e.get('errors', e)}" for e in errors
             ]
-            raise Exception(f"Erro ao inserir no BigQuery: {'; '.join(error_msgs)}")
+            raise BigQueryRowRejectedError(
+                f"Erro ao inserir no BigQuery: {'; '.join(error_msgs)}"
+            )
         except Exception as e:
             last_exception = e
             logger.warning(
                 f"Tentativa {attempt}/{max_retries} de inserção no BigQuery falhou para {table_full_name}: {e}"
             )
+            # Falha permanente não melhora com espera; ir direto ao desfecho
+            # evita segurar a thread do pool de escrita por nada.
+            if _e_falha_permanente(e):
+                break
             if attempt < max_retries:
-                import time
+                _time.sleep(initial_delay * (2 ** (attempt - 1)))
 
-                time.sleep(initial_delay * (2 ** (attempt - 1)))
-
-    _persist_to_dlq(table_full_name, json_data, str(last_exception))
     raise last_exception
+
+
+def insert_rows_json_with_retry_and_dlq(
+    table_full_name: str,
+    json_data: List[dict],
+    max_retries: int = 3,
+    initial_delay: float = 0.5,
+    timeout: float = None,
+) -> None:
+    """
+    Inserts rows into BigQuery with exponential backoff retries and Dead-Letter Queue (DLQ) fallback.
+    """
+    try:
+        _insert_rows_json_raw(
+            table_full_name,
+            json_data,
+            max_retries=max_retries,
+            initial_delay=initial_delay,
+            timeout=timeout,
+        )
+    except Exception as e:
+        _persist_to_dlq(table_full_name, json_data, str(e))
+        raise
 
 
 def enqueue_bigquery_row(
@@ -254,30 +599,81 @@ def enqueue_bigquery_row(
         if batch_size is not None
         else getattr(env, "BIGQUERY_BATCH_SIZE", 50)
     )
+    max_buffered = int(getattr(env, "BIGQUERY_BATCH_MAX_BUFFERED_ROWS", 10000))
 
     rows_to_flush = None
-    with _batch_buffer_lock:
-        if table_full_name not in _batch_buffer:
-            _batch_buffer[table_full_name] = []
-        _batch_buffer[table_full_name].append(row)
+    evicted: list = []
+    if not _batch_buffer_lock.acquire(timeout=_BUFFER_LOCK_TIMEOUT_SECONDS):
+        # Não segurar a thread do pool de escrita esperando um lock que não
+        # vem: mandar a linha direto ao BigQuery preserva o dado, e perder o
+        # agrupamento é o menor dos males neste caminho (que não deve ocorrer).
+        logger.warning(
+            f"Buffer de lote indisponível para {table_full_name}; escrevendo a linha direto."
+        )
+        insert_rows_json_with_retry_and_dlq(table_full_name, [row])
+        return
+    try:
+        _batch_buffer.setdefault(table_full_name, []).append(row)
+        _bump_metric("rows_enqueued")
 
         if len(_batch_buffer[table_full_name]) >= batch_size:
             rows_to_flush = _batch_buffer[table_full_name]
             _batch_buffer[table_full_name] = []
 
+        # Teto global: se o escoamento parou, o buffer não pode crescer até
+        # derrubar o pod por memória. As linhas mais antigas saem para a DLQ,
+        # de onde são recuperáveis — nunca são simplesmente descartadas.
+        total = sum(len(rows) for rows in _batch_buffer.values())
+        if total > max_buffered:
+            excedente = total - max_buffered
+            for tabela in list(_batch_buffer):
+                if excedente <= 0:
+                    break
+                linhas = _batch_buffer[tabela]
+                if not linhas:
+                    continue
+                corte = min(excedente, len(linhas))
+                evicted.append((tabela, linhas[:corte]))
+                _batch_buffer[tabela] = linhas[corte:]
+                excedente -= corte
+    finally:
+        _batch_buffer_lock.release()
+
+    for tabela, linhas in evicted:
+        _bump_metric("rows_evicted", len(linhas))
+        logger.critical(
+            f"Buffer de escrita do BigQuery estourou o teto de {max_buffered} linhas: "
+            f"{len(linhas)} linha(s) de {tabela} foram desviadas para a DLQ."
+        )
+        _persist_to_dlq(tabela, linhas, "buffer de lote excedeu o teto configurado")
+
     if rows_to_flush:
         insert_rows_json_with_retry_and_dlq(table_full_name, rows_to_flush)
 
 
-def flush_bigquery_batch_buffer(table_full_name: str = None) -> None:
+def flush_bigquery_batch_buffer(
+    table_full_name: str = None,
+    max_retries: int = 3,
+    initial_delay: float = 0.5,
+    timeout: float = None,
+) -> None:
     """
     Flushes pending rows in the batch buffer to BigQuery.
     If table_full_name is specified, flushes only that table. Otherwise flushes all tables.
+
+    `max_retries`/`initial_delay` existem para o flush de encerramento, que
+    troca insistência por prazo — ver `_stop_batch_flush_thread`.
     """
     tables_to_flush = {}
-    with _batch_buffer_lock:
+    if not _batch_buffer_lock.acquire(timeout=_BUFFER_LOCK_TIMEOUT_SECONDS):
+        logger.error(
+            "Não foi possível adquirir o lock do buffer para descarregar em lote; "
+            "as linhas seguem em memória até a próxima tentativa."
+        )
+        return
+    try:
         if table_full_name:
-            if table_full_name in _batch_buffer and _batch_buffer[table_full_name]:
+            if _batch_buffer.get(table_full_name):
                 tables_to_flush[table_full_name] = _batch_buffer[table_full_name]
                 _batch_buffer[table_full_name] = []
         else:
@@ -285,12 +681,46 @@ def flush_bigquery_batch_buffer(table_full_name: str = None) -> None:
                 if rows:
                     tables_to_flush[tbl] = rows
             _batch_buffer.clear()
+    finally:
+        _batch_buffer_lock.release()
 
+    if not tables_to_flush:
+        return
+
+    _bump_metric("flush_calls")
     for tbl, rows in tables_to_flush.items():
         try:
-            insert_rows_json_with_retry_and_dlq(tbl, rows)
+            insert_rows_json_with_retry_and_dlq(
+                tbl,
+                rows,
+                max_retries=max_retries,
+                initial_delay=initial_delay,
+                timeout=timeout,
+            )
         except Exception as e:
             logger.error(f"Erro ao descarregar buffer em lote para {tbl}: {e}")
+
+
+def _gravar_linha(table_full_name: str, row: dict, use_batch: bool, span=None) -> None:
+    """Encaminha a linha ao buffer ou direto ao BigQuery, marcando o span.
+
+    A distinção importa no trace. Em modo `batched`, retornar sem erro
+    significa "linha aceita no buffer", não "linha gravada no BigQuery" — a
+    confirmação só existe no flush, que acontece depois e em outra thread. Sem
+    `bigquery.durable`, o span afirmaria escrita bem-sucedida para uma linha
+    que ainda pode terminar na DLQ, e a investigação de um registro faltante
+    começaria pelo lugar errado.
+    """
+    if span is not None:
+        span.set_attribute("bigquery.write_mode", "batched" if use_batch else "direct")
+    if use_batch:
+        enqueue_bigquery_row(table_full_name, row)
+        if span is not None:
+            span.set_attribute("bigquery.durable", False)
+    else:
+        insert_rows_json_with_retry_and_dlq(table_full_name, [row])
+        if span is not None:
+            span.set_attribute("bigquery.durable", True)
 
 
 @interceptor(source={"source": "mcp", "tool": "bigquery"})
@@ -325,10 +755,7 @@ def save_response_in_bq(
         span.set_attribute("bigquery.endpoint", endpoint)
         span.set_attribute("bigquery.row_count", 1)
         try:
-            if use_batch:
-                enqueue_bigquery_row(table_full_name, data_to_save)
-            else:
-                insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
+            _gravar_linha(table_full_name, data_to_save, use_batch, span)
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
         except Exception as e:
@@ -349,7 +776,7 @@ async def save_response_in_bq_background(
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None,
+            _get_write_executor(),
             save_response_in_bq,
             data,
             endpoint,
@@ -399,10 +826,7 @@ def save_feedback_in_bq(
         span.set_attribute("bigquery.table_id", table_id)
         span.set_attribute("bigquery.row_count", 1)
         try:
-            if use_batch:
-                enqueue_bigquery_row(table_full_name, data_to_save)
-            else:
-                insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
+            _gravar_linha(table_full_name, data_to_save, use_batch, span)
             logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
@@ -429,7 +853,7 @@ async def save_feedback_in_bq_background(
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None,
+            _get_write_executor(),
             save_feedback_in_bq,
             user_id,
             feedback,
@@ -498,10 +922,7 @@ def save_cor_alert_in_bq(
         span.set_attribute("bigquery.severity", severity)
         span.set_attribute("bigquery.row_count", 1)
         try:
-            if use_batch:
-                enqueue_bigquery_row(table_full_name, data_to_save)
-            else:
-                insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
+            _gravar_linha(table_full_name, data_to_save, use_batch, span)
             logger.info(f"Alerta COR salvo no BigQuery: {table_full_name}")
             span.set_attribute("bigquery.success", True)
             span.set_status(Status(StatusCode.OK))
@@ -567,7 +988,7 @@ async def save_cor_alert_in_bq_background(
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None,
+            _get_write_executor(),
             save_cor_alert_in_bq,
             alert_id,
             user_id,
@@ -633,10 +1054,7 @@ def save_cor_alert_to_queue(
     }
 
     try:
-        if use_batch:
-            enqueue_bigquery_row(table_full_name, data_to_save)
-        else:
-            insert_rows_json_with_retry_and_dlq(table_full_name, [data_to_save])
+        _gravar_linha(table_full_name, data_to_save, use_batch)
         logger.info(f"Alerta COR salvo na fila: {alert_id}")
     except Exception as e:
         logger.error(f"Erro ao salvar alerta COR na fila: {str(e)}")
@@ -662,7 +1080,7 @@ async def save_cor_alert_to_queue_background(
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None,
+            _get_write_executor(),
             save_cor_alert_to_queue,
             alert_id,
             user_id,
@@ -1415,16 +1833,425 @@ async def get_bigquery_result(
 
 
 # ---------------------------------------------------------------------------
+# Reprocessamento da DLQ (CHATR-126).
+#
+# Persistir o payload que falhou só resolve metade do problema: sem um caminho
+# de volta, o dado sai de "perdido em silêncio" para "parado numa lista que
+# ninguém lê". Aqui estão as duas metades que faltavam — um worker que devolve
+# a DLQ ao BigQuery sozinho quando ele volta, e as funções que o CLI de
+# operação (`python -m src.utils.bq_dlq_replay`) usa para o caminho manual.
+#
+# Contrato de entrega: o item só sai da DLQ *depois* de o BigQuery confirmar a
+# escrita. Uma queda entre a confirmação e a remoção reprocessa o item na
+# próxima varredura, ou seja, duplica. É a troca deliberada — para log,
+# feedback e alerta, registro duplicado é um incômodo de análise; registro
+# perdido é o defeito que esta história inteira existe para eliminar.
+# ---------------------------------------------------------------------------
+
+_DLQ_DRAIN_LOCK_KEY = "bq_dlq_drain:lock"
+_DLQ_DRAIN_LOCK_TTL_SECONDS = 120
+
+
+@contextlib.contextmanager
+def _dlq_drain_lock(r):
+    """Serializa o drain entre réplicas — dois drenos concorrentes duplicariam.
+
+    Best-effort de propósito: se o Redis não responder ao `SET NX`, o drain
+    apenas não roda nesta varredura. Bloquear o worker por causa do lock
+    converteria indisponibilidade do Redis em DLQ que nunca escoa.
+    """
+    token = uuid.uuid4().hex
+    adquirido = False
+    try:
+        adquirido = bool(
+            r.set(_DLQ_DRAIN_LOCK_KEY, token, nx=True, ex=_DLQ_DRAIN_LOCK_TTL_SECONDS)
+        )
+    except Exception as e:
+        logger.warning(f"Não foi possível adquirir o lock de drain da DLQ: {e}")
+    try:
+        yield adquirido
+    finally:
+        if adquirido:
+            # Só libera se o token ainda for nosso: se o TTL expirou e outro
+            # processo pegou o lock, apagá-lo aqui soltaria o dele.
+            with contextlib.suppress(Exception):
+                if r.get(_DLQ_DRAIN_LOCK_KEY) == token:
+                    r.delete(_DLQ_DRAIN_LOCK_KEY)
+
+
+def _dlq_redis_keys(r, table_full_name: str = None) -> List[str]:
+    """Chaves de DLQ existentes no Redis, opcionalmente filtradas por tabela."""
+    if table_full_name:
+        return [_dlq_key(table_full_name)]
+    try:
+        return sorted(r.scan_iter(match=f"{DLQ_KEY_PREFIX}:*", count=100))
+    except Exception as e:
+        logger.warning(f"Não foi possível listar as chaves da DLQ: {e}")
+        return []
+
+
+def _mover_para_poison(r, chave: str, bruto: str, table_full_name: str) -> bool:
+    """Tira da fila principal um item que nunca vai ser aceito.
+
+    Sem isto, um único payload malformado na cabeça da lista bloquearia para
+    sempre tudo o que chegou depois dele — a DLQ inteira ficaria refém de um
+    registro só. O item não é descartado: vai para uma chave separada, com o
+    mesmo teto e a mesma validade, para inspeção manual.
+
+    Devolve `False` se não conseguiu mover. Quem chama precisa saber: insistir
+    sobre um item que não sai da cabeça da lista é laço infinito.
+    """
+    chave_poison = _dlq_poison_key(table_full_name)
+    max_items = int(getattr(env, "BIGQUERY_DLQ_MAX_ITEMS", 1000))
+    ttl = int(getattr(env, "BIGQUERY_DLQ_TTL_SECONDS", 604800))
+    try:
+        pipe = r.pipeline()
+        pipe.rpush(chave_poison, bruto)
+        pipe.ltrim(chave_poison, -max_items, -1)
+        if ttl > 0:
+            pipe.expire(chave_poison, ttl)
+        # O LPOP vai na mesma pipeline que o RPUSH: numa falha parcial o item
+        # fica duplicado (nas duas chaves), nunca ausente das duas.
+        pipe.lpop(chave)
+        pipe.execute()
+    except Exception as e:
+        logger.error(f"Não foi possível mover item para poison ({chave_poison}): {e}")
+        return False
+    logger.critical(
+        f"Item da DLQ de {table_full_name} recusado definitivamente pelo BigQuery "
+        f"(schema/conteúdo). Movido para {chave_poison} — exige correção manual."
+    )
+    return True
+
+
+def _replay_dlq_redis(
+    limite: int, table_full_name: str = None, dry_run: bool = False
+) -> dict:
+    """Devolve itens da DLQ do Redis ao BigQuery. Bloqueante — use no executor."""
+    resumo = {"itens": 0, "linhas": 0, "poison": 0, "pendentes": 0, "erros": []}
+    r = _get_sync_redis_client()
+    if r is None:
+        return resumo
+
+    with _dlq_drain_lock(r) as adquirido:
+        if not adquirido:
+            logger.info("Drain da DLQ já em andamento em outra réplica; pulando.")
+            return resumo
+
+        for chave in _dlq_redis_keys(r, table_full_name):
+            if chave == _DLQ_DRAIN_LOCK_KEY:
+                continue
+            # O laço é limitado por *iterações*, não por itens devolvidos com
+            # sucesso. A diferença importa: item que vai para poison ou que vem
+            # sem payload não incrementa `itens`, então um contador só de
+            # sucesso não faria o laço terminar. E como cada iteração relê a
+            # cabeça da lista, qualquer remoção que falhe em silêncio deixaria
+            # o mesmo item ali — laço infinito segurando uma thread do pool.
+            processados = 0
+            while processados < limite and resumo["itens"] < limite:
+                processados += 1
+                try:
+                    brutos = r.lrange(chave, 0, 0)
+                except Exception as e:
+                    resumo["erros"].append(f"{chave}: {e}")
+                    break
+                if not brutos:
+                    break
+
+                bruto = brutos[0]
+                try:
+                    item = json.loads(bruto)
+                except (ValueError, TypeError):
+                    # Entrada ilegível não tem como ser reprocessada, e mantê-la
+                    # na cabeça travaria a fila. Vai para poison como as demais.
+                    resumo["poison"] += 1
+                    if dry_run:
+                        break  # nada é consumido em dry-run; sair evita laço infinito
+                    if not _mover_para_poison(r, chave, bruto, chave.split(":", 1)[-1]):
+                        resumo["erros"].append(f"{chave}: falha ao mover para poison")
+                        break
+                    continue
+
+                tabela = item.get("table_full_name") or chave.split(":", 1)[-1]
+                payload = item.get("payload") or []
+
+                if dry_run:
+                    resumo["itens"] += 1
+                    resumo["linhas"] += len(payload)
+                    break  # sem consumir: só reporta a cabeça da fila
+
+                if not payload:
+                    try:
+                        r.lpop(chave)
+                    except Exception as e:
+                        resumo["erros"].append(f"{chave}: {e}")
+                        break
+                    continue
+
+                try:
+                    _insert_rows_json_raw(
+                        tabela, payload, max_retries=2, initial_delay=0.5
+                    )
+                except Exception as e:
+                    if _e_falha_permanente(e):
+                        resumo["poison"] += 1
+                        if not _mover_para_poison(r, chave, bruto, tabela):
+                            resumo["erros"].append(
+                                f"{tabela}: falha ao mover para poison"
+                            )
+                            break
+                        continue
+                    # Falha transitória: deixa tudo como está e tenta na
+                    # próxima varredura, quando o BigQuery provavelmente voltou.
+                    resumo["erros"].append(f"{tabela}: {e}")
+                    break
+
+                # A escrita já foi confirmada: se o LPOP falhar, o item volta na
+                # próxima varredura e duplica. É a troca aceita — ver o
+                # cabeçalho desta seção.
+                try:
+                    r.lpop(chave)
+                except Exception as e:
+                    resumo["erros"].append(f"{chave}: {e}")
+                    break
+                resumo["itens"] += 1
+                resumo["linhas"] += len(payload)
+                _bump_metric("rows_replayed", len(payload))
+
+            with contextlib.suppress(Exception):
+                resumo["pendentes"] += r.llen(chave)
+
+    return resumo
+
+
+def _replay_dlq_arquivos(
+    limite: int, table_full_name: str = None, dry_run: bool = False
+) -> dict:
+    """Devolve ao BigQuery o que caiu no fallback em arquivo. Bloqueante."""
+    resumo = {"itens": 0, "linhas": 0, "poison": 0, "pendentes": 0, "erros": []}
+    dlq_dir = _dlq_dir()
+    if not dlq_dir.is_dir():
+        return resumo
+
+    alvo = (
+        _sanitize_table_name(table_full_name).replace(".", "_")
+        if table_full_name
+        else None
+    )
+
+    # `.processing` primeiro: são sobras de uma execução anterior que morreu no
+    # meio. Ficam à frente para não envelhecerem indefinidamente.
+    arquivos = sorted(dlq_dir.glob("dlq_*.jsonl.processing")) + sorted(
+        dlq_dir.glob("dlq_*.jsonl")
+    )
+
+    for arquivo in arquivos:
+        if alvo and f"dlq_{alvo}.jsonl" not in arquivo.name:
+            continue
+
+        if arquivo.suffix == ".processing":
+            trabalho = arquivo
+        else:
+            # Renomear antes de ler é o que evita perder linha: `_persist_to_dlq`
+            # continua acrescentando ao nome original, que a partir daqui é um
+            # arquivo novo. Sem isso, reescrever o arquivo no fim apagaria tudo
+            # que tivesse sido acrescentado durante o reprocessamento.
+            trabalho = arquivo.with_name(arquivo.name + ".processing")
+            if dry_run:
+                trabalho = arquivo
+            else:
+                try:
+                    arquivo.rename(trabalho)
+                except OSError as e:
+                    resumo["erros"].append(f"{arquivo.name}: {e}")
+                    continue
+
+        try:
+            linhas = [
+                linha
+                for linha in trabalho.read_text(encoding="utf-8").splitlines()
+                if linha.strip()
+            ]
+        except OSError as e:
+            resumo["erros"].append(f"{trabalho.name}: {e}")
+            continue
+
+        if dry_run:
+            resumo["itens"] += len(linhas)
+            for linha in linhas:
+                with contextlib.suppress(ValueError, TypeError):
+                    resumo["linhas"] += len(json.loads(linha).get("payload") or [])
+            continue
+
+        restantes: List[str] = []
+        for indice, linha in enumerate(linhas):
+            if resumo["itens"] >= limite:
+                restantes.extend(linhas[indice:])
+                break
+            try:
+                item = json.loads(linha)
+            except (ValueError, TypeError):
+                resumo["poison"] += 1
+                logger.critical(
+                    f"Linha ilegível na DLQ em arquivo ({trabalho.name}) descartada."
+                )
+                continue
+
+            tabela = item.get("table_full_name")
+            payload = item.get("payload") or []
+            if not tabela or not payload:
+                continue
+            try:
+                _insert_rows_json_raw(tabela, payload, max_retries=2, initial_delay=0.5)
+            except Exception as e:
+                if _e_falha_permanente(e):
+                    resumo["poison"] += 1
+                    logger.critical(
+                        f"Item da DLQ em arquivo recusado definitivamente por "
+                        f"{tabela}: {e}. Descartado do arquivo."
+                    )
+                    continue
+                resumo["erros"].append(f"{tabela}: {e}")
+                restantes.extend(linhas[indice:])
+                break
+            resumo["itens"] += 1
+            resumo["linhas"] += len(payload)
+            _bump_metric("rows_replayed", len(payload))
+
+        try:
+            if restantes:
+                trabalho.write_text("\n".join(restantes) + "\n", encoding="utf-8")
+                resumo["pendentes"] += len(restantes)
+            else:
+                trabalho.unlink(missing_ok=True)
+        except OSError as e:
+            resumo["erros"].append(f"{trabalho.name}: {e}")
+
+    return resumo
+
+
+def replay_bigquery_dlq(
+    limite: int = None, table_full_name: str = None, dry_run: bool = False
+) -> dict:
+    """Reprocessa a DLQ (Redis e arquivo) devolvendo o que conseguiu ao BigQuery.
+
+    Bloqueante: chame de thread (o worker usa o executor de escrita) ou de um
+    processo de linha de comando, nunca direto da event loop.
+    """
+    if limite is None:
+        limite = int(getattr(env, "BIGQUERY_DLQ_DRAIN_BATCH", 100))
+
+    total = {"itens": 0, "linhas": 0, "poison": 0, "pendentes": 0, "erros": []}
+
+    parcial_redis = _replay_dlq_redis(limite, table_full_name, dry_run)
+    # O limite é o orçamento da varredura inteira, não de cada origem: o que o
+    # Redis consumiu sai do que sobra para os arquivos.
+    restante = limite if dry_run else max(limite - parcial_redis["itens"], 0)
+    parcial_arquivos = _replay_dlq_arquivos(restante, table_full_name, dry_run)
+
+    for parcial in (parcial_redis, parcial_arquivos):
+        for chave in ("itens", "linhas", "poison", "pendentes"):
+            total[chave] += parcial[chave]
+        total["erros"].extend(parcial["erros"])
+    return total
+
+
+def get_dlq_depth() -> dict:
+    """Quantos itens estão parados na DLQ, por origem. Bloqueante.
+
+    É o que faltava para alguém *descobrir* que há dado parado: até aqui a DLQ
+    só aparecia em linha de log no instante da falha, que ninguém revisita.
+    """
+    profundidade = {"redis": 0, "poison": 0, "arquivos": 0, "total": 0}
+
+    r = _get_sync_redis_client()
+    if r is not None:
+        try:
+            for chave in r.scan_iter(match=f"{DLQ_KEY_PREFIX}:*", count=100):
+                if chave != _DLQ_DRAIN_LOCK_KEY:
+                    profundidade["redis"] += r.llen(chave)
+            for chave in r.scan_iter(match=f"{DLQ_POISON_KEY_PREFIX}:*", count=100):
+                profundidade["poison"] += r.llen(chave)
+        except Exception as e:
+            logger.warning(f"Não foi possível medir a profundidade da DLQ: {e}")
+
+    with contextlib.suppress(Exception):
+        dlq_dir = _dlq_dir()
+        if dlq_dir.is_dir():
+            for arquivo in dlq_dir.glob("dlq_*.jsonl*"):
+                with open(arquivo, "r", encoding="utf-8") as f:
+                    profundidade["arquivos"] += sum(1 for linha in f if linha.strip())
+
+    profundidade["total"] = (
+        profundidade["redis"] + profundidade["poison"] + profundidade["arquivos"]
+    )
+    return profundidade
+
+
+async def get_dlq_depth_async() -> dict:
+    """`get_dlq_depth` fora da event loop — o cliente Redis aqui é síncrono."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_get_write_executor(), get_dlq_depth)
+
+
+async def drain_bigquery_dlq_loop() -> None:
+    """Worker que devolve a DLQ ao BigQuery periodicamente.
+
+    Roda como task do lifespan. Todo o trabalho bloqueante (Redis síncrono,
+    insert do BigQuery, leitura de arquivo) vai para o pool de escrita: a event
+    loop nunca fica presa numa varredura, mesmo quando a DLQ está cheia.
+
+    Nunca deixa uma exceção escapar. Este laço é a única coisa que devolve dado
+    à sua tabela de destino; um erro não tratado o mataria em silêncio e a DLQ
+    voltaria a ser um depósito sem saída.
+    """
+    intervalo = float(getattr(env, "BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS", 300.0))
+    loop = asyncio.get_running_loop()
+    logger.info(f"Worker de drain da DLQ iniciado (intervalo: {intervalo}s).")
+
+    while True:
+        try:
+            await asyncio.sleep(intervalo)
+            resumo = await loop.run_in_executor(
+                _get_write_executor(), replay_bigquery_dlq
+            )
+            if resumo["itens"] or resumo["poison"]:
+                logger.info(
+                    f"Drain da DLQ: {resumo['itens']} item(ns) / {resumo['linhas']} "
+                    f"linha(s) devolvidos ao BigQuery; {resumo['poison']} em poison; "
+                    f"{resumo['pendentes']} ainda pendente(s)."
+                )
+            if resumo["erros"]:
+                logger.warning(
+                    f"Drain da DLQ terminou com {len(resumo['erros'])} erro(s); "
+                    f"os itens seguem na fila. Primeiro: {resumo['erros'][0]}"
+                )
+        except asyncio.CancelledError:
+            logger.info("Worker de drain da DLQ encerrado.")
+            raise
+        except Exception:
+            logger.exception("Falha inesperada no worker de drain da DLQ")
+
+
+# ---------------------------------------------------------------------------
 # Module-level initialisation — must come after flush_bigquery_batch_buffer is
 # defined so the flush thread can call it safely.
 # ---------------------------------------------------------------------------
 
-# Flush remaining rows on clean process exit (atexit fires before interpreter
-# shutdown; gunicorn/uvicorn trigger it on SIGTERM for each worker).
+# Rede de segurança para o encerramento programático (testes, uso embarcado,
+# `sys.exit`). Atenção ao que `atexit` NÃO cobre: morte por sinal com handler
+# default não passa por aqui — daí `_install_shutdown_signal_handlers()` logo
+# abaixo, que é o caminho que de fato executa em produção.
 atexit.register(_stop_batch_flush_thread)
 
 # Encerra o pool de leituras no mesmo momento (não espera query pendurada).
 atexit.register(_shutdown_read_executor)
+
+# Flush do buffer em SIGTERM/SIGINT. Precisa ser instalado *antes* de a uvicorn
+# capturar os sinais: é o handler que ela guarda como "anterior", restaura ao
+# sair de `serve()` e re-levanta. Como este módulo é importado por `src.app`,
+# que a `src.main` importa antes de `mcp.run()`, a ordem está garantida.
+_install_shutdown_signal_handlers()
 
 # Start the periodic background flush thread for the lifetime of this process.
 _start_batch_flush_thread()
