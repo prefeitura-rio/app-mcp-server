@@ -4,7 +4,7 @@
 - **Status**: Implementado
 - **Data**: 2026-08-20
 - **Relacionados**: CHATR-102 (orçamento de tempo das leituras), CHATR-114 (cache do client), [CHATR-119](health-checks-e-preflight.md) (health checks)
-- **Escopo**: `src/utils/bigquery.py`, `src/utils/bq_dlq_replay.py` (novo), `src/utils/background.py` (novo), `src/config/env.py`, `src/app.py`, `src/health/checks.py`, `src/health/routes.py`, `src/tools/{search,feedback_tools,equipments_tools}.py`, `k8s/{prod,staging}/resources.yaml`, arquivos de teste.
+- **Escopo**: `src/utils/bigquery.py`, `src/utils/bq_dlq_replay.py` (novo), `src/utils/background.py` (novo), `src/config/env.py`, `src/app.py`, `src/health/checks.py`, `src/health/routes.py`, `src/tools/{search,feedback_tools,equipments_tools,cor_alert_tools}.py`, `k8s/{prod,staging}/resources.yaml`, arquivos de teste.
 
 ## Problema
 
@@ -247,6 +247,120 @@ que se quer ver; e **tirar o poison do agregado**, que elimina o mascaramento
 mas devolve o poison à condição de "aparece só numa linha de log que ninguém
 revisita", o problema que o check existe para resolver.
 
+### D17 — O encerramento espera a fila do pool antes de esvaziar o buffer
+
+Faltava um passo entre a D13 (a task de background não pode ser coletada) e a
+D1 (o buffer é drenado no sinal). Entre os dois há uma fila: a escrita é
+submetida ao pool e só entra no buffer quando a thread de fato executa
+`save_*_in_bq`. No encerramento, o que ainda estava nessa fila era cancelado por
+`_shutdown_write_executor` (`cancel_futures=True`) — e some sem deixar nada.
+
+Não estava no buffer, então o flush final não a alcançava. Nunca chegou a falhar
+no BigQuery, então a DLQ também não a recebia. Era a mesma perda silenciosa,
+agora um passo **depois** de toda a proteção construída aqui.
+
+`_stop_batch_flush_thread` passa a ter três passos, e a ordem é o que faz o
+encerramento não perder linha:
+
+| Passo | O que faz | Se viesse depois |
+|---|---|---|
+| 1. `_drenar_pool_de_escrita` | a fila do executor vira linha no buffer | o flush não veria essas linhas |
+| 2. `flush_bigquery_batch_buffer` | o buffer vira escrita ou DLQ | — |
+| 3. `_shutdown_write_executor` | cancela o que não escoou | cancelaria antes de o dreno rodar |
+
+O prazo (`BIGQUERY_SHUTDOWN_DRAIN_SECONDS`, 3s) é obrigatório pelo mesmo motivo
+do lock com teto da D2: esta função roda na thread principal, dentro do handler
+de sinal. Esperar sem teto converteria uma escrita pendurada em pod que não
+termina — e o SIGKILL seguinte levaria o buffer inteiro, que é a perda maior. O
+prazo aumenta o que se salva; não promete salvar tudo.
+
+Teto próprio, e não o `BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS`, porque os orçamentos
+são de naturezas diferentes: aquele mede uma chamada de rede, este mede o
+escoamento de uma fila local. Somados ao pior caso do flush, cabem com folga nos
+60s da D14.
+
+Detalhe de implementação: `ThreadPoolExecutor.shutdown(wait=True)` não aceita
+prazo, então a espera vai para uma thread auxiliar e o teto é aplicado sobre um
+`Event`. Fechar o pool para novas submissões ali é o comportamento desejado — o
+processo está terminando, e o flush seguinte escreve direto, sem passar pelo
+executor.
+
+### D18 — A primeira varredura da DLQ não espera o intervalo cheio
+
+O intervalo folgado (`BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS`, 300s) existe pela
+razão da D3: reprocessar de minuto em minuto enquanto o BigQuery está fora só
+empilha falha sobre falha. Essa é uma preocupação da varredura **recorrente**.
+
+Aplicá-la também à primeira invertia o efeito no cenário que mais importa. A DLQ
+do Redis sobrevive ao pod: o que ficou parado do processo anterior já está lá
+quando este sobe, e segurá-lo por mais cinco minutos não protege de nada — o
+BigQuery que derrubou aquele pod não é necessariamente o mesmo de agora.
+
+A primeira varredura passa a acontecer em `min(15s, intervalo)`. Quinze e não
+zero para dar lugar ao preflight e à sondagem inicial de dependências: começar
+um drain no mesmo instante do boot faria os dois disputarem o pool de escrita
+justamente quando ele está sendo criado.
+
+### D19 — A expiração dos arquivos de DLQ deixa de depender do worker
+
+A D12 deu TTL ao fallback em arquivo, mas a varredura que o aplica só era
+chamada de dentro de `_replay_dlq_arquivos`. Dois casos ficavam sem limpeza
+nenhuma: `BIGQUERY_DLQ_DRAIN_ENABLED=false` e execução local.
+
+Isso não é só higiene de disco. O TTL desses arquivos é o que limita a retenção
+do dado pessoal do payload (`user_id` é telefone; alerta do COR tem endereço e
+coordenada) — ver D6. Amarrado a um worker que pode estar desligado, ele não era
+garantia de nada.
+
+`expirar_arquivos_dlq_async` roda no startup do lifespan, no pool de escrita
+(a varredura toca o disco), e nunca propaga exceção: limpeza não pode ser motivo
+de o servidor não subir. A chamada dentro do drain continua, para o caso de o
+processo ficar de pé por mais tempo que o TTL.
+
+### D20 — O alerta do COR tem prazo de espera, não espera indefinida
+
+A D11 tirou o alerta de alta/crítica do lote para que ele exista numa tabela
+consultável durante a ocorrência. O efeito colateral estava do outro lado: a
+tool passava a aguardar um insert direto com retry, duas vezes (registro e fila
+de despacho). Com o BigQuery fora, são dezenas de segundos de espera para quem
+está relatando uma emergência — o oposto do que a D11 pretendia melhorar.
+
+O prazo é `COR_ALERT_WRITE_DEADLINE_SECONDS` (8s) por escrita. Estourado, a tool
+responde e a escrita continua.
+
+O mecanismo é `wait_for(shield(task))`, e o `shield` não é detalhe. `wait_for`
+sozinho **cancela** a corrotina ao estourar o prazo, e uma escrita cancelada
+antes de a thread do pool começar não deixa rastro nenhum: não há linha no
+buffer nem item na DLQ, porque ela nunca chegou a falhar no BigQuery. Trocaria
+espera longa por perda silenciosa — é a mesma armadilha da D17, por outro
+caminho. Com o shield, o prazo vale só para *esperar*.
+
+A task vem de `disparar_em_background` (D13), que a mantém referenciada. Sem
+isso, ao descartar o shield o único dono da task sumiria.
+
+`_registrar_com_prazo` devolve se a escrita confirmou dentro do prazo, e o log
+de sucesso passa a depender disso. É a D8 aplicada ao log: dizer "registrado"
+sobre algo ainda em voo mandaria a investigação de um alerta faltante começar
+pelo lugar errado.
+
+### D21 — O item em poison carrega o motivo da recusa definitiva
+
+O campo `error` do item da DLQ guarda a falha que o levou **para a DLQ**, que
+não é necessariamente a que o tornou irrecuperável: um item pode entrar por
+indisponibilidade do BigQuery e só depois, numa varredura do drain, ser recusado
+por schema.
+
+A listagem do poison mostrava esse `error`. Ou seja, a operação que a D15
+desenhou para "ler o erro do BigQuery e o campo recusado" podia exibir uma
+mensagem de timeout — que não diz nada sobre o que corrigir. O caminho existia e
+apontava para o lugar errado.
+
+`_marcar_motivo_do_poison` anota `poison_error` e `poison_at` no item ao movê-lo,
+nos dois caminhos (Redis e arquivo). O `error` original é preservado e aparece
+como `erro na entrada da DLQ` quando difere: juntos, os dois contam a história
+completa. Entrada ilegível volta como está — não há onde anotar, e perdê-la seria
+pior que não anotar.
+
 ## Limitação conhecida
 
 O fallback em arquivo da DLQ (`DATA_DIR/bq_dlq/*.jsonl`) grava numa camada efêmera: não há volume montado no `k8s/`. No cenário exato em que ele é acionado — Redis fora —, um restart do pod leva o arquivo junto. Ele segue valendo como rede de segurança dentro da vida do pod (o worker de drain o reprocessa), mas **não** é armazenamento durável. Tornar durável exige um PVC, que é decisão de infraestrutura e ficou fora deste escopo.
@@ -272,6 +386,8 @@ Todas as variáveis têm default e `action="ignore"` — nenhuma entra em `REQUI
 | `BIGQUERY_DLQ_DRAIN_INTERVAL_SECONDS` | 300 | intervalo do worker de drain |
 | `BIGQUERY_DLQ_DRAIN_BATCH` | 100 | itens por varredura |
 | `BIGQUERY_DLQ_DRAIN_ENABLED` | true | desliga o drain automático |
+| `BIGQUERY_SHUTDOWN_DRAIN_SECONDS` | 3.0 | espera a fila do pool escoar no encerramento |
+| `COR_ALERT_WRITE_DEADLINE_SECONDS` | 8.0 | prazo que a tool de alerta espera pela escrita |
 
 ## Operação
 
