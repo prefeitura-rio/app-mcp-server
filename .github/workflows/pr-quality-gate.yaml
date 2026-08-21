@@ -151,38 +151,22 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --all-groups
 
+      - name: Load shared CI environment
+        # Lista única para os jobs `test` e `build` — ver .github/ci.env.
+        # Comentários e linhas em branco são filtrados: o parser do
+        # GITHUB_ENV só aceita `KEY=VALUE`.
+        run: grep -Ev '^\s*(#|$)' .github/ci.env >> "$GITHUB_ENV"
+
       - name: Run tests with coverage
         env:
-          VALID_TOKENS: test-token
-          WORKFLOWS_GCP_SERVICE_ACCOUNT: test-workflows-sa
-          WORKFLOWS_GCS_BUCKET: test-workflows-bucket
-          GEMINI_API_KEY: test-gemini-key
-          GEMINI_MODEL: gemini-2.5-flash
-          GOOGLE_MAPS_API_URL: https://maps.googleapis.com/maps/api/geocode/json
-          GOOGLE_MAPS_API_KEY: test-google-key
-          SHORT_API_URL: https://test.short.local
-          SHORT_API_TOKEN: test-short-token
-          GCP_SERVICE_ACCOUNT_CREDENTIALS: e30=
-          NOMINATIM_API_URL: https://nominatim.openstreetmap.org/search
-          ERROR_INTERCEPTOR_URL: https://test.interceptor.local/api
-          ERROR_INTERCEPTOR_TOKEN: test-interceptor-token
-          IPTU_API_URL: https://test.iptu.local/api
-          IPTU_API_TOKEN: test-iptu-token
-          WA_IPTU_URL: https://test.wa-iptu.local/api
-          WA_IPTU_TOKEN: test-wa-iptu-token
-          WA_IPTU_PUBLIC_KEY: test-wa-iptu-public-key
-          DIVIDA_ATIVA_API_URL: https://test.divida.local/api
-          DIVIDA_ATIVA_ACCESS_KEY: test-divida-access-key
+          # Específicas deste job; o restante vem do passo acima.
+          # Os services do runner respondem em localhost, e o pytest não
+          # executa o preflight — daí o placeholder de credencial bastar
+          # aqui, mas não no container (ver job `build`).
           REDIS_URL: redis://localhost:6379/0
-          REDIS_TTL_SECONDS: "3600"
-          PROXY_URL: https://test.proxy.local
-          SGRC_URL: https://test.sgrc.local/api
-          SGRC_AUTHORIZATION_HEADER: test-sgrc-auth
-          SGRC_BODY_TOKEN: test-sgrc-body-token
-          GMAPS_API_TOKEN: test-gmaps-token
-          DATA_DIR: /tmp
-          TYPESENSE_PARAMETERS: none
           MONGODB_URL: mongodb://localhost:27017
+          DATA_DIR: /tmp
+          GCP_SERVICE_ACCOUNT_CREDENTIALS: e30=
         run: uv run pytest --junitxml=pytest.xml --cov=src --cov-report=xml --cov-report=term-missing
 
       - name: Upload pytest report artifact
@@ -244,9 +228,11 @@ jobs:
           path: coverage.xml
 
   build:
-    name: Build Dry Run + Image Scan
+    name: Build + Image Scan + Smoke HTTP
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    env:
+      HURL_VERSION: "8.0.1"
     needs:
       - lint
       - security-scan
@@ -282,6 +268,101 @@ jobs:
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
+
+      # ===== SMOKE HTTP CONTRA A IMAGEM (CHATR-165) =====
+      # Até aqui a imagem era construída, escaneada e descartada sem nunca ser
+      # executada: nada no gate verificava que o artefato que vai para o
+      # cluster sobe e fala HTTP. Roda neste job, e não em um separado, porque
+      # a imagem já está carregada aqui — passá-la adiante custaria um
+      # artifact de centenas de MB.
+
+      - name: Install Hurl
+        run: |
+          curl -fsSL -o /tmp/hurl.deb \
+            "https://github.com/Orange-OpenSource/hurl/releases/download/${HURL_VERSION}/hurl_${HURL_VERSION}_amd64.deb"
+          sudo dpkg -i /tmp/hurl.deb
+          hurl --version
+
+      - name: Start container under test
+        run: |
+          # O preflight recusa service account malformada e aborta o boot,
+          # então o placeholder `e30=` do job de testes não serve aqui. A
+          # chave é gerada no runner e vive o tempo do job: versionar uma
+          # chave privada, ainda que falsa, faria o Trivy e o SAST apontarem
+          # credencial no repositório. Não corresponde a conta alguma no GCP.
+          openssl genrsa -out /tmp/fake-sa.pem 2048 2>/dev/null
+
+          python3 - > /tmp/fake-sa.b64 <<'PY'
+          import base64, json
+
+          key = open("/tmp/fake-sa.pem").read()
+          info = {
+              "type": "service_account",
+              "project_id": "ci-smoke",
+              "private_key_id": "ci",
+              "private_key": key,
+              "client_email": "ci-smoke@example.invalid",
+              "client_id": "0",
+              "token_uri": "https://oauth2.googleapis.com/token",
+          }
+          print(base64.b64encode(json.dumps(info).encode()).decode(), end="")
+          PY
+
+          # Redis e MongoDB apontam para portas inalcançáveis de dentro do
+          # container de propósito: a suíte confirma que /health e
+          # /health/ready continuam 200 com dependência crítica fora do ar.
+          # Nenhum service precisa subir para este job.
+          docker run -d --name mcp-smoke -p 8080:80 \
+            --env-file .github/ci.env \
+            -e GCP_SERVICE_ACCOUNT_CREDENTIALS="$(cat /tmp/fake-sa.b64)" \
+            -e DATA_DIR=/app/data \
+            -e REDIS_URL=redis://127.0.0.1:6379/0 \
+            -e MONGODB_URL=mongodb://127.0.0.1:27017 \
+            app-mcp-server:pr-${{ github.sha }}
+
+      - name: Wait for container to serve /health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "Container respondendo apos ${i} tentativa(s)."
+              exit 0
+            fi
+            if [ -z "$(docker ps -q -f name=mcp-smoke)" ]; then
+              echo "Container morreu antes de atender - provavel falha de preflight:"
+              docker logs mcp-smoke
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "Container nao atendeu /health dentro do tempo limite."
+          docker logs mcp-smoke
+          exit 1
+
+      - name: Run Hurl smoke suite
+        # `--test` e obrigatorio: sem ele o Hurl imprime o corpo e sai com 0
+        # mesmo com assert falhando, e o gate passaria verde a toa.
+        run: |
+          hurl --test \
+            --variable base_url=http://127.0.0.1:8080 \
+            --variable token=test-token \
+            --report-html src/tests/hurl/store/report \
+            src/tests/hurl/smoke.hurl
+
+      - name: Upload Hurl report artifact
+        if: always() && hashFiles('src/tests/hurl/store/report/index.html') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: hurl-report
+          path: src/tests/hurl/store/report
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker logs mcp-smoke || true
+
+      - name: Stop container under test
+        if: always()
+        run: docker rm -f mcp-smoke || true
 
   pr-summary:
     name: PR Summary Comment
@@ -383,7 +464,7 @@ jobs:
             | Lint | ${formatStatus(results.lint)} |
             | Security Scan | ${formatStatus(results.security)} |
             | Tests + Coverage | ${formatStatus(results.test)} |
-            | Build + Image Scan | ${formatStatus(results.build)} |
+            | Build + Scan + Smoke | ${formatStatus(results.build)} |
 
             ${coverageBlock}
 
