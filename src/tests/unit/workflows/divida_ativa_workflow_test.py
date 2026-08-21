@@ -1288,16 +1288,82 @@ async def test_forma_pagamento_valida_salva_e_responde(
     assert state.status == "completed"
     assert state.data == {}
     assert state.internal == {}
+    guia_publica = {
+        "data_vencimento": "10/09/2026",
+        "link": "https://example.com/guia.pdf",
+        "codigo_de_barras": "123456789",
+        "pix": "000201PIX",
+    }
     assert state.agent_response.data == {
         "status": "completed",
         "guia_pagamento_a_vista": {
-            "data_vencimento": "10/09/2026",
-            "link": "https://example.com/guia.pdf",
-            "codigo_de_barras": "123456789",
-            "pix": "000201PIX",
+            **guia_publica,
+            "guias": [guia_publica],
+            "total_guias": 1,
         },
     }
     assert api_service.calls == [(["CDA-1"], ["EF-1"])]
+
+
+@pytest.mark.asyncio
+async def test_forma_pagamento_com_multiplas_guias_entrega_todas(
+    divida_ativa_modules,
+):
+    """CHATR-164: o EPGM emite uma guia por natureza de débito."""
+
+    class FakeAPIService:
+        async def emitir_guia_a_vista(self, cdas, efs):
+            return {
+                "api_resposta_sucesso": True,
+                "total_guias": 2,
+                "guias_emitidas": [
+                    {
+                        "data_vencimento": "10/09/2026",
+                        "link": "https://example.com/guia-1.pdf",
+                        "codigo_de_barras": "111",
+                        "pix": "PIX-1",
+                    },
+                    {
+                        "data_vencimento": "11/09/2026",
+                        "link": "https://example.com/guia-2.pdf",
+                        "codigo_de_barras": "222",
+                        "pix": "PIX-2",
+                    },
+                ],
+                "data_vencimento": "10/09/2026",
+                "link": "https://example.com/guia-1.pdf",
+                "codigo_de_barras": "111",
+                "pix": "PIX-1",
+            }
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeAPIService()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1"},
+            {"tipo": "execucao_fiscal", "identificador": "EF-1"},
+        ],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+    )
+
+    descricao = state.agent_response.description
+    assert "PIX-1" in descricao
+    assert "PIX-2" in descricao
+    assert "2 guias" in descricao
+
+    guia_publica = state.agent_response.data["guia_pagamento_a_vista"]
+    assert guia_publica["total_guias"] == 2
+    assert [item["pix"] for item in guia_publica["guias"]] == ["PIX-1", "PIX-2"]
+    # Campos no topo seguem existindo para quem lê uma guia só: a primeira.
+    assert guia_publica["pix"] == "PIX-1"
 
 
 @pytest.mark.asyncio
@@ -1708,11 +1774,16 @@ async def test_guia_emitida_retorna_payload_publico_compacto(
     assert data["status"] == "completed"
     assert state.data == {}
     assert state.internal == {}
-    assert data["guia_pagamento_a_vista"] == {
+    guia_publica = {
         "data_vencimento": "10/09/2026",
         "link": "https://example.com/guia.pdf",
         "codigo_de_barras": "123456789",
         "pix": "000201PIX",
+    }
+    assert data["guia_pagamento_a_vista"] == {
+        **guia_publica,
+        "guias": [guia_publica],
+        "total_guias": 1,
     }
     assert "arquivoBase64" not in data_json
     assert "A" * 1000 not in data_json

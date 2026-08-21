@@ -12,6 +12,7 @@ from src.tools.divida_ativa_v2 import service as service_module
 from src.tools.divida_ativa_v2.models import EmitirGuiaRequest, EmitirGuiaResponse
 from src.tools.divida_ativa_v2.service import (
     MENSAGEM_SELECAO_VAZIA,
+    MENSAGEM_SEM_GUIA,
     emitir_guia_a_vista_v2,
     emitir_guia_regularizacao_v2,
     formatar_erro_validacao,
@@ -605,22 +606,101 @@ async def test_motivo_nulo_da_pgm_vira_mensagem_padrao(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_multiplos_registros_retornam_o_ultimo_e_avisam(monkeypatch, logger_spy):
+async def test_multiplos_registros_devolvem_todas_as_guias(monkeypatch):
+    """
+    CHATR-164: o EPGM emite uma guia por natureza de débito.
+
+    Antes, o loop de extração sobrescrevia os mesmos campos e só a última guia
+    chegava ao consumidor — o cidadão pagava uma achando que quitou todas.
+    """
+
     async def fake_pgm_api(endpoint, consumidor, data):
         return [
-            {"codigoDeBarras": "111", "pdf": "a.pdf"},
-            {"codigoDeBarras": "222", "pdf": "b.pdf"},
+            {
+                "codigoDeBarras": "111",
+                "pdf": "a.pdf",
+                "dataVencimento": "10/04/2026",
+                "codigoQrEMVPix": "pix-1",
+            },
+            {
+                "codigoDeBarras": "222",
+                "pdf": "b.pdf",
+                "dataVencimento": "11/04/2026",
+                "codigoQrEMVPix": "pix-2",
+            },
         ]
 
     monkeypatch.setattr(service_module, "pgm_api", fake_pgm_api)
 
     resultado = await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
 
-    assert resultado["codigo_de_barras"] == "222"
+    assert resultado["total_guias"] == 2
+    assert resultado["guias_emitidas"] == [
+        {
+            "codigo_de_barras": "111",
+            "link": "a.pdf",
+            "data_vencimento": "10/04/2026",
+            "pix": "pix-1",
+        },
+        {
+            "codigo_de_barras": "222",
+            "link": "b.pdf",
+            "data_vencimento": "11/04/2026",
+            "pix": "pix-2",
+        },
+    ]
+    # Campos legado: a primeira guia, não a última.
+    assert resultado["codigo_de_barras"] == "111"
+    assert resultado["pix"] == "pix-1"
+
+
+@pytest.mark.asyncio
+async def test_registro_unico_fora_de_lista_vira_uma_guia(monkeypatch):
+    """A PGM devolvendo o registro solto não pode virar resposta sem guia."""
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return {"codigoDeBarras": "111", "pdf": "a.pdf"}
+
+    monkeypatch.setattr(service_module, "pgm_api", fake_pgm_api)
+
+    resultado = await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
+
+    assert resultado["api_resposta_sucesso"] is True
+    assert resultado["total_guias"] == 1
+    assert resultado["codigo_de_barras"] == "111"
+
+
+@pytest.mark.asyncio
+async def test_resposta_vazia_da_pgm_nao_vira_guia_em_branco(monkeypatch):
+    """`pgm_api` devolve {"success": True} quando a PGM não retorna nada."""
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return {"success": True}
+
+    monkeypatch.setattr(service_module, "pgm_api", fake_pgm_api)
+
+    resultado = await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert resultado["api_descricao_erro"] == MENSAGEM_SEM_GUIA
+
+
+@pytest.mark.asyncio
+async def test_resposta_sem_registros_vira_erro(monkeypatch, logger_spy):
+    """Sucesso sem guia nenhuma deixaria o cidadão sem nada para pagar."""
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return []
+
+    monkeypatch.setattr(service_module, "pgm_api", fake_pgm_api)
+
+    resultado = await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert resultado["api_descricao_erro"] == MENSAGEM_SEM_GUIA
     assert any(
-        registro.get("event") == "emitir_guia_v2_multiplos_registros"
-        and registro.get("registros") == 2
-        for registro in logger_spy["warning"]
+        registro.get("event") == "emitir_guia_v2_sem_guia"
+        for registro in logger_spy["error"]
     )
 
 

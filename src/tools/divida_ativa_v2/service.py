@@ -18,7 +18,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import ValidationError
 
 from src.tools.divida_ativa import log_execution_time, pgm_api
-from src.tools.divida_ativa_v2.models import EmitirGuiaRequest, EmitirGuiaResponse
+from src.tools.divida_ativa_v2.models import (
+    EmitirGuiaRequest,
+    EmitirGuiaResponse,
+    GuiaEmitida,
+)
 from src.utils.error_interceptor import interceptor, send_general_error
 from src.utils.log import logger
 
@@ -34,6 +38,14 @@ MENSAGEM_SELECAO_VAZIA = (
     "Nenhum item válido selecionado. Verifique se 'itens_informados'/"
     "'apenas_um_item' correspondem a chaves de 'dicionario_itens' e se o "
     "identificador consta nas listas enviadas."
+)
+
+# Campos que identificam um registro de guia na resposta da PGM.
+CAMPOS_PGM_GUIA = ("codigoDeBarras", "pdf", "dataVencimento", "codigoQrEMVPix")
+
+MENSAGEM_SEM_GUIA = (
+    "A PGM respondeu sem nenhuma guia emitida. Nenhum pagamento pode ser "
+    "feito com esta resposta; tente novamente."
 )
 
 
@@ -144,36 +156,43 @@ def montar_parametros_entrada(
     return parametros
 
 
-def _extrair_dados_guia(registros: Any) -> Dict[str, str]:
+def _e_registro_de_guia(registro: Any) -> bool:
     """
-    Extrai os campos da guia emitida a partir da resposta da PGM.
+    Diz se o registro da PGM é mesmo uma guia.
 
-    O contrato de resposta comporta uma única guia, então o último registro
-    vence — mesma semântica da v1 (divida_ativa.py:320-324). Se vier mais de
-    um, os anteriores são perdidos, e isso é registrado em log.
+    `pgm_api` também devolve dicts que não são guia — ``{"success": True}``
+    quando a resposta vem vazia. Sem este filtro, um deles viraria "guia" com
+    os quatro campos em branco e o consumidor receberia sucesso sem nada para
+    o cidadão pagar.
     """
-    dados: Dict[str, str] = {}
-    encontrados = 0
+    return isinstance(registro, dict) and any(
+        registro.get(campo) for campo in CAMPOS_PGM_GUIA
+    )
 
-    for item in registros:
-        if not isinstance(item, dict):
-            continue
-        encontrados += 1
-        dados["codigo_de_barras"] = item.get("codigoDeBarras") or ""
-        dados["link"] = item.get("pdf") or ""
-        dados["data_vencimento"] = item.get("dataVencimento") or ""
-        dados["pix"] = item.get("codigoQrEMVPix") or ""
 
-    if encontrados > 1:
-        logger.warning(
-            {
-                "event": "emitir_guia_v2_multiplos_registros",
-                "registros": encontrados,
-                "detalhe": "apenas o último registro é retornado ao consumidor",
-            }
-        )
+def _extrair_guias(registros: Any) -> List[GuiaEmitida]:
+    """
+    Extrai todas as guias emitidas a partir da resposta da PGM.
 
-    return dados
+    O EPGM emite uma guia por natureza de débito, então uma solicitação com N
+    identificadores pode devolver N registros. Até CHATR-164 este trecho
+    sobrescrevia os mesmos campos a cada volta do loop e devolvia só o último,
+    fazendo o cidadão pagar uma guia achando que quitou todas.
+
+    Aceita a lista de registros e também o registro único fora de lista, que
+    antes era descartado em silêncio pelo teste de tipo.
+    """
+    if isinstance(registros, dict):
+        registros = [registros]
+
+    if not isinstance(registros, list):
+        return []
+
+    return [
+        GuiaEmitida.de_registro(registro)
+        for registro in registros
+        if _e_registro_de_guia(registro)
+    ]
 
 
 def _identificadores_selecionados(
@@ -237,20 +256,44 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
     if isinstance(registros, dict) and "erro" in registros:
         return EmitirGuiaResponse.de_erro(registros.get("motivos") or "Erro na PGM")
 
+    guias_emitidas = _extrair_guias(registros)
+
+    # Sucesso sem nenhuma guia não é sucesso: o consumidor receberia
+    # 'api_resposta_sucesso: true' sem nada para o cidadão pagar.
+    if not guias_emitidas:
+        logger.error(
+            {
+                "event": "emitir_guia_v2_sem_guia",
+                "tipo": tipo,
+                "registros": registros,
+            }
+        )
+        return EmitirGuiaResponse.de_erro(MENSAGEM_SEM_GUIA)
+
+    logger.info(
+        {
+            "event": "emitir_guia_v2_concluida",
+            "tipo": tipo,
+            "total_guias": len(guias_emitidas),
+        }
+    )
+
     # Campos passados explicitamente: `**parametros_entrada` contra o
     # extra="forbid" de EmitirGuiaResponse transformaria uma guia emitida com
     # sucesso em erro caso o payload da PGM ganhasse qualquer chave nova.
-    dados_guia = _extrair_dados_guia(registros)
+    primeira = guias_emitidas[0]
     return EmitirGuiaResponse(
         api_resposta_sucesso=True,
         origem_solicitação=parametros_entrada["origem_solicitação"],
         cdas=parametros_entrada.get("cdas"),
         efs=parametros_entrada.get("efs"),
         guias=parametros_entrada.get("guias"),
-        codigo_de_barras=dados_guia.get("codigo_de_barras"),
-        link=dados_guia.get("link"),
-        data_vencimento=dados_guia.get("data_vencimento"),
-        pix=dados_guia.get("pix"),
+        guias_emitidas=guias_emitidas,
+        total_guias=len(guias_emitidas),
+        codigo_de_barras=primeira.codigo_de_barras,
+        link=primeira.link,
+        data_vencimento=primeira.data_vencimento,
+        pix=primeira.pix,
     )
 
 

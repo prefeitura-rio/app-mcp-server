@@ -511,18 +511,17 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         return consulta
 
-    def _build_public_guia_data(self, guia: dict | None) -> dict:
-        if not isinstance(guia, dict) or not guia.get("api_resposta_sucesso"):
-            return {}
+    # Campos de uma guia, com os nomes alternativos vindos direto da PGM.
+    GUIA_CAMPOS = {
+        "data_vencimento": ("data_vencimento", "dataVencimento"),
+        "link": ("link", "pdf", "arquivoBase64"),
+        "codigo_de_barras": ("codigo_de_barras", "codigoDeBarras"),
+        "pix": ("pix", "codigoQrEMVPix"),
+    }
 
-        mapping = {
-            "data_vencimento": ("data_vencimento",),
-            "link": ("link", "pdf"),
-            "codigo_de_barras": ("codigo_de_barras", "codigoDeBarras"),
-            "pix": ("pix", "codigoQrEMVPix"),
-        }
-        public_guia = {}
-        for public_field, candidates in mapping.items():
+    def _normalizar_guia(self, guia: dict) -> dict:
+        normalizada = {}
+        for public_field, candidates in self.GUIA_CAMPOS.items():
             value = next(
                 (
                     guia.get(candidate)
@@ -532,7 +531,48 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 None,
             )
             if value:
-                public_guia[public_field] = value
+                normalizada[public_field] = value
+        return normalizada
+
+    def _guias_da_resposta(self, guia: dict | None) -> list[dict]:
+        """
+        Todas as guias emitidas na resposta da tool.
+
+        O EPGM emite uma guia por natureza de débito, então a escolha do
+        cidadão pode gerar N guias (CHATR-164). 'guias_emitidas' é a fonte; o
+        fallback para os campos no topo cobre a resposta de guia única que
+        pode estar em cache de conversa.
+        """
+        if not isinstance(guia, dict):
+            return []
+
+        emitidas = guia.get("guias_emitidas")
+        if isinstance(emitidas, list):
+            normalizadas = [
+                self._normalizar_guia(item)
+                for item in emitidas
+                if isinstance(item, dict)
+            ]
+            normalizadas = [item for item in normalizadas if item]
+            if normalizadas:
+                return normalizadas
+
+        unica = self._normalizar_guia(guia)
+        return [unica] if unica else []
+
+    def _build_public_guia_data(self, guia: dict | None) -> dict:
+        if not isinstance(guia, dict) or not guia.get("api_resposta_sucesso"):
+            return {}
+
+        guias = self._guias_da_resposta(guia)
+        if not guias:
+            return {}
+
+        # Os campos no topo seguem sendo a primeira guia, para quem ainda lê
+        # uma só; 'guias' é o que garante que nenhuma se perca.
+        public_guia = dict(guias[0])
+        public_guia["guias"] = guias
+        public_guia["total_guias"] = len(guias)
 
         return public_guia
 
@@ -1385,22 +1425,15 @@ class DividaAtivaWorkflow(BaseWorkflow):
         forma_pagamento: str,
         guia: dict,
     ) -> str:
+        guias = self._guias_da_resposta(guia)
+
         if forma_pagamento == "boleto_bancario":
-            return DividaAtivaTemplates.boleto_bancario_a_vista(
-                guia.get("link")
-                or guia.get("pdf")
-                or guia.get("arquivoBase64")
-                or "N/A"
-            )
+            return DividaAtivaTemplates.boleto_bancario_a_vista(guias)
 
         if forma_pagamento == "codigo_barras":
-            return DividaAtivaTemplates.codigo_barras_a_vista(
-                guia.get("codigo_de_barras") or guia.get("codigoDeBarras") or "N/A"
-            )
+            return DividaAtivaTemplates.codigo_barras_a_vista(guias)
 
-        return DividaAtivaTemplates.pix_copia_e_cola_a_vista(
-            guia.get("pix") or guia.get("codigoQrEMVPix") or "N/A"
-        )
+        return DividaAtivaTemplates.pix_copia_e_cola_a_vista(guias)
 
     async def _processar_forma_pagamento_a_vista(self, state: ServiceState) -> bool:
         if "forma_pagamento_a_vista" not in state.payload:
