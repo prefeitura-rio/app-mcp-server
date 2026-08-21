@@ -93,7 +93,7 @@ def divida_ativa_modules(monkeypatch):
         "src.tools.multi_step_service.workflows.divida_ativa.core.models",
         "src/tools/multi_step_service/workflows/divida_ativa/core/models.py",
     )
-    _load_module(
+    templates_module = _load_module(
         "src.tools.multi_step_service.workflows.divida_ativa.templates",
         "src/tools/multi_step_service/workflows/divida_ativa/templates.py",
     )
@@ -105,6 +105,7 @@ def divida_ativa_modules(monkeypatch):
     return types.SimpleNamespace(
         ServiceState=service_models.ServiceState,
         DividaAtivaWorkflow=workflow_module.DividaAtivaWorkflow,
+        DividaAtivaTemplates=templates_module.DividaAtivaTemplates,
         models=models_module,
     )
 
@@ -1288,16 +1289,85 @@ async def test_forma_pagamento_valida_salva_e_responde(
     assert state.status == "completed"
     assert state.data == {}
     assert state.internal == {}
+    guia_publica = {
+        "data_vencimento": "10/09/2026",
+        "link": "https://example.com/guia.pdf",
+        "codigo_de_barras": "123456789",
+        "pix": "000201PIX",
+    }
     assert state.agent_response.data == {
         "status": "completed",
         "guia_pagamento_a_vista": {
-            "data_vencimento": "10/09/2026",
-            "link": "https://example.com/guia.pdf",
-            "codigo_de_barras": "123456789",
-            "pix": "000201PIX",
+            **guia_publica,
+            "guias": [guia_publica],
+            "total_guias": 1,
         },
     }
     assert api_service.calls == [(["CDA-1"], ["EF-1"])]
+
+
+@pytest.mark.asyncio
+async def test_forma_pagamento_com_multiplas_guias_entrega_todas(
+    divida_ativa_modules,
+):
+    """CHATR-164: o EPGM emite uma guia por natureza de débito."""
+
+    class FakeAPIService:
+        async def emitir_guia_a_vista(self, cdas, efs):
+            return {
+                "api_resposta_sucesso": True,
+                "total_guias": 2,
+                "guias_emitidas": [
+                    {
+                        "data_vencimento": "10/09/2026",
+                        "link": "https://example.com/guia-1.pdf",
+                        "codigo_de_barras": "111",
+                        "pix": "PIX-1",
+                    },
+                    {
+                        "data_vencimento": "11/09/2026",
+                        "link": "https://example.com/guia-2.pdf",
+                        "codigo_de_barras": "222",
+                        "pix": "PIX-2",
+                    },
+                ],
+                "data_vencimento": "10/09/2026",
+                "link": "https://example.com/guia-1.pdf",
+                "codigo_de_barras": "111",
+                "pix": "PIX-1",
+            }
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeAPIService()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1"},
+            {"tipo": "execucao_fiscal", "identificador": "EF-1"},
+        ],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+    )
+
+    templates = divida_ativa_modules.DividaAtivaTemplates
+    descricao = state.agent_response.description
+    assert "PIX-1" in descricao
+    assert "PIX-2" in descricao
+    # Contra a constante, e não contra a redação: o que importa é o cidadão ser
+    # avisado de que são duas guias, não a frase escolhida para dizer isso.
+    assert templates.AVISO_MULTIPLAS_GUIAS.format(total=2) in descricao
+
+    guia_publica = state.agent_response.data["guia_pagamento_a_vista"]
+    assert guia_publica["total_guias"] == 2
+    assert [item["pix"] for item in guia_publica["guias"]] == ["PIX-1", "PIX-2"]
+    # Campos no topo seguem existindo para quem lê uma guia só: a primeira.
+    assert guia_publica["pix"] == "PIX-1"
 
 
 @pytest.mark.asyncio
@@ -1708,15 +1778,80 @@ async def test_guia_emitida_retorna_payload_publico_compacto(
     assert data["status"] == "completed"
     assert state.data == {}
     assert state.internal == {}
-    assert data["guia_pagamento_a_vista"] == {
+    guia_publica = {
         "data_vencimento": "10/09/2026",
         "link": "https://example.com/guia.pdf",
         "codigo_de_barras": "123456789",
         "pix": "000201PIX",
     }
+    assert data["guia_pagamento_a_vista"] == {
+        **guia_publica,
+        "guias": [guia_publica],
+        "total_guias": 1,
+    }
     assert "arquivoBase64" not in data_json
     assert "A" * 1000 not in data_json
     assert "proximo_payload" not in data
+
+
+@pytest.mark.asyncio
+async def test_guia_so_com_base64_nao_vaza_para_o_payload_publico(
+    divida_ativa_modules,
+):
+    """
+    `arquivoBase64` é o último recurso do texto ao cidadão, nunca do payload.
+
+    Sem `pdf` nem `link` na resposta da PGM, o base64 é a única forma de
+    entregar o boleto na conversa — mas ele é o PDF inteiro codificado, e o
+    payload público volta a cada passo do workflow. Por isso os dois mappings
+    (GUIA_CAMPOS e GUIA_CAMPOS_MENSAGEM) são separados.
+    """
+    resultado = _resultado_divida(
+        cdas=[types.SimpleNamespace(cda_id="CDA-1", numero=None)],
+    )
+    base64_pdf = "A" * 10000
+    api_service = FakeDividaAtivaAPIService(
+        resultado=resultado,
+        guias={
+            "api_resposta_sucesso": True,
+            "dataVencimento": "10/09/2026",
+            "codigoDeBarras": "123456789",
+            "codigoQrEMVPix": "000201PIX",
+            "arquivoBase64": base64_pdf,
+        },
+    )
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = api_service
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "cpf_cnpj"})
+    state = await workflow.execute(state, {"cpf_cnpj": "12345678901"})
+    state = await workflow.execute(state, {"acao_resultado": "pagar_agora"})
+    state = await workflow.execute(state, {"opcao_menu": "pagar_a_vista"})
+    state = await workflow.execute(state, {"opcao_pagar_a_vista": "pagar_tudo"})
+    state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "boleto_bancario"},
+    )
+
+    data = state.agent_response.data
+    guia_publica = data["guia_pagamento_a_vista"]
+
+    # O cidadão recebe o boleto: sem `pdf`/`link`, o base64 é o que existe.
+    assert base64_pdf in state.agent_response.description
+
+    # O payload público não carrega o base64 sob nenhuma chave, e o campo
+    # `link` simplesmente não existe em vez de ser preenchido com ele.
+    assert "link" not in guia_publica
+    assert guia_publica["guias"] == [
+        {
+            "data_vencimento": "10/09/2026",
+            "codigo_de_barras": "123456789",
+            "pix": "000201PIX",
+        }
+    ]
+    assert base64_pdf not in json.dumps(data, ensure_ascii=False)
 
 
 @pytest.mark.asyncio

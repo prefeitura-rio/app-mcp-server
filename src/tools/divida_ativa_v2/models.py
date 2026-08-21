@@ -234,6 +234,38 @@ class EmitirGuiaRequest(BaseModel):
         return []
 
 
+class GuiaEmitida(BaseModel):
+    """
+    Uma guia efetivamente emitida pela PGM.
+
+    O EPGM emite uma guia por natureza de débito, então uma única solicitação
+    com N identificadores pode devolver N guias, cada uma com seu próprio PIX,
+    código de barras, PDF e vencimento.
+    """
+
+    # A PGM pode passar a devolver campos novos no registro da guia; ignorar
+    # em vez de quebrar uma emissão que já aconteceu.
+    model_config = ConfigDict(extra="ignore")
+
+    # `str = ""` e não `Optional[str]`: `de_registro` — o único construtor —
+    # normaliza campo ausente para string vazia, como a v1 sempre fez. Declarar
+    # Optional induziria o consumidor a testar `is None`, ramo que nunca roda.
+    codigo_de_barras: str = Field(default="", description="Código de barras da guia.")
+    link: str = Field(default="", description="Link para o PDF da guia.")
+    data_vencimento: str = Field(default="", description="Data de vencimento da guia.")
+    pix: str = Field(default="", description="Código QR EMV do PIX da guia.")
+
+    @classmethod
+    def de_registro(cls, registro: Dict[str, Any]) -> "GuiaEmitida":
+        """Constrói a guia a partir do registro cru da PGM."""
+        return cls(
+            codigo_de_barras=registro.get("codigoDeBarras") or "",
+            link=registro.get("pdf") or "",
+            data_vencimento=registro.get("dataVencimento") or "",
+            pix=registro.get("codigoQrEMVPix") or "",
+        )
+
+
 class EmitirGuiaResponse(BaseModel):
     """
     Resposta da emissão de guia.
@@ -264,17 +296,34 @@ class EmitirGuiaResponse(BaseModel):
     guias: Optional[List[str]] = Field(
         default=None, description="Guias enviadas para emissão (regularização)."
     )
+    guias_emitidas: Optional[List[GuiaEmitida]] = Field(
+        default=None,
+        description=(
+            "Todas as guias emitidas. O EPGM emite uma por natureza de "
+            "débito, então uma solicitação com N identificadores pode "
+            "devolver N guias."
+        ),
+    )
+    total_guias: Optional[int] = Field(
+        default=None, description="Quantidade de guias emitidas."
+    )
+    # Legado: mantidos para os consumidores que ainda leem uma guia só. Quando
+    # há mais de uma, refletem a PRIMEIRA — quem precisa de todas deve ler
+    # 'guias_emitidas'. Até CHATR-164 refletiam a última, sem critério.
     codigo_de_barras: Optional[str] = Field(
-        default=None, description="Código de barras da guia emitida."
+        default=None,
+        description="Código de barras da primeira guia emitida (legado).",
     )
     link: Optional[str] = Field(
-        default=None, description="Link para o PDF da guia emitida."
+        default=None, description="Link para o PDF da primeira guia emitida (legado)."
     )
     data_vencimento: Optional[str] = Field(
-        default=None, description="Data de vencimento da guia emitida."
+        default=None,
+        description="Data de vencimento da primeira guia emitida (legado).",
     )
     pix: Optional[str] = Field(
-        default=None, description="Código QR EMV do PIX da guia emitida."
+        default=None,
+        description="Código QR EMV do PIX da primeira guia emitida (legado).",
     )
 
     @classmethod

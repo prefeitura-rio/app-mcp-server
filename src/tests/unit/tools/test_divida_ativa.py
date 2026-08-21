@@ -186,6 +186,83 @@ async def test_da_emitir_guia_and_processar_registros(divida_module, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_processar_registros_devolve_todas_as_guias(divida_module, monkeypatch):
+    """
+    CHATR-164: o EPGM emite uma guia por natureza de débito.
+
+    Antes, o loop sobrescrevia os mesmos campos e só a última guia chegava ao
+    consumidor — o cidadão pagava uma achando que quitou todas.
+    """
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [
+            {
+                "codigoDeBarras": "111",
+                "pdf": "a.pdf",
+                "dataVencimento": "10/04/2026",
+                "codigoQrEMVPix": "pix-1",
+            },
+            {
+                "codigoDeBarras": "222",
+                "pdf": "b.pdf",
+                "dataVencimento": "11/04/2026",
+                "codigoQrEMVPix": "pix-2",
+            },
+        ]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    result = await divida_module.processar_registros(
+        endpoint="v2/guias",
+        consumidor="emitir",
+        parametros_entrada={"origem_solicitação": 0},
+    )
+
+    assert result["total_guias"] == 2
+    assert [guia["pix"] for guia in result["guias_emitidas"]] == ["pix-1", "pix-2"]
+    # Campos no topo: a primeira guia, não a última.
+    assert result["codigo_de_barras"] == "111"
+    assert result["link"] == "a.pdf"
+
+
+@pytest.mark.asyncio
+async def test_processar_registros_ignora_resposta_vazia_da_pgm(
+    divida_module, monkeypatch
+):
+    """`pgm_api` devolve {"success": True} quando a PGM não retorna nada."""
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return {"success": True}
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    result = await divida_module.processar_registros(
+        endpoint="v2/guias",
+        consumidor="emitir",
+        parametros_entrada={"origem_solicitação": 0},
+    )
+
+    assert result["api_resposta_sucesso"] is False
+    assert result["api_descricao_erro"] == divida_module.MENSAGEM_SEM_GUIA
+
+
+@pytest.mark.asyncio
+async def test_processar_registros_sem_guia_vira_erro(divida_module, monkeypatch):
+    """Sucesso sem guia nenhuma deixaria o cidadão sem nada para pagar."""
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return []
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    result = await divida_module.processar_registros(
+        endpoint="v2/guias",
+        consumidor="emitir",
+        parametros_entrada={"origem_solicitação": 0},
+    )
+
+    assert result["api_resposta_sucesso"] is False
+    assert result["api_descricao_erro"] == divida_module.MENSAGEM_SEM_GUIA
+
+
+@pytest.mark.asyncio
 async def test_emitir_guia_wrappers_and_consultar_debitos(divida_module, monkeypatch):
     async def fake_da_emitir_guia(parameters, tipo):
         return {"origem_solicitação": 0, "tipo": tipo}

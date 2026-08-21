@@ -161,27 +161,71 @@ class DividaAtivaTemplates:
     def forma_pagamento_a_vista_selecionada() -> str:
         return "Beleza."
 
-    @staticmethod
-    def boleto_bancario_a_vista(link: str) -> str:
-        return (
-            f"Beleza.\n\nClique no link para o pagamento por *boleto bancário*:\n{link}"
+    # O EPGM emite uma guia por natureza de débito, então a escolha do cidadão
+    # pode gerar N guias. Todas precisam ser pagas — entregar uma só faria o
+    # cidadão achar que quitou tudo (CHATR-164).
+    AVISO_MULTIPLAS_GUIAS = (
+        "Foram geradas *{total} guias* para os débitos que você escolheu — "
+        "uma para cada tipo de débito. É preciso pagar *todas* para quitar "
+        "o que foi selecionado."
+    )
+
+    @classmethod
+    def _bloco_guia(cls, indice: int, total: int, valor: str, vencimento: str) -> str:
+        cabecalho = f"*Guia {indice} de {total}*"
+        if vencimento:
+            cabecalho += f" — vence em {vencimento}"
+        return f"{cabecalho}:\n{valor}"
+
+    @classmethod
+    def _mensagem_guias(
+        cls,
+        guias: list[dict],
+        campo: str,
+        instrucao: str,
+        separador: str = "\n\n",
+    ) -> str:
+        valores = [
+            (guia.get(campo) or "N/A", guia.get("data_vencimento") or "")
+            for guia in guias
+        ] or [("N/A", "")]
+
+        # Guia única mantém o texto que já ia ao cidadão, sem o aviso de N guias.
+        if len(valores) == 1:
+            return f"Beleza.\n\n{instrucao}{separador}{valores[0][0]}"
+
+        total = len(valores)
+        blocos = [
+            cls._bloco_guia(indice, total, valor, vencimento)
+            for indice, (valor, vencimento) in enumerate(valores, start=1)
+        ]
+        aviso = cls.AVISO_MULTIPLAS_GUIAS.format(total=total)
+        return "Beleza.\n\n" + aviso + f"\n\n{instrucao}\n\n" + "\n\n".join(blocos)
+
+    @classmethod
+    def boleto_bancario_a_vista(cls, guias: list[dict]) -> str:
+        return cls._mensagem_guias(
+            guias,
+            "link",
+            "Clique no link para o pagamento por *boleto bancário*:",
+            separador="\n",
         )
 
-    @staticmethod
-    def codigo_barras_a_vista(codigo: str) -> str:
-        return (
-            "Beleza.\n\n"
-            "Faça o pagamento por *código de barras* usando o código:\n\n"
-            f"{codigo}"
+    @classmethod
+    def codigo_barras_a_vista(cls, guias: list[dict]) -> str:
+        return cls._mensagem_guias(
+            guias,
+            "codigo_de_barras",
+            "Faça o pagamento por *código de barras* usando o código:",
         )
 
-    @staticmethod
-    def pix_copia_e_cola_a_vista(pix: str) -> str:
-        return (
-            "Beleza.\n\n"
+    @classmethod
+    def pix_copia_e_cola_a_vista(cls, guias: list[dict]) -> str:
+        return cls._mensagem_guias(
+            guias,
+            "pix",
             "Copie o código Pix e cole no aplicativo do seu banco para fazer "
-            "o pagamento:\n\n"
-            f"{pix}"
+            "o pagamento:",
         )
 
     @staticmethod
