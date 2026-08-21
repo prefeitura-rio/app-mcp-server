@@ -10,6 +10,7 @@ quando lê, quando grava, com que chave e com que TTL —, não o cliente do Red
 
 import asyncio
 import base64
+import contextvars
 import datetime
 import importlib.util
 import json
@@ -887,6 +888,66 @@ async def test_span_registra_que_o_resultado_degradado_nao_foi_cacheado(monkeypa
 
     span = tracer.spans["bigquery.read"][0]
     assert span.attrs["cache.write_skipped"] == "degraded_result"
+
+
+@pytest.mark.asyncio
+async def test_span_identifica_o_tipo_de_chamada_da_leitura(monkeypatch):
+    """Sem isso não sai p50/p95 por tipo de chamada — só um agregado inútil.
+
+    As escritas se agrupam por `bigquery.table_id`; a leitura só tinha
+    `query_length` e `page_size`. `cache_namespace` já carrega o nome
+    semântico da consulta, e é ele que vira a dimensão do gráfico.
+    """
+    module, _cliente, _redis = _montar(monkeypatch, "bq_cache_call_type")
+    tracer = _TracerFalso()
+    monkeypatch.setattr(module, "get_tracer", lambda: tracer)
+
+    await module.get_bigquery_result(
+        "select 1", cache_ttl_seconds=120, cache_namespace="equipments_categories"
+    )
+
+    span = tracer.spans["bigquery.read"][0]
+    assert span.attrs["bigquery.call_type"] == "equipments_categories"
+
+
+@pytest.mark.asyncio
+async def test_span_marca_leitura_sem_namespace_como_unspecified(monkeypatch):
+    """Bucket explícito: no painel, chamada sem namespace tem de aparecer, não sumir."""
+    module, _cliente, _redis = _montar(monkeypatch, "bq_cache_call_type_sem_ns")
+    tracer = _TracerFalso()
+    monkeypatch.setattr(module, "get_tracer", lambda: tracer)
+
+    await module.get_bigquery_result("select 1", cache_ttl_seconds=0)
+
+    span = tracer.spans["bigquery.read"][0]
+    assert span.attrs["bigquery.call_type"] == "unspecified"
+
+
+@pytest.mark.asyncio
+async def test_span_de_query_e_filho_do_span_de_leitura(monkeypatch):
+    """A query roda no executor, que não copia contextvars — o span perdia o pai.
+
+    Sem a cópia de contexto, `bigquery.query` vira raiz de trace própria: os
+    spans existem e têm duração, mas não há como ir da tool lenta até a query
+    que a segurou.
+    """
+    module, _cliente, _redis = _montar(monkeypatch, "bq_cache_span_pai")
+
+    marcador = contextvars.ContextVar("marcador_de_trace", default="sem-pai")
+    visto = {}
+
+    execucao_original = module._execute_bigquery_query
+
+    def _espiao(*args, **kwargs):
+        visto["contexto"] = marcador.get()
+        return execucao_original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_execute_bigquery_query", _espiao)
+
+    marcador.set("mcp.tool_call")
+    await module.get_bigquery_result("select 1", cache_ttl_seconds=0)
+
+    assert visto["contexto"] == "mcp.tool_call"
 
 
 @pytest.mark.asyncio

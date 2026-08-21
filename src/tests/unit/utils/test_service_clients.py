@@ -618,9 +618,14 @@ async def test_bigquery_background_helpers(monkeypatch):
     calls = []
 
     class FakeLoop:
+        # As chamadas passam por `run_in_executor_with_context`, que embrulha o
+        # alvo num `ctx.run(...)` para levar o contexto do OTel até a thread —
+        # então `func` aqui é o wrapper, não a função de escrita. O que importa
+        # é qual função de fato rodou, e é isso que o resultado identifica.
         async def run_in_executor(self, executor, func, *args):
-            calls.append((func, args))
-            return func(*args)
+            resultado = func(*args)
+            calls.append((func, args, resultado))
+            return resultado
 
     monkeypatch.setattr(asyncio, "get_running_loop", lambda: FakeLoop())
 
@@ -655,7 +660,7 @@ async def test_bigquery_background_helpers(monkeypatch):
         timestamp="2026-04-08T12:00:00",
         environment="staging",
     )
-    assert calls[0][0] is module.save_feedback_in_bq
+    assert calls[0][2]["kind"] == "feedback"
 
     await module.save_response_in_bq_background(
         data={"ok": True},
@@ -664,7 +669,7 @@ async def test_bigquery_background_helpers(monkeypatch):
         table_id="table",
         environment="test",
     )
-    assert calls[1][0] is module.save_response_in_bq
+    assert calls[1][2]["kind"] == "response"
 
     # save_cor_alert_in_bq_background now enqueues rows to the batch buffer
     # instead of writing directly; capture calls to enqueue_bigquery_row.
@@ -709,4 +714,4 @@ async def test_bigquery_background_helpers(monkeypatch):
         timestamp="2026-04-08T16:00:00",
         environment="staging",
     )
-    assert calls[-1][0] is module.save_cor_alert_to_queue
+    assert calls[-1][2]["kind"] == "queue"
