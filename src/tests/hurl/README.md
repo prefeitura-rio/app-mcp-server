@@ -54,7 +54,8 @@ GCP_SA=$(python3 -c '
 import base64, json
 key = open("/tmp/fake-sa.pem").read()
 print(base64.b64encode(json.dumps({
-    "type": "service_account", "project_id": "local-smoke",
+    # sem o campo "type": ver comentario no pr-quality-gate.yaml
+    "project_id": "local-smoke",
     "private_key_id": "local", "private_key": key,
     "client_email": "local@example.invalid", "client_id": "0",
     "token_uri": "https://oauth2.googleapis.com/token",

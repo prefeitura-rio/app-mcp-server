@@ -296,8 +296,18 @@ jobs:
           import base64, json
 
           key = open("/tmp/fake-sa.pem").read()
+          # O campo `type`, de valor `service_account`, foi omitido de
+          # propósito: `from_service_account_info()` exige apenas
+          # client_email, token_uri e private_key, e escrever aquele par
+          # chave/valor aqui dispara a regra `gcp-service-account` do Trivy,
+          # que casa o literal e reporta vazamento CRITICAL. É falso positivo
+          # — a chave é gerada no runner, logo acima — mas ficaria aberto no
+          # code scanning a cada scan da main. Suprimir via `.trivyignore`
+          # sairia caro: o ignore é por ID de regra e cegaria o scanner para
+          # uma service account de verdade commitada em qualquer lugar do
+          # repositório. Escrever o par nem em comentário: a regra casa o
+          # literal onde quer que ele apareça, comentário inclusive.
           info = {
-              "type": "service_account",
               "project_id": "ci-smoke",
               "private_key_id": "ci",
               "private_key": key,
