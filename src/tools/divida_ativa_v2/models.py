@@ -247,16 +247,13 @@ class GuiaEmitida(BaseModel):
     # em vez de quebrar uma emissão que já aconteceu.
     model_config = ConfigDict(extra="ignore")
 
-    codigo_de_barras: Optional[str] = Field(
-        default=None, description="Código de barras da guia."
-    )
-    link: Optional[str] = Field(default=None, description="Link para o PDF da guia.")
-    data_vencimento: Optional[str] = Field(
-        default=None, description="Data de vencimento da guia."
-    )
-    pix: Optional[str] = Field(
-        default=None, description="Código QR EMV do PIX da guia."
-    )
+    # `str = ""` e não `Optional[str]`: `de_registro` — o único construtor —
+    # normaliza campo ausente para string vazia, como a v1 sempre fez. Declarar
+    # Optional induziria o consumidor a testar `is None`, ramo que nunca roda.
+    codigo_de_barras: str = Field(default="", description="Código de barras da guia.")
+    link: str = Field(default="", description="Link para o PDF da guia.")
+    data_vencimento: str = Field(default="", description="Data de vencimento da guia.")
+    pix: str = Field(default="", description="Código QR EMV do PIX da guia.")
 
     @classmethod
     def de_registro(cls, registro: Dict[str, Any]) -> "GuiaEmitida":

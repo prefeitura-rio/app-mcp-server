@@ -131,6 +131,10 @@ mantendo os campos no topo como a primeira guia.
   consumidor conhecido nessa situação, e o comportamento anterior era o bug.
 - Emissão que devolvia sucesso vazio agora devolve erro: é mudança visível de
   status para um caso que já era inútil ao cidadão.
+- O payload público e o texto ao cidadão usam mappings de campo separados
+  (`GUIA_CAMPOS` e `GUIA_CAMPOS_MENSAGEM`). Só o segundo aceita `arquivoBase64`
+  como origem do `link`: é o PDF inteiro em base64, aceitável numa mensagem
+  pontual e não no payload que volta a cada passo do workflow.
 
 ## Onde ficou
 
@@ -138,6 +142,6 @@ mantendo os campos no topo como a primeira guia.
 | --- | --- |
 | Modelo v2 (`GuiaEmitida`, campos novos) | `src/tools/divida_ativa_v2/models.py` |
 | Extração v2 (`_extrair_guias`) | `src/tools/divida_ativa_v2/service.py` |
-| v1 (`extrair_guias`, `processar_registros`) | `src/tools/divida_ativa.py` |
+| v1 (`_extrair_guias`, `processar_registros`, constantes da PGM) | `src/tools/divida_ativa.py` |
 | Workflow (`_guias_da_resposta`, payload público) | `src/tools/multi_step_service/workflows/divida_ativa/divida_ativa_workflow.py` |
 | Templates (1 e N guias) | `src/tools/multi_step_service/workflows/divida_ativa/templates.py` |

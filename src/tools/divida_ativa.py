@@ -299,7 +299,7 @@ MENSAGEM_SEM_GUIA = (
 )
 
 
-def extrair_guias(registros: Any) -> List[Dict[str, str]]:
+def _extrair_guias(registros: Any) -> List[Dict[str, str]]:
     """
     Extrai todas as guias emitidas a partir da resposta da PGM.
 
@@ -357,7 +357,7 @@ async def processar_registros(
             "api_descricao_erro": registros["motivos"],
         }
 
-    guias_emitidas = extrair_guias(registros)
+    guias_emitidas = _extrair_guias(registros)
 
     # Sucesso sem nenhuma guia não é sucesso: o consumidor receberia
     # 'api_resposta_sucesso: true' sem nada para o cidadão pagar.
@@ -374,11 +374,18 @@ async def processar_registros(
             "api_descricao_erro": MENSAGEM_SEM_GUIA,
         }
 
+    primeira = guias_emitidas[0]
     message = parametros_entrada.copy()
     message["api_resposta_sucesso"] = True
     message["guias_emitidas"] = guias_emitidas
     message["total_guias"] = len(guias_emitidas)
-    message.update(guias_emitidas[0])
+    # Campos no topo listados um a um, como a v2 faz no construtor de
+    # EmitirGuiaResponse: um `update` com a guia inteira derramaria no topo
+    # qualquer chave nova que `_extrair_guias` viesse a devolver.
+    message["codigo_de_barras"] = primeira["codigo_de_barras"]
+    message["link"] = primeira["link"]
+    message["data_vencimento"] = primeira["data_vencimento"]
+    message["pix"] = primeira["pix"]
 
     return message
 

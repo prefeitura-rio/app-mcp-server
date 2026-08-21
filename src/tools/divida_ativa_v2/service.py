@@ -17,7 +17,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
-from src.tools.divida_ativa import log_execution_time, pgm_api
+# CAMPOS_PGM_GUIA e MENSAGEM_SEM_GUIA vêm da v1 para não existirem em duas
+# cópias: descrevem o contrato da PGM, que é o mesmo para as duas versões, e
+# um rename de campo lá precisa valer para ambas. A v2 já depende da v1 por
+# `pgm_api`; a dependência inversa não existe.
+from src.tools.divida_ativa import (
+    CAMPOS_PGM_GUIA,
+    MENSAGEM_SEM_GUIA,
+    log_execution_time,
+    pgm_api,
+)
 from src.tools.divida_ativa_v2.models import (
     EmitirGuiaRequest,
     EmitirGuiaResponse,
@@ -38,14 +47,6 @@ MENSAGEM_SELECAO_VAZIA = (
     "Nenhum item válido selecionado. Verifique se 'itens_informados'/"
     "'apenas_um_item' correspondem a chaves de 'dicionario_itens' e se o "
     "identificador consta nas listas enviadas."
-)
-
-# Campos que identificam um registro de guia na resposta da PGM.
-CAMPOS_PGM_GUIA = ("codigoDeBarras", "pdf", "dataVencimento", "codigoQrEMVPix")
-
-MENSAGEM_SEM_GUIA = (
-    "A PGM respondeu sem nenhuma guia emitida. Nenhum pagamento pode ser "
-    "feito com esta resposta; tente novamente."
 )
 
 

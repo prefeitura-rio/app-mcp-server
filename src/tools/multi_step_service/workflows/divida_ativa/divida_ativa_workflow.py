@@ -514,14 +514,23 @@ class DividaAtivaWorkflow(BaseWorkflow):
     # Campos de uma guia, com os nomes alternativos vindos direto da PGM.
     GUIA_CAMPOS = {
         "data_vencimento": ("data_vencimento", "dataVencimento"),
-        "link": ("link", "pdf", "arquivoBase64"),
+        "link": ("link", "pdf"),
         "codigo_de_barras": ("codigo_de_barras", "codigoDeBarras"),
         "pix": ("pix", "codigoQrEMVPix"),
     }
 
-    def _normalizar_guia(self, guia: dict) -> dict:
+    # `arquivoBase64` é o PDF inteiro em base64 — centenas de KB. Vale como
+    # último recurso no texto que vai ao cidadão, que é o comportamento de
+    # antes do CHATR-164, mas nunca no payload público: esse fica no histórico
+    # da conversa e é devolvido a cada passo do workflow.
+    GUIA_CAMPOS_MENSAGEM = {
+        **GUIA_CAMPOS,
+        "link": ("link", "pdf", "arquivoBase64"),
+    }
+
+    def _normalizar_guia(self, guia: dict, campos: dict) -> dict:
         normalizada = {}
-        for public_field, candidates in self.GUIA_CAMPOS.items():
+        for public_field, candidates in campos.items():
             value = next(
                 (
                     guia.get(candidate)
@@ -534,7 +543,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 normalizada[public_field] = value
         return normalizada
 
-    def _guias_da_resposta(self, guia: dict | None) -> list[dict]:
+    def _guias_da_resposta(self, guia: dict | None, campos: dict) -> list[dict]:
         """
         Todas as guias emitidas na resposta da tool.
 
@@ -542,6 +551,10 @@ class DividaAtivaWorkflow(BaseWorkflow):
         cidadão pode gerar N guias (CHATR-164). 'guias_emitidas' é a fonte; o
         fallback para os campos no topo cobre a resposta de guia única que
         pode estar em cache de conversa.
+
+        `campos` decide de quais chaves da PGM cada campo pode vir —
+        GUIA_CAMPOS para o payload público, GUIA_CAMPOS_MENSAGEM para o texto
+        ao cidadão. São mappings diferentes de propósito; ver GUIA_CAMPOS.
         """
         if not isinstance(guia, dict):
             return []
@@ -549,7 +562,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         emitidas = guia.get("guias_emitidas")
         if isinstance(emitidas, list):
             normalizadas = [
-                self._normalizar_guia(item)
+                self._normalizar_guia(item, campos)
                 for item in emitidas
                 if isinstance(item, dict)
             ]
@@ -557,14 +570,14 @@ class DividaAtivaWorkflow(BaseWorkflow):
             if normalizadas:
                 return normalizadas
 
-        unica = self._normalizar_guia(guia)
+        unica = self._normalizar_guia(guia, campos)
         return [unica] if unica else []
 
     def _build_public_guia_data(self, guia: dict | None) -> dict:
         if not isinstance(guia, dict) or not guia.get("api_resposta_sucesso"):
             return {}
 
-        guias = self._guias_da_resposta(guia)
+        guias = self._guias_da_resposta(guia, self.GUIA_CAMPOS)
         if not guias:
             return {}
 
@@ -1425,7 +1438,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
         forma_pagamento: str,
         guia: dict,
     ) -> str:
-        guias = self._guias_da_resposta(guia)
+        guias = self._guias_da_resposta(guia, self.GUIA_CAMPOS_MENSAGEM)
 
         if forma_pagamento == "boleto_bancario":
             return DividaAtivaTemplates.boleto_bancario_a_vista(guias)
