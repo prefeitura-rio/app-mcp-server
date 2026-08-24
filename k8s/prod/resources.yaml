@@ -130,11 +130,21 @@ spec:
             timeoutSeconds: 5
             successThreshold: 1
             failureThreshold: 3
-          # Readiness reflete "inicialização concluída" — também sem depender
-          # de serviços externos. O estado das dependências fica em
-          # /health/detail, que nunca retorna 503. Apontar para uma rota
-          # própria desacopla as duas semânticas: verificações acrescentadas
-          # ao readiness no futuro não poderão matar o pod.
+          # Readiness (Task 7 do plano de resiliência do MCP): inicialização
+          # concluída E Redis alcançável dentro de um teto curto (2s, ver
+          # `src/health/state.py::READINESS_REDIS_TIMEOUT_S`) — nunca
+          # dependência de exportação de telemetria/coletor OTel. Até a
+          # Task 4 este probe era cego a dependências de propósito
+          # (produção rodava `replicas: 1`, e tirar o único pod do
+          # balanceador por causa do Redis convertia degradação parcial em
+          # outage total). Com o HPA/PDB abaixo (mínimo de 3 réplicas, PDB
+          # permitindo perder 1), o comportamento correto passou a ser
+          # tirar SÓ o pod sem Redis do Service e deixar as réplicas
+          # saudáveis absorverem o tráfego. Falha: `failureThreshold: 3` ×
+          # `periodSeconds: 30` (~90s) marca o pod NotReady, removendo-o do
+          # Endpoint sem reiniciá-lo — `startupProbe`/`livenessProbe` continuam
+          # de pé, então quando o Redis volta o próximo sucesso já religa o
+          # pod ao Service, sem esperar por um novo rollout.
           readinessProbe:
             httpGet:
               path: /health/ready

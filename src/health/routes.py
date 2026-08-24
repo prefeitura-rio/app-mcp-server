@@ -1,16 +1,19 @@
 """Rotas HTTP de health, com três semânticas deliberadamente separadas.
 
-| Rota             | Papel      | Faz I/O? | Pode retornar 503? |
-|------------------|------------|----------|--------------------|
-| `/health`        | liveness   | não      | não                |
-| `/health/ready`  | readiness  | não      | sim                |
-| `/health/detail` | diagnóstico| sim      | não                |
+| Rota             | Papel      | Faz I/O?          | Pode retornar 503? |
+|------------------|------------|--------------------|--------------------|
+| `/health`        | liveness   | não                | não                |
+| `/health/ready`  | readiness  | sim (Redis, c/teto)| sim                |
+| `/health/detail` | diagnóstico| sim                | não                |
 
-A separação existe porque hoje um único `/health` serve liveness e readiness
-no Kubernetes. Colocar checagem de dependência ali faria o kubelet **matar** o
-pod quando o Redis caísse — e, com `replicas: 1` em produção, uma degradação
-parcial viraria indisponibilidade total. Por isso o liveness continua trivial
-e a visibilidade vai para `/health/detail`.
+`/health` continua sem tocar dependência alguma: uma checagem ali faria o
+kubelet **matar** o pod por uma falha que só quebra parte das tools. Já
+`/health/ready` passou a sondar o Redis (com teto de tempo — ver
+`src/health/state.py::evaluate_readiness`) desde que produção deixou de
+rodar com `replicas: 1` (Task 4 do plano de resiliência do MCP): tirar do
+balanceador só o pod que não alcança sua única dependência sem fallback é
+correto quando há réplicas saudáveis para assumir o tráfego. A sondagem não
+depende de exportação de telemetria (OTel/coletor) em nenhum ponto.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from src.config.settings import Settings
 from src.health.models import STATUS_OK, aggregate_status
 from src.health.registry import health_registry
-from src.health.state import is_ready, uptime_seconds
+from src.health.state import evaluate_readiness, is_ready, uptime_seconds
 
 
 async def health(request: Request) -> PlainTextResponse:
@@ -33,18 +36,18 @@ async def health(request: Request) -> PlainTextResponse:
 
 
 async def ready(request: Request) -> JSONResponse:
-    """Readiness: a inicialização da aplicação foi concluída.
+    """Readiness: processo inicializado E Redis alcançável dentro do teto.
 
-    Não reflete a saúde das dependências — ver `src/health/state.py`.
-
-    O valor de manter esta rota separada de `/health` é desacoplar as duas
-    semânticas no Kubernetes: enquanto os dois probes apontavam para o mesmo
-    endpoint, qualquer verificação acrescentada ali passaria a poder matar o
-    pod. Com a separação, readiness pode evoluir sem esse risco.
+    O corpo nunca carrega o texto de exceção nem host/URL do Redis — só um
+    `reason` de um conjunto fechado (`starting`, `redis_unavailable`), o
+    bastante para diagnóstico sem repetir o que `/health/detail` já sanitiza
+    com mais detalhe. Ver `src/health/state.py` para o porquê deste desenho
+    ter mudado a partir da Task 7 do plano de resiliência do MCP.
     """
-    if is_ready():
+    ready_for_traffic, reason = await evaluate_readiness()
+    if ready_for_traffic:
         return JSONResponse({"status": "ready"}, status_code=200)
-    return JSONResponse({"status": "not_ready"}, status_code=503)
+    return JSONResponse({"status": "not_ready", "reason": reason}, status_code=503)
 
 
 async def detail(request: Request) -> JSONResponse:
