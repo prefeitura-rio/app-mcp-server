@@ -2,7 +2,7 @@ import ast
 import time
 import asyncio
 from functools import wraps
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 
 from src.tools.utils import internal_request
@@ -290,11 +290,54 @@ async def da_emitir_guia(
         return {"opcao_invalida": True}
 
 
+# Campos que identificam um registro de guia na resposta da PGM.
+CAMPOS_PGM_GUIA = ("codigoDeBarras", "pdf", "dataVencimento", "codigoQrEMVPix")
+
+MENSAGEM_SEM_GUIA = (
+    "A PGM respondeu sem nenhuma guia emitida. Nenhum pagamento pode ser "
+    "feito com esta resposta; tente novamente."
+)
+
+
+def _extrair_guias(registros: Any) -> List[Dict[str, str]]:
+    """
+    Extrai todas as guias emitidas a partir da resposta da PGM.
+
+    O EPGM emite uma guia por natureza de débito, então uma solicitação com N
+    identificadores pode devolver N registros. Aceita também o registro único
+    fora de lista.
+    """
+    if isinstance(registros, dict):
+        registros = [registros]
+
+    if not isinstance(registros, list):
+        return []
+
+    return [
+        {
+            "codigo_de_barras": item.get("codigoDeBarras") or "",
+            "link": item.get("pdf") or "",
+            "data_vencimento": item.get("dataVencimento") or "",
+            "pix": item.get("codigoQrEMVPix") or "",
+        }
+        for item in registros
+        # `pgm_api` também devolve dicts que não são guia — {"success": True}
+        # quando a resposta vem vazia. Sem o filtro, viraria guia em branco.
+        if isinstance(item, dict) and any(item.get(campo) for campo in CAMPOS_PGM_GUIA)
+    ]
+
+
 async def processar_registros(
     endpoint: str, consumidor: str, parametros_entrada: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Processa os registros para emissão de guia.
+
+    Devolve todas as guias emitidas em 'guias_emitidas'. Até CHATR-164 o loop
+    sobrescrevia os mesmos campos a cada registro e só a última guia chegava ao
+    consumidor, fazendo o cidadão pagar uma achando que quitou todas. Os campos
+    no topo (codigo_de_barras, link, data_vencimento, pix) seguem existindo para
+    os consumidores que ainda leem uma guia só, agora com a PRIMEIRA guia.
 
     Args:
         endpoint: Endpoint da API para processar
@@ -308,20 +351,41 @@ async def processar_registros(
         endpoint=endpoint, consumidor=consumidor, data=parametros_entrada
     )
 
-    if "erro" in registros:
+    if isinstance(registros, dict) and "erro" in registros:
         return {
             "api_resposta_sucesso": False,
             "api_descricao_erro": registros["motivos"],
         }
 
+    guias_emitidas = _extrair_guias(registros)
+
+    # Sucesso sem nenhuma guia não é sucesso: o consumidor receberia
+    # 'api_resposta_sucesso: true' sem nada para o cidadão pagar.
+    if not guias_emitidas:
+        logger.error(
+            {
+                "event": "processar_registros_sem_guia",
+                "endpoint": endpoint,
+                "registros": registros,
+            }
+        )
+        return {
+            "api_resposta_sucesso": False,
+            "api_descricao_erro": MENSAGEM_SEM_GUIA,
+        }
+
+    primeira = guias_emitidas[0]
     message = parametros_entrada.copy()
     message["api_resposta_sucesso"] = True
-
-    for item in registros:
-        message["codigo_de_barras"] = item.get("codigoDeBarras") or ""
-        message["link"] = item.get("pdf") or ""
-        message["data_vencimento"] = item.get("dataVencimento") or ""
-        message["pix"] = item.get("codigoQrEMVPix") or ""
+    message["guias_emitidas"] = guias_emitidas
+    message["total_guias"] = len(guias_emitidas)
+    # Campos no topo listados um a um, como a v2 faz no construtor de
+    # EmitirGuiaResponse: um `update` com a guia inteira derramaria no topo
+    # qualquer chave nova que `_extrair_guias` viesse a devolver.
+    message["codigo_de_barras"] = primeira["codigo_de_barras"]
+    message["link"] = primeira["link"]
+    message["data_vencimento"] = primeira["data_vencimento"]
+    message["pix"] = primeira["pix"]
 
     return message
 

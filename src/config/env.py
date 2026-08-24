@@ -19,6 +19,11 @@ if os.path.exists("src/config/.env"):
 
 
 ENVIRONMENT = getenv_or_action("ENVIRONMENT", default="staging", action="ignore")
+# Preenchido pela downward API do Kubernetes (`fieldRef: metadata.name`) nos
+# manifests de staging e prod. Vira `k8s.pod.name` no Resource do OTel, que é
+# o que permite atribuir um pico de latência ou erro a uma réplica. Fora do
+# cluster fica vazio e o atributo simplesmente não é publicado.
+K8S_POD_NAME = getenv_or_action("K8S_POD_NAME", default="", action="ignore")
 VALID_TOKENS = getenv_or_action("VALID_TOKENS")
 IS_LOCAL = getenv_or_action("IS_LOCAL", default="false", action="ignore") == "true"
 MCP_STATELESS_HTTP = getenv_bool(

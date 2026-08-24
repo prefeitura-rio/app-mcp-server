@@ -29,7 +29,7 @@ import json
 import src.config.env as env
 from datetime import datetime, date, time
 import pytz
-from src.observability.tracing import get_tracer
+from src.observability.tracing import get_tracer, run_in_executor_with_context
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.json_utils import CustomJSONEncoder
@@ -998,7 +998,8 @@ async def save_response_in_bq_background(
     """
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        await run_in_executor_with_context(
+            loop,
             _get_write_executor(),
             save_response_in_bq,
             data,
@@ -1075,7 +1076,8 @@ async def save_feedback_in_bq_background(
     """
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        await run_in_executor_with_context(
+            loop,
             _get_write_executor(),
             save_feedback_in_bq,
             user_id,
@@ -1227,7 +1229,8 @@ async def save_cor_alert_in_bq_background(
 
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        await run_in_executor_with_context(
+            loop,
             _get_write_executor(),
             save_cor_alert_in_bq,
             alert_id,
@@ -1319,7 +1322,8 @@ async def save_cor_alert_to_queue_background(
 ):
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        await run_in_executor_with_context(
+            loop,
             _get_write_executor(),
             save_cor_alert_to_queue,
             alert_id,
@@ -1954,7 +1958,8 @@ async def _run_query_com_timeout(
     loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
-            loop.run_in_executor(
+            run_in_executor_with_context(
+                loop,
                 _get_read_executor(),
                 _execute_bigquery_query,
                 query,
@@ -2017,6 +2022,13 @@ async def get_bigquery_result(
     with tracer.start_as_current_span("bigquery.read") as span:
         span.set_attribute("cache.enabled", ttl > 0)
         span.set_attribute("bigquery.timeout_budget_seconds", timeout)
+        # As escritas se agrupam por `bigquery.table_id`; a leitura não tinha
+        # nada equivalente — só `query_length` e `page_size`, com que não se
+        # monta um p50/p95 por tipo de chamada. `cache_namespace` já chega
+        # aqui com o valor semântico certo ("equipments",
+        # "equipments_categories", …); publicá-lo como atributo resolve o
+        # agrupamento sem precisar parsear SQL para descobrir a tabela.
+        span.set_attribute("bigquery.call_type", cache_namespace or "unspecified")
 
         if ttl <= 0:
             span.set_attribute("cache.hit", False)
