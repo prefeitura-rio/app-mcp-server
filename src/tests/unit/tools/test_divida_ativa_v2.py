@@ -641,17 +641,64 @@ async def test_multiplos_registros_devolvem_todas_as_guias(monkeypatch):
             "link": "a.pdf",
             "data_vencimento": "10/04/2026",
             "pix": "pix-1",
+            "valor": "",
+            "natureza": "",
         },
         {
             "codigo_de_barras": "222",
             "link": "b.pdf",
             "data_vencimento": "11/04/2026",
             "pix": "pix-2",
+            "valor": "",
+            "natureza": "",
         },
     ]
     # Campos legado: a primeira guia, não a última.
     assert resultado["codigo_de_barras"] == "111"
     assert resultado["pix"] == "pix-1"
+
+
+@pytest.mark.asyncio
+async def test_guias_trazem_valor_e_natureza(monkeypatch):
+    """
+    Cada guia leva o quanto cobra e de que débito veio.
+
+    Com N guias na resposta, é o que permite ao consumidor montar um card de
+    pagamento por guia em vez de uma lista de PIX indistinguíveis.
+    """
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [
+            {
+                "codigoDeBarras": "111",
+                "pdf": "a.pdf",
+                "dataVencimento": "10/04/2026",
+                "codigoQrEMVPix": "pix-1",
+                "valorTotal": "R$ 1.234,50",
+                "naturezaDivida": "cda",
+            },
+            {
+                "codigoDeBarras": "222",
+                "pdf": "b.pdf",
+                "dataVencimento": "11/04/2026",
+                "codigoQrEMVPix": "pix-2",
+                "valorTotal": "R$ 99,00",
+                "naturezaDivida": "auto_infracao",
+            },
+        ]
+
+    monkeypatch.setattr(service_module, "pgm_api", fake_pgm_api)
+
+    resultado = await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
+
+    assert [
+        (guia["valor"], guia["natureza"]) for guia in resultado["guias_emitidas"]
+    ] == [("R$ 1.234,50", "cda"), ("R$ 99,00", "auto_infracao")]
+    # Os campos no topo seguem sendo só os quatro legados: `valor` e
+    # `natureza` nascem em 'guias_emitidas' e não têm consumidor antigo para
+    # preservar.
+    assert "valor" not in resultado
+    assert "natureza" not in resultado
 
 
 @pytest.mark.asyncio

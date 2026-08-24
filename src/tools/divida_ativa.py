@@ -2,7 +2,7 @@ import ast
 import time
 import asyncio
 from functools import wraps
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 
 from src.tools.utils import internal_request
@@ -293,10 +293,89 @@ async def da_emitir_guia(
 # Campos que identificam um registro de guia na resposta da PGM.
 CAMPOS_PGM_GUIA = ("codigoDeBarras", "pdf", "dataVencimento", "codigoQrEMVPix")
 
+# Nomes possíveis do valor e da natureza dentro do registro de guia. Diferente
+# dos quatro campos acima, estes não têm amostra confirmada: a resposta de
+# emissão da PGM não é documentada e os registros conhecidos vêm de log, onde
+# nunca precisamos destes dois. Cada campo é procurado numa lista de
+# candidatos — mesmo padrão de GUIA_CAMPOS no workflow — para que o nome real
+# seja absorvido sem novo deploy. Ver docs/decisions/guia-valor-e-natureza.md.
+CAMPOS_PGM_VALOR = (
+    "valorTotal",
+    "valorTotalGuia",
+    "valorGuia",
+    "valorDocumento",
+    "valorSaldoTotal",
+    "valor",
+)
+CAMPOS_PGM_NATUREZA = (
+    "naturezaDivida",
+    "naturezaDebito",
+    "descricaoNatureza",
+    "tipoDebito",
+    "natureza",
+)
+
 MENSAGEM_SEM_GUIA = (
     "A PGM respondeu sem nenhuma guia emitida. Nenhum pagamento pode ser "
     "feito com esta resposta; tente novamente."
 )
+
+
+def _primeiro_campo(registro: Dict[str, Any], campos: Tuple[str, ...]) -> Any:
+    """Primeiro campo preenchido dentre os nomes candidatos."""
+    for campo in campos:
+        valor = registro.get(campo)
+        if valor not in (None, "", [], {}):
+            return valor
+    return None
+
+
+def _formatar_valor(valor: Any) -> str:
+    """
+    Valor da guia como texto, pronto para exibição.
+
+    A consulta de débitos da PGM devolve valor já formatado ("R$5.000,00") e a
+    emissão pode devolver número. Formatar aqui evita que cada consumidor
+    tenha que adivinhar em qual dos dois formatos o campo chegou.
+    """
+    if valor is None:
+        return ""
+    if isinstance(valor, str):
+        return valor.strip()
+    if isinstance(valor, bool):
+        return ""
+    if isinstance(valor, (int, float)):
+        inteiro, centavos = f"{valor:.2f}".split(".")
+        milhar = f"{int(inteiro):,}".replace(",", ".")
+        return f"R$ {milhar},{centavos}"
+    return str(valor)
+
+
+def valor_e_natureza_da_guia(registro: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Valor em dinheiro e natureza do débito de uma guia (CHATR-164).
+
+    Pública — e não `_`-prefixada como as demais deste bloco — porque a v2
+    também constrói guia a partir do registro cru (`GuiaEmitida.de_registro`)
+    e o contrato da PGM não pode existir em duas cópias.
+
+    Registro sem nenhum dos dois é logado com as chaves que a PGM enviou (só
+    as chaves: os valores carregam o PDF em base64). É esse log que confirma o
+    nome real dos campos, hoje deduzido dos demais endpoints da PGM.
+    """
+    valor = _formatar_valor(_primeiro_campo(registro, CAMPOS_PGM_VALOR))
+    natureza = _primeiro_campo(registro, CAMPOS_PGM_NATUREZA)
+    natureza = natureza.strip() if isinstance(natureza, str) else ""
+
+    if not valor and not natureza:
+        logger.warning(
+            {
+                "event": "guia_sem_valor_nem_natureza",
+                "campos_do_registro": sorted(registro.keys()),
+            }
+        )
+
+    return valor, natureza
 
 
 def _extrair_guias(registros: Any) -> List[Dict[str, str]]:
@@ -306,6 +385,10 @@ def _extrair_guias(registros: Any) -> List[Dict[str, str]]:
     O EPGM emite uma guia por natureza de débito, então uma solicitação com N
     identificadores pode devolver N registros. Aceita também o registro único
     fora de lista.
+
+    Cada guia leva, além dos dados de pagamento, o valor e a natureza do
+    débito: sem eles o consumidor não tem como dizer ao cidadão o que cada
+    guia cobra nem quanto custa.
     """
     if isinstance(registros, dict):
         registros = [registros]
@@ -313,18 +396,29 @@ def _extrair_guias(registros: Any) -> List[Dict[str, str]]:
     if not isinstance(registros, list):
         return []
 
-    return [
-        {
-            "codigo_de_barras": item.get("codigoDeBarras") or "",
-            "link": item.get("pdf") or "",
-            "data_vencimento": item.get("dataVencimento") or "",
-            "pix": item.get("codigoQrEMVPix") or "",
-        }
-        for item in registros
+    guias = []
+
+    for item in registros:
         # `pgm_api` também devolve dicts que não são guia — {"success": True}
         # quando a resposta vem vazia. Sem o filtro, viraria guia em branco.
-        if isinstance(item, dict) and any(item.get(campo) for campo in CAMPOS_PGM_GUIA)
-    ]
+        if not isinstance(item, dict) or not any(
+            item.get(campo) for campo in CAMPOS_PGM_GUIA
+        ):
+            continue
+
+        valor, natureza = valor_e_natureza_da_guia(item)
+        guias.append(
+            {
+                "codigo_de_barras": item.get("codigoDeBarras") or "",
+                "link": item.get("pdf") or "",
+                "data_vencimento": item.get("dataVencimento") or "",
+                "pix": item.get("codigoQrEMVPix") or "",
+                "valor": valor,
+                "natureza": natureza,
+            }
+        )
+
+    return guias
 
 
 async def processar_registros(

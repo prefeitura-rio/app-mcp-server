@@ -26,7 +26,9 @@ def divida_module(monkeypatch):
         CHATBOT_PGM_ACCESS_KEY="secret-key",
     )
     logger = types.SimpleNamespace(
-        info=lambda *_args, **_kwargs: None, error=lambda *_args, **_kwargs: None
+        info=lambda *_args, **_kwargs: None,
+        error=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
     )
     interceptor_module = types.SimpleNamespace(
         interceptor=lambda *args, **kwargs: lambda func: func
@@ -222,6 +224,72 @@ async def test_processar_registros_devolve_todas_as_guias(divida_module, monkeyp
     # Campos no topo: a primeira guia, não a última.
     assert result["codigo_de_barras"] == "111"
     assert result["link"] == "a.pdf"
+
+
+@pytest.mark.asyncio
+async def test_guias_trazem_valor_e_natureza(divida_module, monkeypatch):
+    """
+    Sem valor e natureza, o consumidor sabe pagar a guia mas não o que ela
+    cobra — com N guias na resposta, não há como distinguir uma da outra.
+
+    Os nomes desses campos na resposta da PGM ainda não têm amostra
+    confirmada, então cada um é procurado em uma lista de candidatos.
+    """
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [
+            {
+                "codigoDeBarras": "111",
+                "pdf": "a.pdf",
+                "dataVencimento": "10/04/2026",
+                "codigoQrEMVPix": "pix-1",
+                "valorTotal": 1234.5,
+                "naturezaDivida": "IPTU",
+            },
+            {
+                "codigoDeBarras": "222",
+                "pdf": "b.pdf",
+                "dataVencimento": "11/04/2026",
+                "codigoQrEMVPix": "pix-2",
+                "valor": "R$ 99,00",
+                "natureza": "auto_infracao",
+            },
+        ]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    result = await divida_module.processar_registros(
+        endpoint="v2/guias",
+        consumidor="emitir",
+        parametros_entrada={"origem_solicitação": 0},
+    )
+
+    # Número da PGM vira texto em BRL; string já formatada passa intacta.
+    assert [(g["valor"], g["natureza"]) for g in result["guias_emitidas"]] == [
+        ("R$ 1.234,50", "IPTU"),
+        ("R$ 99,00", "auto_infracao"),
+    ]
+
+
+def test_guia_sem_valor_nem_natureza_loga_as_chaves_da_pgm(divida_module):
+    """
+    O log é o que permite descobrir o nome real dos campos na PGM.
+
+    Só as chaves: os valores do registro carregam o PDF inteiro em base64.
+    """
+    avisos = []
+    divida_module.logger.warning = lambda evento: avisos.append(evento)
+
+    valor, natureza = divida_module.valor_e_natureza_da_guia(
+        {"codigoDeBarras": "111", "arquivoBase64": "A" * 10000}
+    )
+
+    assert (valor, natureza) == ("", "")
+    assert avisos == [
+        {
+            "event": "guia_sem_valor_nem_natureza",
+            "campos_do_registro": ["arquivoBase64", "codigoDeBarras"],
+        }
+    ]
 
 
 @pytest.mark.asyncio

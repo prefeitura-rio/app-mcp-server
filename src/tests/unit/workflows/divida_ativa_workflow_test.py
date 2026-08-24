@@ -1371,6 +1371,115 @@ async def test_forma_pagamento_com_multiplas_guias_entrega_todas(
 
 
 @pytest.mark.asyncio
+async def test_payload_publico_leva_valor_e_natureza_de_cada_guia(
+    divida_ativa_modules,
+):
+    """
+    O card de pagamento de cada guia se monta a partir do payload público.
+
+    Sem valor e natureza por guia, o consumidor consegue pagar mas não dizer
+    ao cidadão o que cada guia cobra — com N guias, elas ficam
+    indistinguíveis entre si.
+    """
+
+    class FakeAPIService:
+        async def emitir_guia_a_vista(self, cdas, efs):
+            return {
+                "api_resposta_sucesso": True,
+                "total_guias": 2,
+                "guias_emitidas": [
+                    {
+                        "data_vencimento": "10/09/2026",
+                        "link": "https://example.com/guia-1.pdf",
+                        "codigo_de_barras": "111",
+                        "pix": "PIX-1",
+                        "valor": "R$ 1.234,50",
+                        "natureza": "cda",
+                    },
+                    {
+                        "data_vencimento": "11/09/2026",
+                        "link": "https://example.com/guia-2.pdf",
+                        "codigo_de_barras": "222",
+                        "pix": "PIX-2",
+                        "valor": "R$ 99,00",
+                        "natureza": "auto_infracao",
+                    },
+                ],
+            }
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeAPIService()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "CDA-1"},
+        ],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+    )
+
+    guia_publica = state.agent_response.data["guia_pagamento_a_vista"]
+    assert [(item["valor"], item["natureza"]) for item in guia_publica["guias"]] == [
+        ("R$ 1.234,50", "cda"),
+        ("R$ 99,00", "auto_infracao"),
+    ]
+    # Campos no topo seguem sendo a primeira guia, agora incluindo os dois novos.
+    assert guia_publica["valor"] == "R$ 1.234,50"
+    assert guia_publica["natureza"] == "cda"
+
+
+@pytest.mark.asyncio
+async def test_guia_da_pgm_sem_passar_pela_tool_ainda_traz_valor_e_natureza(
+    divida_ativa_modules,
+):
+    """
+    Guia em cache de conversa pode ter os nomes crus da PGM, não os da tool.
+
+    É o mesmo motivo pelo qual GUIA_CAMPOS aceita 'dataVencimento' ao lado de
+    'data_vencimento'.
+    """
+
+    class FakeAPIService:
+        async def emitir_guia_a_vista(self, cdas, efs):
+            return {
+                "api_resposta_sucesso": True,
+                "codigoDeBarras": "111",
+                "pdf": "https://example.com/guia.pdf",
+                "dataVencimento": "10/09/2026",
+                "codigoQrEMVPix": "PIX-1",
+                "valorTotal": "R$ 500,00",
+                "naturezaDivida": "ef",
+            }
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeAPIService()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "debitos_pagamento_a_vista": [
+            {"tipo": "execucao_fiscal", "identificador": "EF-1"},
+        ],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+    )
+
+    guia_publica = state.agent_response.data["guia_pagamento_a_vista"]
+    assert guia_publica["valor"] == "R$ 500,00"
+    assert guia_publica["natureza"] == "ef"
+
+
+@pytest.mark.asyncio
 async def test_forma_pagamento_sem_guia_retorna_erro(
     divida_ativa_modules,
 ):

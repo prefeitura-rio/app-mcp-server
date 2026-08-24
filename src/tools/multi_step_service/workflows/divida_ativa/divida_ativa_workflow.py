@@ -7,6 +7,8 @@ Implementa o início do fluxo de consulta de dívidas ativas.
 from langgraph.graph import StateGraph, END
 from pydantic import ValidationError
 
+from src.tools.divida_ativa import CAMPOS_PGM_NATUREZA, CAMPOS_PGM_VALOR
+
 from src.tools.multi_step_service.core import (
     AgentResponse,
     BaseWorkflow,
@@ -512,11 +514,15 @@ class DividaAtivaWorkflow(BaseWorkflow):
         return consulta
 
     # Campos de uma guia, com os nomes alternativos vindos direto da PGM.
+    # `valor` e `natureza` chegam normalizados pela tool; os candidatos crus
+    # cobrem a guia que veio direto da PGM, sem passar por `_extrair_guias`.
     GUIA_CAMPOS = {
         "data_vencimento": ("data_vencimento", "dataVencimento"),
         "link": ("link", "pdf"),
         "codigo_de_barras": ("codigo_de_barras", "codigoDeBarras"),
         "pix": ("pix", "codigoQrEMVPix"),
+        "valor": ("valor", *CAMPOS_PGM_VALOR),
+        "natureza": ("natureza", *CAMPOS_PGM_NATUREZA),
     }
 
     # `arquivoBase64` é o PDF inteiro em base64 — centenas de KB. Vale como

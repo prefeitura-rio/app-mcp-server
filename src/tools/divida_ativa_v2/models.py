@@ -14,6 +14,10 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# O contrato da PGM mora na v1 (mesma razão de CAMPOS_PGM_GUIA em service.py):
+# um rename de campo lá precisa valer para as duas versões.
+from src.tools.divida_ativa import valor_e_natureza_da_guia
+
 # Placeholder de template não renderizado pelo SFMC, ex.:
 # "{{Event.DEAudience-abc.\"itens_informados\"}}"
 PLACEHOLDER_PATTERN = re.compile(r"\{\{.*?\}\}", re.DOTALL)
@@ -254,15 +258,26 @@ class GuiaEmitida(BaseModel):
     link: str = Field(default="", description="Link para o PDF da guia.")
     data_vencimento: str = Field(default="", description="Data de vencimento da guia.")
     pix: str = Field(default="", description="Código QR EMV do PIX da guia.")
+    # Sem estes dois o consumidor tem como pagar a guia, mas não como dizer ao
+    # cidadão o que ela cobra nem quanto custa — com N guias na resposta, é a
+    # única forma de distinguir uma da outra.
+    valor: str = Field(default="", description="Valor em dinheiro da guia.")
+    natureza: str = Field(
+        default="",
+        description="Natureza do débito que originou a guia (CDA, EF, auto de infração).",
+    )
 
     @classmethod
     def de_registro(cls, registro: Dict[str, Any]) -> "GuiaEmitida":
         """Constrói a guia a partir do registro cru da PGM."""
+        valor, natureza = valor_e_natureza_da_guia(registro)
         return cls(
             codigo_de_barras=registro.get("codigoDeBarras") or "",
             link=registro.get("pdf") or "",
             data_vencimento=registro.get("dataVencimento") or "",
             pix=registro.get("codigoQrEMVPix") or "",
+            valor=valor,
+            natureza=natureza,
         )
 
 
