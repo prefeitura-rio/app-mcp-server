@@ -97,3 +97,9 @@ dmypy.json
 # todo novo doc em docs/decisions/ so entra no repo com `git add -f`.
 docs/*
 !docs/decisions/
+# Mesma razão para os documentos de observabilidade: `observabilidade.md` é o
+# mapa de spans e atributos que o CHATR-112 consulta para montar alertas, e o
+# plano do P98 é o que dá contexto às próximas histórias. Fora do repo, os
+# dois só existem na máquina de quem os escreveu.
+!docs/observabilidade.md
+!docs/plano-observabilidade-p98.md

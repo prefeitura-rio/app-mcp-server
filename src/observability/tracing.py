@@ -13,7 +13,10 @@ tracing fica desabilitado e a aplicação continua funcionando normalmente
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import contextvars
+from concurrent.futures import Executor, Future
+from typing import Any, Callable, TypeVar
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from mcp.types import CallToolRequestParams
@@ -30,6 +33,8 @@ from src.utils.log import logger
 # Nome do tracer usado em toda a aplicação para spans de tool call.
 _TRACER_NAME = "app-mcp-server"
 
+_T = TypeVar("_T")
+
 # Flag de módulo para tornar `setup_tracing()` idempotente e indicar,
 # para o resto da aplicação (ex.: `main.py`), se o tracing está ativo.
 _tracing_enabled = False
@@ -39,6 +44,32 @@ _setup_attempted = False
 def is_tracing_enabled() -> bool:
     """Retorna True se o tracing OTel foi configurado com sucesso."""
     return _tracing_enabled
+
+
+def _build_resource_attributes(service_name: str) -> dict[str, str]:
+    """Monta os atributos de Resource comuns a todos os spans do processo.
+
+    `service.name` sozinho não distingue staging de prod: os dois publicam com
+    o mesmo valor e um alerta de taxa de erro acabaria avaliando os dois
+    ambientes num stream só. `deployment.environment` é o que separa os dois;
+    `k8s.pod.name` é o que permite atribuir um pico a uma réplica específica.
+
+    Atributo vazio não é registrado: um `deployment.environment=""` no SigNoz
+    é pior que a ausência, porque parece um valor legítimo na hora de filtrar.
+    """
+    attributes = {"service.name": service_name}
+
+    environment = (getattr(env, "ENVIRONMENT", None) or "").strip()
+    if environment:
+        attributes["deployment.environment"] = environment
+
+    # Vem da downward API (`fieldRef: metadata.name`) nos manifests; fora do
+    # cluster simplesmente não existe e o atributo é omitido.
+    pod_name = (getattr(env, "K8S_POD_NAME", None) or "").strip()
+    if pod_name:
+        attributes["k8s.pod.name"] = pod_name
+
+    return attributes
 
 
 def setup_tracing() -> bool:
@@ -80,9 +111,8 @@ def setup_tracing() -> bool:
         )
 
         service_name = env.OTEL_SERVICE_NAME or "app-mcp-server"
-        provider = TracerProvider(
-            resource=Resource.create({"service.name": service_name})
-        )
+        resource_attributes = _build_resource_attributes(service_name)
+        provider = TracerProvider(resource=Resource.create(resource_attributes))
 
         # O endpoint configurado é a URL base do coletor (ex.:
         # "http://signoz-otel-collector.signoz.svc.cluster.local:4318");
@@ -102,8 +132,13 @@ def setup_tracing() -> bool:
         trace.set_tracer_provider(provider)
 
         _tracing_enabled = True
+        # `deployment.environment` entra no log de propósito: é ele que separa
+        # staging de prod nos alertas, e um valor errado (o default de
+        # `env.ENVIRONMENT`, por exemplo) só é detectável olhando o pod.
         logger.info(
             f"Tracing OpenTelemetry habilitado. service.name={service_name!r} "
+            f"deployment.environment="
+            f"{resource_attributes.get('deployment.environment')!r} "
             f"endpoint={traces_endpoint!r}"
         )
         return True
@@ -120,6 +155,32 @@ def setup_tracing() -> bool:
 def get_tracer() -> trace.Tracer:
     """Retorna o tracer nomeado usado para instrumentação manual."""
     return trace.get_tracer(_TRACER_NAME)
+
+
+def run_in_executor_with_context(
+    loop: asyncio.AbstractEventLoop,
+    executor: Executor | None,
+    func: Callable[..., _T],
+    *args: Any,
+) -> Future[_T]:
+    """`loop.run_in_executor` que leva o contexto OTel junto para a thread.
+
+    O span corrente do OpenTelemetry vive num `contextvar`, e
+    `run_in_executor` executa a função numa thread do pool sem copiar o
+    contexto do chamador. O efeito é que todo span aberto dentro do executor
+    (`bigquery.query`, `bigquery.save_response`, …) nascia como raiz de um
+    trace próprio em vez de filho do `mcp.tool_call` que o originou: os spans
+    existiam, com duração e status, mas não havia como ir da tool lenta até a
+    query que a segurou.
+
+    `contextvars.copy_context()` tira um retrato do contexto aqui, do lado do
+    event loop, e `ctx.run(...)` o restaura dentro da thread — que é
+    exatamente o que `asyncio.to_thread` faz. Não usamos `to_thread` direto
+    porque ele não aceita escolher o executor, e as leituras de BigQuery
+    rodam num pool dedicado (ver `_get_read_executor`).
+    """
+    ctx = contextvars.copy_context()
+    return loop.run_in_executor(executor, lambda: ctx.run(func, *args))
 
 
 def _extract_user_id(arguments: dict[str, Any] | None) -> str:
