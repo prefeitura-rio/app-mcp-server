@@ -103,6 +103,7 @@ _write_metrics = {
     "rows_to_dlq": 0,  # linhas que caíram na DLQ após esgotar o retry
     "rows_evicted": 0,  # linhas expulsas do buffer por estouro de teto
     "rows_replayed": 0,  # linhas devolvidas ao BigQuery a partir da DLQ
+    "dlq_items_dropped": 0,  # itens expulsos da DLQ/poison pelo teto
 }
 
 
@@ -511,8 +512,8 @@ _DLQ_LINHA_MEDIA_BYTES = 2048
 _SUFIXO_EM_PROCESSAMENTO = ".processing"
 
 
-def _anexar_com_teto(caminho, linha: str, rotulo: str) -> None:
-    """Acrescenta uma linha ao arquivo mantendo o teto de itens da DLQ.
+def _anexar_com_teto(caminho, linha: str, rotulo: str) -> int:
+    """Acrescenta uma linha ao arquivo mantendo o teto. Devolve o que cortou.
 
     Mesmo teto do Redis (`BIGQUERY_DLQ_MAX_ITEMS`) e mesma consequência: o que
     for cortado é perda definitiva e sai como `logger.critical`. Sem isto, o
@@ -538,13 +539,13 @@ def _anexar_com_teto(caminho, linha: str, rotulo: str) -> None:
         f.write(linha + "\n")
 
     if max_items <= 0:
-        return
+        return 0
 
     try:
         if caminho.stat().st_size <= max_items * _DLQ_LINHA_MEDIA_BYTES:
-            return
+            return 0
     except OSError:
-        return
+        return 0
 
     try:
         linhas = [
@@ -553,19 +554,54 @@ def _anexar_com_teto(caminho, linha: str, rotulo: str) -> None:
             if existente.strip()
         ]
         if len(linhas) <= max_items:
-            return
+            return 0
         descartadas = len(linhas) - max_items
         # Corta as mais antigas, como o `LTRIM(-max, -1)` do Redis.
         caminho.write_text("\n".join(linhas[-max_items:]) + "\n", encoding="utf-8")
     except OSError as e:
         logger.error(f"Não foi possível aplicar o teto em {caminho.name}: {e}")
-        return
+        return 0
 
+    _bump_metric("dlq_items_dropped", descartadas)
     logger.critical(
         f"DLQ em arquivo de {rotulo} atingiu o teto de {max_items} itens: "
         f"{descartadas} item(ns) mais antigo(s) foram DESCARTADOS definitivamente "
         f"({caminho.name}). Reprocesse a DLQ ou aumente BIGQUERY_DLQ_MAX_ITEMS."
     )
+    return descartadas
+
+
+def _alertar_descarte_por_teto(resultado, chave: str, max_items: int) -> int:
+    """Registra o que o `LTRIM` do teto cortou da fila. Devolve quantos foram.
+
+    Contrapartida em Redis do `_anexar_com_teto`, e existe pelo mesmo motivo: o
+    corte é perda definitiva de dado e precisa aparecer como tal. Sem isto o
+    item mais antigo some do servidor sem deixar rastro nenhum — o operador não
+    tem como saber que faltou algo, muito menos o quê.
+
+    Como funciona: o RPUSH devolve o tamanho da lista *antes* do LTRIM, e o
+    pipeline começa por ele nos três caminhos com teto (gravação na DLQ, envio
+    ao poison e reenfileiramento de volta). O que passar de `max_items` nesse
+    número é exatamente o que o LTRIM seguinte descartou.
+
+    Deve ser chamado *fora* do `try` do pipeline: aqui só se loga, e uma falha
+    neste ponto não pode ser confundida com falha da gravação.
+    """
+    if max_items <= 0:
+        return 0
+
+    tamanho_apos_push = resultado[0] if resultado else 0
+    if not isinstance(tamanho_apos_push, int) or tamanho_apos_push <= max_items:
+        return 0
+
+    descartados = tamanho_apos_push - max_items
+    _bump_metric("dlq_items_dropped", descartados)
+    logger.critical(
+        f"A fila {chave} atingiu o teto de {max_items} itens: {descartados} "
+        f"item(ns) mais antigo(s) foram DESCARTADOS definitivamente. Reprocesse "
+        f"a DLQ ou aumente BIGQUERY_DLQ_MAX_ITEMS."
+    )
+    return descartados
 
 
 def _expirar_arquivos_dlq() -> None:
@@ -649,17 +685,7 @@ def _persist_to_dlq(
             resultado = pipe.execute()
             pushed = True
 
-            # O RPUSH devolve o tamanho *antes* do LTRIM: se passou do teto, a
-            # diferença é exatamente o que foi descartado. Descarte de DLQ é
-            # perda definitiva de dado — precisa aparecer como tal no log.
-            tamanho_apos_push = resultado[0] if resultado else 0
-            if isinstance(tamanho_apos_push, int) and tamanho_apos_push > max_items:
-                logger.critical(
-                    f"DLQ de {table_full_name} atingiu o teto de {max_items} itens: "
-                    f"{tamanho_apos_push - max_items} item(ns) mais antigo(s) foram "
-                    f"DESCARTADOS definitivamente. Reprocesse a DLQ ou aumente "
-                    f"BIGQUERY_DLQ_MAX_ITEMS."
-                )
+            _alertar_descarte_por_teto(resultado, chave, max_items)
 
             logger.error(
                 f"Falha definitiva de escrita no BigQuery ({table_full_name}). "
@@ -2158,10 +2184,13 @@ def _mover_para_poison(
         # O LPOP vai na mesma pipeline que o RPUSH: numa falha parcial o item
         # fica duplicado (nas duas chaves), nunca ausente das duas.
         pipe.lpop(chave)
-        pipe.execute()
+        resultado = pipe.execute()
     except Exception as e:
         logger.error(f"Não foi possível mover item para poison ({chave_poison}): {e}")
         return False
+    # O poison tem o mesmo teto da DLQ e, portanto, o mesmo risco: mover um item
+    # para cá pode expulsar o mais antigo da outra ponta.
+    _alertar_descarte_por_teto(resultado, chave_poison, max_items)
     logger.critical(
         f"Item da DLQ de {table_full_name} recusado definitivamente pelo BigQuery "
         f"(schema/conteúdo). Movido para {chave_poison} — exige correção manual."
@@ -2713,7 +2742,7 @@ def reenfileirar_poison(limite: int = None, table_full_name: str = None) -> dict
         if limite is not None
         else int(getattr(env, "BIGQUERY_DLQ_DRAIN_BATCH", 100))
     )
-    resumo = {"itens": 0, "linhas": 0, "pendentes": 0, "erros": []}
+    resumo = {"itens": 0, "linhas": 0, "pendentes": 0, "descartados": 0, "erros": []}
     max_items = int(getattr(env, "BIGQUERY_DLQ_MAX_ITEMS", 1000))
     ttl = int(getattr(env, "BIGQUERY_DLQ_TTL_SECONDS", 604800))
 
@@ -2764,11 +2793,18 @@ def reenfileirar_poison(limite: int = None, table_full_name: str = None) -> dict
                     if ttl > 0:
                         pipe.expire(destino, ttl)
                     pipe.lpop(chave)
-                    pipe.execute()
+                    resultado = pipe.execute()
                 except Exception as e:
                     resumo["erros"].append(f"{chave}: {e}")
                     break
 
+                # Devolver ao destino pode estourar o teto dele: a DLQ normal
+                # segue recebendo enquanto o operador reenfileira. O descarte
+                # entra no resumo porque quem rodou o comando é justamente quem
+                # precisa saber que a volta custou itens.
+                resumo["descartados"] += _alertar_descarte_por_teto(
+                    resultado, destino, max_items
+                )
                 resumo["itens"] += 1
                 resumo["linhas"] += linhas
 
@@ -2823,7 +2859,9 @@ def reenfileirar_poison(limite: int = None, table_full_name: str = None) -> dict
                 restantes.append(linha)
                 continue
             try:
-                _anexar_com_teto(_dlq_file_path(tabela), linha, tabela)
+                resumo["descartados"] += _anexar_com_teto(
+                    _dlq_file_path(tabela), linha, tabela
+                )
             except OSError as e:
                 resumo["erros"].append(f"{tabela}: {e}")
                 restantes.extend(linhas[indice:])
@@ -2846,6 +2884,12 @@ def reenfileirar_poison(limite: int = None, table_full_name: str = None) -> dict
             f"{resumo['itens']} item(ns) devolvidos do poison para a DLQ "
             f"({resumo['linhas']} linha(s)). Se a causa não tiver sido corrigida, "
             f"o drain vai recusá-los de novo."
+        )
+    if resumo["descartados"]:
+        logger.critical(
+            f"O reenfileiramento estourou o teto da DLQ: {resumo['descartados']} "
+            f"item(ns) mais antigo(s) foram DESCARTADOS definitivamente. Drene a "
+            f"DLQ antes de devolver o resto do poison."
         )
     return resumo
 

@@ -218,6 +218,17 @@ def _modo_reenfileirar_poison(args) -> int:
                 "tiver sido corrigida, eles voltam ao poison."
             )
 
+    # A DLQ de destino também tem teto: devolver poison para uma fila cheia
+    # empurra o item mais antigo dela para fora, em definitivo. Quem rodou o
+    # comando precisa ver isso na hora, não só no log do pod.
+    if resumo.get("descartados"):
+        print(
+            f"  ATENÇÃO: {resumo['descartados']} item(ns) mais antigo(s) da DLQ "
+            f"foram DESCARTADOS pelo teto durante a devolução. Drene a DLQ antes "
+            f"de reenfileirar o resto.",
+            file=sys.stderr,
+        )
+
     for erro in resumo["erros"]:
         print(f"  erro: {erro}", file=sys.stderr)
     return 1 if resumo["erros"] else 0

@@ -361,6 +361,85 @@ def test_ciclo_do_poison_move_inspeciona_e_reenfileira(monkeypatch, redis_cli):
     assert redis_cli.llen(CHAVE_DLQ) == 1
 
 
+def test_teto_do_poison_corta_no_servidor_e_a_perda_vai_ao_log(monkeypatch, redis_cli):
+    """O poison tem teto, logo tem descarte — e descarte é perda definitiva.
+
+    O dublê prova que o código pede o `LTRIM`; só o servidor prova que ele corta
+    e quanto. É a diferença entre um item que o operador vai procurar no poison
+    e um item que já não existe em lugar nenhum — daí a exigência do log.
+    """
+    module, _ = _montar(
+        monkeypatch,
+        "it_poison_teto",
+        cliente=_ClienteBQ(erros=[{"index": 0, "errors": [{"message": "schema"}]}]),
+        **{"BIGQUERY_DLQ_MAX_ITEMS": 2},
+    )
+    criticos = []
+    monkeypatch.setattr(
+        module.logger, "critical", lambda msg, *_a, **_k: criticos.append(msg)
+    )
+
+    # Um por vez: a DLQ divide o mesmo teto, e enfileirar os três de uma vez
+    # cortaria lá antes de chegar aqui.
+    for i in range(3):
+        module._persist_to_dlq(TABELA, [{"id": i}], "falha de teste")
+        module._replay_dlq_redis(10, table_full_name=TABELA)
+
+    assert redis_cli.llen(CHAVE_POISON) == 2
+    ids = [
+        json.loads(bruto)["payload"][0]["id"]
+        for bruto in redis_cli.lrange(CHAVE_POISON, 0, -1)
+    ]
+    assert ids == [1, 2], "o corte não foi pela cabeça da lista"
+    assert any("DESCARTADOS" in msg for msg in criticos), (
+        "o item cortado do poison sumiu do servidor sem log crítico"
+    )
+    assert module.get_bigquery_write_metrics()["dlq_items_dropped"] == 1
+
+
+def test_reenfileirar_para_dlq_no_teto_reporta_o_que_foi_cortado(
+    monkeypatch, redis_cli
+):
+    """A DLQ segue recebendo enquanto o operador devolve o poison.
+
+    Devolver para uma fila que já está no teto expulsa a cabeça dela. O comando
+    precisa reportar isso: o saldo da operação pode ser negativo, e no servidor
+    o item cortado já não existe para ser recuperado.
+    """
+    module, _ = _montar(monkeypatch, "it_requeue_teto", **{"BIGQUERY_DLQ_MAX_ITEMS": 2})
+    criticos = []
+    monkeypatch.setattr(
+        module.logger, "critical", lambda msg, *_a, **_k: criticos.append(msg)
+    )
+
+    # DLQ no teto, e um item esperando no poison para voltar.
+    for i in range(2):
+        module._persist_to_dlq(TABELA, [{"id": i}], "falha de teste")
+    redis_cli.rpush(
+        CHAVE_POISON,
+        json.dumps(
+            {
+                "table_full_name": TABELA,
+                "failed_at": "2026-08-20T10:00:00.000000",
+                "error": "no such field: cep",
+                "payload": [{"id": 99}],
+            }
+        ),
+    )
+
+    resumo = module.reenfileirar_poison(table_full_name=TABELA)
+
+    assert resumo["itens"] == 1
+    assert resumo["descartados"] == 1, "a perda não chegou ao resumo do comando"
+    assert redis_cli.llen(CHAVE_DLQ) == 2
+    ids = [
+        json.loads(bruto)["payload"][0]["id"]
+        for bruto in redis_cli.lrange(CHAVE_DLQ, 0, -1)
+    ]
+    assert ids == [1, 99], "o mais antigo da DLQ devia ter sido o cortado"
+    assert any("DESCARTADOS" in msg for msg in criticos)
+
+
 def test_inspecao_com_payload_e_opt_in(monkeypatch, redis_cli):
     """O payload carrega telefone, endereço e coordenada.
 

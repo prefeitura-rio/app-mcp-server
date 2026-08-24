@@ -556,6 +556,43 @@ def test_payload_recusado_para_sempre_sai_da_frente(monkeypatch):
     assert len(redis.listas["bq_dlq_poison:proj.ds.tbl"]) == 2
 
 
+def test_poison_cheio_descarta_o_mais_antigo_com_log_critico(monkeypatch):
+    """O poison tem o mesmo teto da DLQ — e o mesmo corte pela cabeça.
+
+    Mover um item para uma chave que já está no teto empurra o mais antigo para
+    fora, em definitivo. É perda de dado como qualquer outra: se sair em
+    silêncio, o operador inspeciona o poison, não encontra o item e não tem como
+    saber que ele existiu.
+    """
+    module = _carregar_bigquery(monkeypatch, "bq_poison_teto", BIGQUERY_DLQ_MAX_ITEMS=2)
+    _espionar_bigquery(monkeypatch, module, erro=BadRequest("schema inválido"))
+    mais_antigo = _item_dlq(payload=[{"antigo": True}])
+    redis = _RedisFalso(
+        {
+            "bq_dlq:proj.ds.tbl": [_item_dlq(payload=[{"novo": True}])],
+            "bq_dlq_poison:proj.ds.tbl": [
+                mais_antigo,
+                _item_dlq(payload=[{"meio": True}]),
+            ],
+        }
+    )
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+    criticos = []
+    monkeypatch.setattr(
+        module.logger, "critical", lambda msg, *_a, **_k: criticos.append(msg)
+    )
+
+    module._replay_dlq_redis(limite=10)
+
+    poison = redis.listas["bq_dlq_poison:proj.ds.tbl"]
+    assert len(poison) == 2, "o teto do poison não foi aplicado"
+    assert mais_antigo not in poison
+    assert any("DESCARTADOS" in msg for msg in criticos), (
+        "item cortado do poison sumiu sem log crítico"
+    )
+    assert module.get_bigquery_write_metrics()["dlq_items_dropped"] == 1
+
+
 def test_item_ilegivel_vai_para_poison_em_vez_de_travar(monkeypatch):
     module = _carregar_bigquery(monkeypatch, "bq_replay_ilegivel")
     _espionar_bigquery(monkeypatch, module)
@@ -1242,6 +1279,42 @@ def test_reenfileirar_devolve_o_poison_para_a_dlq(monkeypatch):
     assert resumo["itens"] == 1
     assert redis.listas["bq_dlq_poison:proj.ds.tbl"] == [], "o item ficou no poison"
     assert redis.listas["bq_dlq:proj.ds.tbl"] == [_item_dlq()]
+
+
+def test_reenfileirar_para_dlq_cheia_registra_o_descarte(monkeypatch):
+    """A volta do poison pode custar o item mais antigo da DLQ de destino.
+
+    A DLQ segue recebendo enquanto o operador reenfileira: devolver para uma
+    fila já no teto expulsa a cabeça dela. O comando não pode reportar só o que
+    devolveu — o saldo pode ser negativo, e quem rodou é quem precisa saber.
+    """
+    module = _carregar_bigquery(
+        monkeypatch, "bq_poison_requeue_teto", BIGQUERY_DLQ_MAX_ITEMS=2
+    )
+    mais_antigo = _item_dlq(payload=[{"antigo": True}])
+    redis = _RedisFalso(
+        {
+            "bq_dlq:proj.ds.tbl": [mais_antigo, _item_dlq(payload=[{"meio": True}])],
+            "bq_dlq_poison:proj.ds.tbl": [_item_dlq(payload=[{"volta": True}])],
+        }
+    )
+    monkeypatch.setattr(module, "_get_sync_redis_client", lambda: redis)
+    criticos = []
+    monkeypatch.setattr(
+        module.logger, "critical", lambda msg, *_a, **_k: criticos.append(msg)
+    )
+
+    resumo = module.reenfileirar_poison(limite=10)
+
+    dlq = redis.listas["bq_dlq:proj.ds.tbl"]
+    assert resumo["itens"] == 1
+    assert len(dlq) == 2, "o teto da DLQ não foi aplicado na devolução"
+    assert mais_antigo not in dlq
+    assert resumo["descartados"] == 1, "a perda não chegou ao resumo do comando"
+    assert any("DESCARTADOS" in msg for msg in criticos), (
+        "item cortado da DLQ sumiu sem log crítico"
+    )
+    assert module.get_bigquery_write_metrics()["dlq_items_dropped"] == 1
 
 
 def test_reenfileirar_nao_perde_item_com_entrada_ilegivel(monkeypatch):
