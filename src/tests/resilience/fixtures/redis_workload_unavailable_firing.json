@@ -1,0 +1,5 @@
+{
+  "_comment": "Same shape/evaluator as workload_unavailable_firing.json but modeling the redis-ha StatefulSet (desired=3: primary+2 replicas) losing one pod for several samples before recovering.",
+  "desired":   [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+  "available": [3, 3, 3, 2, 2, 2, 3, 3, 3, 3]
+}

@@ -257,6 +257,11 @@ spec:
 # (`name: prometheus`, porta 9090) — não `prometheus-server`, hostname que
 # alguns AnalysisTemplates irmãos usam mas que não corresponde a nenhum
 # Service existente no cluster.
+#
+# Runbook (plan todo 8, comentário apenas — nenhum comportamento mudou
+# aqui): docs/runbooks/failed-canary.md documenta a semântica exata de
+# `failureLimit`/abort/rollback deste AnalysisTemplate e o drill isolado
+# que a exercita (`src/tests/resilience/test_drill_failed_canary.py`).
 apiVersion: argoproj.io/v1alpha1
 kind: AnalysisTemplate
 metadata:

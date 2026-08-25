@@ -1,0 +1,5 @@
+{
+  "_comment": "A single OOMKilled event in the middle sample is enough (AtLeastOnce, target=0, Above).",
+  "oom_count": [0, 1, 0],
+  "eviction_count": [0, 0, 0]
+}

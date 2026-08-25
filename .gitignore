@@ -94,6 +94,10 @@ dmypy.json
 .claude/
 # `docs/` é area de rascunho local, mas os registros de decisao (ADRs) sao
 # versionados: sao o criterio de aceite de varias historias. Sem esta excecao
-# todo novo doc em docs/decisions/ so entra no repo com `git add -f`.
+# todo novo doc em docs/decisions/ so entra no repo com `git add -f`. Mesma
+# excecao para docs/runbooks/: os runbooks de resiliencia de producao (plano
+# de resiliencia do MCP, todo 8) sao linkados a partir de alertas SigNoz em
+# infra/superapp e precisam estar versionados, nao ser rascunho local.
 docs/*
 !docs/decisions/
+!docs/runbooks/
