@@ -65,9 +65,33 @@ async def detail(request: Request) -> JSONResponse:
             "uptime_s": uptime_seconds(),
             "ready": is_ready(),
             "checks": [result.to_dict() for result in results],
+            "bigquery_write": _bigquery_write_metrics(),
         },
         status_code=200,
     )
+
+
+def _bigquery_write_metrics() -> dict:
+    """Contadores de escrita do BigQuery para o corpo de `/health/detail`.
+
+    O critério de aceite do CHATR-118 é que o volume de inserts caia "de forma
+    mensurável" — o que exige que alguém consiga medir sem abrir um REPL dentro
+    do pod. Os contadores existiam desde o batching; o que faltava era saída.
+
+    Só leitura de estado em memória, com lock de prazo curto do lado do
+    BigQuery: nenhuma chamada de rede entra aqui, e por isso não passa pelo
+    `health_registry` (que existe para check com I/O e timeout próprio).
+
+    Nunca propaga exceção. Este bloco é informativo e não pode ser o motivo de
+    a rota de diagnóstico falhar — se ele quebrar, o resto do payload, que é o
+    que de fato importa para diagnosticar, continua saindo.
+    """
+    try:
+        from src.utils.bigquery import get_bigquery_write_metrics
+
+        return get_bigquery_write_metrics()
+    except Exception as e:  # pragma: no cover - salvaguarda
+        return {"erro": type(e).__name__}
 
 
 def register_health_routes(mcp: Any) -> None:

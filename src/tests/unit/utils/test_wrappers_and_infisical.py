@@ -381,7 +381,17 @@ async def test_search_uses_typesense_then_google_fallback(monkeypatch):
             )
         ),
     )
-    monkeypatch.setattr(asyncio, "create_task", lambda coro: created_tasks.append(coro))
+    # A tool dispara a escrita por `disparar_em_background`, e não por
+    # `asyncio.create_task` direto, para a task não ser coletada antes de rodar
+    # (a event loop só guarda referência fraca). O stub captura a corrotina no
+    # mesmo ponto de saída.
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.background",
+        types.SimpleNamespace(
+            disparar_em_background=lambda coro, nome=None: created_tasks.append(coro)
+        ),
+    )
 
     module = load_module("test_search_module", "src/tools/search.py")
 

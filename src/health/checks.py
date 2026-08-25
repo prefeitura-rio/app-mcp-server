@@ -142,6 +142,51 @@ async def check_external_tables() -> CheckStatus:
     return CheckStatus.UP
 
 
+async def check_bigquery_dlq() -> CheckStatus:
+    """Reporta se há escrita parada na dead-letter queue do BigQuery.
+
+    Até existir este check, a DLQ só aparecia numa linha de log no instante da
+    falha — que ninguém revisita. Sem visibilidade, "o payload está guardado"
+    não se distingue na prática de "o payload se perdeu": o dado fica lá e
+    ninguém reprocessa.
+
+    Degradado, e não `critical`, de propósito. Item na DLQ significa escrita de
+    log/feedback atrasada, não servidor incapaz de atender: derrubar o pod por
+    causa disso trocaria perda de log por indisponibilidade da aplicação
+    inteira. O worker de drain (`drain_bigquery_dlq_loop`) tende a zerar isto
+    sozinho assim que o BigQuery volta; o que este check pega é justamente o
+    caso em que ele não zera.
+
+    Item em poison degrada a partir do primeiro, e isso é deliberado — mas só
+    passou a ser defensável depois que o poison ganhou saída operacional. Antes,
+    "degradado" significava esperar o TTL de sete dias, e um único payload
+    malformado mascarava toda outra degradação no agregado por uma semana; um
+    check permanentemente vermelho é um check que ninguém lê. Agora significa
+    "rode `python -m src.utils.bq_dlq_replay --poison`", e some quando alguém
+    reprocessa ou descarta. A mensagem carrega tabela e prazo justamente para
+    que a ação seja possível sem investigação prévia.
+    """
+    from src.utils.bigquery import formatar_duracao, get_dlq_depth_async
+
+    profundidade = await get_dlq_depth_async()
+
+    if profundidade["poison"]:
+        tabelas = ", ".join(profundidade.get("poison_tabelas") or []) or "?"
+        prazo = formatar_duracao(profundidade.get("poison_expira_em_s"))
+        raise HealthCheckError(
+            f"{profundidade['poison']} item(ns) recusado(s) definitivamente pelo "
+            f"BigQuery aguardam ação em {tabelas} (o mais próximo expira em "
+            f"{prazo}); use `bq_dlq_replay --poison` para inspecionar, "
+            f"`--requeue-poison` após corrigir a causa ou `--purge-poison` para "
+            f"descartar. {profundidade['total']} na DLQ ao todo"
+        )
+    if profundidade["total"]:
+        raise HealthCheckError(
+            f"{profundidade['total']} item(ns) aguardando reprocessamento na DLQ"
+        )
+    return CheckStatus.UP
+
+
 def make_tool_registry_check(mcp: Any):
     """Cria o check que confirma haver tools registradas.
 
@@ -182,5 +227,8 @@ def register_default_checks(
         # curto. Não é `critical`: a queda afeta só `equipments_instructions`,
         # que degrada graciosamente.
         registry.register("external_tables", check_external_tables, timeout_s=1.0)
+        # Consulta o Redis síncrono numa thread do pool de escrita, daí o
+        # timeout maior que o dos checks que só leem estado em memória.
+        registry.register("bigquery_dlq", check_bigquery_dlq, timeout_s=3.0)
 
     logger.info(f"Health checks registrados: {', '.join(registry.names)}")
