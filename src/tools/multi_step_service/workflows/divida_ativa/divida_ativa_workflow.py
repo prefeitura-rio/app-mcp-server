@@ -561,6 +561,19 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
             if sempre or value:
                 normalizada[public_field] = value
+
+        # Guia sem nenhum campo próprio é dict vazio, como antes do CHATR-164.
+        # `valor` sozinho não conta: ele entra sempre, inclusive como None, e
+        # devolvê-lo aqui faria `normalizada` nunca ser falsa — matando os dois
+        # descartes de guia vazia em `_guias_da_resposta` e fabricando um card
+        # de pagamento sem código de barras, sem link e sem Pix.
+        if not any(
+            valor
+            for campo, valor in normalizada.items()
+            if campo not in self.GUIA_CAMPOS_SEMPRE
+        ):
+            return {}
+
         return normalizada
 
     def _guias_da_resposta(self, guia: dict | None, campos: dict) -> list[dict]:

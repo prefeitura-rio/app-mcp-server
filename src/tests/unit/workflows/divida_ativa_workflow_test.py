@@ -2126,3 +2126,82 @@ async def test_guia_sem_valor_mantem_a_chave_no_payload(divida_ativa_modules):
     assert guia["valor"] is None
     # A guia continua entregue e pagável.
     assert guia["codigo_de_barras"] == "123456789"
+
+
+# --- Guia vazia não vira card de pagamento ---------------------------------
+#
+# `valor` entra no payload mesmo como None, para o consumidor distinguir "não
+# apurável" de "esta versão não manda o campo". Isso quase custou os dois
+# descartes de guia vazia em `_guias_da_resposta`: com `valor` sempre presente,
+# `_normalizar_guia` nunca devolveria dict falso e toda resposta viraria uma
+# guia — sem código de barras, sem link e sem Pix (CHATR-164).
+
+
+def test_resposta_de_sucesso_sem_nenhuma_guia_nao_vira_card(divida_ativa_modules):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    assert workflow._build_public_guia_data({"api_resposta_sucesso": True}) == {}
+
+
+def test_registro_que_nao_e_guia_nao_entra_no_total(divida_ativa_modules):
+    """
+    `pgm_api` devolve {"success": True} quando a resposta vem vazia. Contado
+    como guia, o cidadão leria "foram geradas 2 guias, pague todas" com uma só.
+    """
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    publico = workflow._build_public_guia_data(
+        {
+            "api_resposta_sucesso": True,
+            "guias_emitidas": [
+                {
+                    "codigo_de_barras": "123456789",
+                    "link": "http://pgm/a.pdf",
+                    "data_vencimento": "31/08/2026",
+                    "pix": "pix",
+                    "valor": 10.0,
+                },
+                {"success": True},
+            ],
+        }
+    )
+
+    assert publico["total_guias"] == 1
+    assert publico["guias"] == [
+        {
+            "codigo_de_barras": "123456789",
+            "link": "http://pgm/a.pdf",
+            "data_vencimento": "31/08/2026",
+            "pix": "pix",
+            "valor": 10.0,
+        }
+    ]
+
+
+def test_guia_real_sem_valor_apuravel_continua_no_payload(divida_ativa_modules):
+    """O descarte é de guia sem campo próprio, não de guia sem valor."""
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    publico = workflow._build_public_guia_data(
+        {
+            "api_resposta_sucesso": True,
+            "guias_emitidas": [{"codigo_de_barras": "123456789", "valor": None}],
+        }
+    )
+
+    assert publico["total_guias"] == 1
+    assert publico["guias"][0]["valor"] is None
+
+
+def test_guia_com_valor_zero_continua_no_payload(divida_ativa_modules):
+    """0.0 é valor legítimo de guia e não pode ser lido como campo ausente."""
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    publico = workflow._build_public_guia_data(
+        {
+            "api_resposta_sucesso": True,
+            "guias_emitidas": [{"codigo_de_barras": "123456789", "valor": 0.0}],
+        }
+    )
+
+    assert publico["guias"][0]["valor"] == 0.0

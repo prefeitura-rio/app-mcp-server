@@ -133,3 +133,53 @@ def test_valor_brl_nao_parseavel_vira_none(texto):
     não veio diria ao consumidor que o débito está quitado.
     """
     assert valor_brl_para_numero(texto) is None
+
+
+# --- Valores não finitos ---------------------------------------------------
+#
+# `float()` aceita "nan", "inf" e "Infinity", e estoura para `inf` com dígitos
+# demais. Qualquer um deles atravessaria até a serialização, onde o
+# `JSONResponse` do FastAPI (`allow_nan=False`) levanta ValueError: o endpoint
+# devolveria 500 com a guia já emitida na PGM, e nada chegaria ao cidadão.
+
+
+@pytest.mark.parametrize("bruto", ["nan", "NaN", "inf", "-inf", "Infinity"])
+def test_pix_com_valor_nao_finito_nao_tem_valor(bruto):
+    pix = f"000201{'54'}{len(bruto):02d}{bruto}6304ABCD"
+    assert valor_do_pix(pix) is None
+
+
+# Overflow por excesso de dígitos não é alcançável pelo PIX: o tamanho do campo
+# EMV tem 2 dígitos, então o campo 54 para em 99 caracteres e `float` só estoura
+# perto de 309. Pelo texto BRL da consulta, que não tem limite, é alcançável.
+
+
+@pytest.mark.parametrize("texto", ["R$" + "9" * 400, "9" * 400])
+def test_valor_brl_que_estoura_o_float_vira_none(texto):
+    assert valor_brl_para_numero(texto) is None
+
+
+@pytest.mark.parametrize("numero", [float("nan"), float("inf"), float("-inf")])
+def test_valor_brl_numerico_nao_finito_vira_none(numero):
+    assert valor_brl_para_numero(numero) is None
+
+
+def test_valor_da_guia_nao_finito_cai_no_codigo_de_barras():
+    """
+    O Pix é a fonte primária, mas um campo 54 impagável não pode encobrir o
+    código de barras, que descreve a mesma guia e está íntegro.
+    """
+    pix_nan = "0002015403nan6304ABCD"
+    assert valor_da_guia(pix_nan, BARRAS_REAL) == VALOR_REAL
+
+
+def test_valor_de_guia_e_sempre_serializavel_em_json():
+    """
+    O contrato que o resto do sistema assume: `valor` ou é número serializável
+    ou é None. `allow_nan=False` é o que o FastAPI usa para renderizar.
+    """
+    import json
+
+    for pix in ["0002015403nan6304ABCD", "0002015403inf6304ABCD", PIX_REAL, ""]:
+        valor = valor_da_guia(pix, "")
+        json.dumps({"valor": valor}, allow_nan=False)

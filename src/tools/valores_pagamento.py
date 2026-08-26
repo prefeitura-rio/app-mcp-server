@@ -11,8 +11,9 @@ Nada aqui é específico de dívida ativa: são os formatos públicos do BR Code
 guia pode reusar.
 """
 
+import math
 import re
-from typing import Iterator, Optional, Tuple
+from typing import Iterator, Optional, Tuple, Union
 
 
 # Campo 54 do BR Code — "Transaction Amount" (Manual de Padrões Pix, BCB).
@@ -29,6 +30,24 @@ BARRAS_VALOR_EFETIVO = ("6", "8")
 BARRAS_PRODUTO_ARRECADACAO = "8"
 
 
+def _numero_finito(bruto: Union[str, int, float]) -> Optional[float]:
+    """
+    `float(bruto)` só quando o resultado é dinheiro representável.
+
+    `float()` aceita "nan", "inf" e "Infinity", e estoura para `inf` com
+    dígitos demais. Qualquer um deles atravessaria até a serialização, onde o
+    `JSONResponse` do FastAPI (`allow_nan=False`) levanta ValueError e devolve
+    500 — com a guia já emitida na PGM e nada chegando ao cidadão. Não
+    apurável é o que None significa; é o que estes casos são.
+    """
+    try:
+        numero = float(bruto)
+    except ValueError:
+        return None
+
+    return numero if math.isfinite(numero) else None
+
+
 def valor_brl_para_numero(texto: object) -> Optional[float]:
     """
     Converte valor em texto BRL para número.
@@ -38,7 +57,7 @@ def valor_brl_para_numero(texto: object) -> Optional[float]:
     que é um valor legítimo e diria ao consumidor algo falso.
     """
     if isinstance(texto, (int, float)) and not isinstance(texto, bool):
-        return float(texto)
+        return _numero_finito(texto)
 
     if not isinstance(texto, str):
         return None
@@ -52,10 +71,7 @@ def valor_brl_para_numero(texto: object) -> Optional[float]:
     limpo = re.sub(r"[^\d,.\-]", "", limpo)
     limpo = limpo.replace(".", "").replace(",", ".")
 
-    try:
-        return float(limpo)
-    except ValueError:
-        return None
+    return _numero_finito(limpo)
 
 
 def _campos_emv(payload: str) -> Iterator[Tuple[str, str]]:
@@ -99,12 +115,9 @@ def valor_do_pix(pix: object) -> Optional[float]:
 
     for identificador, valor in _campos_emv(pix.strip()):
         if identificador == EMV_ID_VALOR:
-            try:
-                # O campo 54 vem como decimal com ponto ("4825.43"), no padrão
-                # EMV — não no formato brasileiro.
-                return float(valor)
-            except ValueError:
-                return None
+            # O campo 54 vem como decimal com ponto ("4825.43"), no padrão
+            # EMV — não no formato brasileiro.
+            return _numero_finito(valor)
 
     return None
 
