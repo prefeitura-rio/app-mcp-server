@@ -7,7 +7,6 @@ para consulta de IPTU e geração de guias de pagamento.
 
 import asyncio
 import re
-import json
 from typing import List, Optional, Dict, Any
 import httpx
 import base64
@@ -17,9 +16,6 @@ import datetime as dt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 import uuid
-
-from google.cloud import storage
-from google.oauth2 import service_account
 
 from src.config import env
 from src.tools.multi_step_service.workflows.iptu_pagamento.core.models import (
@@ -50,7 +46,22 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.pix_page_service impo
 )
 
 from loguru import logger
+from src.utils.gcs_storage import upload_to_gcs
 from src.utils.http_client import InterceptedHTTPClient
+from src.utils.short_url import format_expires_at, get_short_url
+
+
+# Origem das chamadas para o interceptor de erros. Mesma para todas as
+# integrações deste workflow.
+ERROR_SOURCE = {
+    "source": "mcp",
+    "tool": "multi_step_service",
+    "workflow": "iptu_pagamento",
+}
+
+# Validade do PDF do DARM: vale para a signed URL do GCS e para o link curto,
+# que não faz sentido sobreviver ao destino.
+PDF_DARM_TTL = dt.timedelta(days=7)
 
 
 def _corpo_resposta(response) -> str:
@@ -205,11 +216,7 @@ class IPTUAPIService:
                 # query string sem que ele apareça no body reportado ao interceptor.
                 async with InterceptedHTTPClient(
                     user_id=self.user_id,
-                    source={
-                        "source": "mcp",
-                        "tool": "multi_step_service",
-                        "workflow": "iptu_pagamento",
-                    },
+                    source=ERROR_SOURCE,
                     proxy=self.proxy,
                     timeout=30.0,
                     params={"token": self.api_token},
@@ -582,17 +589,24 @@ class IPTUAPIService:
         if pdf_base64 and not pdf_base64.startswith("<!DOCTYPE"):
             # Retorna apenas se não for uma página de erro HTML
             logger.info(f"PDF downloaded successfully for inscricao {inscricao_clean}")
-            signed_url = await self.upload_base64_to_gcs(base64_content=pdf_base64)
-            expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7)
-            shorted_url = await self.get_short_url(
+            signed_url = await upload_to_gcs(
+                conteudo=base64.b64decode(pdf_base64),
+                blob_path=f"iptu/{uuid.uuid4()}.pdf",
+                content_type="application/pdf",
+                ttl=PDF_DARM_TTL,
+            )
+            expires_at = dt.datetime.now(dt.timezone.utc) + PDF_DARM_TTL
+            shorted_url = await get_short_url(
                 url=signed_url,
                 title="PDF para pagamento de cotas do IPTU",
                 description="Documento para pagamento das cotas selecionadas do IPTU.",
-                expires_at=expires_at.replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z"),
+                user_id=self.user_id,
+                source=ERROR_SOURCE,
+                expires_at=format_expires_at(expires_at),
             )
-            return shorted_url
+            # Encurtador fora do ar não pode impedir o pagamento: a signed URL é
+            # longa, mas funciona. Mesmo fallback da página Pix.
+            return shorted_url or signed_url
         else:
             logger.warning("PDF download failed or returned HTML error page")
             return None
@@ -629,11 +643,7 @@ class IPTUAPIService:
             logger.info(f"Imovel info URL: {url}")
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
-                source={
-                    "source": "mcp",
-                    "tool": "multi_step_service",
-                    "workflow": "iptu_pagamento",
-                },
+                source=ERROR_SOURCE,
                 timeout=30.0,
             ) as client:
                 # Erros de status code são automaticamente interceptados
@@ -723,11 +733,7 @@ class IPTUAPIService:
         try:
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
-                source={
-                    "source": "mcp",
-                    "tool": "multi_step_service",
-                    "workflow": "iptu_pagamento",
-                },
+                source=ERROR_SOURCE,
                 timeout=30.0,
                 proxy=self.proxy,
             ) as client:
@@ -817,102 +823,6 @@ class IPTUAPIService:
             raise APIUnavailableError(
                 f"Erro ao comunicar com serviço de Dívida Ativa: {detalhe}"
             )
-
-    async def upload_base64_to_gcs(self, base64_content) -> str:
-        """
-        Faz o upload de um arquivo em base64 para o Google Cloud Storage e retorna uma URL assinada válida por 7 dias.
-
-        Args:
-            base64_content (str): Conteúdo do arquivo codificado em base64.
-
-        Returns:
-            str: URL assinada para download do arquivo válida por 7 dias.
-        """
-
-        google_credentials = self.get_credentials_from_env()
-        client = storage.Client(credentials=google_credentials)
-        bucket = client.bucket(env.WORKFLOWS_GCS_BUCKET)
-
-        file_data = base64.b64decode(base64_content)
-
-        file_name = f"iptu/{uuid.uuid4()}.pdf"
-
-        blob = bucket.blob(file_name)
-
-        blob.upload_from_string(file_data, content_type="application/pdf")
-
-        expiration = dt.timedelta(days=7)
-        signed_url = blob.generate_signed_url(
-            expiration=expiration,
-        )
-
-        return signed_url
-
-    def get_credentials_from_env(self) -> service_account.Credentials:
-        """
-        Gets credentials from env vars
-        """
-        info: dict = json.loads(base64.b64decode(env.WORKFLOWS_GCP_SERVICE_ACCOUNT))
-        return service_account.Credentials.from_service_account_info(info)
-
-    async def get_short_url(
-        self,
-        url: str,
-        title: str = "PDF para pagamento de cotas do IPTU",
-        description: str = "Documento para pagamento das cotas selecionadas do IPTU.",
-        expires_at: Optional[str] = None,
-        image_url: Optional[str] = None,
-        short_path: Optional[str] = None,
-    ) -> Optional[str]:
-        """
-        Envia uma URL para o endpoint de encurtamento de URL e retorna a URL encurtada.
-
-        Usa InterceptedHTTPClient para interceptação automática de erros.
-
-        :param url: A URL que será encurtada.
-        :return: A URL encurtada como string.
-        """
-        api_url = f"{env.SHORT_API_URL}/link/api/urls"
-        headers = {
-            "Authorization": f"Bearer {env.SHORT_API_TOKEN}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "description": description,
-            "destination": url,
-            "title": title,
-        }
-        if expires_at:
-            payload["expires_at"] = expires_at
-        if image_url:
-            payload["image_url"] = image_url
-        if short_path:
-            payload["short_path"] = short_path
-
-        try:
-            async with InterceptedHTTPClient(
-                user_id=self.user_id,
-                source={
-                    "source": "mcp",
-                    "tool": "multi_step_service",
-                    "workflow": "iptu_pagamento",
-                },
-            ) as client:
-                # Erros são automaticamente interceptados
-                response = await client.post(api_url, json=payload, headers=headers)
-                if response.status_code == 200 or response.status_code == 201:
-                    data = response.json()
-                    logger.info(f"URL shortened successfully: {data}")
-                    return f"{env.SHORT_API_URL}/link/{data['short_path']}"
-                else:
-                    logger.error(f"Erro HTTP ao encurtar URL: {response.status_code}")
-                    return None
-        except httpx.TimeoutException:
-            logger.error("Timeout ao encurtar URL")
-            return None
-        except Exception as e:
-            logger.error(f"Erro ao encurtar URL: {e}")
-            return None
 
 
 def encrypt_token_rsa(chave_publica_pem: str, token: str) -> str:
