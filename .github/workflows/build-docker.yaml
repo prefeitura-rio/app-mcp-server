@@ -5,13 +5,19 @@ on:
     branches:
       - main
 
+# Sem este bloco o GITHUB_TOKEN vem com write-all (CKV2_GHA_1). O workflow só
+# lê o código e publica a imagem, então é isso que ele recebe.
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin

@@ -181,6 +181,12 @@ class Orchestrator:
         try:
             # Executa workflow passando state e payload (async)
             # O workflow retorna ServiceState com agent_response integrado
+            #
+            # `nosemgrep`: a regra é a do cursor de banco do Django e casa por
+            # nome com qualquer `.execute()` que receba dado de request. Aqui
+            # `workflow` é um `BaseWorkflow` e `execute` é método de domínio —
+            # não há cursor, driver nem SQL em lugar algum do projeto.
+            # nosemgrep: python.django.security.injection.sql.sql-injection-using-db-cursor-execute.sql-injection-db-cursor-execute
             final_state = await workflow.execute(state, request.payload)
 
             # Salva state atualizado APÓS execução do workflow (async)

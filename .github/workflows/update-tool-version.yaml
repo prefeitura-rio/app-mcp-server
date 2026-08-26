@@ -8,19 +8,24 @@ on:
       - 'src/**'
       - 'tool_version.json'
 
+# Sem este bloco o GITHUB_TOKEN vem com write-all (CKV2_GHA_1). Aqui o push do
+# tool_version.json exige escrita em `contents` — e nada além disso.
+permissions:
+  contents: write
+
 jobs:
   update-version:
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
           python-version: '3.13'
 

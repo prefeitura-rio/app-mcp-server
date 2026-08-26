@@ -68,6 +68,13 @@ body not matches "[a-z][a-z0-9+.-]*://"
 # Os testes unitários exercitam o `HybridTokenVerifier` isolado. O que só se
 # vê pela porta HTTP é se ele está de fato plugado no app — `auth=` do FastMCP
 # protege apenas o `/mcp`, e é fácil essa ligação se perder num refactor.
+#
+# Os dois casos abaixo devolvem 401, mas com desafios `WWW-Authenticate`
+# diferentes, e é de propósito (RFC 6750 §3): `error=` só se aplica quando um
+# token foi apresentado e recusado. Requisição sem credencial alguma recebe o
+# desafio nu, porque não houve erro de token a reportar — não existe token.
+# O FastMCP 2.x devolvia `invalid_token` nos dois; o 3.x separa. O invariante
+# que esta seção protege é o 401, não o texto do header.
 
 POST {{base_url}}/mcp
 Content-Type: application/json
@@ -77,7 +84,7 @@ Accept: application/json, text/event-stream
 ```
 HTTP 401
 [Asserts]
-header "WWW-Authenticate" contains "invalid_token"
+header "WWW-Authenticate" contains "Bearer"
 
 
 POST {{base_url}}/mcp
@@ -88,6 +95,8 @@ Accept: application/json, text/event-stream
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"hurl-smoke","version":"1"}}}
 ```
 HTTP 401
+[Asserts]
+header "WWW-Authenticate" contains "invalid_token"
 
 
 # ===== HANDSHAKE MCP SOBRE STREAMABLE HTTP =====
