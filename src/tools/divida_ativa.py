@@ -1,4 +1,5 @@
 import ast
+import re
 import time
 import asyncio
 from functools import wraps
@@ -6,6 +7,7 @@ from typing import Dict, Any, List, Optional
 
 
 from src.tools.utils import internal_request
+from src.tools.valores_pagamento import valor_brl_para_numero, valor_da_guia
 from src.utils.log import logger
 from src.utils.error_interceptor import interceptor
 from src.config import env
@@ -298,14 +300,45 @@ MENSAGEM_SEM_GUIA = (
     "feito com esta resposta; tente novamente."
 )
 
+# A PGM gera o PDF da guia num caminho terminado pelo GUID do documento:
+# .../repositoriorelatorioscertidao/6a13bc0c-f48b-4459-858f-a836d673e210.pdf
+GUID_NO_LINK = re.compile(
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+    re.IGNORECASE,
+)
 
-def _extrair_guias(registros: Any) -> List[Dict[str, str]]:
+
+def _id_da_guia(link: str) -> str:
+    """
+    Identificador da guia emitida.
+
+    A PGM **não** devolve id de guia: o único campo parecido na resposta de
+    emissão é `$id`, que é numeração de objeto do Json.NET — sequencial dentro
+    da resposta, recomeça do 1 na chamada seguinte e não identifica nada.
+
+    O GUID do PDF é o que sobra: é gerado pela PGM, único por guia emitida e
+    estável. Não serve para consultar a guia na PGM depois, e o consumidor
+    precisa saber disso (ver docs/decisions/CHATR-164-valor-e-itens.md).
+    """
+    if not isinstance(link, str):
+        return ""
+
+    encontrado = GUID_NO_LINK.search(link)
+    return encontrado.group(1) if encontrado else ""
+
+
+def _extrair_guias(registros: Any) -> List[Dict[str, Any]]:
     """
     Extrai todas as guias emitidas a partir da resposta da PGM.
 
     O EPGM emite uma guia por natureza de débito, então uma solicitação com N
     identificadores pode devolver N registros. Aceita também o registro único
     fora de lista.
+
+    O valor não vem da PGM: é lido do próprio código de pagamento (campo 54 do
+    Pix, com o código de barras como segunda fonte). Guia sem valor extraível
+    segue no payload com `valor: None` — ela continua pagável, e omiti-la seria
+    esconder do cidadão um débito em aberto.
     """
     if isinstance(registros, dict):
         registros = [registros]
@@ -313,18 +346,32 @@ def _extrair_guias(registros: Any) -> List[Dict[str, str]]:
     if not isinstance(registros, list):
         return []
 
-    return [
-        {
-            "codigo_de_barras": item.get("codigoDeBarras") or "",
-            "link": item.get("pdf") or "",
-            "data_vencimento": item.get("dataVencimento") or "",
-            "pix": item.get("codigoQrEMVPix") or "",
-        }
-        for item in registros
+    guias = []
+
+    for item in registros:
         # `pgm_api` também devolve dicts que não são guia — {"success": True}
         # quando a resposta vem vazia. Sem o filtro, viraria guia em branco.
-        if isinstance(item, dict) and any(item.get(campo) for campo in CAMPOS_PGM_GUIA)
-    ]
+        if not isinstance(item, dict) or not any(
+            item.get(campo) for campo in CAMPOS_PGM_GUIA
+        ):
+            continue
+
+        link = item.get("pdf") or ""
+        codigo_de_barras = item.get("codigoDeBarras") or ""
+        pix = item.get("codigoQrEMVPix") or ""
+
+        guias.append(
+            {
+                "id": _id_da_guia(link),
+                "codigo_de_barras": codigo_de_barras,
+                "link": link,
+                "data_vencimento": item.get("dataVencimento") or "",
+                "pix": pix,
+                "valor": valor_da_guia(pix, codigo_de_barras),
+            }
+        )
+
+    return guias
 
 
 async def processar_registros(
@@ -471,6 +518,75 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+def _itens_da_consulta(
+    cdas: List[Any], efs: List[Any], guias: List[Any]
+) -> List[Dict[str, Any]]:
+    """
+    Débitos do contribuinte como lista estruturada (CHATR-164).
+
+    `debitos_msg` já levava algo parecido, mas com o tipo na chave do dict
+    ('cda'/'ef'/'guia'), valor em texto e sem natureza — serve para montar
+    mensagem, não para o consumidor processar. Aqui cada item tem a mesma
+    forma, com valor numérico.
+
+    É esta lista que permite ao consumidor rotular as guias emitidas: a PGM não
+    diz a natureza de cada guia, mas o EPGM agrupa os débitos por natureza,
+    então somar os itens por natureza reproduz o valor de cada guia.
+
+    Só a CDA traz `naturezaDivida`. A EF traz apenas número e saldo — a
+    natureza dela sai por eliminação contra `naturezas_divida` (a lista
+    agregada da consulta), e isso só é inequívoco quando sobra uma natureza
+    para uma EF. A guia parcelada não tem natureza nem valor
+    (`valorTotalGuia` vem vazio em todas as amostras).
+    """
+    itens: List[Dict[str, Any]] = []
+
+    for cda in cdas:
+        if not isinstance(cda, dict):
+            continue
+        itens.append(
+            {
+                "id": cda.get("cdaId") or "",
+                "tipo": "cda",
+                "natureza": cda.get("naturezaDivida") or None,
+                "natureza_id": cda.get("naturezaDividaGrupoId") or None,
+                "valor": valor_brl_para_numero(cda.get("valorSaldoTotal")),
+            }
+        )
+
+    for ef in efs:
+        if not isinstance(ef, dict):
+            continue
+        itens.append(
+            {
+                "id": ef.get("numeroExecucaoFiscal") or "",
+                "tipo": "ef",
+                # Lido mesmo sabendo que hoje não vem: se a PGM passar a
+                # mandar, o campo é absorvido sem novo deploy.
+                "natureza": ef.get("naturezaDivida") or None,
+                "natureza_id": ef.get("naturezaDividaGrupoId") or None,
+                "valor": valor_brl_para_numero(
+                    ef.get("saldoExecucaoFiscalNaoParcelada")
+                ),
+            }
+        )
+
+    for guia in guias:
+        if not isinstance(guia, dict):
+            continue
+        itens.append(
+            {
+                "id": guia.get("numero") or "",
+                "tipo": "guia",
+                "natureza": guia.get("naturezaDivida") or None,
+                "natureza_id": guia.get("naturezaDividaGrupoId") or None,
+                "valor": valor_brl_para_numero(guia.get("valorTotalGuia")),
+            }
+        )
+
+    return itens
+
+
 @interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 @log_execution_time
 async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
@@ -611,6 +727,10 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
                 "total_nao_parcelado": len(efs) + len(cdas),
                 "total_parcelado": len(guias),
                 "debitos_msg": debitos,
+                "itens": _itens_da_consulta(cdas, efs, guias),
+                # A lista agregada da consulta. Vai junto de `itens` porque é o
+                # que permite deduzir a natureza da EF, que não a traz.
+                "naturezas_divida": naturezas_divida,
             }
         )
 

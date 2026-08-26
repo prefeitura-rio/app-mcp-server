@@ -337,3 +337,148 @@ async def test_emitir_guia_wrappers_and_consultar_debitos(divida_module, monkeyp
         }
     )
     assert result["api_resposta_sucesso"] is False
+
+
+# Guia real de produção: PIX e código de barras da mesma emissão, ambos
+# declarando R$ 4.825,43.
+PIX_REAL = (
+    "00020101021226850014br.gov.bcb.pix2563pix.santander.com.br/qr/v2/"
+    "a2ecf2b0-c305-4a4c-8cb4-40561cff7e0b520400005303986540748"
+    "25.435802BR5917PM RIO DE JANEIRO6014RIO DE JANEIRO62070503***63044CD6"
+)
+BARRAS_REAL = "81650000048-3 25433659202-0 60831418100-9 11098057426-0"
+LINK_REAL = (
+    "https://daminternet.rio.rj.gov.br//repositoriorelatorioscertidao/"
+    "6a13bc0c-f48b-4459-858f-a836d673e210.pdf"
+)
+
+
+@pytest.mark.asyncio
+async def test_guia_leva_valor_extraido_do_codigo_de_pagamento(
+    divida_module, monkeypatch
+):
+    """
+    CHATR-164: a PGM não devolve o valor da guia.
+
+    A resposta de emissão traz só data, PDF, base64, código de barras e PIX —
+    o valor está dentro dos dois últimos e é de lá que sai.
+    """
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [
+            {
+                "dataVencimento": "31/08/2026",
+                "pdf": LINK_REAL,
+                "arquivoBase64": "JVBERi0xLjQK",
+                "codigoDeBarras": BARRAS_REAL,
+                "codigoQrEMVPix": PIX_REAL,
+            }
+        ]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    result = await divida_module.processar_registros(
+        endpoint="v2/guiapagamento/emitir/avista",
+        consumidor="emitir-guia-vista",
+        parametros_entrada={"origem_solicitação": 0, "cdas": ["94/009914/2026-00"]},
+    )
+
+    guia = result["guias_emitidas"][0]
+    assert guia["valor"] == 4825.43
+    # `$id` da PGM é numeração do Json.NET; o GUID do PDF é o que identifica.
+    assert guia["id"] == "6a13bc0c-f48b-4459-858f-a836d673e210"
+
+
+@pytest.mark.asyncio
+async def test_guia_sem_valor_apuravel_ainda_e_entregue(divida_module, monkeypatch):
+    """
+    Guia sem valor extraível continua pagável: omiti-la esconderia do cidadão
+    um débito em aberto. O valor vem nulo, e o consumidor decide o que exibir.
+    """
+
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [
+            {
+                "dataVencimento": "31/08/2026",
+                "pdf": "sem-guid.pdf",
+                "codigoDeBarras": "",
+                "codigoQrEMVPix": "nao-e-um-emv",
+            }
+        ]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    result = await divida_module.processar_registros(
+        endpoint="v2/guias",
+        consumidor="emitir",
+        parametros_entrada={"origem_solicitação": 0},
+    )
+
+    guia = result["guias_emitidas"][0]
+    assert result["total_guias"] == 1
+    assert guia["valor"] is None
+    assert guia["id"] == ""
+    assert guia["data_vencimento"] == "31/08/2026"
+
+
+def test_itens_da_consulta_estrutura_cda_ef_e_guia(divida_module):
+    """
+    Amostra real de consulta com CDA, EF e guias parceladas.
+
+    Só a CDA traz `naturezaDivida`. A EF tem apenas número e saldo, e a guia
+    parcelada vem com `valorTotalGuia` vazio — daí os nulos.
+    """
+    itens = divida_module._itens_da_consulta(
+        cdas=[
+            {
+                "cdaId": "01/184218/2026-00",
+                "naturezaDivida": "IPTU/Taxas - Predial",
+                "naturezaDividaGrupoId": "1",
+                "valorSaldoPrincipal": "R$1.830,52",
+                "valorSaldoHonorarios": "R$91,53",
+                "valorSaldoTotal": "R$1.922,05",
+            }
+        ],
+        efs=[
+            {
+                "numeroExecucaoFiscal": "0334852-76.2017.8.19.0001",
+                "saldoExecucaoFiscalNaoParcelada": "R$24.897,81",
+            }
+        ],
+        guias=[{"numero": "2026/0009656", "valorTotalGuia": ""}],
+    )
+
+    assert itens == [
+        {
+            "id": "01/184218/2026-00",
+            "tipo": "cda",
+            "natureza": "IPTU/Taxas - Predial",
+            "natureza_id": "1",
+            "valor": 1922.05,
+        },
+        {
+            "id": "0334852-76.2017.8.19.0001",
+            "tipo": "ef",
+            "natureza": None,
+            "natureza_id": None,
+            "valor": 24897.81,
+        },
+        {
+            "id": "2026/0009656",
+            "tipo": "guia",
+            "natureza": None,
+            "natureza_id": None,
+            "valor": None,
+        },
+    ]
+
+    # A soma dos itens reproduz o saldo que a mesma resposta informa — é isso
+    # que permite ao consumidor casar guia com natureza.
+    assert round(itens[0]["valor"] + itens[1]["valor"], 2) == 26819.86
+
+
+def test_itens_da_consulta_ignora_entrada_que_nao_e_item(divida_module):
+    itens = divida_module._itens_da_consulta(
+        cdas=["não é dict", None],
+        efs=[],
+        guias=[],
+    )
+    assert itens == []
