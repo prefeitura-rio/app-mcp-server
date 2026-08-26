@@ -16,12 +16,18 @@ se comporta de forma diferente conforme as variáveis de ambiente:
   `registradas == catálogo - excluídas`, não uma lista fixa.
 - `IS_LOCAL` decide entre **duas implementações distintas** de `FastMCP`:
   `mcp.server.fastmcp` (SDK) quando local, `fastmcp` (pacote) em produção. As
-  duas guardam as rotas em atributos privados de nomes diferentes, então o
-  teste constrói o app ASGI pela API pública e lê as rotas de lá — o que
-  também é mais forte: valida que a rota é de fato servida, não que consta de
-  uma lista interna.
+  duas guardam rotas e tools em atributos privados de nomes diferentes, então
+  o teste lê as duas coisas pela API pública — o que também é mais forte:
+  valida que a rota é de fato servida e que a tool é de fato listável, não que
+  constam de uma estrutura interna.
+
+  Isso não é hipotético: a versão anterior deste arquivo lia
+  `mcp._tool_manager._tools`, que existia no fastmcp 2 e sumiu no 3. Como numa
+  máquina com `IS_LOCAL=true` o teste exercita o SDK — que ainda tinha o
+  atributo —, a quebra passava batido localmente e só aparecia no CI.
 """
 
+import asyncio
 import importlib
 import sys
 
@@ -94,7 +100,12 @@ def app_module():
 
 
 def _registered_tool_names(mcp) -> set:
-    return set(mcp._tool_manager._tools.keys())
+    """Tools que o servidor de fato lista, pela API pública das duas implementações.
+
+    `list_tools()` é assíncrono e é o denominador comum entre `fastmcp` e
+    `mcp.server.fastmcp`; ler estrutura interna amarraria o teste a uma delas.
+    """
+    return {tool.name for tool in asyncio.run(mcp.list_tools())}
 
 
 def _served_route_paths(mcp) -> set:

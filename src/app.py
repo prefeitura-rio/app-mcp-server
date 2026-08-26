@@ -227,11 +227,19 @@ def create_app() -> FastMCP:
 
     mcp = FastMCP(**mcp_kwargs)  # pyright: ignore[reportCallIssue]
 
+    # Nomes efetivamente registrados, acumulados no único ponto por onde todo
+    # registro passa. É só para o log de inicialização: ler a estrutura interna
+    # do FastMCP não serve, porque as duas implementações que coexistem aqui a
+    # expõem de formas diferentes — e o fastmcp 3 removeu o `_tool_manager` em
+    # que a versão anterior deste log se apoiava.
+    registered_tool_names: set[str] = set()
+
     def conditional_mcp_tool(tool_name: str, **kwargs):
         """Wrapper to conditionally register tools based on EXCLUDED_TOOLS"""
 
         def decorator(func):
             if tool_name not in EXCLUDED_TOOLS:
+                registered_tool_names.add(tool_name)
                 return mcp.tool(**kwargs)(func)
             else:
                 logger.info(f"Tool '{tool_name}' excluded from registration")
@@ -682,14 +690,10 @@ def create_app() -> FastMCP:
         logger.debug(f"Configurações: {Settings.get_server_info()}")
 
     # Log todas as tools registradas
-    try:
-        if hasattr(mcp, "_tool_manager") and hasattr(mcp._tool_manager, "_tools"):
-            tool_names = list(mcp._tool_manager._tools.keys())
-            logger.info(f"Tools registradas ({len(tool_names)}): {sorted(tool_names)}")
-        else:
-            logger.warning("Não foi possível acessar a lista de tools registradas")
-    except Exception as e:
-        logger.warning(f"Erro ao listar tools: {e}")
+    logger.info(
+        f"Tools registradas ({len(registered_tool_names)}): "
+        f"{sorted(registered_tool_names)}"
+    )
 
     # Fallback para modos de execução que não entram no lifespan: nada é
     # servido por HTTP antes de `create_app()` retornar, então marcar aqui não

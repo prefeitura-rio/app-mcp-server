@@ -195,10 +195,11 @@ def make_tool_registry_check(mcp: Any):
     """
 
     async def check_tool_registry() -> CheckStatus:
-        if hasattr(mcp, "get_tools"):  # fastmcp
-            tools = await mcp.get_tools()
-        else:  # mcp.server.fastmcp, usado quando IS_LOCAL
-            tools = await mcp.list_tools()
+        # `list_tools()` é o denominador comum das duas implementações que
+        # coexistem (ver o bloco de import condicional em src/app.py). O
+        # fastmcp 2 tinha `get_tools()`; o 3 removeu, e o ramo que testava por
+        # ele passou a cair sempre no outro — por acaso, no caminho certo.
+        tools = await mcp.list_tools()
 
         if not tools:
             raise HealthCheckError("nenhuma tool registrada")
