@@ -124,6 +124,18 @@ A resposta da PGM carrega nome, CPF e endereco do cidadao. O relatorio imprime
 nomes de campos, contagens e valores monetarios; nunca o conteudo dos campos
 identificadores, nem no diagnostico de campo faltante.
 
+Sao dois caminhos, porque a PII chega por dois:
+
+- campos conhecidos saem por `CAMPOS_PII` antes de qualquer diagnostico;
+- texto livre da PGM (`motivos`, mensagens de erro) passa por
+  `sem_identificadores`, que mascara sequencias de 6+ digitos — CPF, CNPJ,
+  numero de CDA ou de EF. Valor monetario nao e afetado: o maior grupo de
+  digitos em `R$26.819,86` tem 3.
+
+Uma excecao deliberada: o numero da CDA usada em `--emitir` sai no cabecalho da
+secao. Sem ele o operador nao localiza na PGM a guia que acabou de criar, e o
+numero do debito nao revela nome, CPF nem endereco.
+
 ## Execucao
 
 Credenciais em `src/config/.env` (carregado automaticamente) ou no ambiente:
@@ -132,11 +144,16 @@ Credenciais em `src/config/.env` (carregado automaticamente) ou no ambiente:
 
 ```bash
 # So consulta - read-only, seguro.
-uv run python src/tests/e2e/run_pgm_contract.py --cpf 12345678901
+PGM_CONTRATO_CPF=12345678901 uv run python src/tests/e2e/run_pgm_contract.py
 
-# Tambem emite guia. ATENCAO: gera uma guia de verdade na PGM.
-uv run python src/tests/e2e/run_pgm_contract.py --cpf 12345678901 --emitir
+# Tambem emite guia. ATENCAO: gera UMA guia de verdade na PGM.
+PGM_CONTRATO_CPF=12345678901 uv run python src/tests/e2e/run_pgm_contract.py --emitir
 ```
+
+`--cpf` continua aceito e e equivalente, mas deixa o documento no historico do
+shell e visivel em `ps`. O `--emitir` chama o endpoint de emissao **uma vez**:
+a verificacao do processamento reusa os registros dessa chamada, em vez de
+emitir de novo.
 
 O CPF precisa ser de contribuinte **com debitos em aberto** — sem massa, nao ha
 o que verificar. Uma massa com CDA e EF ao mesmo tempo exercita mais contrato.

@@ -15,8 +15,14 @@ guia, depois de uma implementação inteira ter sido escrita supondo que sim
 ## PII
 
 A resposta da PGM carrega nome, CPF e endereço do cidadão. Nada disso é
-impresso: o relatório mostra nomes de campos, contagens e valores monetários,
-nunca o conteúdo dos campos identificadores.
+impresso, por dois caminhos: os campos identificadores saem de `CAMPOS_PII`
+antes de qualquer diagnóstico, e o texto livre da PGM (`motivos`, mensagens de
+erro) passa por `sem_identificadores`, que mascara sequências de 6+ dígitos.
+O relatório mostra nomes de campos, contagens e valores monetários.
+
+A exceção é o número da CDA usada em `--emitir`, impresso no cabeçalho da
+seção: sem ele o operador não tem como localizar na PGM a guia que acabou de
+criar. É número de débito, não dado pessoal — não diz nome, CPF nem endereço.
 
 ## Execução
 
@@ -24,16 +30,21 @@ Credenciais em `src/config/.env` (carregado automaticamente) ou no ambiente:
 CHATBOT_INTEGRATIONS_URL, CHATBOT_INTEGRATIONS_KEY, CHATBOT_PGM_API_URL,
 CHATBOT_PGM_ACCESS_KEY.
 
-    # Só consulta — read-only, seguro.
-    uv run python src/tests/e2e/run_pgm_contract.py --cpf 12345678901
+O CPF da massa vem de `PGM_CONTRATO_CPF`. `--cpf` funciona e é equivalente, mas
+deixa o documento no histórico do shell e visível em `ps` para qualquer
+processo da máquina.
 
-    # Também emite guia. ATENÇÃO: gera guia de verdade na PGM.
-    uv run python src/tests/e2e/run_pgm_contract.py --cpf 12345678901 --emitir
+    # Só consulta — read-only, seguro.
+    PGM_CONTRATO_CPF=12345678901 uv run python src/tests/e2e/run_pgm_contract.py
+
+    # Também emite guia. ATENÇÃO: gera UMA guia de verdade na PGM.
+    PGM_CONTRATO_CPF=12345678901 uv run python src/tests/e2e/run_pgm_contract.py --emitir
 """
 
 import argparse
 import asyncio
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -42,10 +53,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.tools.divida_ativa import (  # noqa: E402
+    _extrair_guias,
     _itens_da_consulta,
     consultar_debitos,
     pgm_api,
-    processar_registros,
 )
 from src.tools.valores_pagamento import (  # noqa: E402
     valor_brl_para_numero,
@@ -83,6 +94,25 @@ CAMPOS_PII = {
     "codigoInscricaoImobiliaria",
     "arquivoBase64",
 }
+
+# Sequências de 6+ dígitos em texto livre da PGM: CPF, CNPJ, número de CDA,
+# de EF, de inscrição imobiliária. Valores monetários não caem aqui — o maior
+# grupo de dígitos em "R$26.819,86" tem 3.
+IDENTIFICADOR_EM_TEXTO = re.compile(r"\d{6,}")
+
+
+def sem_identificadores(valor: object) -> str:
+    """
+    Texto vindo da PGM, com os identificadores mascarados.
+
+    `motivos` e as mensagens de erro são texto livre escrito do outro lado:
+    costumam ecoar o documento consultado, e nada garante que não tragam nome
+    ou endereço junto. O diagnóstico continua legível — "CPF ###### não
+    encontrado" diz o mesmo que a original para quem está depurando.
+    """
+    return IDENTIFICADOR_EM_TEXTO.sub(
+        lambda encontrado: "#" * len(encontrado.group()), str(valor)
+    )
 
 
 class Relatorio:
@@ -286,7 +316,10 @@ def verificar_itens_processados(rel: Relatorio, resultado: Dict[str, Any]) -> No
     rel.secao("Consulta de débitos — saída processada pela tool")
 
     if not resultado.get("api_resposta_sucesso"):
-        rel.falhou("consultar_debitos não teve sucesso", str(resultado)[:200])
+        rel.falhou(
+            "consultar_debitos não teve sucesso",
+            sem_identificadores(resultado.get("api_descricao_erro"))[:200],
+        )
         return
 
     itens = resultado.get("itens")
@@ -327,7 +360,10 @@ async def verificar_emissao(rel: Relatorio, cda_id: str) -> None:
     )
 
     if isinstance(registros, dict) and "erro" in registros:
-        rel.falhou("emissão devolveu erro", str(registros.get("motivos"))[:200])
+        rel.falhou(
+            "emissão devolveu erro",
+            sem_identificadores(registros.get("motivos"))[:200],
+        )
         return
 
     lista = registros if isinstance(registros, list) else [registros]
@@ -341,14 +377,15 @@ async def verificar_emissao(rel: Relatorio, cda_id: str) -> None:
         verificar_campos(rel, registro, CAMPOS_EMISSAO, f"guia[{indice}]")
         verificar_campos_derivados(rel, registro, indice)
 
-    resultado = await processar_registros(
-        endpoint=ENDPOINT_EMISSAO,
-        consumidor=CONSUMIDOR_EMISSAO,
-        parametros_entrada={"origem_solicitação": 0, "cdas": [cda_id], "efs": []},
-    )
-    guias = resultado.get("guias_emitidas") or []
+    # `_extrair_guias` sobre os registros que já temos, e não
+    # `processar_registros`, que chamaria a PGM de novo: cada chamada ao
+    # endpoint de emissão gera uma guia de pagamento de verdade contra os
+    # débitos de um contribuinte real. Uma execução, uma guia. É a mesma
+    # função que `processar_registros` usa para montar `guias_emitidas`, então
+    # a verificação é idêntica sem o efeito colateral.
+    guias = _extrair_guias(registros)
     if guias and all("valor" in guia for guia in guias):
-        rel.ok("processar_registros devolve 'valor' em toda guia")
+        rel.ok("_extrair_guias devolve 'valor' em toda guia")
     else:
         rel.falhou("alguma guia saiu sem a chave 'valor'")
 
@@ -437,7 +474,9 @@ async def executar(args: argparse.Namespace) -> int:
         # Contribuinte sem débito é resposta legítima da PGM, não contrato
         # quebrado — mas o run não verificou nada, e dizer "íntegro" seria
         # pior que dizer "não deu para verificar".
-        rel.aviso(f"a PGM recusou a consulta: {dados.get('motivos')}")
+        rel.aviso(
+            f"a PGM recusou a consulta: {sem_identificadores(dados.get('motivos'))}"
+        )
         rel.aviso("escolha um CPF/CNPJ da massa que tenha débitos em aberto")
         return rel.encerrar()
 
@@ -471,8 +510,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--cpf",
-        required=True,
-        help="CPF/CNPJ da massa de teste (só dígitos). Não é impresso no relatório.",
+        default=os.environ.get("PGM_CONTRATO_CPF", ""),
+        help=(
+            "CPF/CNPJ da massa de teste (só dígitos). Não é impresso no "
+            "relatório. Prefira PGM_CONTRATO_CPF no ambiente: argumento de "
+            "linha de comando fica no histórico do shell e é visível em `ps`."
+        ),
     )
     parser.add_argument(
         "--emitir",
@@ -487,6 +530,12 @@ def main() -> int:
         help="CDA específica para a emissão. Padrão: a primeira elegível da consulta.",
     )
     args = parser.parse_args()
+
+    # Vale o mesmo que uma credencial ausente: sem massa não há o que
+    # verificar, e o código 2 já significa exatamente isso.
+    if not args.cpf.strip():
+        print("Informe o CPF/CNPJ da massa em PGM_CONTRATO_CPF ou em --cpf")
+        return 2
 
     return asyncio.run(executar(args))
 
