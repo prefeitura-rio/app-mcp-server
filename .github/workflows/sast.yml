@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run SAST (local action)
-        uses: prefeitura-rio/actions/sast@master
+        uses: prefeitura-rio/actions/sast@2005b16fb84f506aa00c26f16621e3ac4040ed3d # último master bom; master está quebrado (symlink /nix/store em .pre-commit-config.yaml)
         with:
           sonar_url: ${{ vars.SONARQUBE_URL }}
           sonar_token: ${{ secrets.SONARQUBE_TOKEN }}
