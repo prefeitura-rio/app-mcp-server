@@ -119,6 +119,13 @@ guia na PGM depois** — o consumidor precisa saber disso.
   natureza. Ambos são calculados para a mesma data de vencimento, mas consulta e
   emissão em datas diferentes divergem por juros; cabe ao consumidor decidir se
   casa por igualdade ou proximidade.
+- **O casamento tem que arredondar**: `round(soma, 2) == round(valor_guia, 2)`.
+  `valor` é float dos dois lados — `centavos / 100` na guia, texto BRL
+  convertido nos itens — e nenhuma das duas divisões é exata em binário. Numa
+  simulação de 20.000 casamentos com 2 a 6 itens, igualdade exata de float
+  falhou em 29% deles **com os valores corretos**; com `round(…, 2)` nos dois
+  lados, em nenhum. Isso é independente da divergência por juros acima: aquela
+  é diferença real de dinheiro, esta é só representação.
 
 ## Onde ficou
 

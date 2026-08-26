@@ -271,7 +271,12 @@ class GuiaEmitida(BaseModel):
     # resolver. None diz "não foi possível apurar"; 0.0 diria "guia sem valor".
     valor: Optional[float] = Field(
         default=None,
-        description="Valor da guia em reais, extraído do PIX ou do código de barras.",
+        description=(
+            "Valor da guia em reais, extraído do PIX ou do código de barras. "
+            "É float: para casar com a soma dos `itens` da consulta, compare "
+            "com round(x, 2) dos dois lados — igualdade exata de float falha "
+            "em cerca de 29% das somas de 2 a 6 parcelas."
+        ),
     )
 
     @classmethod

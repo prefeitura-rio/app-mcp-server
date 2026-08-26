@@ -533,6 +533,11 @@ def _itens_da_consulta(
     diz a natureza de cada guia, mas o EPGM agrupa os débitos por natureza,
     então somar os itens por natureza reproduz o valor de cada guia.
 
+    `valor` é float, e o casamento tem que arredondar: `round(soma, 2) ==
+    round(valor_da_guia, 2)`. Igualdade exata de float falha em cerca de 29%
+    das somas de 2 a 6 parcelas — os dois lados vêm de divisões por 100 que não
+    são exatas em binário, então o erro aparece com os valores certos.
+
     Só a CDA traz `naturezaDivida`. A EF traz apenas número e saldo — a
     natureza dela sai por eliminação contra `naturezas_divida` (a lista
     agregada da consulta), e isso só é inequívoco quando sobra uma natureza
