@@ -699,14 +699,14 @@ async def test_iptu_api_service_helpers_and_parsing(monkeypatch):
 
     monkeypatch.setattr(service, "_make_api_request", fake_request)
 
-    async def fake_upload_base64_to_gcs(base64_content):
+    async def fake_upload_to_gcs(**_kwargs):
         return "signed-url"
 
     async def fake_get_short_url(url, **_kwargs):
         return "short-url"
 
-    monkeypatch.setattr(service, "upload_base64_to_gcs", fake_upload_base64_to_gcs)
-    monkeypatch.setattr(service, "get_short_url", fake_get_short_url)
+    monkeypatch.setattr(module, "upload_to_gcs", fake_upload_to_gcs)
+    monkeypatch.setattr(module, "get_short_url", fake_get_short_url)
 
     dados_guias = await service.consultar_guias("12.345.678", 2025)
     assert dados_guias.inscricao_imobiliaria == "12345678"
@@ -760,198 +760,80 @@ def test_pix_page_helpers_build_copy_page():
 
 
 @pytest.mark.asyncio
-async def test_pix_page_service_uploads_and_shortens_url(monkeypatch):
-    pix_page = load_module(
-        "src.tools.multi_step_service.workflows.iptu_pagamento.pix_page",
-        "src/tools/multi_step_service/workflows/iptu_pagamento/pix_page.py",
-    )
+async def test_pix_page_service_monta_pagina_e_encurta(monkeypatch):
+    """
+    O que é do IPTU: onde a página é gravada, com que content-type, por quanto
+    tempo vale e com que título/descrição vai ao encurtador. O comportamento do
+    encurtador em si está em src/tests/unit/utils/test_short_url.py.
+    """
     module = load_module(
         "test_iptu_pix_page_service_module",
         "src/tools/multi_step_service/workflows/iptu_pagamento/pix_page_service.py",
     )
 
-    env_module = types.SimpleNamespace(
-        WORKFLOWS_GCP_SERVICE_ACCOUNT="e30=",
-        WORKFLOWS_GCS_BUCKET="bucket-name",
-        SHORT_API_URL="https://pref.rio",
-        SHORT_API_TOKEN="short-token",
-    )
-    monkeypatch.setattr(module, "env", env_module)
-    monkeypatch.setattr(
-        module.service_account.Credentials,
-        "from_service_account_info",
-        lambda info: "credentials",
-    )
+    capturado = {}
 
-    class FakeBlob:
-        def __init__(self):
-            self.content = None
-            self.content_type = None
+    async def fake_upload_to_gcs(conteudo, blob_path, content_type, ttl):
+        capturado["conteudo"] = conteudo
+        capturado["blob_path"] = blob_path
+        capturado["content_type"] = content_type
+        capturado["ttl"] = ttl
+        return "https://storage.example/signed"
 
-        def upload_from_string(self, content, content_type):
-            self.content = content
-            self.content_type = content_type
+    async def fake_get_short_url(url, title, description, **kwargs):
+        capturado["url"] = url
+        capturado["title"] = title
+        capturado["description"] = description
+        capturado.update(kwargs)
+        return "https://pref.rio/link/abc123"
 
-        def generate_signed_url(self, expiration):
-            assert expiration == module.dt.timedelta(hours=module.PIX_PAGE_TTL_HOURS)
-            return "https://storage.example/signed"
-
-    class FakeBucket:
-        def __init__(self):
-            self.blob_value = FakeBlob()
-            self.blob_name = None
-
-        def blob(self, name):
-            self.blob_name = name
-            return self.blob_value
-
-    fake_bucket = FakeBucket()
+    monkeypatch.setattr(module, "upload_to_gcs", fake_upload_to_gcs)
+    monkeypatch.setattr(module, "get_short_url", fake_get_short_url)
 
     service = module.IPTUPixPageService(user_id="user-1")
-    monkeypatch.setattr(service, "_get_workflows_gcs_bucket", lambda: fake_bucket)
-
-    signed_url = await service.upload_pix_copy_page_to_gcs(
+    short_url = await service.create_pix_copy_page_url(
         qr_code_pix="iVBORw0KGgo=",
         pix_code="pix-code",
     )
 
-    assert signed_url == "https://storage.example/signed"
-    assert fake_bucket.blob_name.startswith("iptu/qrcode-pix/")
-    assert fake_bucket.blob_name.endswith(".html")
-    assert fake_bucket.blob_value.content_type == "text/html; charset=utf-8"
-    assert "pix-code" in fake_bucket.blob_value.content
-    assert pix_page.build_expired_pix_page()
-
-    captured = {}
-
-    class FakeShortenerResponse:
-        status_code = 201
-
-        def json(self):
-            return {"short_path": "abc123"}
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            captured["client_kwargs"] = kwargs
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def post(self, url, json=None, headers=None):
-            captured["url"] = url
-            captured["payload"] = json
-            captured["headers"] = headers
-            return FakeShortenerResponse()
-
-    monkeypatch.setattr(module, "InterceptedHTTPClient", FakeClient)
-
-    short_url = await service.get_short_url(
-        url="https://storage.example/signed",
-        title="Titulo",
-        description="Descricao",
-        expires_at="2026-05-11T12:00:00Z",
-        image_url="https://example.com/image.png",
-        short_path="meu-link",
-    )
-
     assert short_url == "https://pref.rio/link/abc123"
-    assert captured["url"] == "https://pref.rio/link/api/urls"
-    assert captured["headers"]["Authorization"] == "Bearer short-token"
-    assert captured["payload"] == {
-        "description": "Descricao",
-        "destination": "https://storage.example/signed",
-        "expires_at": "2026-05-11T12:00:00Z",
-        "image_url": "https://example.com/image.png",
-        "short_path": "meu-link",
-        "title": "Titulo",
-    }
+
+    assert capturado["blob_path"].startswith("iptu/qrcode-pix/")
+    assert capturado["blob_path"].endswith(".html")
+    assert capturado["content_type"] == "text/html; charset=utf-8"
+    assert capturado["ttl"] == module.dt.timedelta(hours=module.PIX_PAGE_TTL_HOURS)
+    assert "pix-code" in capturado["conteudo"]
+
+    assert capturado["url"] == "https://storage.example/signed"
+    assert capturado["title"] == "Pix para pagamento de cotas do IPTU"
+    assert capturado["user_id"] == "user-1"
+    assert capturado["source"] == module.ERROR_SOURCE
+    assert capturado["expires_at"].endswith("Z")
 
 
 @pytest.mark.asyncio
-async def test_pix_page_service_shortener_fallbacks(monkeypatch):
+async def test_pix_page_service_cai_na_signed_url_quando_encurtador_falha(monkeypatch):
+    """Encurtador fora do ar não pode impedir o cidadão de pagar."""
     module = load_module(
         "test_iptu_pix_page_service_fallback_module",
         "src/tools/multi_step_service/workflows/iptu_pagamento/pix_page_service.py",
     )
-    env_module = types.SimpleNamespace(
-        SHORT_API_URL="https://pref.rio",
-        SHORT_API_TOKEN="short-token",
-    )
-    monkeypatch.setattr(module, "env", env_module)
 
-    class FakeResponse:
-        status_code = 500
+    async def fake_upload_to_gcs(**_kwargs):
+        return "https://storage.example/signed"
 
-    class FakeClient:
-        def __init__(self, response=None, error=None, **kwargs):
-            self.response = response or FakeResponse()
-            self.error = error
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def post(self, url, json=None, headers=None):
-            if self.error:
-                raise self.error
-            return self.response
-
-    service = module.IPTUPixPageService(user_id="user-1")
-
-    monkeypatch.setattr(module, "InterceptedHTTPClient", lambda **kwargs: FakeClient())
-    assert await service.get_short_url("url", "title", "description") is None
-
-    monkeypatch.setattr(
-        module,
-        "InterceptedHTTPClient",
-        lambda **kwargs: FakeClient(error=module.httpx.TimeoutException("timeout")),
-    )
-    assert await service.get_short_url("url", "title", "description") is None
-
-    monkeypatch.setattr(
-        module,
-        "InterceptedHTTPClient",
-        lambda **kwargs: FakeClient(error=RuntimeError("boom")),
-    )
-    assert await service.get_short_url("url", "title", "description") is None
-
-    async def fake_upload(qr_code_pix, pix_code):
-        return "signed-url"
-
-    async def fake_shortener(**kwargs):
+    async def fake_get_short_url(**_kwargs):
         return None
 
-    monkeypatch.setattr(service, "upload_pix_copy_page_to_gcs", fake_upload)
-    monkeypatch.setattr(service, "get_short_url", fake_shortener)
+    monkeypatch.setattr(module, "upload_to_gcs", fake_upload_to_gcs)
+    monkeypatch.setattr(module, "get_short_url", fake_get_short_url)
+
+    service = module.IPTUPixPageService(user_id="user-1")
 
     assert (
         await service.create_pix_copy_page_url(
             qr_code_pix="iVBORw0KGgo=",
             pix_code="pix-code",
         )
-        == "signed-url"
+        == "https://storage.example/signed"
     )
-
-
-def test_pix_page_service_formats_expiration_as_utc():
-    module = load_module(
-        "test_iptu_pix_page_service_format_module",
-        "src/tools/multi_step_service/workflows/iptu_pagamento/pix_page_service.py",
-    )
-    expiration = module.dt.datetime(
-        2026,
-        5,
-        11,
-        9,
-        30,
-        15,
-        123456,
-        tzinfo=module.dt.timezone(module.dt.timedelta(hours=-3)),
-    )
-
-    assert module.format_expires_at(expiration) == "2026-05-11T12:30:15Z"
