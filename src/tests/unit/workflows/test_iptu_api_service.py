@@ -726,6 +726,83 @@ async def test_iptu_api_service_helpers_and_parsing(monkeypatch):
     assert pdf_url == "short-url"
 
 
+@pytest.mark.asyncio
+async def test_download_pdf_darm_grava_pdf_e_encurta(monkeypatch):
+    """
+    O que é do IPTU no PDF do DARM: onde o arquivo é gravado, com que
+    content-type, por quanto tempo vale e com que texto vai ao encurtador.
+    Espelha o teste equivalente da página Pix — o comportamento dos helpers em
+    si está em src/tests/unit/utils/.
+    """
+    module = prepare_service_module(monkeypatch, "test_iptu_darm_pdf_module")
+    service = module.IPTUAPIService(user_id="u2")
+
+    pdf_base64 = "JVBERi0xLjQK"
+
+    async def fake_request(endpoint, params, expect_json=True):
+        assert endpoint == "DownloadPdfDARM"
+        return pdf_base64
+
+    monkeypatch.setattr(service, "_make_api_request", fake_request)
+
+    capturado = {}
+
+    async def fake_upload_to_gcs(conteudo, blob_path, content_type, ttl):
+        capturado["conteudo"] = conteudo
+        capturado["blob_path"] = blob_path
+        capturado["content_type"] = content_type
+        capturado["ttl"] = ttl
+        return "https://storage.example/signed"
+
+    async def fake_get_short_url(url, title, description, **kwargs):
+        capturado["url"] = url
+        capturado["title"] = title
+        capturado["description"] = description
+        capturado.update(kwargs)
+        return "https://pref.rio/link/abc123"
+
+    monkeypatch.setattr(module, "upload_to_gcs", fake_upload_to_gcs)
+    monkeypatch.setattr(module, "get_short_url", fake_get_short_url)
+
+    pdf_url = await service.download_pdf_darm("12.345.678", 2025, "00", ["01"])
+
+    assert pdf_url == "https://pref.rio/link/abc123"
+
+    assert capturado["blob_path"].startswith("iptu/")
+    assert capturado["blob_path"].endswith(".pdf")
+    assert capturado["content_type"] == "application/pdf"
+    assert capturado["ttl"] == module.PDF_DARM_TTL == module.dt.timedelta(days=7)
+    # O helper recebe bytes: quem tem base64 na mão decodifica antes
+    assert capturado["conteudo"] == module.base64.b64decode(pdf_base64)
+
+    assert capturado["url"] == "https://storage.example/signed"
+    assert capturado["title"] == "PDF para pagamento de cotas do IPTU"
+    assert capturado["description"] == (
+        "Documento para pagamento das cotas selecionadas do IPTU."
+    )
+    assert capturado["user_id"] == "u2"
+    assert capturado["source"] == module.ERROR_SOURCE
+    assert capturado["expires_at"].endswith("Z")
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_darm_devolve_none_em_pagina_de_erro(monkeypatch):
+    """Página de erro HTML não vira link: nada sobe ao bucket."""
+    module = prepare_service_module(monkeypatch, "test_iptu_darm_pdf_erro_module")
+    service = module.IPTUAPIService(user_id="u2")
+
+    async def fake_request(endpoint, params, expect_json=True):
+        return "<!DOCTYPE html><html>erro</html>"
+
+    async def upload_proibido(**_kwargs):
+        raise AssertionError("não deve subir página de erro ao bucket")
+
+    monkeypatch.setattr(service, "_make_api_request", fake_request)
+    monkeypatch.setattr(module, "upload_to_gcs", upload_proibido)
+
+    assert await service.download_pdf_darm("12.345.678", 2025, "00", ["01"]) is None
+
+
 def test_pix_page_helpers_build_copy_page():
     pix_page = load_module(
         "test_iptu_pix_page_module",

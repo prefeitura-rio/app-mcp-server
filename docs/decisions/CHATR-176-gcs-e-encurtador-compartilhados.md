@@ -2,7 +2,7 @@
 
 **Status:** implementado
 **Data:** 2026-08-26
-**Tipo:** Débito técnico (refactor sem mudança de comportamento)
+**Tipo:** Débito técnico (extração + correções que a extração habilitou)
 
 Registra a extração do caminho "conteúdo → GCS → signed URL → link curto" de
 dentro do workflow de IPTU para `src/utils/`.
@@ -82,11 +82,40 @@ IPTU. O único chamador que os usava por omissão passa a explicitá-los.
 HTML da página Pix e para o PDF. Só um chamador tem base64 na mão, e é ele quem
 decodifica — o helper não adivinha o encoding do que recebe.
 
+### 5. Com um lugar só, três correções deixaram de ser caras
+
+A extração era pré-requisito para elas: nos dois arquivos, cada uma custaria o
+dobro e correria o risco de divergir. Feitas aqui:
+
+**O `short_path` saiu do log** (CHATR-174 D3). A resposta do encurtador traz o
+link direto para a guia daquele contribuinte — quem lê o SigNoz abre o
+documento. O `logger.info` agora não registra o corpo da resposta.
+
+**A signed URL do GCS deixou de chegar em claro ao interceptor de erros.** Ela é
+uma capability: quem tem a URL baixa o arquivo, sem autenticar. Como o
+encurtador a recebe no campo `destination`, qualquer 4xx/5xx dele reportava o
+payload inteiro ao monitoramento. `SENSITIVE_KEYS` em `http_client.py` ganhou
+`signature`, `x-goog-credential` e `googleaccessid`, o que cobre signed URL v2 e
+v4 — sem a assinatura o GCS recusa a URL, e o caminho do blob continua legível
+para diagnóstico.
+
+**O upload saiu do event loop.** `upload_from_string` e `generate_signed_url`
+são síncronas, e montar o client ainda parseia a chave RSA da service account:
+com o PDF de um contribuinte subindo, todos os outros atendimentos ficavam
+parados. A parte bloqueante virou `_upload_sync`, chamada por
+`asyncio.to_thread`. A assinatura pública de `upload_to_gcs` não mudou.
+
+Além delas, `format_expires_at` passou a exigir `tzinfo`: com datetime naive, o
+`astimezone` assumiria o fuso da máquina e o vencimento do link passaria a
+depender do TZ do container. Nenhum chamador atual passa naive — o guard existe
+porque o helper vai ganhar um segundo consumidor.
+
 ## Consequências
 
-- Nenhuma mudança de comportamento. Blob path, content-type, TTL, título,
-  descrição e formato do `expires_at` saem idênticos aos de antes, nos dois
-  links. Verificado por execução, não só por teste.
+- **Os links não mudaram.** Blob path, content-type, TTL, título, descrição e
+  formato do `expires_at` saem idênticos aos de antes, nos dois. O que mudou de
+  comportamento está todo em observabilidade e concorrência: o que vai ao log,
+  o que vai ao interceptor, e em que thread o upload roda.
 - `ERROR_SOURCE` no `api_service` substitui **quatro** dicts inline idênticos
   (três em `InterceptedHTTPClient`, um novo no encurtador).
 - Os testes do encurtador e do upload saíram de `test_iptu_api_service.py` para
@@ -105,6 +134,7 @@ decodifica — o helper não adivinha o encoding do que recebe.
 | Encurtador da Prefeitura e formato de vencimento | `src/utils/short_url.py` |
 | Política do link da página Pix (24h) | `iptu_pagamento/pix_page_service.py` |
 | Política do link do PDF do DARM (7 dias) | `iptu_pagamento/api/api_service.py` |
+| Redação da signed URL antes do interceptor | `src/utils/http_client.py` (`SENSITIVE_KEYS`) |
 | Testes dos helpers | `src/tests/unit/utils/test_{gcs_storage,short_url}.py` |
 
 ## Em aberto
@@ -116,6 +146,8 @@ decodifica — o helper não adivinha o encoding do que recebe.
   (`codigoQrEMVPix`), enquanto `build_pix_copy_page` hoje espera a imagem em
   base64 que só o IPTU manda (`QrCodePIX`). Precisa de dependência nova
   (`segno`/`qrcode`) e de parametrizar o título, fixo em "Pix IPTU".
-- **I/O bloqueante** — `upload_from_string` e `generate_signed_url` são síncronas
-  e seguram o event loop. `upload_to_gcs` mantém a assinatura `async` do código
-  anterior; passar para `asyncio.to_thread` seria mudança de comportamento.
+- **Client do GCS por chamada** — `get_workflows_bucket` monta um
+  `storage.Client` e parseia a chave RSA a cada upload. Fora do event loop isso
+  deixou de travar o atendimento, mas segue sendo trabalho repetido; cachear
+  muda o comportamento quando a service account rotaciona, então fica para
+  quando houver volume que justifique.

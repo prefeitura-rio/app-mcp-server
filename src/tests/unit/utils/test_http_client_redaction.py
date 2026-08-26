@@ -44,6 +44,50 @@ def test_redact_text_cobre_variacoes_de_chave(chave):
     assert "SEGREDO" not in redact_text(f"https://ex.com/a?{chave}=SEGREDO&x=1")
 
 
+# Signed URL do GCS: capability pura — quem tem a URL baixa o arquivo, sem
+# autenticar. Os fluxos de guia mandam essa URL ao encurtador no campo
+# "destination", então uma falha lá reporta o payload inteiro ao monitoramento.
+SIGNED_URL_V4 = (
+    "https://storage.googleapis.com/bucket/iptu/abc.pdf"
+    "?X-Goog-Algorithm=GOOG4-RSA-SHA256"
+    "&X-Goog-Credential=sa%40proj.iam.gserviceaccount.com%2F20260826%2Fauto"
+    "&X-Goog-Date=20260826T150000Z&X-Goog-Expires=604800"
+    "&X-Goog-SignedHeaders=host&X-Goog-Signature=ASSINATURA-SECRETA"
+)
+
+SIGNED_URL_V2 = (
+    "https://storage.googleapis.com/bucket/iptu/abc.pdf"
+    "?GoogleAccessId=sa%40proj.iam.gserviceaccount.com"
+    "&Expires=1790000000&Signature=ASSINATURA-SECRETA"
+)
+
+
+@pytest.mark.parametrize("signed_url", [SIGNED_URL_V4, SIGNED_URL_V2], ids=["v4", "v2"])
+def test_redact_text_invalida_signed_url_do_gcs(signed_url):
+    limpo = redact_text(signed_url)
+
+    assert "ASSINATURA-SECRETA" not in limpo
+    assert "gserviceaccount" not in limpo
+    # Sem a assinatura o GCS recusa a URL, e o caminho do blob continua
+    # legível para diagnosticar qual arquivo falhou
+    assert "iptu/abc.pdf" in limpo
+
+
+def test_redact_body_invalida_signed_url_no_payload_do_encurtador():
+    """Payload real de src/utils/short_url.py: a URL vai no campo destination."""
+    limpo = redact_body(
+        {
+            "title": "PDF para pagamento de cotas do IPTU",
+            "destination": SIGNED_URL_V4,
+            "expires_at": "2026-09-02T15:00:00Z",
+        }
+    )
+
+    assert "ASSINATURA-SECRETA" not in repr(limpo)
+    assert limpo["title"] == "PDF para pagamento de cotas do IPTU"
+    assert limpo["expires_at"] == "2026-09-02T15:00:00Z"
+
+
 def test_redact_text_preserva_texto_sem_credencial():
     assert redact_text("falha de conexão") == "falha de conexão"
     assert redact_text("") == ""

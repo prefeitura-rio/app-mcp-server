@@ -37,7 +37,12 @@ from src.utils.error_interceptor import send_api_error
 # Status codes que devem ser interceptados por padrão
 DEFAULT_ERROR_STATUS_CODES: Set[int] = {400, 401, 403, 404, 500, 502, 503, 504}
 
-# Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro
+# Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro.
+#
+# As três últimas são da signed URL do GCS: ela é uma capability — quem tem a URL
+# baixa o arquivo, sem autenticar. Os fluxos de guia mandam essa URL ao encurtador
+# no campo "destination", e uma falha lá reportaria o payload inteiro ao
+# monitoramento. Redigir a assinatura invalida a URL para quem lê o log.
 SENSITIVE_KEYS: Set[str] = {
     "token",
     "access_token",
@@ -51,6 +56,9 @@ SENSITIVE_KEYS: Set[str] = {
     "authorization",
     "chaveacesso",
     "chave_acesso",
+    "signature",
+    "x-goog-credential",
+    "googleaccessid",
 }
 
 _SENSITIVE_QUERY_RE = re.compile(

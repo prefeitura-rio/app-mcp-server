@@ -21,7 +21,14 @@ from src.utils.http_client import InterceptedHTTPClient
 
 
 def format_expires_at(expiration: dt.datetime) -> str:
-    """Formata o vencimento no formato que o encurtador espera (UTC, sufixo Z)."""
+    """
+    Formata o vencimento no formato que o encurtador espera (UTC, sufixo Z).
+
+    Exige datetime com timezone: para um naive, `astimezone` assumiria o fuso da
+    máquina e o vencimento do link passaria a depender do TZ do container.
+    """
+    if expiration.tzinfo is None:
+        raise ValueError("expiration precisa ter timezone (use dt.timezone.utc)")
     return (
         expiration.astimezone(dt.timezone.utc)
         .replace(microsecond=0)
@@ -84,7 +91,9 @@ async def get_short_url(
             response = await client.post(api_url, json=payload, headers=headers)
             if response.status_code == 200 or response.status_code == 201:
                 data = response.json()
-                logger.info(f"URL shortened successfully: {data}")
+                # Sem o corpo da resposta: ele traz o short_path, ou seja, o link
+                # direto para a guia daquele contribuinte (CHATR-174 D3).
+                logger.info("URL encurtada com sucesso")
                 return f"{env.SHORT_API_URL}/link/{data['short_path']}"
 
             logger.error(f"Erro HTTP ao encurtar URL: {response.status_code}")

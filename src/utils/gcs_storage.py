@@ -9,8 +9,14 @@ caminho — sobem para o bucket de workflows e saem como signed URL temporária.
 Nada aqui é específico de IPTU: o bucket e as credenciais são os mesmos para
 qualquer workflow, e o que varia (caminho do blob, content-type, validade) é
 política de cada fluxo e entra por parâmetro.
+
+O SDK do GCS é síncrono: montar o client, subir o arquivo e assinar a URL
+seguram a thread. Como todo chamador é uma corrotina servindo um atendimento em
+andamento, o trabalho todo vai para uma thread separada — o event loop continua
+atendendo os outros enquanto o PDF sobe.
 """
 
+import asyncio
 import base64
 import datetime as dt
 import json
@@ -33,6 +39,19 @@ def get_workflows_bucket():
     return client.bucket(env.WORKFLOWS_GCS_BUCKET)
 
 
+def _upload_sync(
+    conteudo: str | bytes,
+    blob_path: str,
+    content_type: str,
+    ttl: dt.timedelta,
+) -> str:
+    """Parte bloqueante do upload, executada fora do event loop."""
+    bucket = get_workflows_bucket()
+    blob = bucket.blob(blob_path)
+    blob.upload_from_string(conteudo, content_type=content_type)
+    return blob.generate_signed_url(expiration=ttl)
+
+
 async def upload_to_gcs(
     conteudo: str | bytes,
     blob_path: str,
@@ -51,7 +70,4 @@ async def upload_to_gcs(
     Returns:
         URL assinada para acesso ao arquivo.
     """
-    bucket = get_workflows_bucket()
-    blob = bucket.blob(blob_path)
-    blob.upload_from_string(conteudo, content_type=content_type)
-    return blob.generate_signed_url(expiration=ttl)
+    return await asyncio.to_thread(_upload_sync, conteudo, blob_path, content_type, ttl)

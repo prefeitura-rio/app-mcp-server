@@ -71,6 +71,12 @@ def test_format_expires_at_converte_para_utc():
     assert format_expires_at(expiration) == "2026-05-11T12:30:15Z"
 
 
+def test_format_expires_at_recusa_datetime_sem_timezone():
+    """Sem tzinfo, o vencimento do link dependeria do TZ do container."""
+    with pytest.raises(ValueError):
+        format_expires_at(dt.datetime(2026, 5, 11, 9, 30, 15))
+
+
 @pytest.mark.asyncio
 async def test_encurta_e_monta_payload_completo(monkeypatch, env_encurtador):
     captured = {}
@@ -170,3 +176,33 @@ async def test_falha_devolve_none(monkeypatch, env_encurtador, response, error):
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_link_da_guia_nao_vai_para_o_log(monkeypatch, env_encurtador):
+    """
+    CHATR-174 D3: a resposta do encurtador traz o `short_path`, ou seja, o link
+    direto para a guia daquele contribuinte. Quem lê o log acessa o documento.
+    """
+    monkeypatch.setattr(
+        short_url_mod,
+        "InterceptedHTTPClient",
+        fake_client_factory(response=FakeResponse(payload={"short_path": "s3gr3d0"})),
+    )
+
+    registros = []
+    sink_id = short_url_mod.logger.add(registros.append, level="DEBUG")
+    try:
+        short_url = await get_short_url(
+            url="https://storage.example/signed",
+            title="Titulo",
+            description="Descricao",
+            user_id="user-1",
+            source=SOURCE,
+        )
+    finally:
+        short_url_mod.logger.remove(sink_id)
+
+    # O link continua sendo devolvido a quem chamou — só não é logado
+    assert short_url == "https://pref.rio/link/s3gr3d0"
+    assert "s3gr3d0" not in "".join(registros)
