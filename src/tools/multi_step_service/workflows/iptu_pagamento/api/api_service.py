@@ -604,7 +604,9 @@ class IPTUAPIService:
                 source=ERROR_SOURCE,
                 expires_at=format_expires_at(expires_at),
             )
-            return shorted_url
+            # Encurtador fora do ar não pode impedir o pagamento: a signed URL é
+            # longa, mas funciona. Mesmo fallback da página Pix.
+            return shorted_url or signed_url
         else:
             logger.warning("PDF download failed or returned HTML error page")
             return None

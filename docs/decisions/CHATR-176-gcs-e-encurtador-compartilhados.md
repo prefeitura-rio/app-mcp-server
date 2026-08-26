@@ -82,10 +82,12 @@ IPTU. O único chamador que os usava por omissão passa a explicitá-los.
 HTML da página Pix e para o PDF. Só um chamador tem base64 na mão, e é ele quem
 decodifica — o helper não adivinha o encoding do que recebe.
 
-### 5. Com um lugar só, três correções deixaram de ser caras
+### 5. Com um lugar só, cinco correções deixaram de ser caras
 
 A extração era pré-requisito para elas: nos dois arquivos, cada uma custaria o
-dobro e correria o risco de divergir. Feitas aqui:
+dobro e correria o risco de divergir. As duas últimas saíram da revisão do PR e
+valem pelo mesmo motivo — só com os dois fluxos lado a lado a assimetria entre
+eles fica visível. Feitas aqui:
 
 **O `short_path` saiu do log** (CHATR-174 D3). A resposta do encurtador traz o
 link direto para a guia daquele contribuinte — quem lê o SigNoz abre o
@@ -93,17 +95,31 @@ documento. O `logger.info` agora não registra o corpo da resposta.
 
 **A signed URL do GCS deixou de chegar em claro ao interceptor de erros.** Ela é
 uma capability: quem tem a URL baixa o arquivo, sem autenticar. Como o
-encurtador a recebe no campo `destination`, qualquer 4xx/5xx dele reportava o
-payload inteiro ao monitoramento. `SENSITIVE_KEYS` em `http_client.py` ganhou
-`signature`, `x-goog-credential` e `googleaccessid`, o que cobre signed URL v2 e
-v4 — sem a assinatura o GCS recusa a URL, e o caminho do blob continua legível
-para diagnóstico.
+encurtador a recebe no campo `destination`, uma falha na chamada reporta o
+payload inteiro ao monitoramento — hoje inclusive em todo 4xx/5xx, com a
+interceptação de status ligada (abaixo). `SENSITIVE_KEYS` em `http_client.py`
+ganhou `signature`, `x-goog-credential` e `googleaccessid`, o que cobre signed
+URL v2 e v4 — sem a assinatura o GCS recusa a URL, e o caminho do blob continua
+legível para diagnóstico.
 
 **O upload saiu do event loop.** `upload_from_string` e `generate_signed_url`
 são síncronas, e montar o client ainda parseia a chave RSA da service account:
 com o PDF de um contribuinte subindo, todos os outros atendimentos ficavam
 parados. A parte bloqueante virou `_upload_sync`, chamada por
 `asyncio.to_thread`. A assinatura pública de `upload_to_gcs` não mudou.
+
+**Os status de erro do encurtador passaram a alertar.** `InterceptedHTTPClient`
+só reporta 4xx/5xx quando recebe `error_status_codes`; sem eles, reporta apenas
+falha de transporte (timeout, connect error). Como `get_short_url` engole o erro
+e devolve `None` — e não há `@interceptor`/`raise_for_status` no caminho para
+ser a outra fonte do alerta —, encurtador com token vencido (401) ou fora do ar
+(5xx) falhava calado: o cidadão recebia a signed URL crua e o monitoramento não
+via nada. O helper passa `DEFAULT_ERROR_STATUS_CODES`.
+
+**O PDF do DARM ganhou o fallback que a página Pix já tinha.**
+`download_pdf_darm` devolvia `shorted_url` direto: com o encurtador fora do ar,
+o cidadão ficava sem link nenhum, enquanto o fluxo Pix caía na signed URL. Agora
+é `shorted_url or signed_url` nos dois.
 
 Além delas, `format_expires_at` passou a exigir `tzinfo`: com datetime naive, o
 `astimezone` assumiria o fuso da máquina e o vencimento do link passaria a
@@ -114,8 +130,10 @@ porque o helper vai ganhar um segundo consumidor.
 
 - **Os links não mudaram.** Blob path, content-type, TTL, título, descrição e
   formato do `expires_at` saem idênticos aos de antes, nos dois. O que mudou de
-  comportamento está todo em observabilidade e concorrência: o que vai ao log,
-  o que vai ao interceptor, e em que thread o upload roda.
+  comportamento está em observabilidade e concorrência: o que vai ao log, o que
+  vai ao interceptor, e em que thread o upload roda. **A exceção é o PDF do DARM
+  com o encurtador falhando**: antes o cidadão não recebia link nenhum, agora
+  recebe a signed URL.
 - `ERROR_SOURCE` no `api_service` substitui **quatro** dicts inline idênticos
   (três em `InterceptedHTTPClient`, um novo no encurtador).
 - Os testes do encurtador e do upload saíram de `test_iptu_api_service.py` para

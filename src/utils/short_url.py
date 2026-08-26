@@ -17,7 +17,7 @@ import httpx
 from loguru import logger
 
 from src.config import env
-from src.utils.http_client import InterceptedHTTPClient
+from src.utils.http_client import DEFAULT_ERROR_STATUS_CODES, InterceptedHTTPClient
 
 
 def format_expires_at(expiration: dt.datetime) -> str:
@@ -87,8 +87,16 @@ async def get_short_url(
             user_id=user_id,
             source=source,
         ) as client:
-            # Erros são automaticamente interceptados
-            response = await client.post(api_url, json=payload, headers=headers)
+            # O interceptor só reporta status HTTP quando recebe a lista de
+            # códigos: sem ela, encurtador fora do ar (401 de token, 5xx) falha
+            # em silêncio — o cidadão recebe a signed URL crua e o monitoramento
+            # não vê nada. Exceções de transporte o client já reporta sozinho.
+            response = await client.post(
+                api_url,
+                json=payload,
+                headers=headers,
+                error_status_codes=DEFAULT_ERROR_STATUS_CODES,
+            )
             if response.status_code == 200 or response.status_code == 201:
                 data = response.json()
                 # Sem o corpo da resposta: ele traz o short_path, ou seja, o link

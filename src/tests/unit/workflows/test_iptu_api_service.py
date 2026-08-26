@@ -803,6 +803,31 @@ async def test_download_pdf_darm_devolve_none_em_pagina_de_erro(monkeypatch):
     assert await service.download_pdf_darm("12.345.678", 2025, "00", ["01"]) is None
 
 
+@pytest.mark.asyncio
+async def test_download_pdf_darm_cai_na_signed_url_quando_encurtador_falha(monkeypatch):
+    """Encurtador fora do ar não pode impedir o cidadão de pagar (igual ao Pix)."""
+    module = prepare_service_module(monkeypatch, "test_iptu_darm_pdf_fallback_module")
+    service = module.IPTUAPIService(user_id="u2")
+
+    async def fake_request(endpoint, params, expect_json=True):
+        return "JVBERi0xLjQK"
+
+    async def fake_upload_to_gcs(**_kwargs):
+        return "https://storage.example/signed"
+
+    async def fake_get_short_url(**_kwargs):
+        return None
+
+    monkeypatch.setattr(service, "_make_api_request", fake_request)
+    monkeypatch.setattr(module, "upload_to_gcs", fake_upload_to_gcs)
+    monkeypatch.setattr(module, "get_short_url", fake_get_short_url)
+
+    assert (
+        await service.download_pdf_darm("12.345.678", 2025, "00", ["01"])
+        == "https://storage.example/signed"
+    )
+
+
 def test_pix_page_helpers_build_copy_page():
     pix_page = load_module(
         "test_iptu_pix_page_module",
