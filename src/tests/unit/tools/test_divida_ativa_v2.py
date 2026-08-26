@@ -635,18 +635,23 @@ async def test_multiplos_registros_devolvem_todas_as_guias(monkeypatch):
     resultado = await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
 
     assert resultado["total_guias"] == 2
+    # `id` vazio e `valor` nulo: o fake não tem GUID no link nem PIX parseável.
     assert resultado["guias_emitidas"] == [
         {
+            "id": "",
             "codigo_de_barras": "111",
             "link": "a.pdf",
             "data_vencimento": "10/04/2026",
             "pix": "pix-1",
+            "valor": None,
         },
         {
+            "id": "",
             "codigo_de_barras": "222",
             "link": "b.pdf",
             "data_vencimento": "11/04/2026",
             "pix": "pix-2",
+            "valor": None,
         },
     ]
     # Campos legado: a primeira guia, não a última.

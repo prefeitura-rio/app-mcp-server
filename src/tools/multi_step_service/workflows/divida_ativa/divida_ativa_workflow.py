@@ -326,6 +326,10 @@ class DividaAtivaWorkflow(BaseWorkflow):
         "endereco_imovel",
         "bairro_imovel",
         "opcoes_menu",
+        # Débitos estruturados e a lista agregada de naturezas: é com eles que
+        # o consumidor rotula cada guia emitida (CHATR-164).
+        "itens",
+        "naturezas_divida",
     }
 
     @property
@@ -498,6 +502,8 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "confirmar_pagamento_a_vista",
             "forma_pagamento_a_vista",
+            "itens",
+            "naturezas_divida",
         ]
         consulta = {
             field: divida_ativa[field]
@@ -512,12 +518,22 @@ class DividaAtivaWorkflow(BaseWorkflow):
         return consulta
 
     # Campos de uma guia, com os nomes alternativos vindos direto da PGM.
+    # `id` e `valor` não têm alternativa crua: a PGM não devolve nenhum dos
+    # dois, eles são derivados pela tool (GUID do PDF e campo 54 do PIX).
     GUIA_CAMPOS = {
+        "id": ("id",),
         "data_vencimento": ("data_vencimento", "dataVencimento"),
         "link": ("link", "pdf"),
         "codigo_de_barras": ("codigo_de_barras", "codigoDeBarras"),
         "pix": ("pix", "codigoQrEMVPix"),
+        "valor": ("valor",),
     }
+
+    # Campos que vão ao payload mesmo vazios. `valor` é o único: o consumidor
+    # monta um card por guia e precisa distinguir "não foi possível apurar"
+    # (null) de "esta versão não manda o campo" (ausente). Os demais são
+    # strings que, vazias, não acrescentam nada ao card.
+    GUIA_CAMPOS_SEMPRE = ("valor",)
 
     # `arquivoBase64` é o PDF inteiro em base64 — centenas de KB. Vale como
     # último recurso no texto que vai ao cidadão, que é o comportamento de
@@ -531,16 +547,33 @@ class DividaAtivaWorkflow(BaseWorkflow):
     def _normalizar_guia(self, guia: dict, campos: dict) -> dict:
         normalizada = {}
         for public_field, candidates in campos.items():
-            value = next(
-                (
-                    guia.get(candidate)
-                    for candidate in candidates
-                    if guia.get(candidate)
-                ),
-                None,
-            )
-            if value:
+            valores = [guia.get(candidate) for candidate in candidates]
+            sempre = public_field in self.GUIA_CAMPOS_SEMPRE
+
+            if sempre:
+                # 0.0 é um valor legítimo de guia; procurar por truthiness o
+                # descartaria e o campo sairia como null, dizendo outra coisa.
+                value = next((valor for valor in valores if valor is not None), None)
+            else:
+                # Truthiness aqui é de propósito: campo vazio precisa cair no
+                # próximo candidato, não fixar a string vazia.
+                value = next((valor for valor in valores if valor), None)
+
+            if sempre or value:
                 normalizada[public_field] = value
+
+        # Guia sem nenhum campo próprio é dict vazio, como antes do CHATR-164.
+        # `valor` sozinho não conta: ele entra sempre, inclusive como None, e
+        # devolvê-lo aqui faria `normalizada` nunca ser falsa — matando os dois
+        # descartes de guia vazia em `_guias_da_resposta` e fabricando um card
+        # de pagamento sem código de barras, sem link e sem Pix.
+        if not any(
+            valor
+            for campo, valor in normalizada.items()
+            if campo not in self.GUIA_CAMPOS_SEMPRE
+        ):
+            return {}
+
         return normalizada
 
     def _guias_da_resposta(self, guia: dict | None, campos: dict) -> list[dict]:
@@ -1731,6 +1764,11 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "dicionario_itens": divida_info.get("dicionario_itens", {}),
             "total_itens_pagamento": divida_info.get("total_itens_pagamento", 0),
             "debitos_msg": divida_info.get("debitos_msg", []),
+            # `itens` é a lista estruturada; `naturezas_divida` é a lista
+            # agregada da consulta. Andam juntas: só a CDA traz natureza
+            # própria, e é contra a agregada que a da EF sai por eliminação.
+            "itens": divida_info.get("itens", []),
+            "naturezas_divida": divida_info.get("naturezas_divida", []),
             "saldo_total_divida": divida_info.get("saldo_total_divida"),
             "saldo_total_nao_parcelado": divida_info.get("saldo_total_nao_parcelado"),
             "saldo_total_parcelado": divida_info.get("saldo_total_parcelado"),

@@ -124,6 +124,8 @@ def _resultado_divida(
     cdas=None,
     efs=None,
     parcelamentos=None,
+    itens_estruturados=None,
+    naturezas_divida=None,
 ):
     lista_cdas = [
         getattr(cda, "cda_id", None) or getattr(cda, "numero", None)
@@ -159,6 +161,8 @@ def _resultado_divida(
         ),
         "total_parcelado": len([item for item in lista_guias if item]),
         "debitos_msg": [],
+        "itens": itens_estruturados or [],
+        "naturezas_divida": naturezas_divida or [],
     }
 
 
@@ -1294,6 +1298,10 @@ async def test_forma_pagamento_valida_salva_e_responde(
         "link": "https://example.com/guia.pdf",
         "codigo_de_barras": "123456789",
         "pix": "000201PIX",
+        # `valor` vai ao payload mesmo sem ser apurável: o consumidor precisa
+        # distinguir "não deu para extrair" de "esta versão não manda o campo".
+        # `id` não aparece: o link do fake não tem GUID de PDF.
+        "valor": None,
     }
     assert state.agent_response.data == {
         "status": "completed",
@@ -1783,6 +1791,10 @@ async def test_guia_emitida_retorna_payload_publico_compacto(
         "link": "https://example.com/guia.pdf",
         "codigo_de_barras": "123456789",
         "pix": "000201PIX",
+        # `valor` vai ao payload mesmo sem ser apurável: o consumidor precisa
+        # distinguir "não deu para extrair" de "esta versão não manda o campo".
+        # `id` não aparece: o link do fake não tem GUID de PDF.
+        "valor": None,
     }
     assert data["guia_pagamento_a_vista"] == {
         **guia_publica,
@@ -1849,6 +1861,7 @@ async def test_guia_so_com_base64_nao_vaza_para_o_payload_publico(
             "data_vencimento": "10/09/2026",
             "codigo_de_barras": "123456789",
             "pix": "000201PIX",
+            "valor": None,
         }
     ]
     assert base64_pdf not in json.dumps(data, ensure_ascii=False)
@@ -1966,3 +1979,229 @@ async def test_fluxo_input_inesperado_nao_avanca_step(
     assert "cpf_cnpj" in state.agent_response.payload_schema["properties"]
     assert state.internal["tipo_consulta_cache"] == "cpf_cnpj"
     assert "consulta_realizada" not in state.internal
+
+
+# Guia real de produção: o PIX declara R$ 4.825,43 no campo 54 do EMV.
+PIX_REAL_COM_VALOR = (
+    "00020101021226850014br.gov.bcb.pix2563pix.santander.com.br/qr/v2/"
+    "a2ecf2b0-c305-4a4c-8cb4-40561cff7e0b520400005303986540748"
+    "25.435802BR5917PM RIO DE JANEIRO6014RIO DE JANEIRO62070503***63044CD6"
+)
+
+
+@pytest.mark.asyncio
+async def test_consulta_leva_itens_estruturados_e_naturezas(divida_ativa_modules):
+    """
+    CHATR-164: o consumidor monta um card por guia, mas a PGM não diz a
+    natureza de cada guia emitida.
+
+    `itens` traz os débitos com natureza e valor; `naturezas_divida` traz a
+    lista agregada. Juntos permitem casar guia com natureza por soma — e
+    deduzir a da EF, que não tem natureza própria, por eliminação.
+    """
+    resultado = _resultado_divida(
+        cdas=[types.SimpleNamespace(cda_id="01/184218/2026-00", numero=None)],
+        itens_estruturados=[
+            {
+                "id": "01/184218/2026-00",
+                "tipo": "cda",
+                "natureza": "IPTU/Taxas - Predial",
+                "natureza_id": "1",
+                "valor": 1922.05,
+            },
+            {
+                "id": "0334852-76.2017.8.19.0001",
+                "tipo": "ef",
+                "natureza": None,
+                "natureza_id": None,
+                "valor": 24897.81,
+            },
+        ],
+        naturezas_divida=["ISS", "IPTU/Taxas - Predial"],
+    )
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeDividaAtivaAPIService(resultado=resultado)
+
+    state = await workflow.execute(_new_state(divida_ativa_modules), {})
+    state = await workflow.execute(state, {"tipo_consulta": "cpf_cnpj"})
+    state = await workflow.execute(state, {"cpf_cnpj": "12345678901"})
+
+    consulta = state.agent_response.data["consulta"]
+
+    assert [item["tipo"] for item in consulta["itens"]] == ["cda", "ef"]
+    assert consulta["itens"][0]["natureza"] == "IPTU/Taxas - Predial"
+    # A EF não traz natureza: 'ISS' é o que sobra na lista agregada.
+    assert consulta["itens"][1]["natureza"] is None
+    assert consulta["naturezas_divida"] == ["ISS", "IPTU/Taxas - Predial"]
+
+
+@pytest.mark.asyncio
+async def test_guia_publica_leva_valor_numerico_extraido_do_pix(divida_ativa_modules):
+    """O valor chega ao payload como número, pronto para o card de pagamento."""
+
+    class FakeAPIService:
+        async def emitir_guia_a_vista(self, cdas, efs):
+            return {
+                "api_resposta_sucesso": True,
+                "guias_emitidas": [
+                    {
+                        "id": "6a13bc0c-f48b-4459-858f-a836d673e210",
+                        "codigo_de_barras": "81650000048-3 25433659202-0 "
+                        "60831418100-9 11098057426-0",
+                        "link": "https://example.com/guia.pdf",
+                        "data_vencimento": "31/08/2026",
+                        "pix": PIX_REAL_COM_VALOR,
+                        "valor": 4825.43,
+                    }
+                ],
+                "total_guias": 1,
+            }
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeAPIService()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "94/009914/2026-00"},
+        ],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+    )
+
+    guia_publica = state.agent_response.data["guia_pagamento_a_vista"]
+    assert guia_publica["guias"][0]["valor"] == 4825.43
+    assert guia_publica["guias"][0]["id"] == "6a13bc0c-f48b-4459-858f-a836d673e210"
+    assert guia_publica["valor"] == 4825.43
+
+
+@pytest.mark.asyncio
+async def test_guia_sem_valor_mantem_a_chave_no_payload(divida_ativa_modules):
+    """
+    `valor: null` é informação: diz que não foi possível apurar. Omitir a
+    chave faria o consumidor concluir que esta versão não manda o campo.
+    """
+
+    class FakeAPIService:
+        async def emitir_guia_a_vista(self, cdas, efs):
+            return {
+                "api_resposta_sucesso": True,
+                "guias_emitidas": [
+                    {
+                        "id": "",
+                        "codigo_de_barras": "123456789",
+                        "link": "https://example.com/guia.pdf",
+                        "data_vencimento": "31/08/2026",
+                        "pix": "nao-e-um-emv",
+                        "valor": None,
+                    }
+                ],
+                "total_guias": 1,
+            }
+
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = FakeAPIService()
+    state = _new_state(divida_ativa_modules)
+    state.internal["consulta_realizada"] = True
+    state.data["divida_ativa"] = {
+        "mensagem_divida_contribuinte": "mensagem",
+        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
+        "debitos_pagamento_a_vista": [
+            {"tipo": "cda", "identificador": "94/009914/2026-00"},
+        ],
+    }
+
+    state = await workflow.execute(
+        state,
+        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+    )
+
+    guia = state.agent_response.data["guia_pagamento_a_vista"]["guias"][0]
+    assert "valor" in guia
+    assert guia["valor"] is None
+    # A guia continua entregue e pagável.
+    assert guia["codigo_de_barras"] == "123456789"
+
+
+# --- Guia vazia não vira card de pagamento ---------------------------------
+#
+# `valor` entra no payload mesmo como None, para o consumidor distinguir "não
+# apurável" de "esta versão não manda o campo". Isso quase custou os dois
+# descartes de guia vazia em `_guias_da_resposta`: com `valor` sempre presente,
+# `_normalizar_guia` nunca devolveria dict falso e toda resposta viraria uma
+# guia — sem código de barras, sem link e sem Pix (CHATR-164).
+
+
+def test_resposta_de_sucesso_sem_nenhuma_guia_nao_vira_card(divida_ativa_modules):
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    assert workflow._build_public_guia_data({"api_resposta_sucesso": True}) == {}
+
+
+def test_registro_que_nao_e_guia_nao_entra_no_total(divida_ativa_modules):
+    """
+    `pgm_api` devolve {"success": True} quando a resposta vem vazia. Contado
+    como guia, o cidadão leria "foram geradas 2 guias, pague todas" com uma só.
+    """
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    publico = workflow._build_public_guia_data(
+        {
+            "api_resposta_sucesso": True,
+            "guias_emitidas": [
+                {
+                    "codigo_de_barras": "123456789",
+                    "link": "http://pgm/a.pdf",
+                    "data_vencimento": "31/08/2026",
+                    "pix": "pix",
+                    "valor": 10.0,
+                },
+                {"success": True},
+            ],
+        }
+    )
+
+    assert publico["total_guias"] == 1
+    assert publico["guias"] == [
+        {
+            "codigo_de_barras": "123456789",
+            "link": "http://pgm/a.pdf",
+            "data_vencimento": "31/08/2026",
+            "pix": "pix",
+            "valor": 10.0,
+        }
+    ]
+
+
+def test_guia_real_sem_valor_apuravel_continua_no_payload(divida_ativa_modules):
+    """O descarte é de guia sem campo próprio, não de guia sem valor."""
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    publico = workflow._build_public_guia_data(
+        {
+            "api_resposta_sucesso": True,
+            "guias_emitidas": [{"codigo_de_barras": "123456789", "valor": None}],
+        }
+    )
+
+    assert publico["total_guias"] == 1
+    assert publico["guias"][0]["valor"] is None
+
+
+def test_guia_com_valor_zero_continua_no_payload(divida_ativa_modules):
+    """0.0 é valor legítimo de guia e não pode ser lido como campo ausente."""
+    workflow = divida_ativa_modules.DividaAtivaWorkflow()
+
+    publico = workflow._build_public_guia_data(
+        {
+            "api_resposta_sucesso": True,
+            "guias_emitidas": [{"codigo_de_barras": "123456789", "valor": 0.0}],
+        }
+    )
+
+    assert publico["guias"][0]["valor"] == 0.0

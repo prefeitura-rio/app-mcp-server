@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# O contrato da PGM mora na v1: um rename de campo lá precisa valer para as
+# duas versões, e `_id_da_guia` carrega junto o porquê de `$id` não servir.
+from src.tools.divida_ativa import _id_da_guia
+from src.tools.valores_pagamento import valor_da_guia
+
 # Placeholder de template não renderizado pelo SFMC, ex.:
 # "{{Event.DEAudience-abc.\"itens_informados\"}}"
 PLACEHOLDER_PATTERN = re.compile(r"\{\{.*?\}\}", re.DOTALL)
@@ -250,19 +255,44 @@ class GuiaEmitida(BaseModel):
     # `str = ""` e não `Optional[str]`: `de_registro` — o único construtor —
     # normaliza campo ausente para string vazia, como a v1 sempre fez. Declarar
     # Optional induziria o consumidor a testar `is None`, ramo que nunca roda.
+    id: str = Field(
+        default="",
+        description=(
+            "GUID do PDF da guia. A PGM não devolve id de guia; este é o único "
+            "identificador estável da resposta e não serve para consultá-la."
+        ),
+    )
     codigo_de_barras: str = Field(default="", description="Código de barras da guia.")
     link: str = Field(default="", description="Link para o PDF da guia.")
     data_vencimento: str = Field(default="", description="Data de vencimento da guia.")
     pix: str = Field(default="", description="Código QR EMV do PIX da guia.")
+    # Optional de verdade, ao contrário dos campos acima: a PGM não manda o
+    # valor, ele é lido do código de pagamento, e essa leitura pode não
+    # resolver. None diz "não foi possível apurar"; 0.0 diria "guia sem valor".
+    valor: Optional[float] = Field(
+        default=None,
+        description=(
+            "Valor da guia em reais, extraído do PIX ou do código de barras. "
+            "É float: para casar com a soma dos `itens` da consulta, compare "
+            "com round(x, 2) dos dois lados — igualdade exata de float falha "
+            "em cerca de 29% das somas de 2 a 6 parcelas."
+        ),
+    )
 
     @classmethod
     def de_registro(cls, registro: Dict[str, Any]) -> "GuiaEmitida":
         """Constrói a guia a partir do registro cru da PGM."""
+        link = registro.get("pdf") or ""
+        codigo_de_barras = registro.get("codigoDeBarras") or ""
+        pix = registro.get("codigoQrEMVPix") or ""
+
         return cls(
-            codigo_de_barras=registro.get("codigoDeBarras") or "",
-            link=registro.get("pdf") or "",
+            id=_id_da_guia(link),
+            codigo_de_barras=codigo_de_barras,
+            link=link,
             data_vencimento=registro.get("dataVencimento") or "",
-            pix=registro.get("codigoQrEMVPix") or "",
+            pix=pix,
+            valor=valor_da_guia(pix, codigo_de_barras),
         )
 
 
@@ -332,5 +362,19 @@ class EmitirGuiaResponse(BaseModel):
         return cls(api_resposta_sucesso=False, api_descricao_erro=descricao)
 
     def para_dict(self) -> Dict[str, Any]:
-        """Serializa omitindo os campos não preenchidos."""
-        return self.model_dump(exclude_none=True)
+        """
+        Serializa omitindo os campos não preenchidos.
+
+        Dentro de `guias_emitidas`, não: ali `valor: None` é informação — diz
+        que não foi possível apurar o valor daquela guia. Omitir o campo faria
+        o consumidor concluir que esta versão não o manda, e `exclude_none` é
+        recursivo, então as guias precisam ser serializadas à parte.
+        """
+        dados = self.model_dump(exclude_none=True)
+
+        if self.guias_emitidas is not None:
+            dados["guias_emitidas"] = [
+                guia.model_dump() for guia in self.guias_emitidas
+            ]
+
+        return dados
