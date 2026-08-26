@@ -78,3 +78,82 @@ Os dois gates se complementam: unitario pega regressao de codigo cedo e barato; 
 ## Evolucao Recomendada
 
 Se a gente quiser aprofundar mais, o proximo passo natural e extrair essa logica para testes `pytest`, adicionando asserts mais ricos sobre schema e respostas de negocio. O desenho atual ja entrega um gate de promocao mais forte sem aumentar muito o tempo nem as dependencias do workflow.
+
+---
+
+# Contrato da API da PGM
+
+O runner [`run_pgm_contract.py`](run_pgm_contract.py) e um teste de integracao
+sob demanda: nao roda em pipeline nenhuma, e existe para responder uma pergunta
+so — **o que vem e vai da PGM ainda e o que o codigo espera?**
+
+## Por que existe
+
+A resposta de emissao da PGM nao e documentada, e ja nos surpreendeu. O
+CHATR-164 teve uma implementacao inteira escrita supondo que a emissao
+devolvia valor e natureza; so descobrimos que nao devolve lendo log de
+producao, depois do codigo pronto. Ver
+[`CHATR-164-valor-e-itens.md`](../../../docs/decisions/CHATR-164-valor-e-itens.md).
+
+Este runner transforma aquilo que aprendemos por log em verificacao executavel.
+
+## O que verifica
+
+Chama a PGM pelo mesmo caminho da producao (`internal_request` ->
+chatbot-integrations), nao por HTTP contra o MCP.
+
+**Presenca de campos** — os que o codigo le em cada estrutura: consulta, CDA,
+EF, guia parcelada e registro de emissao.
+
+**Invariantes**, que e onde esta o valor real do teste:
+
+- `valorSaldoPrincipal + valorSaldoHonorarios == valorSaldoTotal`, por CDA;
+- soma dos itens nao parcelados == `saldoTotalNaoParcelado`;
+- natureza de cada CDA presente em `naturezasDivida` — e o que sustenta deduzir
+  a natureza da EF por eliminacao;
+- na emissao, o valor extraido do PIX (campo 54) e o do codigo de barras
+  (posicoes 5-15) precisam concordar: sao fontes independentes da mesma guia.
+
+**Mudancas a favor** também são sinalizadas: se a emissao passar a trazer
+`valorTotal`, ou a EF passar a trazer `naturezaDivida`, sai um aviso — deriva-los
+deixa de ser necessario.
+
+## PII
+
+A resposta da PGM carrega nome, CPF e endereco do cidadao. O relatorio imprime
+nomes de campos, contagens e valores monetarios; nunca o conteudo dos campos
+identificadores, nem no diagnostico de campo faltante.
+
+## Execucao
+
+Credenciais em `src/config/.env` (carregado automaticamente) ou no ambiente:
+`CHATBOT_INTEGRATIONS_URL`, `CHATBOT_INTEGRATIONS_KEY`, `CHATBOT_PGM_API_URL`,
+`CHATBOT_PGM_ACCESS_KEY`.
+
+```bash
+# So consulta - read-only, seguro.
+uv run python src/tests/e2e/run_pgm_contract.py --cpf 12345678901
+
+# Tambem emite guia. ATENCAO: gera uma guia de verdade na PGM.
+uv run python src/tests/e2e/run_pgm_contract.py --cpf 12345678901 --emitir
+```
+
+O CPF precisa ser de contribuinte **com debitos em aberto** — sem massa, nao ha
+o que verificar. Uma massa com CDA e EF ao mesmo tempo exercita mais contrato.
+
+## Codigos de saida
+
+| Codigo | Significado |
+| --- | --- |
+| `0` | Contrato integro |
+| `1` | Quebra de contrato: algo que o codigo le mudou ou sumiu |
+| `2` | Nada verificado (massa vazia, credencial faltando) — o contrato segue desconhecido |
+
+O `2` e deliberado: sem massa, dizer "integro" seria falso conforto.
+
+## Por que nao e `test_*.py`
+
+`testpaths` do pytest aponta para `src/tests`, entao um arquivo `test_*.py`
+aqui seria coletado pelo `pr-quality-gate` e falharia no CI, que nao tem
+credencial da PGM — nem deveria ter. O prefixo `run_` mantem estes runners fora
+da coleta, como os demais desta pasta.
