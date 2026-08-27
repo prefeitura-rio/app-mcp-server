@@ -116,7 +116,7 @@ _OPTION_REGISTRY: Mapping[str, Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _build_options(
+def build_options(
     values: list[str],
     overrides: dict[str, dict[str, str]] | None = None,
     include_description: bool = True,
@@ -306,7 +306,7 @@ class AcaoResultadoConsultaPayload(BaseModel):
         title="Próxima ação",
         description="Escolha como quer continuar.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["pagar_agora", "consultar_outro_debito"],
                 include_description=False,
             ),
@@ -330,7 +330,7 @@ class MenuPagamentoCompletoPayload(BaseModel):
         title="Opções de pagamento",
         description="Escolha uma opção",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 [
                     "pagar_a_vista",
                     "parcelar_debitos",
@@ -360,7 +360,7 @@ class MenuPagamentoParceladoPayload(BaseModel):
         title="Opções de pagamento",
         description="Escolha uma opção",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 [
                     "parcelar_debitos",
                     "regularizar_debitos",
@@ -386,7 +386,7 @@ class OpcaoPagarAVistaPayload(BaseModel):
         title="Pagamento à vista",
         description="Escolha como quer pagar à vista.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["pagar_tudo", "escolher_debitos"],
                 include_description=False,
             ),
@@ -419,7 +419,7 @@ class ConfirmacaoPagamentoAVistaPayload(BaseModel):
         title="Confirmar pagamento",
         description="Confirme se deseja seguir para o pagamento.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["sim", "nao"],
                 include_description=False,
             ),
@@ -440,7 +440,7 @@ class FormaPagamentoAVistaPayload(BaseModel):
         title="Forma de pagamento",
         description="Escolha uma forma de pagamento à vista.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["boleto_bancario", "codigo_barras", "pix_copia_e_cola"],
                 include_description=False,
             ),
@@ -461,7 +461,7 @@ class AcaoPagamentoRecusadoPayload(BaseModel):
         title="Próxima ação",
         description="Escolha como deseja continuar.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["escolher_debitos", "opcoes_pagamento", "encerrar_atendimento"],
                 include_description=False,
             ),
@@ -484,7 +484,7 @@ class TipoConsultaPayload(BaseModel):
         title="Tipos de consulta",
         description="Escolha uma opção",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 [
                     "cpf_cnpj",
                     "inscricao_imobiliaria",

@@ -13,14 +13,6 @@ class DividaAtivaTemplates:
         "cda": "Certidão de Dívida Ativa",
         "execucao_fiscal": "Número de Execução Fiscal",
     }
-    OPCAO_MENU_LABELS = {
-        "pagar_a_vista": "Pagar à vista",
-        "parcelar_debitos": "Parcelar débitos",
-        "regularizar_debitos": "Regularizar débitos",
-        "liquidar_parcelamento": "Liquidar parcelamento",
-        "emitir_2_via": "Emitir 2ª via",
-        "voltar": "Voltar",
-    }
 
     @staticmethod
     def solicitar_tipo_consulta() -> str:

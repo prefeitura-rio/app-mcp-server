@@ -18,6 +18,7 @@ whitelist. Mutáveis, ambas podiam ser esvaziadas em runtime.
 O critério de aceite do CHATR-153 em forma executável.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -100,4 +101,61 @@ def test_allowed_neighborhoods_tem_definicao_unica():
     ]
     assert len(definicoes) == 1, (
         f"esperava uma única definição, encontrei {len(definicoes)}: {definicoes}"
+    )
+
+
+def test_labels_de_opcao_nao_tem_registro_paralelo():
+    """`_OPTION_REGISTRY` é a origem única dos rótulos que viram botão/lista.
+
+    Até CHATR-153 `templates.py` mantinha `OPCAO_MENU_LABELS`, um segundo mapa
+    com seis rótulos idênticos aos do registry, usado só pelo branch de
+    fallback do menu de pagamento. Os seis eram iguais — verificados um a um —
+    mas nada obrigava: mudar o texto de um botão num arquivo e não no outro
+    entregaria rótulos diferentes para o mesmo `value`, dependendo de o
+    cidadão ter débito parcelado ou não.
+
+    O critério é reproduzir o rótulo, não usar a chave. Mapas indexados pelos
+    mesmos slugs para outro fim são legítimos e não entram aqui: roteamento
+    (`tipo_consulta_steps`), configuração de API (`CONSULTA_CONFIGS`) e
+    `TIPO_CONSULTA_LABELS`, que alimenta prosa e traz de propósito textos mais
+    longos ("CDA" no botão, "Certidão de Dívida Ativa" na mensagem).
+    """
+    rotulos = {
+        chave: opcao["label"]
+        for chave, opcao in _OPTION_REGISTRY.items()
+        if "label" in opcao
+    }
+    origem = Path("src/tools/multi_step_service/workflows/divida_ativa/core/models.py")
+
+    paralelos = []
+    for caminho in (PROJECT_ROOT / "src").rglob("*.py"):
+        relativo = caminho.relative_to(PROJECT_ROOT)
+        if "tests" in relativo.parts or relativo == origem:
+            continue
+        try:
+            arvore = ast.parse(caminho.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - defensivo
+            continue
+        for no in ast.walk(arvore):
+            if not isinstance(no, ast.Dict):
+                continue
+            pares = [
+                (chave.value, valor.value)
+                for chave, valor in zip(no.keys, no.values)
+                if isinstance(chave, ast.Constant)
+                and isinstance(valor, ast.Constant)
+                and chave.value in rotulos
+            ]
+            # Espelho puro: todo slug do dicionário reproduz o rótulo do
+            # registry. Dois textos coincidirem não basta — `TIPO_CONSULTA_LABELS`
+            # compartilha dois e diverge em três, de propósito.
+            if len(pares) >= 2 and all(rotulos[k] == v for k, v in pares):
+                paralelos.append(
+                    f"{relativo}:{no.lineno} {sorted(k for k, _ in pares)}"
+                )
+
+    assert not paralelos, (
+        f"registro paralelo de rótulos encontrado em {paralelos}. "
+        f"A origem única é {origem}; importe `build_options` em vez de "
+        f"redeclarar os rótulos."
     )

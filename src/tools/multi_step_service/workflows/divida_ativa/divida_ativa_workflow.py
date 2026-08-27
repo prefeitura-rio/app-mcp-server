@@ -15,6 +15,7 @@ from src.tools.multi_step_service.core import (
 )
 from src.tools.multi_step_service.workflows.divida_ativa.core.models import (
     AcaoResultadoConsultaPayload,
+    build_options,
     AcaoPagamentoRecusadoPayload,
     AutoInfracaoPayload,
     CdaPayload,
@@ -1112,15 +1113,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
                     "title": "Opções de pagamento",
                     "description": "Escolha uma opção.",
                     "enum": opcoes_menu,
-                    "options": [
-                        {
-                            "value": opcao,
-                            "label": DividaAtivaTemplates.OPCAO_MENU_LABELS.get(
-                                opcao, opcao
-                            ),
-                        }
-                        for opcao in opcoes_menu
-                    ],
+                    "options": build_options(opcoes_menu, include_description=False),
                     "x-render": renderizacao,
                 }
             },
