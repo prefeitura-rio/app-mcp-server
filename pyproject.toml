@@ -15,14 +15,21 @@ dependencies = [
     "dotenv>=0.9.9",
     "google-genai>=1.25.0",
     "requests>=2.33.0",
+    # Importados direto por `src/` e até aqui só presentes por transitividade:
+    # `starlette` vinha do mcp/fastmcp e `cryptography` do authlib/google-auth,
+    # ambos atravessando major sem nenhuma restrição deste projeto. `aiofiles`
+    # chegava pelo crawl4ai — e como `core/state.py` o importa em `try/except`
+    # com fallback síncrono, a falta dele não quebraria nada: degradaria calado
+    # para I/O bloqueante dentro de corrotina.
+    "starlette>=1.6,<2",
+    "cryptography>=50.0.1",
+    "aiofiles>=25.1.0",
     "google-cloud-storage>=2.18,<3",
     "google-cloud-bigquery>=3.35.0",
-    "crawl4ai>=0.9.0",
     "pydantic>=2.11.7",
     "redis>=7.0.1",
     "langgraph>=1.0.10,<2",
     "httpx>=0.27.0",
-    "langchain>=1.3.9,<2",
     "langchain-core>=1.2.22,<2",
     "langchain-mcp-adapters>=0.1.9",
     "opentelemetry-exporter-otlp-proto-http>=1.36.0",
