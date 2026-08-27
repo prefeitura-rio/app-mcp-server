@@ -250,49 +250,24 @@ async def test_equipments_tools_instructions_and_whitelist(monkeypatch):
         sys.modules, "src.config", types.SimpleNamespace(env=env_module)
     )
 
-    monkeypatch.setitem(
-        sys.modules,
-        "src.tools.equipments.utils",
-        types.SimpleNamespace(
-            get_coords_from_google_maps_api=lambda address: {
-                "lat": -22.9,
-                "lng": -43.2,
-                "bairro_normalizado": "outro-bairro",
-            }
-        ),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "src.tools.cor_alert_tools",
-        types.SimpleNamespace(
-            _extract_google_neighborhood=lambda result: "Acari",
-            normalize_neighborhood=lambda value: "acari",
-        ),
-    )
-
-    class FakeSyncClient:
-        def __init__(self, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def get_sync(self, url, params=None):
-            return types.SimpleNamespace(
-                raise_for_status=lambda: None,
-                json=lambda: {
-                    "status": "OK",
-                    "results": [{"address_components": []}],
+    # `get_equipments_with_instructions` geocodifica por `geocode_address`, que já
+    # é assíncrona e resolve o fallback de reverse geocoding internamente. Antes de
+    # CHATR-153 este teste stubava o cliente síncrono, porque a tool chamava
+    # `get_coords_from_google_maps_api` e `get_sync` de dentro da corrotina.
+    def stub_cor_alert(bairro_normalizado):
+        return types.SimpleNamespace(
+            geocode_address=lambda address: asyncio.sleep(
+                0,
+                result={
+                    "lat": -22.9,
+                    "lng": -43.2,
+                    "bairro_normalizado": bairro_normalizado,
                 },
             )
+        )
 
     monkeypatch.setitem(
-        sys.modules,
-        "src.utils.http_client",
-        types.SimpleNamespace(InterceptedHTTPClient=FakeSyncClient),
+        sys.modules, "src.tools.cor_alert_tools", stub_cor_alert("outro-bairro")
     )
 
     module = load_module(
@@ -337,15 +312,7 @@ async def test_equipments_tools_instructions_and_whitelist(monkeypatch):
     assert "defesa civil" in result["instructions"].lower()
 
     monkeypatch.setitem(
-        sys.modules,
-        "src.tools.equipments.utils",
-        types.SimpleNamespace(
-            get_coords_from_google_maps_api=lambda address: {
-                "lat": -22.9,
-                "lng": -43.2,
-                "bairro_normalizado": "bairro-nao-permitido",
-            }
-        ),
+        sys.modules, "src.tools.cor_alert_tools", stub_cor_alert("bairro-nao-permitido")
     )
     module = load_module(
         "test_equipments_tools_module_blocked", "src/tools/equipments_tools.py"
@@ -360,6 +327,28 @@ async def test_equipments_tools_instructions_and_whitelist(monkeypatch):
     )
     assert result["equipamentos"] == []
     assert "199" in result["instructions"]
+
+    # Bairro na whitelist: a busca segue adiante em vez de parar na mensagem.
+    # Sem este caso os dois cenários acima passariam mesmo se a whitelist
+    # rejeitasse tudo.
+    monkeypatch.setitem(
+        sys.modules, "src.tools.cor_alert_tools", stub_cor_alert("acari")
+    )
+    module = load_module(
+        "test_equipments_tools_module_allowed", "src/tools/equipments_tools.py"
+    )
+    monkeypatch.setattr(
+        module,
+        "get_equipments",
+        lambda address, categories=None: asyncio.sleep(
+            0, result=[{"nome": "Abrigo", "categoria": "PONTOS_DE_APOIO"}]
+        ),
+    )
+    result = await module.get_equipments_with_instructions(
+        "Rua A", categories=["PONTOS_DE_APOIO"]
+    )
+    assert result["equipamentos"][0]["nome"] == "Abrigo"
+    assert "Infelizmente não encontro" not in result["instructions"]
 
     result = await module.get_equipments_categories()
     assert result == {"cats": ["A"]}
