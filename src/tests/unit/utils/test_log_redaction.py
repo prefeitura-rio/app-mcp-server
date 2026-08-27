@@ -290,3 +290,84 @@ def test_instalar_redacao_e_idempotente(capsys):
     logger.info("uma vez só")
 
     assert capsys.readouterr().err.count("uma vez só") == 1
+
+
+# ---------------------------------------------------------------------------
+# Teto de frames no traceback (CHATR-169)
+# ---------------------------------------------------------------------------
+
+
+def _traceback_falso(frames, cabecalho="Traceback (most recent call last):"):
+    corpo = "".join(
+        f'  File "/app/src/m{i}.py", line {i}, in f{i}\n    chamada_{i}()\n'
+        for i in range(frames)
+    )
+    return f"{cabecalho}\n{corpo}ValueError: deu ruim"
+
+
+def _conta_frames(texto):
+    return len(
+        [linha for linha in texto.split("\n") if linha.strip().startswith('File "')]
+    )
+
+
+def test_traceback_longo_e_cortado_no_meio():
+    """
+    Topo e base sobrevivem: o topo diz por onde a requisição entrou, a base diz
+    o que estourou. O miolo é framework repetido.
+    """
+    cortado = log_mod._limitar_frames(_traceback_falso(30))
+
+    assert _conta_frames(cortado) == log_mod.MAX_FRAMES_TRACEBACK
+    assert "f0" in cortado and "f29" in cortado  # topo e base
+    assert "f15" not in cortado  # miolo
+    assert "20 frames intermediários omitidos" in cortado
+    assert "ValueError: deu ruim" in cortado
+
+
+def test_traceback_curto_fica_intacto():
+    curto = _traceback_falso(6)
+
+    assert log_mod._limitar_frames(curto) == curto
+
+
+def test_linha_sem_traceback_fica_intacta():
+    linha = "2026-01-01 00:00:00 | INFO | m:f:1 - mensagem comum"
+
+    assert log_mod._limitar_frames(linha) == linha
+
+
+def test_excecao_encadeada_mantem_o_separador():
+    """
+    `During handling of the above exception` está na coluna 0, não é frame, e
+    sem ele o traceback encadeado vira duas pilhas coladas sem explicação.
+    """
+    encadeado = (
+        _traceback_falso(20)
+        + "\n\nDuring handling of the above exception, another exception occurred:\n\n"
+        + _traceback_falso(20)
+    )
+
+    cortado = log_mod._limitar_frames(encadeado)
+
+    assert "During handling of the above exception" in cortado
+    assert cortado.count("Traceback (most recent call last):") == 2
+    assert _conta_frames(cortado) == log_mod.MAX_FRAMES_TRACEBACK
+
+
+def test_corte_de_frames_roda_antes_da_redacao(monkeypatch):
+    """
+    O que for cortado não precisa ser varrido. Inverter a ordem faria a redação
+    pagar pelo traceback inteiro -- e é o traceback que domina o custo.
+    """
+    vistos = []
+
+    def espia(texto):
+        vistos.append(texto)
+        return texto
+
+    monkeypatch.setattr(log_mod, "redigir_texto", espia)
+    log_mod._sink_redigido(_traceback_falso(30))
+
+    assert vistos, "a redação do sink não foi chamada"
+    assert _conta_frames(vistos[0]) == log_mod.MAX_FRAMES_TRACEBACK

@@ -214,6 +214,22 @@ def test_blob_nao_engole_caminho_nem_rota():
     assert redigir_padroes_pii("QUJDRA" * 12) == "[REDACTED-BASE64]"
 
 
+def test_chave_hifenizada_nao_reintroduz_backtracking_quadratico():
+    """
+    A classe da chave ganhou o `-` para casar `x-goog-credential` inteira. Se a
+    guarda de ancoragem não ganhar junto, o motor reinicia a tentativa depois de
+    cada hífen e o custo volta a ser O(n²) -- a mesma falha de antes, por outra
+    porta. Medido com a guarda incompleta: 85,66 ms em 4 KB; com ela, 0,12 ms.
+    """
+    adversarial = "a-" * 16000
+
+    inicio = time.perf_counter()
+    redigir_texto(adversarial)
+    decorrido = time.perf_counter() - inicio
+
+    assert decorrido < 1.0, f"redação levou {decorrido:.2f}s -- guarda incompleta"
+
+
 def test_redacao_nao_tem_backtracking_quadratico():
     """
     `_CHAVE_VALOR` roda em toda linha de log, sobre texto que o cidadão
@@ -287,6 +303,27 @@ def test_redige_estrutura_nao_estoura_com_set_de_elemento_nao_hashable():
     assert redigir_estrutura({"itens": {("21999998888",)}}) == {
         "itens": [["[REDACTED-PHONE]"]]
     }
+
+
+def test_toda_chave_de_credencial_decide_como_sensivel():
+    """
+    Terceira porta da mesma classe de bug: `chave_e_sensivel` consultava
+    `CHAVES_EXATAS_SENSIVEIS` e os tokens, mas não `CHAVES_CREDENCIAL`. `apikey`
+    era redigida na query string e no `redact_body` do `http_client`, e saía em
+    claro no dict e no texto do log, porque tokeniza como {apikey} -- que não é
+    token sensível nenhum.
+
+    Iterar sobre o conjunto, e não sobre lista escrita à mão, é o que obriga
+    chave nova a funcionar nos três caminhos.
+    """
+    for chave in sorted(CHAVES_CREDENCIAL):
+        assert chave_e_sensivel(chave), f"{chave} não decide como sensível"
+        assert redigir_estrutura({chave: "SEGREDO"})[chave] != "SEGREDO", (
+            f"{chave} sai em claro no dict"
+        )
+        assert "SEGREDO" not in redigir_texto("{%r: 'SEGREDO'}" % chave), (
+            f"{chave} sai em claro no texto"
+        )
 
 
 def test_conjuntos_de_configuracao_sao_imutaveis():
@@ -513,3 +550,86 @@ def test_chave_camelcase_em_dict_stringificado():
 
     assert "RUA X 123" not in redigido
     assert "poda_de_arvore" in redigido
+
+
+# ---------------------------------------------------------------------------
+# CHAVES_EXATAS_SENSIVEIS pelo caminho de texto (CHATR-169)
+# ---------------------------------------------------------------------------
+#
+# Regressão encontrada por fuzz: `chave_e_sensivel` reconhecia todas essas
+# chaves, mas o padrão de texto era montado só de `TOKENS_SENSIVEIS` e as
+# descartava antes de chamar a decisão. O efeito era um vazamento assimétrico --
+# redigido em dict de pé, em claro em `str(exception)` e no traceback, que é
+# exatamente o que o sink de `log.py` existe para cobrir.
+
+
+@pytest.mark.parametrize(
+    "chave",
+    [
+        "userId",
+        "user_id",
+        "chave_acesso",
+        "chaveAcesso",
+        "x-goog-credential",
+        "X-Goog-Signature",
+        "GoogleAccessId",
+        "customer_whatsapp_number",
+    ],
+)
+def test_chave_exata_sensivel_e_redigida_tambem_em_texto(chave):
+    redigido = redigir_texto("{'%s': 'valor-secreto-abc'}" % chave)
+
+    assert "valor-secreto-abc" not in redigido
+    assert "[REDACTED]" in redigido
+
+
+@pytest.mark.parametrize("chave", sorted(CHAVES_EXATAS_SENSIVEIS))
+def test_toda_chave_exata_alcanca_os_dois_caminhos(chave):
+    """
+    O caminho de dict e o caminho de texto não podem divergir.
+
+    Este teste itera sobre o conjunto, e não sobre uma lista escrita à mão, para
+    que uma chave nova acrescentada a `CHAVES_EXATAS_SENSIVEIS` seja obrigada a
+    funcionar nos dois -- que é o que faltava quando o padrão de texto tinha uma
+    fonte de verdade própria.
+    """
+    assert chave_e_sensivel(chave)
+    assert redigir_estrutura({chave: "valor-secreto-abc"})[chave] == "[REDACTED]"
+    assert "valor-secreto-abc" not in redigir_texto(
+        "{'%s': 'valor-secreto-abc'}" % chave
+    )
+
+
+def test_chave_com_hifen_nao_vem_partida():
+    """
+    `x-goog-credential` só é sensível inteira: `credential` e `signature`
+    isolados não estão em nenhum conjunto. Com a chave partida no hífen, a
+    assinatura da signed URL do GCS saía em claro.
+    """
+    redigido = redigir_texto("{'x-goog-signature': 'abc123assinatura'}")
+
+    assert "abc123assinatura" not in redigido
+
+
+def test_chave_aninhada_nao_e_engolida_pelo_valor_da_chave_de_fora():
+    """
+    `parameters` não é sensível, mas o valor dela contém `cpf`. Se o padrão
+    consumisse o valor, o scanner retomaria depois dele e o `cpf` nunca seria
+    examinado.
+    """
+    redigido = redigir_texto("{'parameters': {'cpf': '12345678901'}}")
+
+    assert "12345678901" not in redigido
+
+
+def test_short_circuit_nao_muda_o_resultado():
+    """
+    Texto sem `:` nem `=` sai antes do motor de chave-valor, e texto sem dígito
+    nem `@` sai antes dos padrões de formato. Nenhum dos dois atalhos pode
+    mudar a saída -- só o caminho até ela.
+    """
+    assert redigir_texto("mensagem simples sem par chave valor") == (
+        "mensagem simples sem par chave valor"
+    )
+    assert redigir_texto("cpf 12345678901") == "cpf [REDACTED-CPF]"
+    assert redigir_texto("nome: Fulano") == "nome: [REDACTED]"

@@ -36,7 +36,7 @@ ms), `1790000000` (epoch em s) e `12345678` (inscrição) atravessam intactos.
 
 import re
 from functools import lru_cache
-from typing import Any, FrozenSet, Iterable, Optional, Set
+from typing import Any, FrozenSet, Optional, Set
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +225,12 @@ def _chave_e_sensivel(chave: str) -> bool:
     normalizada = re.sub(r"[^a-z0-9]", "", chave.lower())
     if normalizada in CHAVES_EXATAS_SENSIVEIS:
         return True
+    # Credencial também decide aqui, senão sobra a mesma classe de bug numa
+    # terceira porta: `apikey` está em `CHAVES_CREDENCIAL` e é redigida na query
+    # string e no `redact_body`, mas tokeniza como {apikey} -- que não é nenhum
+    # token sensível -- e saía em claro no dict e no texto do log.
+    if normalizada in _CREDENCIAIS_NORMALIZADAS:
+        return True
     tokens = _tokens_da_chave(chave)
     sensiveis = tokens & TOKENS_SENSIVEIS
     if not sensiveis:
@@ -376,41 +382,53 @@ _TELEFONE_COM_GATILHO = re.compile(
 )
 
 
-def _regex_de_chaves(tokens: Iterable[str]) -> re.Pattern:
-    """
-    Monta o padrão `chave: valor` / `chave=valor` para dict já convertido em
-    string.
-
-    A chave é reconhecida por token e não por igualdade -- `'enderecoImovel':`
-    precisa bater tanto quanto `'endereco':`. Quem decide de fato é
-    `chave_e_sensivel`, chamada na substituição: a regex é só o filtro grosso.
-
-    A guarda de ancoragem não é estilo. Sem ela o motor tenta casar em **cada
-    posição** de um run de `[A-Za-z0-9_]`, e em cada uma o prefixo
-    `[A-Za-z0-9_]*` refaz o backtracking sobre a alternação inteira -- O(n² · k).
-    Este padrão roda em toda linha de log, sobre texto que o cidadão escreveu:
-    medido antes da guarda, um `logger.info` com 4 KB adversariais custava 2,4 s
-    de CPU no event loop (1,2 s por passada, e a barreira passa duas vezes).
-    Com a guarda, 1,9 ms. É o mesmo problema que o `_EMAIL` já tratava com
-    lookbehind e quantificador possessivo.
-    """
-    alternativa = "|".join(
-        sorted((re.escape(t) for t in tokens), key=len, reverse=True)
-    )
-    return re.compile(
-        r"(?<![A-Za-z0-9_])"
-        r"(?P<abre>['\"]?)"
-        rf"(?P<chave>[A-Za-z0-9_]*(?:{alternativa})[A-Za-z0-9_]*)"
-        r"(?P<meio>['\"]?\s*[:=]\s*)"
-        # O `&` fica de fora do valor para não engolir o resto de uma query
-        # string, e o marcador entra como alternativa própria para que um valor
-        # já redigido seja reconhecido inteiro em vez de partido no `]`.
-        r"(?P<valor>\[REDACTED[^\]]*\]|'[^']*'|\"[^\"]*\"|[^\s,;&}\])]+)",
-        re.IGNORECASE,
-    )
-
-
-_CHAVE_VALOR = _regex_de_chaves(TOKENS_SENSIVEIS)
+# Padrão `chave: valor` / `chave=valor` para dict já convertido em string.
+#
+# A chave é **sintática**: qualquer identificador seguido de `:` ou `=`. Quem
+# decide se ela é sensível é `chave_e_sensivel`, no callback.
+#
+# Até o CHATR-167 a alternação dos tokens vivia dentro do padrão, como filtro
+# grosso, e isso criava uma segunda fonte de verdade. `chave_e_sensivel`
+# consulta `TOKENS_SENSIVEIS`, `CHAVES_EXATAS_SENSIVEIS` e o veto de
+# `TOKENS_NAO_SENSIVEIS`; a regex era montada só do primeiro. Chave que a
+# decisão reconhece mas cujo token não está em `TOKENS_SENSIVEIS` -- toda a
+# `CHAVES_EXATAS_SENSIVEIS` -- nunca chegava ao callback, e o valor saía em
+# claro no caminho de texto. `chave_acesso`, `userId`, `GoogleAccessId` e
+# `x-goog-credential` eram redigidos em dict de pé e vazavam em `str(exception)`
+# e no traceback, que é justamente o que o sink existe para cobrir.
+#
+# O `-` na classe da chave é o que alcança `x-goog-credential` e
+# `X-Goog-Signature`: com `[A-Za-z0-9_]` a chave vinha partida em `credential` e
+# `signature`, que não são sensíveis isoladas.
+#
+# O valor fica em **lookahead** -- capturado, não consumido -- para que o
+# scanner retome dentro dele. Sem isso `{'parameters': {'cpf': '...'}}` casa com
+# a chave não-sensível `parameters` engolindo `{'cpf':` no grupo do valor, e o
+# `cpf` nunca é examinado. Como o valor não é consumido, a substituição é
+# montada à mão em `redigir_chaves_sensiveis`, e não por `sub`.
+#
+# A guarda de ancoragem continua necessária pelo motivo de sempre: sem ela o
+# motor tenta casar em cada posição de um run de `[A-Za-z0-9_]`.
+_CHAVE_VALOR = re.compile(
+    # O `-` entra na guarda junto com a classe da chave, e os dois têm de andar
+    # juntos: com hífen na chave e fora da guarda, o motor reinicia a tentativa
+    # depois de **cada** hífen e o custo volta a ser O(n²) -- 4 KB de `"a-"*2000`
+    # medidos em 85,66 ms, contra 0,12 ms com a guarda completa. É a mesma falha
+    # que o commit 530fdd6 corrigiu, por outra porta.
+    #
+    # Não custa cobertura: uma chave hifenizada é casada a partir do primeiro
+    # caractere dela (`x-goog-credential` começa no `x`, precedido de aspas ou
+    # `{`), nunca do meio.
+    r"(?<![A-Za-z0-9_-])"
+    r"(?P<abre>['\"]?)"
+    r"(?P<chave>[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?)"
+    r"(?P<meio>['\"]?\s*[:=]\s*)"
+    # O `&` fica de fora do valor para não engolir o resto de uma query string,
+    # e o marcador entra como alternativa própria para que um valor já redigido
+    # seja reconhecido inteiro em vez de partido no `]`.
+    r"(?=(?P<valor>\[REDACTED[^\]]*\]|'[^']*'|\"[^\"]*\"|[^\s,;&}\])]+))",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -418,9 +436,20 @@ _CHAVE_VALOR = _regex_de_chaves(TOKENS_SENSIVEIS)
 # ---------------------------------------------------------------------------
 
 
+# Teste de pertinência barato para `redigir_padroes_pii`. Todo padrão de lá
+# exige um dígito ou um `@`, com uma exceção: um blob base64 pode ser só letras.
+# Uma varredura em C que falha cedo custa uma fração do preço de rodar os seis
+# padrões, e a linha de log escrita à mão quase nunca tem qualquer um dos dois.
+_GATILHO_PADROES = re.compile(r"[\d@]|[A-Za-z+/]{64}")
+
+
 def redigir_credenciais(texto: Optional[str]) -> Optional[str]:
-    """Redige valores de credencial embutidos em URL ou texto livre."""
-    if not texto:
+    """
+    Redige valores de credencial embutidos em URL ou texto livre.
+
+    O padrão só casa `chave=valor`, então texto sem `=` sai antes do motor.
+    """
+    if not texto or "=" not in texto:
         return texto
     return _CREDENCIAL_EM_QUERY.sub(rf"\1{MARCADOR_CREDENCIAL}", texto)
 
@@ -438,7 +467,7 @@ def redigir_padroes_pii(texto: Optional[str]) -> Optional[str]:
     propósito, porque um log redigido a ponto de não dizer nada não serve para
     diagnosticar.
     """
-    if not texto:
+    if not texto or not _GATILHO_PADROES.search(texto):
         return texto
     redigido = _BLOB_BASE64.sub(_redigir_blob, texto)
     redigido = _EMAIL.sub("[REDACTED-EMAIL]", redigido)
@@ -452,16 +481,22 @@ def redigir_padroes_pii(texto: Optional[str]) -> Optional[str]:
     return redigido
 
 
-def _redigir_valor_da_chave(match: "re.Match") -> str:
-    """Redige o valor se a chave for sensível e o valor não for flag/contador."""
+def _redigir_valor_da_chave(match: "re.Match") -> Optional[str]:
+    """
+    Substituto para o trecho casado, ou `None` quando o valor deve ficar.
+
+    Devolver `None` em vez do texto original é o que permite a
+    `redigir_chaves_sensiveis` saber que não houve mudança sem ter de comparar
+    strings -- e o trecho casado não contém o valor, que ficou no lookahead.
+    """
     chave, valor = match.group("chave"), match.group("valor")
     if not chave_e_sensivel(chave) or (
         _valor_e_inocuo(valor) and not _chave_e_credencial(str(chave))
     ):
-        return match.group(0)
+        return None
     limpo = valor.strip("'\"")
     if limpo.startswith("[REDACTED") or limpo == MARCADOR_CREDENCIAL:
-        return match.group(0)
+        return None
     return f"{match.group('abre')}{chave}{match.group('meio')}{MARCADOR_GENERICO}"
 
 
@@ -472,10 +507,38 @@ def redigir_chaves_sensiveis(texto: Optional[str]) -> Optional[str]:
     É o que cobre nome, endereço e proprietário -- que não têm padrão próprio --
     quando o dado aparece rotulado, tanto em dict já convertido para string
     (`{'nome': 'Fulano'}`) quanto em mensagem escrita à mão (`cpf: 123...`).
+
+    A montagem é manual porque o valor não é consumido pelo padrão (ver
+    `_CHAVE_VALOR`): `sub` só substituiria a chave e o separador. O `pos` pula
+    match que caia dentro de um valor já redigido, que é o preço de deixar o
+    scanner entrar no valor -- e é justamente o que faz a chave aninhada ser
+    examinada.
+
+    Texto sem `:` nem `=` não tem par chave-valor nenhum e sai antes de o motor
+    ser acionado. É a maioria das linhas de log escritas à mão, e o teste custa
+    uma varredura em C contra o custo do padrão inteiro.
     """
     if not texto:
         return texto
-    return _CHAVE_VALOR.sub(_redigir_valor_da_chave, texto)
+    if ":" not in texto and "=" not in texto:
+        return texto
+
+    partes: list = []
+    pos = 0
+    for match in _CHAVE_VALOR.finditer(texto):
+        if match.start() < pos:
+            continue
+        substituto = _redigir_valor_da_chave(match)
+        if substituto is None:
+            continue
+        partes.append(texto[pos : match.start()])
+        partes.append(substituto)
+        pos = match.end() + len(match.group("valor"))
+
+    if not partes:
+        return texto
+    partes.append(texto[pos:])
+    return "".join(partes)
 
 
 def redigir_texto(texto: Optional[str]) -> Optional[str]:

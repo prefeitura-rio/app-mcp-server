@@ -27,6 +27,7 @@ módulo seja importado uma vez, o mais cedo possível na subida (ver
 """
 
 import logging
+import re
 import sys
 from typing import Any, Dict, Optional
 
@@ -53,6 +54,59 @@ FORMATO = (
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
     "<level>{message}</level>"
 )
+
+# Teto de frames no traceback. `backtrace=False` já tirou o encadeamento
+# estendido do loguru, mas o traceback do próprio Python continua inteiro, e uma
+# pilha de FastAPI + httpx + langgraph passa fácil de 40 frames. O custo aparece
+# duas vezes: volume no SigNoz e CPU, porque o traceback é a única coisa que o
+# sink redige de novo -- 3 KB custam ~0,5 ms de redação, e traceback acontece em
+# tempestade de erro, exatamente quando não há CPU sobrando.
+#
+# Os frames do topo dizem por onde a requisição entrou e os de baixo dizem o que
+# estourou; o miolo é framework repetido. Cortar o meio preserva os dois lados.
+MAX_FRAMES_TRACEBACK = 10
+_FRAMES_DO_TOPO = 3
+
+# Início de frame no traceback do Python: `  File "<caminho>", line N, in <f>`.
+# Linhas na coluna 0 (`Traceback (most recent call last):`, `During handling of
+# ...`, a linha final da exceção) nunca pertencem a um frame e são preservadas
+# sempre -- é o que mantém legível o encadeamento de exceções.
+_INICIO_DE_FRAME = re.compile(r'^\s+File "')
+
+_MARCADOR_FRAMES = "  [... {n} frames intermediários omitidos ...]"
+
+
+def _limitar_frames(texto: str, maximo: int = MAX_FRAMES_TRACEBACK) -> str:
+    """
+    Corta os frames do miolo do traceback, mantendo topo e base.
+
+    Opera sobre o texto já formatado porque é lá que o traceback existe -- o
+    loguru o anexa depois do `{message}`. Texto sem traceback sai intacto no
+    primeiro `if`.
+    """
+    if "\n" not in texto:
+        return texto
+    linhas = texto.split("\n")
+    indices = [i for i, linha in enumerate(linhas) if _INICIO_DE_FRAME.match(linha)]
+    if len(indices) <= maximo:
+        return texto
+
+    corta_de = indices[_FRAMES_DO_TOPO]
+    corta_ate = indices[len(indices) - (maximo - _FRAMES_DO_TOPO)]
+    omitidos = len(indices) - maximo
+
+    mantidas = linhas[:corta_de]
+    mantidas.append(_MARCADOR_FRAMES.format(n=omitidos))
+    # Linha na coluna 0 no meio do trecho cortado é separador de exceção
+    # encadeada, não frame: sem ela o traceback vira duas pilhas coladas.
+    mantidas.extend(
+        linha
+        for linha in linhas[corta_de:corta_ate]
+        if linha and not linha[0].isspace()
+    )
+    mantidas.extend(linhas[corta_ate:])
+    return "\n".join(mantidas)
+
 
 # Substitui a linha quando a própria redação falha. Fail-closed: ver
 # `_redigir_record`.
@@ -161,13 +215,16 @@ def _sink_redigido(mensagem: Any) -> None:
     origem, que não são PII. Redigir de novo dobraria o custo do caminho quente
     sem cobrir nada novo, e esse custo roda no thread do event loop.
 
+    O corte de frames vem **antes** da redação, e não depois: o que for cortado
+    não precisa ser varrido, e é o traceback que domina o custo do caminho.
+
     Falha fechado, pelo mesmo motivo de `_redigir_record`.
     """
     record = getattr(mensagem, "record", None)
     try:
         texto = str(mensagem)
         if record is None or record.get("exception") is not None:
-            texto = redigir_texto(texto)
+            texto = redigir_texto(_limitar_frames(texto))
     except Exception as erro:
         texto = _linha_de_falha(record, erro)
     sys.stderr.write(texto)
