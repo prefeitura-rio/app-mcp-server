@@ -253,6 +253,158 @@ def test_redacao_nao_tem_backtracking_quadratico():
     assert decorrido < 1.0, f"redação levou {decorrido:.2f}s -- backtracking voltou"
 
 
+def _custo(entrada: str, repeticoes: int = 3) -> float:
+    """
+    Melhor tempo de `redigir_texto` sobre `entrada`, em segundos.
+
+    O melhor, e não a média: o que interessa é o custo do algoritmo, e o que uma
+    máquina de CI acrescenta por cima -- escalonamento, GC, vizinho barulhento --
+    é sempre ruído para cima. Tomar o mínimo tira a maior parte dele.
+    """
+    melhor = float("inf")
+    for _ in range(repeticoes):
+        inicio = time.perf_counter()
+        redigir_texto(entrada)
+        melhor = min(melhor, time.perf_counter() - inicio)
+    return melhor
+
+
+def _razao_de_crescimento(molde: str, base: int = 16_000) -> float:
+    """
+    Quanto o custo cresce quando a entrada quadruplica.
+
+    Linear devolve ~4, quadrático devolve ~16. É essa razão que o teste afirma,
+    e não um tempo absoluto: tempo absoluto depende da máquina e obriga a
+    escolher um limite frouxo o bastante para deixar passar justamente a
+    regressão que interessa. A razão é adimensional -- uma máquina lenta torna
+    os dois lados lentos e a razão não se mexe.
+    """
+    pequeno = _custo(molde * (base // len(molde)))
+    grande = _custo(molde * ((base * 4) // len(molde)))
+    return grande / pequeno
+
+
+@pytest.mark.parametrize(
+    "molde",
+    [
+        pytest.param("a:", id="colon-densa"),
+        pytest.param("a=", id="igual-densa"),
+        pytest.param("k:v,", id="pares-sem-espaco"),
+        pytest.param("a_", id="run-de-underscore"),
+        pytest.param("a-", id="run-de-hifen"),
+    ],
+)
+def test_redacao_cresce_linearmente(molde):
+    """
+    O custo de `redigir_texto` cresce em O(n), e não em O(n²).
+
+    Três vetores já bateram aqui, todos pela mesma porta -- o motor refazendo
+    trabalho em cada posição de um run:
+
+    | vetor                    | fechado por | como                        |
+    | ---                      | ---         | ---                         |
+    | run de `[A-Za-z0-9_]`    | 530fdd6     | guarda de ancoragem         |
+    | run de `[A-Za-z0-9_-]`   | 07e32c4     | hífen junto na guarda       |
+    | texto denso em `:` / `=` | este        | valor fora do padrão        |
+
+    O terceiro é o que as duas guardas anteriores não alcançavam: elas impedem
+    o reinício dentro da **chave**, e o custo estava na varredura do **valor**,
+    que ficava num lookahead guloso e sem teto. Medido antes da correção:
+    17,01 ms em 4 KB, 259,06 ms em 16 KB e 1.051,01 ms em 32 KB -- quatro vezes
+    o custo a cada dobra, no thread do event loop, a partir de uma mensagem de
+    WhatsApp.
+
+    O teste afirma o **crescimento**, não o tempo: quadruplicar a entrada tem de
+    quadruplicar o custo (~4), e não multiplicá-lo por dezesseis. O limite de 8
+    fica no meio dos dois em escala log, longe o bastante de ambos para não
+    depender da velocidade da máquina.
+    """
+    razao = _razao_de_crescimento(molde)
+
+    assert razao < 8.0, (
+        f"custo cresceu {razao:.1f}× ao quadruplicar a entrada; "
+        f"linear é ~4 e quadrático é ~16 -- o backtracking voltou"
+    )
+
+
+@pytest.mark.parametrize(
+    "molde",
+    [
+        pytest.param("a:", id="colon-densa"),
+        pytest.param("a=", id="igual-densa"),
+    ],
+)
+def test_entrada_adversarial_percorre_o_caminho_real(molde):
+    """
+    A entrada dos testes de custo não sai pelo atalho.
+
+    `redigir_chaves_sensiveis` devolve o texto intacto quando ele não tem `:`
+    nem `=`, e um teste de custo escrito sobre entrada assim mede o atalho --
+    fica verde com o caminho quadrático de pé. Foi o que aconteceu com
+    `"a_"*16000` e `"a-"*16000`: nenhum dos dois tem separador, e nenhum dos
+    dois chegava a `_CHAVE_VALOR`.
+
+    A prova é positiva: um CPF plantado no fim da entrada adversarial só sai
+    redigido se o laço tiver percorrido tudo até lá.
+    """
+    entrada = molde * 8000 + " cpf: 12345678901"
+
+    assert ":" in entrada or "=" in entrada
+    assert "[REDACTED-CPF]" in redigir_texto(entrada)
+
+
+# ---------------------------------------------------------------------------
+# Valor não citado com mais de uma palavra
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        ("nome: Joao Silva Pereira", "nome: [REDACTED]"),
+        ("nome do cliente: Maria da Silva Santos", "nome do cliente: [REDACTED]"),
+        ("endereco: Rua Sao Clemente 100 apto 502", "endereco: [REDACTED]"),
+        ("proprietario: Jose Carlos de Oliveira", "proprietario: [REDACTED]"),
+        ("logradouro=Avenida Rio Branco 156", "logradouro=[REDACTED]"),
+    ],
+)
+def test_redige_valor_nao_citado_ate_o_fim(texto, esperado):
+    """
+    Valor sem aspas e com mais de uma palavra sai redigido inteiro.
+
+    Enquanto o valor vivia no lookahead, a classe dele excluía `\\s` e o valor
+    terminava na primeira palavra: `nome: Joao Silva Pereira` saía como
+    `nome: [REDACTED] Silva Pereira`, com o sobrenome em claro. É o formato da
+    mensagem interpolada à mão (`f"nome: {nome}"`), que é exatamente onde nome e
+    endereço aparecem com mais de uma palavra -- o dict convertido em string vem
+    com aspas e nunca teve o problema.
+    """
+    assert redigir_texto(texto) == esperado
+
+
+def test_valor_nao_citado_para_no_proximo_par():
+    """
+    Atravessar o espaço não pode engolir o par seguinte.
+
+    Redigir demais custa diagnóstico, que é o outro lado da mesma moeda: uma
+    linha redigida a ponto de não dizer nada não serve para investigar
+    atendimento nenhum. O valor termina antes do que parecer uma nova chave.
+    """
+    assert (
+        redigir_texto("cpf: 12345678901 status: ok") == "cpf: [REDACTED-CPF] status: ok"
+    )
+    assert redigir_texto("nome: Joao Silva, cpf: 123") == "nome: [REDACTED], cpf: 123"
+
+
+def test_valor_nao_citado_nao_atravessa_a_linha():
+    """
+    Num traceback a linha seguinte é outro frame, não a continuação do nome.
+    """
+    assert redigir_texto('nome: Joao Silva\n  File "x.py", line 1') == (
+        'nome: [REDACTED]\n  File "x.py", line 1'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Redação de estrutura
 # ---------------------------------------------------------------------------

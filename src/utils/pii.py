@@ -401,14 +401,41 @@ _TELEFONE_COM_GATILHO = re.compile(
 # `X-Goog-Signature`: com `[A-Za-z0-9_]` a chave vinha partida em `credential` e
 # `signature`, que não são sensíveis isoladas.
 #
-# O valor fica em **lookahead** -- capturado, não consumido -- para que o
-# scanner retome dentro dele. Sem isso `{'parameters': {'cpf': '...'}}` casa com
-# a chave não-sensível `parameters` engolindo `{'cpf':` no grupo do valor, e o
-# `cpf` nunca é examinado. Como o valor não é consumido, a substituição é
-# montada à mão em `redigir_chaves_sensiveis`, e não por `sub`.
+# O valor **não entra no padrão**. Ele já esteve num lookahead capturado, e era
+# um segundo caminho quadrático, independente do da chave: a alternativa não
+# citada (`[^\s,;&}\])]+`) é gulosa e sem teto, então em texto denso em `:` ou
+# `=` e sem espaço -- `a:a:a:...` -- o motor varria da posição corrente até o
+# fim da string em **cada** posição. A guarda de ancoragem não alcança isso: ela
+# impede o reinício dentro de um run de chave, não a varredura do valor.
 #
-# A guarda de ancoragem continua necessária pelo motivo de sempre: sem ela o
-# motor tenta casar em cada posição de um run de `[A-Za-z0-9_]`.
+#   | entrada             | com lookahead | sem      |
+#   | ---                 | ---           | ---      |
+#   | `"a:"*2000`  (4 KB) |     17,01 ms  |  0,52 ms |
+#   | `"a:"*8000` (16 KB) |    259,06 ms  |  1,91 ms |
+#   | `"a:"*16000`(32 KB) |  1.051,01 ms  |  3,70 ms |
+#
+# O dobro de entrada custava quatro vezes o tempo -- O(n²) limpo, no thread do
+# event loop, a partir de uma mensagem de WhatsApp. É o mesmo vetor do commit
+# 530fdd6 pela terceira porta: primeiro o run da chave, depois o hífen, agora o
+# valor.
+#
+# Sem o valor no padrão, o custo por posição passa a ser o da chave mais o
+# separador -- limitado --, e quem decide continua sendo `chave_e_sensivel`, que
+# é memoizada. A extensão real do valor é varrida em Python por `_fim_do_valor`,
+# e **só quando a chave é sensível**: o trabalho caro sai do caminho quente e
+# passa a rodar no caminho raro.
+#
+# A mesma mudança fecha a redação parcial. Preso à classe do lookahead, o valor
+# terminava no primeiro espaço, e `nome: Joao Silva Pereira` saía como
+# `nome: [REDACTED] Silva Pereira`, com o sobrenome em claro -- o formato de
+# mensagem interpolada à mão, que é onde nome e endereço têm mais de uma
+# palavra. `_fim_do_valor` atravessa o espaço.
+#
+# O scanner continua entrando no valor, que é o que faz a chave aninhada ser
+# examinada: `{'parameters': {'cpf': '...'}}` casa `parameters`, que não é
+# sensível, o `pos` não avança, e o `cpf` de dentro é examinado na sequência.
+_FORMA_DA_CHAVE = r"[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?"
+
 _CHAVE_VALOR = re.compile(
     # O `-` entra na guarda junto com a classe da chave, e os dois têm de andar
     # juntos: com hífen na chave e fora da guarda, o motor reinicia a tentativa
@@ -421,14 +448,80 @@ _CHAVE_VALOR = re.compile(
     # `{`), nunca do meio.
     r"(?<![A-Za-z0-9_-])"
     r"(?P<abre>['\"]?)"
-    r"(?P<chave>[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?)"
-    r"(?P<meio>['\"]?\s*[:=]\s*)"
-    # O `&` fica de fora do valor para não engolir o resto de uma query string,
-    # e o marcador entra como alternativa própria para que um valor já redigido
-    # seja reconhecido inteiro em vez de partido no `]`.
-    r"(?=(?P<valor>\[REDACTED[^\]]*\]|'[^']*'|\"[^\"]*\"|[^\s,;&}\])]+))",
+    rf"(?P<chave>{_FORMA_DA_CHAVE})"
+    r"(?P<meio>['\"]?\s*[:=]\s*)",
     re.IGNORECASE,
 )
+
+# Fecham o valor onde quer que apareçam, inclusive no meio de uma sequência de
+# palavras. O `&` está aqui para não engolir o resto de uma query string, e o
+# `\n` para que o valor nunca atravesse a linha: num traceback, a linha seguinte
+# é outro frame, não a continuação do nome.
+_FIM_DE_VALOR = re.compile(r"[,;&}\])\n\r]")
+
+# Começo de um novo par `chave:`/`chave=`. É o que impede a varredura por
+# palavras de engolir o par seguinte da mesma linha: em
+# `cpf: 12345678901 status: ok` o valor do `cpf` termina antes de `status`, e o
+# `status: ok` continua legível para diagnóstico.
+_PROXIMA_CHAVE = re.compile(rf"['\"]?{_FORMA_DA_CHAVE}['\"]?[ \t]*[:=]")
+
+
+def _fim_do_valor(texto: str, inicio: int) -> int:
+    """
+    Índice em que termina o valor que começa em `inicio`.
+
+    Roda só para chave sensível, e é isso que mantém o custo total linear: as
+    regiões varridas são disjuntas, porque `redigir_chaves_sensiveis` avança o
+    `pos` até o fim de todo valor que redige.
+
+    Três formas, na ordem em que aparecem no log:
+
+    1. **Citado** -- `'...'` ou `"..."`: vai até a aspa que fecha. É o caso do
+       dict convertido em string, e o mais simples, porque a aspa delimita.
+    2. **Já redigido** -- `[REDACTED...]` ou `<redacted>`: reconhecido inteiro,
+       para que a segunda passada da barreira (patcher e depois sink) não redija
+       o marcador de novo nem o parta ao meio.
+    3. **Não citado** -- palavra a palavra, atravessando o espaço. Para no
+       delimitador estrutural e antes do próximo par `chave:`.
+    """
+    n = len(texto)
+    if inicio >= n:
+        return inicio
+
+    if texto[inicio] in "'\"":
+        fecha = texto.find(texto[inicio], inicio + 1)
+        return n if fecha == -1 else fecha + 1
+
+    if texto.startswith("[REDACTED", inicio):
+        fecha = texto.find("]", inicio)
+        return n if fecha == -1 else fecha + 1
+
+    if texto.startswith(MARCADOR_CREDENCIAL, inicio):
+        return inicio + len(MARCADOR_CREDENCIAL)
+
+    fim = pos = inicio
+    while pos < n:
+        if pos > inicio:
+            salto = pos
+            while salto < n and texto[salto] in " \t":
+                salto += 1
+            # Sem espaço aqui, a palavra anterior terminou num delimitador.
+            if salto == pos or salto >= n:
+                break
+            if _PROXIMA_CHAVE.match(texto, salto):
+                break
+            pos = salto
+        inicio_palavra = pos
+        while (
+            pos < n and texto[pos] not in " \t" and not _FIM_DE_VALOR.match(texto, pos)
+        ):
+            pos += 1
+        if pos == inicio_palavra:
+            break
+        fim = pos
+        if pos < n and _FIM_DE_VALOR.match(texto, pos):
+            break
+    return fim
 
 
 # ---------------------------------------------------------------------------
@@ -481,18 +574,20 @@ def redigir_padroes_pii(texto: Optional[str]) -> Optional[str]:
     return redigido
 
 
-def _redigir_valor_da_chave(match: "re.Match") -> Optional[str]:
+def _redigir_valor_da_chave(match: "re.Match", valor: str) -> Optional[str]:
     """
-    Substituto para o trecho casado, ou `None` quando o valor deve ficar.
+    Substituto para o par chave-valor, ou `None` quando o valor deve ficar.
 
     Devolver `None` em vez do texto original é o que permite a
     `redigir_chaves_sensiveis` saber que não houve mudança sem ter de comparar
-    strings -- e o trecho casado não contém o valor, que ficou no lookahead.
+    strings -- e o trecho casado não contém o valor, que o padrão não consome.
+
+    A decisão por chave ficou com quem chama: é ela que dá o direito de varrer o
+    valor, e varrer antes de saber que a chave é sensível é o que tornava o
+    caminho quadrático.
     """
-    chave, valor = match.group("chave"), match.group("valor")
-    if not chave_e_sensivel(chave) or (
-        _valor_e_inocuo(valor) and not _chave_e_credencial(str(chave))
-    ):
+    chave = match.group("chave")
+    if _valor_e_inocuo(valor) and not _chave_e_credencial(str(chave)):
         return None
     limpo = valor.strip("'\"")
     if limpo.startswith("[REDACTED") or limpo == MARCADOR_CREDENCIAL:
@@ -514,6 +609,11 @@ def redigir_chaves_sensiveis(texto: Optional[str]) -> Optional[str]:
     scanner entrar no valor -- e é justamente o que faz a chave aninhada ser
     examinada.
 
+    A ordem das três etapas é o que mantém o custo linear, e não é cosmética:
+    a chave decide primeiro (memoizada, O(1)), e só uma chave sensível paga a
+    varredura do valor. Invertido -- valor primeiro, como fazia o lookahead --,
+    toda posição de um texto denso em `:` paga a varredura, e o total é O(n²).
+
     Texto sem `:` nem `=` não tem par chave-valor nenhum e sai antes de o motor
     ser acionado. É a maioria das linhas de log escritas à mão, e o teste custa
     uma varredura em C contra o custo do padrão inteiro.
@@ -528,12 +628,15 @@ def redigir_chaves_sensiveis(texto: Optional[str]) -> Optional[str]:
     for match in _CHAVE_VALOR.finditer(texto):
         if match.start() < pos:
             continue
-        substituto = _redigir_valor_da_chave(match)
+        if not chave_e_sensivel(match.group("chave")):
+            continue
+        fim = _fim_do_valor(texto, match.end())
+        substituto = _redigir_valor_da_chave(match, texto[match.end() : fim])
         if substituto is None:
             continue
         partes.append(texto[pos : match.start()])
         partes.append(substituto)
-        pos = match.end() + len(match.group("valor"))
+        pos = fim
 
     if not partes:
         return texto
