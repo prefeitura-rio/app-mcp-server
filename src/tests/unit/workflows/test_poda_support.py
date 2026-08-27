@@ -104,13 +104,8 @@ def prepare_poda_api_module(monkeypatch, module_name="test_poda_api_service_modu
     )
     monkeypatch.setitem(
         sys.modules,
-        "geopandas",
-        types.SimpleNamespace(read_file=lambda *_args, **_kwargs: None),
-    )
-    monkeypatch.setitem(
-        sys.modules,
         "shapely.geometry",
-        types.SimpleNamespace(Point=lambda x, y: (x, y)),
+        types.SimpleNamespace(Point=lambda x, y: (x, y), shape=lambda geom: geom),
     )
     monkeypatch.setitem(
         sys.modules,

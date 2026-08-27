@@ -8,9 +8,8 @@ from loguru import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 from async_googlemaps import AsyncClient
-from shapely.geometry import Point
+from shapely.geometry import Point, shape
 from shapely.wkt import loads
-import geopandas as gpd
 from pathlib import Path
 from pydantic import BaseModel
 from jellyfish import jaro_similarity
@@ -86,7 +85,13 @@ class AddressAPIService:
         try:
             shape_path = Path(__file__).parent.parent.parent / "shape_rj.geojson"
             if shape_path.exists():
-                self.shape_rj = gpd.read_file(shape_path).iloc[0]["geometry"]
+                # Antes via `geopandas.read_file`, que arrastava pyogrio e
+                # pyproj só para pegar a geometria da primeira feature de um
+                # GeoJSON. `json` + `shapely.shape` fazem o mesmo sem elas.
+                with open(shape_path, encoding="utf-8") as fp:
+                    geojson = json.load(fp)
+                features = geojson.get("features")
+                self.shape_rj = shape(features[0]["geometry"] if features else geojson)
         except Exception as e:
             logger.warning(f"Não foi possível carregar shape do RJ: {e}")
             self.shape_rj = None
