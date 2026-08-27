@@ -13,7 +13,9 @@ from src.config.env import EQUIPMENTS_VALID_THEMES
 # Origem única: `equipments_workflow.py` importa daqui. Até CHATR-153 o mesmo
 # literal existia nos dois arquivos, e editar só um passaria despercebido — a
 # tool e o workflow aceitariam listas de bairros diferentes, sem erro nenhum.
-ALLOWED_NEIGHBORHOODS_PONTOS_APOIO = frozenset({"acari", "guaratiba", "jardim america"})
+ALLOWED_NEIGHBORHOODS_PONTOS_APOIO: frozenset[str] = frozenset(
+    {"acari", "guaratiba", "jardim america"}
+)
 
 
 def get_valid_themes() -> List[str]:
