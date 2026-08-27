@@ -72,18 +72,6 @@ _OPTION_REGISTRY: Mapping[str, Mapping[str, str]] = MappingProxyType(
             "label": "Não",
             "description": "Voltar para as opções de pagamento.",
         },
-        "boleto_bancario": {
-            "label": "Boleto bancário",
-            "description": "Gerar boleto bancário.",
-        },
-        "codigo_barras": {
-            "label": "Código de barras",
-            "description": "Receber o código de barras.",
-        },
-        "pix_copia_e_cola": {
-            "label": "Pix copia e cola",
-            "description": "Receber o Pix copia e cola.",
-        },
         "opcoes_pagamento": {
             "label": "Opções de pagamento",
             "description": "Voltar para as opções de pagamento.",
@@ -421,27 +409,6 @@ class ConfirmacaoPagamentoAVistaPayload(BaseModel):
         json_schema_extra={
             "options": build_options(
                 ["sim", "nao"],
-                include_description=False,
-            ),
-            "x-render": "buttons",
-        },
-    )
-
-
-class FormaPagamentoAVistaPayload(BaseModel):
-    """Botões para escolher a forma de pagamento à vista."""
-
-    forma_pagamento_a_vista: Literal[
-        "boleto_bancario",
-        "codigo_barras",
-        "pix_copia_e_cola",
-    ] = Field(
-        ...,
-        title="Forma de pagamento",
-        description="Escolha uma forma de pagamento à vista.",
-        json_schema_extra={
-            "options": build_options(
-                ["boleto_bancario", "codigo_barras", "pix_copia_e_cola"],
                 include_description=False,
             ),
             "x-render": "buttons",

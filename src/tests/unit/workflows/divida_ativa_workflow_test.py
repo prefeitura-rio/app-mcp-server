@@ -1159,10 +1159,33 @@ async def test_confirmacao_pagamento_nao_retorna_menu_de_retentativa(
 
 
 @pytest.mark.asyncio
-async def test_confirmacao_pagamento_sim_retorna_formas_de_pagamento(
+async def test_confirmacao_pagamento_sim_emite_e_entrega_a_guia(
     divida_ativa_modules,
 ):
+    """
+    O "sim" emite e encerra, sem passo intermediário.
+
+    Até CHATR-176 este teste cobria a abertura dos botões de forma de pagamento
+    (boleto, código de barras, Pix copia e cola). O passo saiu — o PDF da PGM
+    traz os três — e a confirmação virou o último toque do cidadão.
+    """
+
+    class FakeAPIService:
+        def __init__(self):
+            self.calls = []
+
+        async def emitir_guia_a_vista(self, cdas, efs):
+            self.calls.append((cdas, efs))
+            return {
+                "api_resposta_sucesso": True,
+                "data_vencimento": "10/09/2026",
+                "link": "https://example.com/guia.pdf",
+                "codigo_de_barras": "123456789",
+            }
+
+    api_service = FakeAPIService()
     workflow = divida_ativa_modules.DividaAtivaWorkflow()
+    workflow._api_service = api_service
     state = _new_state(divida_ativa_modules)
     state.internal["consulta_realizada"] = True
     state.data["divida_ativa"] = {
@@ -1180,36 +1203,10 @@ async def test_confirmacao_pagamento_sim_retorna_formas_de_pagamento(
         {"confirmar_pagamento_a_vista": "sim"},
     )
 
-    assert "Agora escolha uma das três opções" in state.agent_response.description
-    assert state.agent_response.payload_schema["properties"]["forma_pagamento_a_vista"][
-        "enum"
-    ] == ["boleto_bancario", "codigo_barras", "pix_copia_e_cola"]
-
-
-@pytest.mark.asyncio
-async def test_forma_pagamento_invalida_retorna_botoes(
-    divida_ativa_modules,
-):
-    workflow = divida_ativa_modules.DividaAtivaWorkflow()
-    state = _new_state(divida_ativa_modules)
-    state.internal["consulta_realizada"] = True
-    state.data["divida_ativa"] = {
-        "mensagem_divida_contribuinte": "mensagem",
-        "opcoes_menu": workflow.opcoes_menu_nao_parcelado,
-        "debitos_pagamento_a_vista": [
-            {"tipo": "cda", "identificador": "CDA-1", "label": "1. CDA-1"},
-        ],
-    }
-
-    state = await workflow.execute(
-        state,
-        {"forma_pagamento_a_vista": "dinheiro"},
-    )
-
-    assert "Essa opção não existe" in state.agent_response.description
-    assert (
-        "forma_pagamento_a_vista" in state.agent_response.payload_schema["properties"]
-    )
+    assert "https://example.com/guia.pdf" in state.agent_response.description
+    assert state.agent_response.payload_schema is None
+    assert state.status == "completed"
+    assert api_service.calls == [(["CDA-1"], [])]
 
 
 @pytest.mark.asyncio
@@ -1233,7 +1230,7 @@ async def test_forma_pagamento_sem_debitos_selecionados_nao_emite_guia(
 
     state = await workflow.execute(
         state,
-        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+        {"confirmar_pagamento_a_vista": "sim"},
     )
 
     assert "Não consegui entender esse input" in state.agent_response.description
@@ -1241,19 +1238,18 @@ async def test_forma_pagamento_sem_debitos_selecionados_nao_emite_guia(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("forma_pagamento", "texto_esperado"),
-    [
-        ("boleto_bancario", "https://example.com/guia.pdf"),
-        ("codigo_barras", "123456789"),
-        ("pix_copia_e_cola", "000201PIX"),
-    ],
-)
-async def test_forma_pagamento_valida_salva_e_responde(
+async def test_guia_a_vista_entrega_o_pdf_e_nao_o_emv(
     divida_ativa_modules,
-    forma_pagamento,
-    texto_esperado,
 ):
+    """
+    O texto ao cidadão leva o link do PDF, e o EMV não aparece em lugar nenhum.
+
+    Era parametrizado sobre as três formas de pagamento; virou um caso só
+    quando a pergunta saiu do fluxo (CHATR-176). O `pix` que a PGM devolve
+    segue chegando ao workflow — o que este teste fixa é que ele não sai
+    daqui, nem no texto nem no payload.
+    """
+
     class FakeAPIService:
         def __init__(self):
             self.calls = []
@@ -1284,11 +1280,12 @@ async def test_forma_pagamento_valida_salva_e_responde(
 
     state = await workflow.execute(
         state,
-        {"forma_pagamento_a_vista": forma_pagamento},
+        {"confirmar_pagamento_a_vista": "sim"},
     )
 
     assert "Beleza." in state.agent_response.description
-    assert texto_esperado in state.agent_response.description
+    assert "https://example.com/guia.pdf" in state.agent_response.description
+    assert "000201PIX" not in state.agent_response.description
     assert state.agent_response.payload_schema is None
     assert state.status == "completed"
     assert state.data == {}
@@ -1297,10 +1294,10 @@ async def test_forma_pagamento_valida_salva_e_responde(
         "data_vencimento": "10/09/2026",
         "link": "https://example.com/guia.pdf",
         "codigo_de_barras": "123456789",
-        "pix": "000201PIX",
         # `valor` vai ao payload mesmo sem ser apurável: o consumidor precisa
         # distinguir "não deu para extrair" de "esta versão não manda o campo".
         # `id` não aparece: o link do fake não tem GUID de PDF.
+        # `pix` não aparece: saiu do payload em CHATR-176.
         "valor": None,
     }
     assert state.agent_response.data == {
@@ -1315,7 +1312,7 @@ async def test_forma_pagamento_valida_salva_e_responde(
 
 
 @pytest.mark.asyncio
-async def test_forma_pagamento_com_multiplas_guias_entrega_todas(
+async def test_multiplas_guias_entrega_todas(
     divida_ativa_modules,
 ):
     """CHATR-164: o EPGM emite uma guia por natureza de débito."""
@@ -1360,22 +1357,30 @@ async def test_forma_pagamento_com_multiplas_guias_entrega_todas(
 
     state = await workflow.execute(
         state,
-        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+        {"confirmar_pagamento_a_vista": "sim"},
     )
 
     templates = divida_ativa_modules.DividaAtivaTemplates
     descricao = state.agent_response.description
-    assert "PIX-1" in descricao
-    assert "PIX-2" in descricao
+    assert "https://example.com/guia-1.pdf" in descricao
+    assert "https://example.com/guia-2.pdf" in descricao
+    # Nenhum dos dois EMV vaza para o texto, nem o da primeira guia.
+    assert "PIX-1" not in descricao
+    assert "PIX-2" not in descricao
     # Contra a constante, e não contra a redação: o que importa é o cidadão ser
     # avisado de que são duas guias, não a frase escolhida para dizer isso.
     assert templates.AVISO_MULTIPLAS_GUIAS.format(total=2) in descricao
 
     guia_publica = state.agent_response.data["guia_pagamento_a_vista"]
     assert guia_publica["total_guias"] == 2
-    assert [item["pix"] for item in guia_publica["guias"]] == ["PIX-1", "PIX-2"]
+    assert [item["link"] for item in guia_publica["guias"]] == [
+        "https://example.com/guia-1.pdf",
+        "https://example.com/guia-2.pdf",
+    ]
+    assert all("pix" not in item for item in guia_publica["guias"])
     # Campos no topo seguem existindo para quem lê uma guia só: a primeira.
-    assert guia_publica["pix"] == "PIX-1"
+    assert guia_publica["link"] == "https://example.com/guia-1.pdf"
+    assert "pix" not in guia_publica
 
 
 @pytest.mark.asyncio
@@ -1400,7 +1405,7 @@ async def test_forma_pagamento_sem_guia_retorna_erro(
 
     state = await workflow.execute(
         state,
-        {"forma_pagamento_a_vista": "boleto_bancario"},
+        {"confirmar_pagamento_a_vista": "sim"},
     )
 
     assert "Não consegui emitir a guia" in state.agent_response.description
@@ -1690,7 +1695,7 @@ async def test_input_inesperado_no_botao_pagar_a_vista_reenvia_schema(
 
 
 @pytest.mark.asyncio
-async def test_fluxo_completo_pagar_tudo_boleto_bancario(
+async def test_fluxo_completo_pagar_tudo(
     divida_ativa_modules,
 ):
     resultado = _resultado_divida(
@@ -1731,13 +1736,6 @@ async def test_fluxo_completo_pagar_tudo_boleto_bancario(
     ]
 
     state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
-    assert (
-        "forma_pagamento_a_vista" in state.agent_response.payload_schema["properties"]
-    )
-
-    state = await workflow.execute(
-        state, {"forma_pagamento_a_vista": "boleto_bancario"}
-    )
     assert "https://example.com/guia.pdf" in state.agent_response.description
     assert state.agent_response.payload_schema is None
     assert api_service.consulta_calls == [
@@ -1774,10 +1772,6 @@ async def test_guia_emitida_retorna_payload_publico_compacto(
     state = await workflow.execute(state, {"opcao_menu": "pagar_a_vista"})
     state = await workflow.execute(state, {"opcao_pagar_a_vista": "pagar_tudo"})
     state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
-    state = await workflow.execute(
-        state,
-        {"forma_pagamento_a_vista": "boleto_bancario"},
-    )
 
     data = state.agent_response.data
     data_json = json.dumps(data, ensure_ascii=False)
@@ -1790,10 +1784,10 @@ async def test_guia_emitida_retorna_payload_publico_compacto(
         "data_vencimento": "10/09/2026",
         "link": "https://example.com/guia.pdf",
         "codigo_de_barras": "123456789",
-        "pix": "000201PIX",
         # `valor` vai ao payload mesmo sem ser apurável: o consumidor precisa
         # distinguir "não deu para extrair" de "esta versão não manda o campo".
         # `id` não aparece: o link do fake não tem GUID de PDF.
+        # `pix` não aparece: saiu do payload em CHATR-176.
         "valor": None,
     }
     assert data["guia_pagamento_a_vista"] == {
@@ -1842,10 +1836,6 @@ async def test_guia_so_com_base64_nao_vaza_para_o_payload_publico(
     state = await workflow.execute(state, {"opcao_menu": "pagar_a_vista"})
     state = await workflow.execute(state, {"opcao_pagar_a_vista": "pagar_tudo"})
     state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
-    state = await workflow.execute(
-        state,
-        {"forma_pagamento_a_vista": "boleto_bancario"},
-    )
 
     data = state.agent_response.data
     guia_publica = data["guia_pagamento_a_vista"]
@@ -1860,7 +1850,6 @@ async def test_guia_so_com_base64_nao_vaza_para_o_payload_publico(
         {
             "data_vencimento": "10/09/2026",
             "codigo_de_barras": "123456789",
-            "pix": "000201PIX",
             "valor": None,
         }
     ]
@@ -1868,7 +1857,7 @@ async def test_guia_so_com_base64_nao_vaza_para_o_payload_publico(
 
 
 @pytest.mark.asyncio
-async def test_fluxo_completo_escolher_debitos_e_pix(
+async def test_fluxo_completo_escolher_debitos_e_emitir(
     divida_ativa_modules,
 ):
     resultado = _resultado_divida(
@@ -1901,11 +1890,9 @@ async def test_fluxo_completo_escolher_debitos_e_pix(
     assert "1. CDA-1" not in state.agent_response.description
 
     state = await workflow.execute(state, {"confirmar_pagamento_a_vista": "sim"})
-    state = await workflow.execute(
-        state, {"forma_pagamento_a_vista": "pix_copia_e_cola"}
-    )
 
-    assert "000201PIX" in state.agent_response.description
+    assert "https://example.com/guia.pdf" in state.agent_response.description
+    assert "000201PIX" not in state.agent_response.description
     assert api_service.emissao_calls == [(["CDA-2"], ["EF-1"])]
 
 
@@ -2071,7 +2058,7 @@ async def test_guia_publica_leva_valor_numerico_extraido_do_pix(divida_ativa_mod
 
     state = await workflow.execute(
         state,
-        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+        {"confirmar_pagamento_a_vista": "sim"},
     )
 
     guia_publica = state.agent_response.data["guia_pagamento_a_vista"]
@@ -2118,7 +2105,7 @@ async def test_guia_sem_valor_mantem_a_chave_no_payload(divida_ativa_modules):
 
     state = await workflow.execute(
         state,
-        {"forma_pagamento_a_vista": "pix_copia_e_cola"},
+        {"confirmar_pagamento_a_vista": "sim"},
     )
 
     guia = state.agent_response.data["guia_pagamento_a_vista"]["guias"][0]
@@ -2172,7 +2159,6 @@ def test_registro_que_nao_e_guia_nao_entra_no_total(divida_ativa_modules):
             "codigo_de_barras": "123456789",
             "link": "http://pgm/a.pdf",
             "data_vencimento": "31/08/2026",
-            "pix": "pix",
             "valor": 10.0,
         }
     ]

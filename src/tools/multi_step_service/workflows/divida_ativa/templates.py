@@ -136,10 +136,6 @@ class DividaAtivaTemplates:
         )
 
     @staticmethod
-    def pagamento_a_vista_confirmado() -> str:
-        return "Certo.\n\nAgora escolha uma das três opções para fazer o pagamento:"
-
-    @staticmethod
     def pagamento_a_vista_recusado() -> str:
         return (
             "Tudo bem. Vamos tentar novamente.\n\n"
@@ -148,10 +144,6 @@ class DividaAtivaTemplates:
             "regularizar, emitir 2ª via) ou encerrar o atendimento.\n\n"
             "O que deseja fazer?"
         )
-
-    @staticmethod
-    def forma_pagamento_a_vista_selecionada() -> str:
-        return "Beleza."
 
     # O EPGM emite uma guia por natureza de débito, então a escolha do cidadão
     # pode gerar N guias. Todas precisam ser pagas — entregar uma só faria o
@@ -195,29 +187,22 @@ class DividaAtivaTemplates:
         return "Beleza.\n\n" + aviso + f"\n\n{instrucao}\n\n" + "\n\n".join(blocos)
 
     @classmethod
-    def boleto_bancario_a_vista(cls, guias: list[dict]) -> str:
+    def guia_a_vista_emitida(cls, guias: list[dict]) -> str:
+        """
+        Entrega da guia à vista — um caminho só, o PDF.
+
+        Substituiu os três templates por forma de pagamento (boleto, código de
+        barras e Pix copia e cola) quando o passo que perguntava a preferência
+        saiu do fluxo: o PDF da PGM já traz o QR Code, o código Pix e o código
+        de barras na mesma folha, então perguntar antes só somava um toque para
+        entregar um subconjunto do que o arquivo entrega.
+        """
         return cls._mensagem_guias(
             guias,
             "link",
-            "Clique no link para o pagamento por *boleto bancário*:",
+            "Sua guia de pagamento está pronta. O PDF traz o QR Code, o código "
+            "Pix copia e cola e o código de barras:",
             separador="\n",
-        )
-
-    @classmethod
-    def codigo_barras_a_vista(cls, guias: list[dict]) -> str:
-        return cls._mensagem_guias(
-            guias,
-            "codigo_de_barras",
-            "Faça o pagamento por *código de barras* usando o código:",
-        )
-
-    @classmethod
-    def pix_copia_e_cola_a_vista(cls, guias: list[dict]) -> str:
-        return cls._mensagem_guias(
-            guias,
-            "pix",
-            "Copie o código Pix e cole no aplicativo do seu banco para fazer "
-            "o pagamento:",
         )
 
     @staticmethod
