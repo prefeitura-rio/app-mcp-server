@@ -116,7 +116,7 @@ async def pgm_api(
             url=f"{env.CHATBOT_PGM_API_URL}/security/token",
             method="POST",
             request_kwargs={
-                "verify": False,
+                "verify": env.INTERNAL_TLS_VERIFY,
                 "headers": {},
                 "data": {
                     "grant_type": "password",
@@ -136,7 +136,7 @@ async def pgm_api(
             url=f"{env.CHATBOT_PGM_API_URL}/{endpoint}",
             method="POST",
             request_kwargs={
-                "verify": False,
+                "verify": env.INTERNAL_TLS_VERIFY,
                 "headers": {"Authorization": token},
                 "data": data,
             },

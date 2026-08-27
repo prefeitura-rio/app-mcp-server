@@ -24,6 +24,10 @@ def divida_module(monkeypatch):
     env_module = types.SimpleNamespace(
         CHATBOT_PGM_API_URL="https://pgm.example.local",
         CHATBOT_PGM_ACCESS_KEY="secret-key",
+        # Default de produção hoje. A verificação de TLS destas chamadas passou
+        # a ser configurável (`INTERNAL_TLS_VERIFY`) sem mudar o comportamento —
+        # ver `test_verificacao_de_tls_e_repassada`.
+        INTERNAL_TLS_VERIFY=False,
     )
     logger = types.SimpleNamespace(
         info=lambda *_args, **_kwargs: None, error=lambda *_args, **_kwargs: None
@@ -482,3 +486,29 @@ def test_itens_da_consulta_ignora_entrada_que_nao_e_item(divida_module):
         guias=[],
     )
     assert itens == []
+
+
+@pytest.mark.asyncio
+async def test_verificacao_de_tls_e_repassada(divida_module, monkeypatch):
+    """`INTERNAL_TLS_VERIFY` precisa chegar ao chatbot-integrations.
+
+    Quem faz a chamada real à PGM é o integrations, a partir do `request_kwargs`
+    que este módulo monta — então ligar a verificação de certificado depende de
+    o valor atravessar até aqui. Antes era `False` fixo no código, e virar isso
+    exigia deploy.
+    """
+    capturado = []
+
+    async def fake_internal_request(url, method, request_kwargs):
+        capturado.append(request_kwargs)
+        if url.endswith("/security/token"):
+            return {"access_token": "token-123"}
+        return {"success": True}
+
+    monkeypatch.setattr(divida_module, "internal_request", fake_internal_request)
+    monkeypatch.setattr(divida_module.env, "INTERNAL_TLS_VERIFY", True)
+
+    await divida_module.pgm_api(endpoint="/x", consumidor="c", data={})
+
+    assert capturado, "nenhuma chamada capturada"
+    assert all(kwargs["verify"] is True for kwargs in capturado)

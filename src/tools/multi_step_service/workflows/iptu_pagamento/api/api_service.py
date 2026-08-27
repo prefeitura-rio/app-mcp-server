@@ -741,7 +741,7 @@ class IPTUAPIService:
                 auth_response = await client.post(
                     f"{env.DIVIDA_ATIVA_API_URL}/security/token",
                     data={
-                        "verify": False,
+                        "verify": env.INTERNAL_TLS_VERIFY,
                         "grant_type": "password",
                         "Consumidor": "consultar-dividas-contribuinte",
                         "ChaveAcesso": env.DIVIDA_ATIVA_ACCESS_KEY,

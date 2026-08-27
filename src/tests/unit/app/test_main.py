@@ -8,10 +8,19 @@ from unittest.mock import Mock
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 MAIN_PATH = PROJECT_ROOT / "src" / "main.py"
 
+# Sentinela: o conteúdo não importa, só que seja exatamente este objeto que
+# chega a `mcp.run(middleware=...)`.
+MIDDLEWARE_MONTADO = ["middleware-montado"]
+
 
 def run_main_with_env(monkeypatch, is_local: bool):
     app_module = types.ModuleType("src.app")
     app_module.mcp = Mock()
+    # `build_http_middleware()` monta a exigência de autenticação e o teto de
+    # corpo. Aqui ele é um Mock com valor sentinela só para verificar que
+    # `main.py` de fato repassa o que ele devolve — o comportamento do
+    # middleware em si é testado em `test_http_auth_coverage.py`.
+    app_module.build_http_middleware = Mock(return_value=MIDDLEWARE_MONTADO)
 
     env_module = types.ModuleType("src.config.env")
     env_module.IS_LOCAL = is_local
@@ -41,26 +50,40 @@ def run_main_with_env(monkeypatch, is_local: bool):
 
     runpy.run_path(str(MAIN_PATH), run_name="__main__")
 
-    return app_module.mcp, preflight_module.run_startup_preflight
+    return app_module, preflight_module.run_startup_preflight
 
 
 def test_main_runs_default_transport_locally(monkeypatch):
-    mcp, _ = run_main_with_env(monkeypatch, is_local=True)
+    app_module, _ = run_main_with_env(monkeypatch, is_local=True)
 
-    mcp.run.assert_called_once_with()
+    app_module.mcp.run.assert_called_once_with()
 
 
 def test_main_runs_streamable_http_when_not_local(monkeypatch):
-    mcp, _ = run_main_with_env(monkeypatch, is_local=False)
+    app_module, _ = run_main_with_env(monkeypatch, is_local=False)
 
-    mcp.run.assert_called_once_with(
+    app_module.mcp.run.assert_called_once_with(
         transport="streamable-http",
         host="0.0.0.0",
         port=80,
         path="/mcp",
-        middleware=None,
+        middleware=MIDDLEWARE_MONTADO,
         stateless_http=True,
     )
+
+
+def test_main_serve_com_o_middleware_de_autenticacao(monkeypatch):
+    """`main.py` precisa servir o que `build_http_middleware()` devolve.
+
+    Passar `middleware=None` aqui (como era antes) devolve as rotas de
+    `custom_route` ao estado em que atendiam sem token nenhum. É uma linha só
+    de diferença, e nada mais no CI perceberia.
+    """
+    app_module, _ = run_main_with_env(monkeypatch, is_local=False)
+
+    app_module.build_http_middleware.assert_called_once_with(None)
+    _, kwargs = app_module.mcp.run.call_args
+    assert kwargs["middleware"] is MIDDLEWARE_MONTADO
 
 
 def test_main_runs_config_preflight(monkeypatch):
