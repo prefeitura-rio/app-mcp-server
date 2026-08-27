@@ -16,12 +16,17 @@ import pytest
 import src.utils.http_client as http_client_mod
 from src.utils.http_client import (
     SENSITIVE_KEYS,
-    _SENSITIVE_QUERY_RE,
     DEFAULT_ERROR_STATUS_CODES,
     InterceptedHTTPClient,
     redact_body,
     redact_text,
 )
+
+# O padrão compilado saiu do `http_client` no CHATR-167: a lista de chaves e os
+# padrões passaram a viver em `src/utils/pii.py`, para o log e o interceptor
+# consumirem a mesma fonte. `redact_text` continua sendo o ponto de entrada
+# testado aqui; só o objeto compilado mudou de casa.
+from src.utils.pii import _CREDENCIAL_EM_QUERY
 
 
 def test_redact_text_remove_token_de_query_string():
@@ -165,7 +170,7 @@ def test_chaves_entram_escapadas_na_alternacao():
     sem — o que este teste protege é o idioma, não um bug ativo. O hífen de
     "x-goog-signature" é o que torna a diferença visível no padrão compilado.
     """
-    assert r"x\-goog\-signature" in _SENSITIVE_QUERY_RE.pattern
+    assert r"x\-goog\-signature" in _CREDENCIAL_EM_QUERY.pattern
 
 
 def test_redact_text_preserva_texto_sem_credencial():

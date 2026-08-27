@@ -24,7 +24,6 @@ Uso sync:
 """
 
 import asyncio
-import re
 import traceback as tb
 from typing import AbstractSet, Any, Dict, FrozenSet, Optional, Union
 
@@ -32,6 +31,12 @@ import httpx
 from loguru import logger
 
 from src.utils.error_interceptor import send_api_error
+from src.utils.pii import (
+    CHAVES_CREDENCIAL,
+    MARCADOR_CREDENCIAL,
+    redigir_credenciais,
+    redigir_padroes_pii,
+)
 
 
 # Status codes que devem ser interceptados por padrão
@@ -39,69 +44,37 @@ DEFAULT_ERROR_STATUS_CODES: FrozenSet[int] = frozenset(
     {400, 401, 403, 404, 500, 502, 503, 504}
 )
 
-# Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro.
+# Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro. A lista
+# vive em `src/utils/pii.py` desde o CHATR-167, junto com os padrões usados pela
+# barreira de log -- antes deste ticket havia uma cópia aqui e outra no
+# `error_interceptor`, e nenhuma das duas cobria a saída de `logger.*`.
 #
-# As quatro últimas são da signed URL do GCS: ela é uma capability — quem tem a URL
-# baixa o arquivo, sem autenticar. Os fluxos de guia mandam essa URL ao encurtador
-# no campo "destination", e uma falha lá reportaria o payload inteiro ao
-# monitoramento. Redigir a assinatura invalida a URL para quem lê o log.
+# É um alias, não uma cópia: os três módulos apontam para o mesmo objeto, e é
+# por isso que ele é `frozenset` -- um `.add()` distraído aqui mudaria também a
+# barreira de log.
 #
-# `x-goog-signature` precisa estar aqui por extenso mesmo com `signature` na lista:
-# `redact_text` casa por substring e cobriria os dois, mas `redact_body` compara a
-# chave inteira, e ali "X-Goog-Signature" não casava com "signature" — a assinatura
-# saía em claro sempre que chegasse como campo próprio, e não embutida na URL.
-SENSITIVE_KEYS: FrozenSet[str] = frozenset(
-    {
-        "token",
-        "access_token",
-        "refresh_token",
-        "api_key",
-        "apikey",
-        "key",
-        "secret",
-        "password",
-        "senha",
-        "authorization",
-        "chaveacesso",
-        "chave_acesso",
-        "signature",
-        "x-goog-credential",
-        "x-goog-signature",
-        "googleaccessid",
-    }
-)
-
-# `sorted` na alternação: a ordem de iteração de um set de strings varia entre
-# processos (hash randomization), então o padrão compilado mudava a cada boot.
-# O resultado da redação é o mesmo, mas um regex estável é o que torna o
-# comportamento reproduzível entre um pod e outro.
-#
-# `re.escape` porque as chaves entram cruas na alternação: hoje só têm `_` e `-`
-# e o padrão é o mesmo com ou sem, mas a primeira chave com `.` ou `+` viraria
-# curinga em silêncio — e o silêncio, num controle de redação, é o problema.
-#
-# `(?<!\w)` ancora o início da chave. Sem ele `key` casava dentro de qualquer
-# palavra terminada nela e `monkey=banana` virava `monkey=<redacted>`, comendo
-# diagnóstico do relatório de erro. A âncora recusa `\w` mas aceita `-`, que é
-# justamente o que mantém `X-Goog-Signature` coberto: `(?<![\w-])` quebraria a
-# redação da signed URL do GCS.
-_SENSITIVE_QUERY_RE = re.compile(
-    rf"(?<!\w)((?:{'|'.join(re.escape(chave) for chave in sorted(SENSITIVE_KEYS))})=)[^&\s'\"]+",
-    re.IGNORECASE,
-)
+# O que o CHATR-153 tinha acrescentado neste bloco foi junto: `x-goog-signature`
+# está na lista lá, e as notas sobre a âncora `(?<!\w)`, o `re.escape` e o
+# `sorted` determinístico vivem em `_CREDENCIAL_EM_QUERY`, que é onde o padrão
+# passou a ser compilado.
+SENSITIVE_KEYS: FrozenSet[str] = CHAVES_CREDENCIAL
 
 
 def redact_text(texto: Optional[str]) -> Optional[str]:
     """
-    Redige valores sensíveis embutidos em texto livre.
+    Redige credencial e PII embutidas em texto livre.
 
-    Várias APIs (IPTU, entre outras) autenticam por query string, e exceções do httpx
-    como TooManyRedirects ou InvalidURL embutem a URL completa na mensagem. Sem isso,
-    a credencial acabaria no sistema de monitoramento.
+    Várias APIs (IPTU, entre outras) autenticam por query string, e exceções do
+    httpx como TooManyRedirects ou InvalidURL embutem a URL completa na
+    mensagem. Sem isso, a credencial acabaria no sistema de monitoramento.
+
+    Desde o CHATR-167 também passa pelos padrões de PII: `error_message` e
+    `traceback` chegam aqui a caminho do interceptor e carregam com frequência o
+    CPF ou o telefone que originou a chamada.
     """
     if not texto:
         return texto
-    return _SENSITIVE_QUERY_RE.sub(r"\1<redacted>", texto)
+    return redigir_padroes_pii(redigir_credenciais(texto))
 
 
 def redact_body(body: Any) -> Any:
@@ -109,7 +82,7 @@ def redact_body(body: Any) -> Any:
     if isinstance(body, dict):
         return {
             chave: (
-                "<redacted>"
+                MARCADOR_CREDENCIAL
                 if str(chave).lower() in SENSITIVE_KEYS
                 else redact_body(valor)
             )

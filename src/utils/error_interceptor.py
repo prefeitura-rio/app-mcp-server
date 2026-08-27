@@ -11,7 +11,6 @@ garantindo que falhas no envio de erros não afetem o fluxo principal da aplica�
 import asyncio
 import inspect
 import json
-import re
 import traceback as tb
 from typing import Any, Callable, Dict, Optional, Set
 
@@ -21,6 +20,7 @@ from opentelemetry import trace
 
 from src.config import env
 from src.utils.json_utils import CustomJSONEncoder
+from src.utils.pii import mascarar_ultimos_quatro, redigir_padroes_pii
 
 
 # ---------------------------------------------------------------------------
@@ -65,77 +65,33 @@ def _get_current_trace_context() -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Redação básica de PII (CHATR-113)
+# Redação de PII (CHATR-113, estendida no CHATR-167)
 # ---------------------------------------------------------------------------
 #
-# Redação conservadora e best-effort, usando apenas stdlib (`re` + slicing
-# de strings) -- não é uma limpeza completa do conteúdo, e sim uma redução
-# do risco de exposição mantendo contexto suficiente para debug. Como
-# `input_body` chega aqui já serializado como string (ver
-# `send_error_to_interceptor` abaixo), a substituição por regex opera sobre
-# texto puro e não é ciente da estrutura JSON subjacente -- em casos raros
-# (ex.: um número aparecendo como literal numérico não citado dentro do
-# JSON) a substituição poderia invalidar o JSON resultante; esse é um
-# tradeoff aceito para manter a implementação simples e sem dependências
-# novas.
-
-# Formato de CPF "000.000.000-00". Esse padrão só pode aparecer dentro de
-# uma string JSON válida (não é um literal numérico válido em JSON), então
-# a substituição abaixo nunca corrompe a estrutura do payload.
-_CPF_PATTERN = re.compile(r"(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)")
-
-# Números de telefone com 10 a 13 dígitos, com ou sem "+" inicial (cobre os
-# formatos usados neste projeto, ex.: "5521999999999" ou "+5521999999999").
-_PHONE_NUMBER_PATTERN = re.compile(r"(?<!\d)\+?\d{10,13}(?!\d)")
+# Os padrões e as máscaras vivem em `src/utils/pii.py` desde o CHATR-167. Antes
+# disso esta era uma das duas ilhas isoladas de redação do projeto -- e cobria
+# só CPF pontuado e "10 a 13 dígitos", o que rotulava CPF sem pontuação como
+# telefone e não enxergava e-mail, CNPJ nem blob em base64.
+#
+# Como `input_body` chega aqui já serializado como string (ver
+# `send_error_to_interceptor` abaixo), a substituição opera sobre texto puro e
+# não é ciente da estrutura JSON subjacente -- em casos raros a substituição
+# poderia invalidar o JSON resultante; tradeoff aceito desde o CHATR-113.
+#
+# Aqui se usa `redigir_padroes_pii`, e não `redigir_texto`: a redação por chave
+# apagaria o `"nome"` e o `"cliente"` do payload, e o contexto de debug do
+# interceptor é um destino diferente do log indexado -- a decisão do CHATR-113
+# de preservá-lo continua valendo.
 
 
 def _mask_last_four_digits(value: str) -> str:
-    """
-    Mascara um valor mantendo visíveis apenas os últimos 4 caracteres,
-    substituindo o restante por asteriscos. Um eventual "+" inicial (comum
-    em números de telefone no formato E.164) é preservado como está, já
-    que não carrega PII por si só.
-
-    Usado diretamente em `customer_whatsapp_number`: como esse campo é, por
-    contrato, sempre um número de telefone, mascaramos incondicionalmente
-    em vez de depender de `_PHONE_NUMBER_PATTERN` bater com o formato
-    exato -- isso evita vazar o valor por completo caso ele venha em um
-    formato inesperado (mais curto/mais longo que o previsto pelo regex).
-
-    Examples:
-        >>> _mask_last_four_digits("5521999999999")
-        '*********9999'
-        >>> _mask_last_four_digits("+5521999999999")
-        '+*********9999'
-    """
-    if not value:
-        return value
-    prefix = "+" if value.startswith("+") else ""
-    rest = value[len(prefix) :]
-    if len(rest) <= 4:
-        return value
-    return f"{prefix}{'*' * (len(rest) - 4)}{rest[-4:]}"
+    """Mantém visíveis só os últimos 4 caracteres. Ver `mascarar_ultimos_quatro`."""
+    return mascarar_ultimos_quatro(value)
 
 
 def _redact_pii_in_text(text: str) -> str:
-    """
-    Aplica uma varredura leve por padrões óbvios de PII (CPF e números de
-    telefone) em um texto livre, substituindo apenas os trechos que batem
-    com esses padrões por um marcador -- o restante do conteúdo é mantido
-    intacto, propositalmente, já que o objetivo é reduzir exposição de PII
-    mantendo contexto útil de debug (isto não é uma limpeza completa do
-    conteúdo).
-
-    Usa o mesmo `_PHONE_NUMBER_PATTERN` usado para mascarar
-    `customer_whatsapp_number`, então qualquer número de telefone que
-    apareça embutido em `input_body` é redigido com a mesma referência de
-    formato.
-    """
-    if not text:
-        return text
-    redacted = _CPF_PATTERN.sub("[REDACTED-CPF]", text)
-    redacted = _PHONE_NUMBER_PATTERN.sub("[REDACTED-PHONE]", redacted)
-    return redacted
+    """Redige PII de formato reconhecível em texto livre. Ver `redigir_padroes_pii`."""
+    return redigir_padroes_pii(text)
 
 
 async def send_error_to_interceptor(
