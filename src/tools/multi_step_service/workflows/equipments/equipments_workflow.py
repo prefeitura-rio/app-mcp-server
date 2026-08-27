@@ -8,15 +8,12 @@ from src.tools.multi_step_service.workflows.equipments.models import (
     EquipmentsInstructionsPayload,
 )
 from src.tools.equipments_tools import (
+    ALLOWED_NEIGHBORHOODS_PONTOS_APOIO,
     get_equipments_with_instructions,
     get_equipments_instructions,
     get_equipments_categories,
 )
 from src.tools.cor_alert_tools import get_coordinates_google
-
-
-# Allowed neighborhoods for pontos de apoio (support points)
-ALLOWED_NEIGHBORHOODS_PONTOS_APOIO = ["acari", "guaratiba", "jardim america"]
 
 
 async def _geocode_and_extract_neighborhood(address: str) -> Optional[str]:

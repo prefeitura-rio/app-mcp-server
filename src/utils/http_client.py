@@ -26,7 +26,7 @@ Uso sync:
 import asyncio
 import re
 import traceback as tb
-from typing import Any, Dict, Optional, Set, Union
+from typing import AbstractSet, Any, Dict, FrozenSet, Optional, Union
 
 import httpx
 from loguru import logger
@@ -35,34 +35,58 @@ from src.utils.error_interceptor import send_api_error
 
 
 # Status codes que devem ser interceptados por padrão
-DEFAULT_ERROR_STATUS_CODES: Set[int] = {400, 401, 403, 404, 500, 502, 503, 504}
+DEFAULT_ERROR_STATUS_CODES: FrozenSet[int] = frozenset(
+    {400, 401, 403, 404, 500, 502, 503, 504}
+)
 
 # Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro.
 #
-# As três últimas são da signed URL do GCS: ela é uma capability — quem tem a URL
+# As quatro últimas são da signed URL do GCS: ela é uma capability — quem tem a URL
 # baixa o arquivo, sem autenticar. Os fluxos de guia mandam essa URL ao encurtador
 # no campo "destination", e uma falha lá reportaria o payload inteiro ao
 # monitoramento. Redigir a assinatura invalida a URL para quem lê o log.
-SENSITIVE_KEYS: Set[str] = {
-    "token",
-    "access_token",
-    "refresh_token",
-    "api_key",
-    "apikey",
-    "key",
-    "secret",
-    "password",
-    "senha",
-    "authorization",
-    "chaveacesso",
-    "chave_acesso",
-    "signature",
-    "x-goog-credential",
-    "googleaccessid",
-}
+#
+# `x-goog-signature` precisa estar aqui por extenso mesmo com `signature` na lista:
+# `redact_text` casa por substring e cobriria os dois, mas `redact_body` compara a
+# chave inteira, e ali "X-Goog-Signature" não casava com "signature" — a assinatura
+# saía em claro sempre que chegasse como campo próprio, e não embutida na URL.
+SENSITIVE_KEYS: FrozenSet[str] = frozenset(
+    {
+        "token",
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "apikey",
+        "key",
+        "secret",
+        "password",
+        "senha",
+        "authorization",
+        "chaveacesso",
+        "chave_acesso",
+        "signature",
+        "x-goog-credential",
+        "x-goog-signature",
+        "googleaccessid",
+    }
+)
 
+# `sorted` na alternação: a ordem de iteração de um set de strings varia entre
+# processos (hash randomization), então o padrão compilado mudava a cada boot.
+# O resultado da redação é o mesmo, mas um regex estável é o que torna o
+# comportamento reproduzível entre um pod e outro.
+#
+# `re.escape` porque as chaves entram cruas na alternação: hoje só têm `_` e `-`
+# e o padrão é o mesmo com ou sem, mas a primeira chave com `.` ou `+` viraria
+# curinga em silêncio — e o silêncio, num controle de redação, é o problema.
+#
+# `(?<!\w)` ancora o início da chave. Sem ele `key` casava dentro de qualquer
+# palavra terminada nela e `monkey=banana` virava `monkey=<redacted>`, comendo
+# diagnóstico do relatório de erro. A âncora recusa `\w` mas aceita `-`, que é
+# justamente o que mantém `X-Goog-Signature` coberto: `(?<![\w-])` quebraria a
+# redação da signed URL do GCS.
 _SENSITIVE_QUERY_RE = re.compile(
-    rf"((?:{'|'.join(SENSITIVE_KEYS)})=)[^&\s'\"]+",
+    rf"(?<!\w)((?:{'|'.join(re.escape(chave) for chave in sorted(SENSITIVE_KEYS))})=)[^&\s'\"]+",
     re.IGNORECASE,
 )
 
@@ -98,7 +122,9 @@ def redact_body(body: Any) -> Any:
     return body
 
 
-def raise_for_status_except(response: httpx.Response, skip_codes: Set[int]) -> None:
+def raise_for_status_except(
+    response: httpx.Response, skip_codes: AbstractSet[int]
+) -> None:
     """Chama raise_for_status() ignorando status codes que representam estados válidos.
 
     Use sempre que um código 4xx for semanticamente um "resultado vazio" e não uma
@@ -242,7 +268,7 @@ class InterceptedHTTPClient:
         url: str,
         *,
         intercept_errors: bool = True,
-        error_status_codes: Optional[Set[int]] = None,
+        error_status_codes: Optional[AbstractSet[int]] = None,
         **kwargs,
     ) -> httpx.Response:
         """
@@ -325,7 +351,7 @@ class InterceptedHTTPClient:
         url: str,
         *,
         intercept_errors: bool = True,
-        error_status_codes: Optional[Set[int]] = None,
+        error_status_codes: Optional[AbstractSet[int]] = None,
         **kwargs,
     ) -> httpx.Response:
         """

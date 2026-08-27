@@ -1,7 +1,8 @@
 import asyncio
 import unicodedata
 import uuid
-from typing import Any, Dict
+from types import MappingProxyType
+from typing import Any, Dict, Mapping
 
 from src.utils.background import disparar_em_background
 from src.utils.bigquery import (
@@ -20,16 +21,21 @@ from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 
 
-# Valid alert types and severities
-VALID_ALERT_TYPES = ["alagamento", "enchente", "bolsao"]
-VALID_SEVERITIES = ["baixa", "alta", "critica"]
+# Valid alert types and severities.
+#
+# `tuple` e não `frozenset`: a ordem chega ao cidadão, via `", ".join(...)` na
+# mensagem de erro de `create_cor_alert`.
+VALID_ALERT_TYPES: tuple[str, ...] = ("alagamento", "enchente", "bolsao")
+VALID_SEVERITIES: tuple[str, ...] = ("baixa", "alta", "critica")
 
-NEIGHBORHOOD_ALIASES = {
-    "jd america": "jardim america",
-    "jardim america": "jardim america",
-    "acari": "acari",
-    "guaratiba": "guaratiba",
-}
+NEIGHBORHOOD_ALIASES: Mapping[str, str] = MappingProxyType(
+    {
+        "jd america": "jardim america",
+        "jardim america": "jardim america",
+        "acari": "acari",
+        "guaratiba": "guaratiba",
+    }
+)
 
 
 def _normalize_text(value: str) -> str:
