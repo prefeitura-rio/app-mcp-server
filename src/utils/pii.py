@@ -489,8 +489,16 @@ def _fim_do_valor(texto: str, inicio: int) -> int:
         return inicio
 
     if texto[inicio] in "'\"":
-        fecha = texto.find(texto[inicio], inicio + 1)
-        return n if fecha == -1 else fecha + 1
+        aspas = texto[inicio]
+        pos = inicio + 1
+        while pos < n:
+            if texto[pos] == "\\":
+                pos += 2
+                continue
+            if texto[pos] == aspas:
+                return pos + 1
+            pos += 1
+        return n
 
     if texto.startswith("[REDACTED", inicio):
         fecha = texto.find("]", inicio)
