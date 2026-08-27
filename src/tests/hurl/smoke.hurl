@@ -43,8 +43,13 @@ jsonpath "$.status" == "ready"
 # roda com credenciais falsas e sem Redis, então esses checks reprovam de
 # propósito. Se este assert quebrar com `ok`, significa que os checks
 # pararam de detectar dependência fora do ar.
+#
+# Passou a exigir token: diferente de /health e /health/ready, esta rota não é
+# probe do kubelet — é diagnóstico, e desenhava o mapa das dependências para
+# qualquer um que alcançasse a porta.
 
 GET {{base_url}}/health/detail
+Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.status" == "degraded"
@@ -58,9 +63,10 @@ jsonpath "$.checks[?(@.name=='data_files')].status" == "up"
 jsonpath "$.checks[?(@.name=='gcp_credentials')].status" == "up"
 jsonpath "$.checks[?(@.name=='tool_registry')].status" == "up"
 jsonpath "$.checks[?(@.name=='redis')].critical" == true
-# Contrato de `registry.sanitize_error`: a rota é pública e não pode devolver
-# URL, host ou credencial. Mensagens de cliente de rede embutem a URL de
-# conexão — no caso do Redis, com a senha dentro.
+# Contrato de `registry.sanitize_error`: o corpo não pode devolver URL, host
+# nem credencial. Mensagens de cliente de rede embutem a URL de conexão — no
+# caso do Redis, com a senha dentro. Continua valendo mesmo com a rota agora
+# autenticada: quem tem token de consumidor não precisa da senha do Redis.
 body not matches "[a-z][a-z0-9+.-]*://"
 
 
@@ -68,6 +74,24 @@ body not matches "[a-z][a-z0-9+.-]*://"
 # Os testes unitários exercitam o `HybridTokenVerifier` isolado. O que só se
 # vê pela porta HTTP é se ele está de fato plugado no app — `auth=` do FastMCP
 # protege apenas o `/mcp`, e é fácil essa ligação se perder num refactor.
+
+# Fora do `/mcp`, quem protege é o `RequireAuthOnAllRoutes`
+# (src/middleware/require_auth.py), montado por `build_http_middleware()` em
+# `src/main.py`. Uma rota qualquer que não esteja na allowlist tem que recusar
+# — inclusive uma que não existe, porque o middleware decide antes do
+# roteamento. É este request que prova, pela rede, que o middleware está
+# plugado: sem ele a resposta seria 404, e foi exatamente assim que as cinco
+# rotas de Dívida Ativa passaram a atender sem credencial.
+GET {{base_url}}/rota-que-nao-existe
+HTTP 401
+[Asserts]
+header "WWW-Authenticate" contains "invalid_token"
+
+
+# A mesma rota de diagnóstico que passou acima com token, agora sem ele.
+GET {{base_url}}/health/detail
+HTTP 401
+
 
 POST {{base_url}}/mcp
 Content-Type: application/json
