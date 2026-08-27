@@ -53,6 +53,28 @@ spec:
           envFrom:
             - secretRef:
                 name: mcp-secrets
+          securityContext:
+            # Hardening que não depende do usuário da imagem — por isso entra
+            # agora, enquanto o `runAsNonRoot` espera um build testado (ver
+            # abaixo). Nenhum deles altera comportamento de aplicação web em
+            # Python: o processo não escala privilégio, não usa capability de
+            # kernel e não precisa de syscall fora do perfil padrão.
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+            # runAsNonRoot: true
+            #   PENDENTE: exige `USER` não-root no Dockerfile (hoje o processo
+            #   roda como root) e `chown` de DATA_DIR, onde ficam os arquivos
+            #   de fallback da DLQ e o state dos workflows em modo JSON.
+            #   Ligar isto sem o par no Dockerfile deixa o pod em
+            #   CreateContainerConfigError.
+            # readOnlyRootFilesystem: true
+            #   NÃO aplicar como está: o app escreve em DATA_DIR/bq_dlq/ e o
+            #   `JsonBackend` faz mkdir + write. Exigiria montar um emptyDir
+            #   nesses caminhos primeiro.
           resources:
             requests:
               memory: "512Mi"

@@ -1,0 +1,114 @@
+# NetworkPolicy do servidor MCP (staging) — NÃO REFERENCIADA NO kustomization.yaml AINDA.
+#
+# Por que não está plugada: NetworkPolicy não tem modo de auditoria. No instante
+# em que a primeira policy seleciona um pod, tudo que não estiver explicitamente
+# liberado passa a ser negado. Aplicar isto com um seletor de origem errado tira
+# o MCP do ar — em staging são `replicas: 2`, o que dá alguma folga — valide aqui primeiro. Os seletores abaixo estão
+# marcados com CONFIRMAR: preencha, valide em staging, e só então acrescente
+#
+#   - networkpolicy.yaml
+#
+# a `kustomization.yaml`.
+#
+# O que isto fecha: hoje o Service é ClusterIP, o que restringe ao cluster mas
+# não *dentro* dele — qualquer pod de qualquer namespace alcança a porta 80 do
+# MCP. É esse fato que transforma uma rota HTTP desprotegida em "endpoint fiscal
+# aberto para todo o cluster". Com a exigência de token no lugar (ver
+# src/middleware/require_auth.py), esta policy é a segunda camada.
+#
+# Escopo deliberado: só ingress. Restringir egress também vale a pena, mas o
+# servidor fala com muitos destinos externos (PGM, IPTU, Gemini, Maps, BigQuery,
+# SigNoz, encurtador) e uma lista incompleta quebra funcionalidade de forma
+# difícil de diagnosticar. Fica para uma segunda rodada, com os destinos
+# levantados a partir do tráfego real.
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-default-deny-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp
+  policyTypes:
+    - Ingress
+  # Sem `ingress:` = nega tudo. As policies seguintes reabrem o necessário;
+  # policies do mesmo namespace são aditivas (união das permissões).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-allow-ingress-controller
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # CONFIRMAR: label real do namespace do ingress controller.
+        #   kubectl get ns --show-labels | grep -i -E 'ingress|nginx|istio|gateway'
+        # Em cluster com Istio/gateway próprio, o seletor é outro — e pode ser
+        # preciso liberar também o sidecar.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-allow-consumidores-internos
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # CONFIRMAR: quem de fato chama o MCP por dentro do cluster.
+        # Levantar antes de aplicar — um consumidor esquecido aqui cai em
+        # produção sem aviso:
+        #   kubectl logs -n mcp -l app=mcp --tail=2000 | grep -o 'client_ip[^ ]*'
+        #   # ou, com service mesh, a topologia no SigNoz
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: eai
+      ports:
+        - protocol: TCP
+          port: 80
+
+# ---------------------------------------------------------------------------
+# Redis (`mcp-redis`) — o outro lado do problema.
+#
+# O Redis guarda o state dos workflows e a DLQ de escrita do BigQuery, e hoje
+# aceita conexão de qualquer pod do cluster. Ele NÃO é versionado neste
+# repositório (ver o port-forward documentado no README), então a policy abaixo
+# fica aqui como referência para quem for aplicá-la de onde o Redis é
+# gerenciado — o `podSelector` precisa casar com os labels reais:
+#   kubectl get pod -n mcp -l app=mcp-redis --show-labels
+#
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: mcp-redis-somente-mcp
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: mcp-redis        # CONFIRMAR
+#   policyTypes:
+#     - Ingress
+#   ingress:
+#     - from:
+#         - podSelector:
+#             matchLabels:
+#               app: mcp
+#       ports:
+#         - protocol: TCP
+#           port: 6379
