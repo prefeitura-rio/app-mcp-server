@@ -14,6 +14,8 @@ O que este arquivo protege, além do óbvio "o CPF sai redigido":
   redigir texto já redigido não pode corromper nada.
 """
 
+import time
+
 import pytest
 
 from src.utils.pii import (
@@ -165,6 +167,69 @@ def test_credencial_em_query_string():
 
 def test_redigir_chaves_sensiveis_ignora_texto_sem_chave():
     assert redigir_chaves_sensiveis("nada a redigir aqui") == "nada a redigir aqui"
+
+
+def test_parametro_que_termina_em_key_nao_e_credencial():
+    """
+    A alternação de `_CREDENCIAL_EM_QUERY` casava no fim de qualquer palavra, e
+    `sortkey=asc` saía como `<redacted>` -- apagando do log parâmetro de
+    paginação e de cache que não é segredo nenhum.
+    """
+    assert redigir_credenciais("?sortkey=asc&rowkey=42") == "?sortkey=asc&rowkey=42"
+    assert redigir_credenciais("cacheKey=abc") == "cacheKey=abc"
+
+
+def test_assinatura_do_gcs_continua_redigida():
+    """
+    A fronteira do teste acima não pode incluir o `-`: o que a signed URL manda
+    é `X-Goog-Signature=`, e é exatamente casando no fim de uma palavra
+    kebab-case que a assinatura é invalidada para quem lê o log.
+    """
+    url = "https://storage.googleapis.com/b/x.pdf?X-Goog-Signature=SEGREDO&e=1"
+
+    redigido = redigir_credenciais(url)
+
+    assert "SEGREDO" not in redigido
+    assert "X-Goog-Signature=<redacted>" in redigido
+
+
+def test_blob_nao_engole_caminho_nem_rota():
+    """
+    Um caminho de arquivo é um run longo de `[A-Za-z0-9/]` como o base64, e
+    saía como `[REDACTED-BASE64]` -- apagando do log justamente o que localiza o
+    erro. O que separa os dois é o formato: pedaços curtos e numerosos entre
+    barras contra pedaços longos.
+    """
+    caminho = "/home/runner/work/appmcpserver/appmcpserver/src/utils/errorinterceptor"
+    rota = "/api/v1/consultaImovel/porInscricao/2024/detalhe/imovel/guia/darm/pdf"
+
+    assert redigir_padroes_pii(caminho) == caminho
+    assert redigir_padroes_pii(rota) == rota
+    # e o blob de verdade continua indo embora, mesmo sem um dígito sequer
+    assert redigir_padroes_pii("QUJDRA" * 12) == "[REDACTED-BASE64]"
+
+
+def test_redacao_nao_tem_backtracking_quadratico():
+    """
+    `_CHAVE_VALOR` roda em toda linha de log, sobre texto que o cidadão
+    escreveu, e a barreira o executa duas vezes (patcher e sink). Sem a guarda
+    de ancoragem o custo era O(n² · k): 4 KB adversariais custavam 2,4 s de CPU
+    **no event loop**, o que é um DoS a partir de uma mensagem de WhatsApp.
+
+    O underscore é o que torna a entrada adversarial: mantém o run inteiro para
+    `[A-Za-z0-9_]` e ao mesmo tempo impede que `_BLOB_BASE64` o encurte antes.
+
+    A margem é folgada de propósito -- linear resolve 32 KB em milissegundos e
+    quadrático levaria mais de um minuto. Qualquer coisa perto de 1 s significa
+    que a guarda saiu do padrão.
+    """
+    adversarial = "a_" * 16000
+
+    inicio = time.perf_counter()
+    redigir_texto(adversarial)
+    decorrido = time.perf_counter() - inicio
+
+    assert decorrido < 1.0, f"redação levou {decorrido:.2f}s -- backtracking voltou"
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +411,34 @@ def test_chave_sensivel_reconhecida_em_qualquer_convencao(chave):
 )
 def test_chave_de_diagnostico_continua_legivel(chave):
     assert not chave_e_sensivel(chave)
+
+
+def test_credencial_curta_nao_escapa_pela_isencao_de_valor_inocuo():
+    """
+    A isenção de valor curto existe para flag e contador, e o argumento dela --
+    nenhum dado pessoal cabe em 4 caracteres -- não vale para segredo: PIN, OTP
+    e código de acesso moram exatamente nessa faixa.
+    """
+    assert redigir_estrutura({"senha": "1234"}) == {"senha": "[REDACTED]"}
+    assert redigir_estrutura({"token": "9999"}) == {"token": "[REDACTED]"}
+    assert redigir_estrutura({"api_key": "0000"}) == {"api_key": "[REDACTED]"}
+    assert redigir_texto("senha: 1234") == "senha: [REDACTED]"
+
+
+def test_veto_de_diagnostico_nao_desarma_token_forte():
+    """
+    O veto de `TOKENS_NAO_SENSIVEIS` desarmava a chave inteira: bastava um
+    `servico` em qualquer posição para `nome_do_cliente_do_servico` sair em
+    claro. Ele só pode desarmar token genérico -- `nome` e `name`, que rotulam
+    qualquer coisa. `cliente`, `cpf` e `endereco` ganham do veto.
+    """
+    assert chave_e_sensivel("nome_servico") is False
+    assert chave_e_sensivel("service_name") is False
+    assert chave_e_sensivel("bairro_nome") is False
+
+    assert chave_e_sensivel("nome_do_cliente_do_servico") is True
+    assert chave_e_sensivel("cpf_do_servico") is True
+    assert chave_e_sensivel("endereco_do_evento") is True
 
 
 def test_flag_e_contador_nao_sao_redigidos():

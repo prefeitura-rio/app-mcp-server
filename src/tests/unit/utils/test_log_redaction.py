@@ -29,6 +29,29 @@ def capturado():
         logger.remove(sink_id)
 
 
+@pytest.fixture
+def records():
+    """
+    Sink de teste que guarda o record inteiro, e não só o texto formatado.
+
+    `extra` não aparece na linha formatada -- nem aqui nem no `FORMATO` de
+    produção, que não imprime `{extra}`. Um teste que olhe só a mensagem passa
+    com a redação de `extra` desligada, sem testar nada. Quem recebe `extra` de
+    verdade é um sink com `serialize=True` ou um exportador OTLP, e é o record
+    que eles leem.
+    """
+    vistos = []
+    sink_id = logger.add(
+        lambda mensagem: vistos.append(mensagem.record),
+        level="DEBUG",
+        format="{message}",
+    )
+    try:
+        yield vistos
+    finally:
+        logger.remove(sink_id)
+
+
 # ---------------------------------------------------------------------------
 # Camada 1: patcher (vale para todo sink)
 # ---------------------------------------------------------------------------
@@ -66,10 +89,10 @@ def test_redige_argumento_interpolado(capturado):
     assert "12345678901" not in capturado[0]
 
 
-def test_redige_campo_extra(capturado):
+def test_redige_campo_extra(records):
     logger.bind(user_id="5521999998888").info("chamada de tool")
 
-    assert "5521999998888" not in str(capturado)
+    assert records[0]["extra"]["user_id"] == "[REDACTED]"
 
 
 def test_preserva_identificador_util(capturado):
@@ -79,10 +102,16 @@ def test_preserva_identificador_util(capturado):
     assert "1756213800000" in capturado[0]
 
 
-def test_patcher_nao_derruba_a_chamada(capturado, monkeypatch):
+def test_falha_na_redacao_nao_derruba_a_chamada_e_falha_fechado(capturado, monkeypatch):
     """
-    Uma falha na redação não pode virar exceção no `logger.*` de quem chamou --
-    a linha de log vale menos do que a chamada que a produziu.
+    Duas garantias distintas, e as duas importam.
+
+    **Não levantar**, porque um patcher que estoura derruba o `logger.*` de quem
+    chamou -- a linha de log vale menos do que a chamada que a produziu.
+
+    **Falhar fechado**, porque devolver o texto original quando a redação quebra
+    é pior do que não ter barreira: o vazamento é silencioso e ninguém procura
+    por ele. Perder a linha custa um diagnóstico; deixá-la passar custa o CPF.
     """
 
     def explode(_texto):
@@ -90,9 +119,28 @@ def test_patcher_nao_derruba_a_chamada(capturado, monkeypatch):
 
     monkeypatch.setattr(log_mod, "redigir_texto", explode)
 
-    logger.info("segue o baile")
+    logger.info("cpf do cidadão 123.456.789-01")
 
-    assert capturado  # a linha saiu mesmo com a redação quebrada
+    assert capturado  # a chamada de quem logou sobreviveu
+    assert "123.456.789-01" not in capturado[0]  # e o dado não passou em claro
+    assert "[REDACAO-FALHOU:RuntimeError]" in capturado[0]
+
+
+def test_falha_na_redacao_do_extra_nao_vaza_o_extra(records, monkeypatch):
+    """
+    `message` e `extra` têm `try` separados: uma falha em um não pode devolver o
+    outro em claro.
+    """
+
+    def explode(_obj, **_kwargs):
+        raise RuntimeError("falha na redação")
+
+    monkeypatch.setattr(log_mod, "redigir_estrutura", explode)
+
+    logger.bind(user_id="5521999998888").info("chamada de tool")
+
+    assert "5521999998888" not in str(records[0]["extra"])
+    assert "[REDACAO-FALHOU" in str(records[0]["extra"])
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +193,57 @@ def test_sink_nao_despeja_variaveis_locais(capsys):
     assert "98765432100" not in capsys.readouterr().err
 
 
+def test_sink_falha_fechado_e_nao_escreve_o_traceback_cru(capsys, monkeypatch):
+    """
+    Quando a redação do texto final quebra, o traceback -- que é onde está o
+    valor do cidadão -- não pode ir para o stderr como veio.
+    """
+
+    def explode(_texto):
+        raise RuntimeError("falha na redação")
+
+    monkeypatch.setattr(log_mod, "redigir_texto", explode)
+
+    try:
+        raise ValueError("cpf 123.456.789-01")
+    except ValueError:
+        logger.exception("falhou")
+
+    err = capsys.readouterr().err
+
+    assert "123.456.789-01" not in err
+    assert "[REDACAO-FALHOU:RuntimeError]" in err
+
+
+def test_segunda_passada_so_acontece_quando_ha_excecao(monkeypatch, capsys):
+    """
+    O que o sink acrescenta é `str(exception)` e o traceback, que só existem
+    depois da formatação. Sem exceção, tudo que varia na linha é `{message}` --
+    já redigido pelo patcher --, e repassar a redação dobraria o custo do
+    caminho quente, que roda no thread do event loop.
+    """
+    chamadas = []
+    original = log_mod.redigir_texto
+    monkeypatch.setattr(
+        log_mod, "redigir_texto", lambda t: chamadas.append(t) or original(t)
+    )
+
+    logger.info("linha comum, sem exceção")
+    sem_excecao = len(chamadas)
+
+    chamadas.clear()
+    try:
+        raise ValueError("estourou")
+    except ValueError:
+        logger.exception("com traceback")
+    com_excecao = len(chamadas)
+
+    capsys.readouterr()
+
+    assert sem_excecao == 1, "linha comum não precisa da segunda passada"
+    assert com_excecao == 2, "linha com traceback precisa das duas"
+
+
 def test_debug_nao_sai_com_log_level_padrao(capsys):
     """
     `LOG_LEVEL` era lido em `settings.py` e nunca aplicado: o handler default do
@@ -158,6 +257,31 @@ def test_debug_nao_sai_com_log_level_padrao(capsys):
 
     assert "dados do imóvel em detalhe" not in err
     assert "consulta concluída" in err
+
+
+@pytest.mark.parametrize(
+    "configurado,esperado",
+    [
+        ("info", "INFO"),
+        ("debug", "DEBUG"),
+        ("  warning  ", "WARNING"),
+        ("", "INFO"),
+        (None, "INFO"),
+        ("lixo", "INFO"),
+        ("ERROR", "ERROR"),
+    ],
+)
+def test_log_level_invalido_nao_derruba_a_subida(monkeypatch, configurado, esperado):
+    """
+    O loguru exige o nível em maiúsculas e levanta `ValueError` no resto --
+    `LOG_LEVEL=info` ou vazio é o que um ConfigMap produz sem esforço. Como este
+    módulo é importado na primeira linha de `src/main.py`, o estouro aconteceria
+    antes do preflight: em vez do relatório consolidado de variáveis faltantes,
+    um traceback de dentro do loguru e CrashLoopBackOff.
+    """
+    monkeypatch.setattr(log_mod.Settings, "LOG_LEVEL", configurado)
+
+    assert log_mod._nivel_de_log() == esperado
 
 
 def test_instalar_redacao_e_idempotente(capsys):

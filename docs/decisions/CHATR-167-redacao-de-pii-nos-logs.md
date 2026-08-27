@@ -61,11 +61,27 @@ estavam inline em `poda_de_arvore/workflow.py:694-714`, e
 
 | Camada | Onde | O que só ela pega |
 | --- | --- | --- |
-| `patcher` | antes de **todo** sink | mensagem ainda **estruturada** — `logger.info({...})` chega com o dict de pé, e é a única janela para redigir pela chave |
+| `patcher` | antes de **todo** sink | `record["extra"]`, que não passa pela formatação e chega inteiro a um sink que serializa o record |
 | `sink` | texto já formatado | `str(exception)` e o traceback, que não existem antes da formatação |
+
+**O patcher não vê estrutura.** O loguru monta o record com `str(message)`
+(`_logger.py:2024`) e só então chama o patcher (`_logger.py:2060`), então
+`logger.info({...})` chega já stringificado — não há janela para redigir o dict
+de pé. Quem cobre esse caso é `redigir_chaves_sensiveis`, que reconhece a chave
+dentro do texto. A consequência prática é que **essa cobertura por chave é a
+única que existe para nome e endereço em `logger.*`**: tirá-la de
+`redigir_texto` reabre o vazamento. `redigir_estrutura` continua valendo para
+`extra` e para os payloads do interceptor e do cliente HTTP, onde a estrutura
+de fato sobrevive.
 
 O sink próprio também é o que desliga `diagnose`/`backtrace` e aplica
 `LOG_LEVEL`.
+
+**A segunda passada é condicional.** O que ela acrescenta é exatamente
+`str(exception)` e o traceback; sem exceção no record, tudo que varia na linha é
+`{message}` — já redigido pelo patcher — mais timestamp, nível e origem, que não
+são PII. Redigir de novo dobrava o custo do caminho quente, e esse custo roda no
+thread do event loop: 106 µs → 46 µs por linha típica.
 
 **Consequência a conhecer:** um sink adicionado fora de `src/utils/log.py` (um
 teste, ou um exportador OTLP de logs no futuro) recebe a camada 1, não a 2 — o
@@ -79,8 +95,10 @@ arquivos precisou trocar de import**.
 
 Não existe padrão confiável para nome próprio em texto solto: uma regex que
 tentasse ou destruiria mensagem legítima ou não pegaria nada. A cobertura desses
-vem de **olhar a chave, não o valor** — `redigir_estrutura` para dict de pé e
-`redigir_chaves_sensiveis` para dict já convertido em string.
+vem de **olhar a chave, não o valor** — `redigir_chaves_sensiveis` para o texto
+que chega ao logger (que é sempre texto, ver acima) e `redigir_estrutura` onde a
+estrutura sobrevive: `record["extra"]`, o payload do interceptor e o do cliente
+HTTP.
 
 E a chave é decidida por **token**, não por igualdade, porque os payloads deste
 projeto misturam convenções. Colhendo os nomes reais de campo do código:
@@ -92,7 +110,11 @@ Duas salvaguardas contra o excesso:
 
 - **Tokens que desarmam** (`servico`, `service`, `table`, `bairro`, `event`…):
   sem eles, `nome_servico`, `service_name` e `bairro_nome` seriam redigidos — e
-  são justamente o que sobra para entender a linha.
+  são justamente o que sobra para entender a linha. O veto vale **só sobre token
+  genérico** (`nome`, `name`), que rotula qualquer coisa. Desarmando a chave
+  inteira, bastava um `servico` em qualquer posição para
+  `nome_do_cliente_do_servico` sair em claro; `cliente`, `cpf` e `endereco`
+  ganham do veto.
 - **Valor inócuo nunca é redigido**: `email_processed: True` e `cpf_attempts: 2`
   são o rastro do caminho do workflow. Nenhum dado pessoal cabe em 4 caracteres.
 
@@ -134,21 +156,78 @@ Uma exceção conhecida: um protocolo de **10 dígitos** que comece com DDD vál
 (`1234567890`) é redigido como telefone, porque tem exatamente a forma de um
 fixo. Não há como separar os dois sem contexto.
 
-### 4b. O regex de e-mail é possessivo por segurança, não por estilo
+### 4b. Regex que roda em toda linha de log precisa ser linear
 
-`[\w.+-]+@[\w-]+(?:\.[\w-]+)+` tem backtracking quadrático em texto longo sem
-`@` — e este padrão roda em **toda linha de log**, sobre texto que o cidadão
-escreveu. Com lookbehind e quantificadores possessivos (`++`, Python 3.11+),
-8 KB de entrada adversarial caem de 0,30s para 0,0001s.
+Vale para dois padrões, pela mesma razão: eles processam texto que o cidadão
+escreveu, no thread do event loop, duas vezes por linha (patcher e sink).
+
+**E-mail.** `[\w.+-]+@[\w-]+(?:\.[\w-]+)+` tem backtracking quadrático em texto
+longo sem `@`. Com lookbehind e quantificadores possessivos (`++`, Python
+3.11+), 8 KB de entrada adversarial caem de 0,30s para 0,0001s.
+
+**Chave/valor.** `[A-Za-z0-9_]*(?:alternação de 35 tokens)[A-Za-z0-9_]*` tem o
+mesmo problema, e pior: sem uma guarda de ancoragem o motor tenta casar em cada
+posição de um run de `[A-Za-z0-9_]` e, em cada uma, refaz o backtracking sobre a
+alternação inteira — O(n² · k). Medido: um `logger.info` com 4 KB adversariais
+custava **2,4 s de CPU no event loop**, o que faz de uma mensagem de WhatsApp um
+DoS. Com `(?<![A-Za-z0-9_])`, 1,9 ms.
+
+O `_BLOB_BASE64` encurta runs de 64+ caracteres antes, mas não protege: basta um
+`_` no meio para o run deixar de ser base64 e continuar sendo um run para o
+padrão de chave/valor.
+
+### 4c. Blob se distingue de caminho pelo formato, não pelo alfabeto
+
+`[A-Za-z0-9+/]{64,}` também casa com caminho de arquivo e rota de API, que são
+runs longos dos mesmos caracteres — e apagava do log justamente o que localiza o
+erro. Tentar separar pelo alfabeto não funciona (`QUJDRA...` é base64 legítimo
+sem um dígito sequer); o que separa é a forma. Em base64 o `/` aparece com
+probabilidade 1/64 por caractere, então os pedaços entre barras são longos; em
+caminho são curtos e numerosos.
+
+Errar para o lado do blob não redigido é aceitável: o conteúdo já está
+codificado, e a chave que o carrega (`pdf`, `base64`) continua sendo redigida
+pela chave.
+
+### 4d. Credencial não usa a isenção de valor curto
+
+`_valor_e_inocuo` deixa passar valor numérico de até 4 caracteres, para preservar
+`cpf_attempts: 2` e `email_processed: True`. O argumento — nenhum dado pessoal
+cabe em 4 caracteres — vale para PII e **não** vale para segredo: PIN, OTP e
+código de acesso moram exatamente nessa faixa, e `senha: 1234` estava saindo em
+claro. Chave de credencial desarma a isenção.
+
+### 4e. `LOG_LEVEL` inválido não pode impedir a subida
+
+Passar a **aplicar** o `LOG_LEVEL` cria um modo de falha que não existia enquanto
+ele era lido e ignorado: o loguru exige o nome em maiúsculas e levanta
+`ValueError` no resto, e `LOG_LEVEL=info` ou vazio é o que um ConfigMap produz
+sem esforço. Como `src/utils/log.py` é importado na primeira linha de
+`src/main.py`, o estouro viria **antes do preflight** — trocando o relatório
+consolidado de variáveis faltantes por um traceback de dentro do loguru, em
+CrashLoopBackOff. O valor é normalizado e cai para INFO com aviso. Nível de log
+errado é motivo para logar mais, nunca para não subir.
 
 ### 5. Sem chave para desligar
 
 Não há `LOG_REDACTION_ENABLED`. Uma flag dessas é o tipo de coisa que alguém
 liga para depurar em staging e esquece ligada em produção.
 
-O que existe é uma garantia oposta: `_redigir_record` **nunca levanta**. Um
-patcher que estoura derruba o `logger.*` de quem chamou (verificado), e a linha
-de log vale menos do que a chamada que a produziu.
+O que existe são duas garantias opostas, e são independentes uma da outra.
+
+**Nunca levanta.** Um patcher que estoura derruba o `logger.*` de quem chamou
+(verificado), e a linha de log vale menos do que a chamada que a produziu.
+
+**Falha fechado.** Não levantar não diz nada sobre *qual valor fica*, e devolver
+o texto original quando a redação quebra — uma regex nova mal formada, um objeto
+cujo `__str__` levanta — é pior do que não ter barreira: o vazamento é silencioso
+e ninguém vai procurar por ele. A linha vira
+`[REDACAO-FALHOU:<TipoDaExcecao>]`, que é o termo a alertar no SigNoz. O tipo da
+exceção entra porque localiza a causa; a mensagem dela, não — costuma repetir o
+valor que estourou a redação. Mensagem e `extra` têm `try` separados, para que
+uma falha em um não devolva o outro em claro.
+
+Perder a linha custa um diagnóstico; deixá-la passar custa o CPF.
 
 ### 6. O interceptor continua vendo o nome
 

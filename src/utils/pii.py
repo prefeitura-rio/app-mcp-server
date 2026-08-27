@@ -157,6 +157,15 @@ TOKENS_NAO_SENSIVEIS: Set[str] = {
     "uf",
 }
 
+# Token sensível que também serve de rótulo genérico para qualquer coisa: é o
+# único que o veto acima pode desarmar. `nome_servico` é o nome de um serviço,
+# mas `nome_do_cliente_do_servico` continua sendo o nome de uma pessoa -- deixar
+# `servico` desarmar a chave inteira era um veto mais forte do que o pretendido.
+TOKENS_SENSIVEIS_GENERICOS: Set[str] = {
+    "nome",
+    "name",
+}
+
 # Chave sensível cujos tokens, isolados, não denunciam nada.
 CHAVES_EXATAS_SENSIVEIS: Set[str] = {
     "userid",
@@ -189,9 +198,34 @@ def chave_e_sensivel(chave: Any) -> bool:
     if normalizada in CHAVES_EXATAS_SENSIVEIS:
         return True
     tokens = _tokens_da_chave(chave)
-    if tokens & TOKENS_NAO_SENSIVEIS:
+    sensiveis = tokens & TOKENS_SENSIVEIS
+    if not sensiveis:
         return False
-    return bool(tokens & TOKENS_SENSIVEIS)
+    # O veto de diagnóstico só vale enquanto tudo que marcou a chave for
+    # genérico. Um token forte (`cpf`, `cliente`, `endereco`) na mesma chave
+    # ganha do veto.
+    if sensiveis <= TOKENS_SENSIVEIS_GENERICOS and tokens & TOKENS_NAO_SENSIVEIS:
+        return False
+    return True
+
+
+# Forma normalizada das chaves de credencial, para comparar com a chave do
+# payload sem depender da convenção de escrita (`api_key`, `apiKey`, `API-KEY`).
+_CREDENCIAIS_NORMALIZADAS: Set[str] = {
+    re.sub(r"[^a-z0-9]", "", chave) for chave in CHAVES_CREDENCIAL
+}
+
+
+def _chave_e_credencial(chave: Any) -> bool:
+    """
+    True se a chave nomeia um segredo, e não um dado pessoal.
+
+    Serve para furar a isenção de `_valor_e_inocuo`: o argumento dela -- nenhum
+    dado pessoal cabe em 4 caracteres -- vale para PII e não vale para segredo.
+    PIN, OTP e código de acesso moram exatamente nessa faixa, e `senha: 1234`
+    estava saindo em claro.
+    """
+    return re.sub(r"[^a-z0-9]", "", str(chave).lower()) in _CREDENCIAIS_NORMALIZADAS
 
 
 def _valor_e_inocuo(valor: Any) -> bool:
@@ -201,6 +235,9 @@ def _valor_e_inocuo(valor: Any) -> bool:
     `email_processed: True`, `cpf_attempts: 2` e `collect_email: False` são o
     rastro que explica o caminho do workflow -- redigi-los é perder o diagnóstico
     sem ganhar privacidade nenhuma. Nenhum dado pessoal cabe em 4 caracteres.
+
+    A recíproca não vale para credencial: ver `_chave_e_credencial`, que desarma
+    esta isenção nos dois pontos que a consultam.
     """
     if valor is None or isinstance(valor, bool):
         return True
@@ -226,11 +263,13 @@ def _valor_e_inocuo(valor: Any) -> bool:
 # e o padrão é o mesmo com ou sem, mas a primeira chave com `.` ou `+` viraria
 # curinga em silêncio -- e o silêncio, num controle de redação, é o problema.
 #
-# `(?<!\w)` ancora o início da chave. Sem ele `key` casava dentro de qualquer
-# palavra terminada nela e `monkey=banana` virava `monkey=<redacted>`, comendo
-# diagnóstico do relatório de erro. A âncora recusa `\w` mas aceita `-`, que é
-# justamente o que mantém `X-Goog-Signature` coberto: `(?<![\w-])` quebraria a
-# redação da signed URL do GCS.
+# `(?<!\w)` ancora o início da chave. Sem ele a alternação casava no fim de
+# qualquer palavra terminada nela, e `monkey=banana`, `sortkey=asc`, `rowkey=42`
+# e `cacheKey=...` viravam `<redacted>` -- comendo do log e do relatório de erro
+# parâmetro de paginação e de cache que não é segredo nenhum. A âncora recusa
+# `\w` mas aceita `-`, e é isso que mantém `X-Goog-Signature` coberto:
+# `(?<![\w-])` mataria a over-redaction do mesmo jeito, passaria no resto da
+# suíte, e desligaria em silêncio a redação de toda signed URL de fornecedor.
 _CREDENCIAL_EM_QUERY = re.compile(
     rf"(?<!\w)((?:{'|'.join(re.escape(chave) for chave in sorted(CHAVES_CREDENCIAL))})=)"
     r"[^&\s'\"]+",
@@ -241,6 +280,33 @@ _CREDENCIAL_EM_QUERY = re.compile(
 # JWT. O piso de 64 caracteres contíguos é alto o bastante para não pegar
 # palavra de mensagem nem trace_id (32 caracteres).
 _BLOB_BASE64 = re.compile(r"(?<![\w+/=])[A-Za-z0-9+/]{64,}={0,2}(?![\w+/=])")
+
+
+def _e_blob(candidato: str) -> bool:
+    """
+    Separa blob de caminho e de rota, que também são runs longos de
+    `[A-Za-z0-9/]`.
+
+    `/home/runner/work/appmcpserver/appmcpserver/src/utils/errorinterceptor` tem
+    70 caracteres e saía como `[REDACTED-BASE64]` -- apagando do log justamente
+    o que localiza o erro.
+
+    O alfabeto não separa os dois: `QUJDRA...` é base64 legítimo sem um dígito
+    sequer. O que separa é o formato. Em base64 o `/` aparece com probabilidade
+    1/64 por caractere, então os pedaços entre barras são longos; em caminho e
+    em rota são curtos e numerosos.
+
+    Errar aqui custa um blob não redigido de vez em quando, não um dado pessoal
+    em claro -- o conteúdo do blob já está codificado, e a chave que o carrega
+    (`pdf`, `base64`) continua sendo redigida por `redigir_chaves_sensiveis`.
+    """
+    pedacos = candidato.rstrip("=").split("/")
+    return len(pedacos) <= 2 or max(len(pedaco) for pedaco in pedacos) >= 32
+
+
+def _redigir_blob(match: "re.Match") -> str:
+    return "[REDACTED-BASE64]" if _e_blob(match.group(0)) else match.group(0)
+
 
 # O lookbehind e os quantificadores possessivos (`++`, Python 3.11+) não são
 # capricho: `[\w.+-]+@[\w-]+(?:\.[\w-]+)+` tem backtracking quadrático em texto
@@ -289,11 +355,21 @@ def _regex_de_chaves(tokens: Iterable[str]) -> re.Pattern:
     A chave é reconhecida por token e não por igualdade -- `'enderecoImovel':`
     precisa bater tanto quanto `'endereco':`. Quem decide de fato é
     `chave_e_sensivel`, chamada na substituição: a regex é só o filtro grosso.
+
+    A guarda de ancoragem não é estilo. Sem ela o motor tenta casar em **cada
+    posição** de um run de `[A-Za-z0-9_]`, e em cada uma o prefixo
+    `[A-Za-z0-9_]*` refaz o backtracking sobre a alternação inteira -- O(n² · k).
+    Este padrão roda em toda linha de log, sobre texto que o cidadão escreveu:
+    medido antes da guarda, um `logger.info` com 4 KB adversariais custava 2,4 s
+    de CPU no event loop (1,2 s por passada, e a barreira passa duas vezes).
+    Com a guarda, 1,9 ms. É o mesmo problema que o `_EMAIL` já tratava com
+    lookbehind e quantificador possessivo.
     """
     alternativa = "|".join(
         sorted((re.escape(t) for t in tokens), key=len, reverse=True)
     )
     return re.compile(
+        r"(?<![A-Za-z0-9_])"
         r"(?P<abre>['\"]?)"
         rf"(?P<chave>[A-Za-z0-9_]*(?:{alternativa})[A-Za-z0-9_]*)"
         r"(?P<meio>['\"]?\s*[:=]\s*)"
@@ -335,7 +411,7 @@ def redigir_padroes_pii(texto: Optional[str]) -> Optional[str]:
     """
     if not texto:
         return texto
-    redigido = _BLOB_BASE64.sub("[REDACTED-BASE64]", texto)
+    redigido = _BLOB_BASE64.sub(_redigir_blob, texto)
     redigido = _EMAIL.sub("[REDACTED-EMAIL]", redigido)
     redigido = _CNPJ.sub("[REDACTED-CNPJ]", redigido)
     # Telefone antes de CPF: os dois têm 11 dígitos quando vêm sem pontuação, e
@@ -350,7 +426,9 @@ def redigir_padroes_pii(texto: Optional[str]) -> Optional[str]:
 def _redigir_valor_da_chave(match: "re.Match") -> str:
     """Redige o valor se a chave for sensível e o valor não for flag/contador."""
     chave, valor = match.group("chave"), match.group("valor")
-    if not chave_e_sensivel(chave) or _valor_e_inocuo(valor):
+    if not chave_e_sensivel(chave) or (
+        _valor_e_inocuo(valor) and not _chave_e_credencial(chave)
+    ):
         return match.group(0)
     limpo = valor.strip("'\"")
     if limpo.startswith("[REDACTED") or limpo == MARCADOR_CREDENCIAL:
@@ -390,7 +468,8 @@ def redigir_estrutura(obj: Any, *, marcador: str = MARCADOR_GENERICO) -> Any:
         return {
             chave: (
                 marcador
-                if chave_e_sensivel(chave) and not _valor_e_inocuo(valor)
+                if chave_e_sensivel(chave)
+                and (_chave_e_credencial(chave) or not _valor_e_inocuo(valor))
                 else redigir_estrutura(valor, marcador=marcador)
             )
             for chave, valor in obj.items()
