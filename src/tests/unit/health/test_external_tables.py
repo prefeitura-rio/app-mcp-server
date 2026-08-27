@@ -278,7 +278,7 @@ def test_registro_em_producao_inclui_external_tables(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.config.env", env)
 
     registry = HealthRegistry()
-    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={"t": 1}))
+    mcp = types.SimpleNamespace(list_tools=AsyncMock(return_value=["t"]))
     checks.register_default_checks(mcp, registry)
 
     assert "external_tables" in registry.names
@@ -292,7 +292,7 @@ def test_registro_local_omite_external_tables(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.config.env", env)
 
     registry = HealthRegistry()
-    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={"t": 1}))
+    mcp = types.SimpleNamespace(list_tools=AsyncMock(return_value=["t"]))
     checks.register_default_checks(mcp, registry)
 
     assert "external_tables" not in registry.names

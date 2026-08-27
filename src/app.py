@@ -232,6 +232,13 @@ def create_app() -> FastMCP:
     # do FastMCP não serve, porque as duas implementações que coexistem aqui a
     # expõem de formas diferentes — e o fastmcp 3 removeu o `_tool_manager` em
     # que a versão anterior deste log se apoiava.
+    #
+    # O `name=tool_name` no `mcp.tool()` abaixo é o que torna esta coleta
+    # confiável: sem ele o nome registrado sairia de `func.__name__`, e a
+    # lista passaria a ser a intenção declarada no decorator em vez do que o
+    # servidor de fato expõe. Com ele, a string do decorator é ao mesmo tempo
+    # o nome registrado, o que este log imprime e o que `EXCLUDED_TOOLS`
+    # compara — os três não têm como divergir.
     registered_tool_names: set[str] = set()
 
     def conditional_mcp_tool(tool_name: str, **kwargs):
@@ -240,7 +247,7 @@ def create_app() -> FastMCP:
         def decorator(func):
             if tool_name not in EXCLUDED_TOOLS:
                 registered_tool_names.add(tool_name)
-                return mcp.tool(**kwargs)(func)
+                return mcp.tool(name=tool_name, **kwargs)(func)
             else:
                 logger.info(f"Tool '{tool_name}' excluded from registration")
                 return func

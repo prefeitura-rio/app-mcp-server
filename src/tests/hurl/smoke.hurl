@@ -74,7 +74,9 @@ body not matches "[a-z][a-z0-9+.-]*://"
 # token foi apresentado e recusado. Requisição sem credencial alguma recebe o
 # desafio nu, porque não houve erro de token a reportar — não existe token.
 # O FastMCP 2.x devolvia `invalid_token` nos dois; o 3.x separa. O invariante
-# que esta seção protege é o 401, não o texto do header.
+# principal continua sendo o 401; os asserts de header prendem a separação em
+# si. `Bearer` sozinho não serve para isso: o desafio de erro também começa
+# com `Bearer`, então o caso sem credencial checa a AUSÊNCIA de `error=`.
 
 POST {{base_url}}/mcp
 Content-Type: application/json
@@ -85,6 +87,7 @@ Accept: application/json, text/event-stream
 HTTP 401
 [Asserts]
 header "WWW-Authenticate" contains "Bearer"
+header "WWW-Authenticate" not contains "error="
 
 
 POST {{base_url}}/mcp

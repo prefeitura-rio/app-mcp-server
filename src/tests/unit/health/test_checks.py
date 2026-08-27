@@ -113,8 +113,6 @@ async def test_tool_registry_nao_depende_de_get_tools():
         async def list_tools(self):
             return ["uma_tool"]
 
-    assert not hasattr(SemGetTools(), "get_tools")
-
     check = checks.make_tool_registry_check(SemGetTools())
 
     assert await check() is CheckStatus.UP
