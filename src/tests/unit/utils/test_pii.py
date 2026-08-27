@@ -405,6 +405,14 @@ def test_valor_nao_citado_nao_atravessa_a_linha():
     )
 
 
+def test_valor_citado_respeita_aspas_escapadas():
+    texto = '{"nome": "Maria \\"da Silva\\" Santos", "cpf": "12345678901"}'
+
+    assert redigir_texto(texto) == (
+        '{"nome": [REDACTED], "cpf": "[REDACTED-CPF]"}'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Redação de estrutura
 # ---------------------------------------------------------------------------
