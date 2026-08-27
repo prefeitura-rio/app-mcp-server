@@ -41,10 +41,15 @@ DEFAULT_ERROR_STATUS_CODES: FrozenSet[int] = frozenset(
 
 # Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro.
 #
-# As três últimas são da signed URL do GCS: ela é uma capability — quem tem a URL
+# As quatro últimas são da signed URL do GCS: ela é uma capability — quem tem a URL
 # baixa o arquivo, sem autenticar. Os fluxos de guia mandam essa URL ao encurtador
 # no campo "destination", e uma falha lá reportaria o payload inteiro ao
 # monitoramento. Redigir a assinatura invalida a URL para quem lê o log.
+#
+# `x-goog-signature` precisa estar aqui por extenso mesmo com `signature` na lista:
+# `redact_text` casa por substring e cobriria os dois, mas `redact_body` compara a
+# chave inteira, e ali "X-Goog-Signature" não casava com "signature" — a assinatura
+# saía em claro sempre que chegasse como campo próprio, e não embutida na URL.
 SENSITIVE_KEYS: FrozenSet[str] = frozenset(
     {
         "token",
@@ -61,6 +66,7 @@ SENSITIVE_KEYS: FrozenSet[str] = frozenset(
         "chave_acesso",
         "signature",
         "x-goog-credential",
+        "x-goog-signature",
         "googleaccessid",
     }
 )
@@ -69,8 +75,18 @@ SENSITIVE_KEYS: FrozenSet[str] = frozenset(
 # processos (hash randomization), então o padrão compilado mudava a cada boot.
 # O resultado da redação é o mesmo, mas um regex estável é o que torna o
 # comportamento reproduzível entre um pod e outro.
+#
+# `re.escape` porque as chaves entram cruas na alternação: hoje só têm `_` e `-`
+# e o padrão é o mesmo com ou sem, mas a primeira chave com `.` ou `+` viraria
+# curinga em silêncio — e o silêncio, num controle de redação, é o problema.
+#
+# `(?<!\w)` ancora o início da chave. Sem ele `key` casava dentro de qualquer
+# palavra terminada nela e `monkey=banana` virava `monkey=<redacted>`, comendo
+# diagnóstico do relatório de erro. A âncora recusa `\w` mas aceita `-`, que é
+# justamente o que mantém `X-Goog-Signature` coberto: `(?<![\w-])` quebraria a
+# redação da signed URL do GCS.
 _SENSITIVE_QUERY_RE = re.compile(
-    rf"((?:{'|'.join(sorted(SENSITIVE_KEYS))})=)[^&\s'\"]+",
+    rf"(?<!\w)((?:{'|'.join(re.escape(chave) for chave in sorted(SENSITIVE_KEYS))})=)[^&\s'\"]+",
     re.IGNORECASE,
 )
 

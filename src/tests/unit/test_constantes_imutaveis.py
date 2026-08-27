@@ -223,5 +223,10 @@ def test_sensitive_keys_cobre_a_signed_url_do_gcs(constantes):
     quem lê o log.
     """
     chaves = constantes["SENSITIVE_KEYS"]
-    for obrigatoria in ("signature", "x-goog-credential", "googleaccessid"):
+    for obrigatoria in (
+        "signature",
+        "x-goog-credential",
+        "x-goog-signature",
+        "googleaccessid",
+    ):
         assert obrigatoria in chaves
