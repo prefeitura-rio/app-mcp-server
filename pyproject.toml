@@ -5,7 +5,7 @@ description = "Servidor FastMCP para o Rio de Janeiro"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp",
+    "mcp[cli]",
     "pytz",
     "fastmcp>=2.14.7,<3",
     "loguru>=0.7.3",
@@ -33,7 +33,7 @@ dependencies = [
     # de carona (shapely via geopandas, cryptography via pyjwt[crypto],
     # aiofiles via crawl4ai). Sem isto, remover aquelas quebra o build.
     "shapely>=2.1",
-    "cryptography>=43",
+    "cryptography>=50",
     "aiofiles>=24.1",
     "jellyfish>=1.2.1",
     "num2words>=0.5.14",

@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -37,6 +39,26 @@ def _load_module(module_name: str, relative_path: str):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+class FakeSTRtree:
+    """
+    Stub de `shapely.STRtree` para o módulo de API da poda.
+
+    Com `shapely.wkt.loads` stubado para identidade, as geometrias chegam como
+    os próprios números do JSON de fixture e `Point(x, y)` vira a tupla `(x, y)`
+    — então o vizinho mais próximo é a menor diferença absoluta para a longitude.
+    """
+
+    def __init__(self, geometries):
+        self._geometries = list(geometries)
+
+    def nearest(self, point):
+        longitude = point[0]
+        return min(
+            range(len(self._geometries)),
+            key=lambda i: abs(self._geometries[i] - longitude),
+        )
 
 
 def prepare_poda_api_module(monkeypatch, module_name="test_poda_api_service_module"):
@@ -104,8 +126,13 @@ def prepare_poda_api_module(monkeypatch, module_name="test_poda_api_service_modu
     )
     monkeypatch.setitem(
         sys.modules,
+        "shapely",
+        types.SimpleNamespace(STRtree=FakeSTRtree),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "shapely.geometry",
-        types.SimpleNamespace(Point=lambda x, y: (x, y), shape=lambda geom: geom),
+        types.SimpleNamespace(Point=lambda x, y: (x, y)),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -351,7 +378,6 @@ async def test_sgrc_service_get_user_info_wraps_errors(monkeypatch):
 @pytest.mark.asyncio
 async def test_address_service_helpers_and_endereco_info(monkeypatch):
     module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_addr")
-    monkeypatch.setattr(module.AddressAPIService, "_load_shape_rj", lambda self: None)
     service = module.AddressAPIService()
 
     assert await service.substitute_digits("Rua 12") != "Rua 12"
@@ -385,10 +411,103 @@ async def test_address_service_helpers_and_endereco_info(monkeypatch):
     assert result["bairro_id"] == "0"
 
 
+def _escrever_fixtures_de_geometria(tmp_path):
+    """Dois arquivos no formato que `get_nearest_logradouro_and_bairro` espera."""
+    (tmp_path / "logradouros.json").write_text(
+        json.dumps(
+            [
+                {"id": 1, "nome": "Rua Longe", "geometry": -50.0},
+                {"id": 2, "nome": "Rua Perto", "geometry": -43.2},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bairros.json").write_text(
+        json.dumps(
+            [
+                {"id": 20, "nome": "Centro", "geometry": -43.19},
+                {"id": 30, "nome": "Bangu", "geometry": -43.46},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_get_nearest_usa_indice_espacial_e_devolve_o_mais_proximo(
+    monkeypatch, tmp_path
+):
+    module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_near")
+    monkeypatch.setattr(module.env, "DATA_DIR", tmp_path)
+    _escrever_fixtures_de_geometria(tmp_path)
+
+    resultado = module.AddressAPIService().get_nearest_logradouro_and_bairro(
+        latitude=-22.9, longitude=-43.2
+    )
+
+    assert resultado.id_logradouro == 2
+    assert resultado.name_logradouro == "Rua Perto"
+    assert resultado.id_bairro == 20
+    assert resultado.name_bairro == "Centro"
+
+
+def test_get_nearest_le_cada_arquivo_uma_unica_vez(monkeypatch, tmp_path):
+    """
+    O conteúdo é imutável em runtime: reler e reparsear a cada consulta era o
+    custo linear que o cache de processo elimina.
+    """
+    module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_cache")
+    monkeypatch.setattr(module.env, "DATA_DIR", tmp_path)
+    _escrever_fixtures_de_geometria(tmp_path)
+
+    lidos = []
+    read_json_original = module.pd.read_json
+
+    def read_json_espiao(caminho, *args, **kwargs):
+        lidos.append(Path(caminho).name)
+        return read_json_original(caminho, *args, **kwargs)
+
+    monkeypatch.setattr(module.pd, "read_json", read_json_espiao)
+
+    service = module.AddressAPIService()
+    service.get_nearest_logradouro_and_bairro(latitude=-22.9, longitude=-43.2)
+    service.get_nearest_logradouro_and_bairro(latitude=-22.8, longitude=-43.4)
+
+    assert sorted(lidos) == ["bairros.json", "logradouros.json"]
+
+
+@pytest.mark.asyncio
+async def test_get_endereco_info_nao_bloqueia_o_event_loop(monkeypatch, tmp_path):
+    """A consulta é síncrona e lê disco: precisa sair do loop via `to_thread`."""
+    module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_thread")
+    monkeypatch.setattr(module.env, "DATA_DIR", tmp_path)
+    _escrever_fixtures_de_geometria(tmp_path)
+
+    service = module.AddressAPIService()
+    thread_da_consulta = {}
+    consulta_original = service.get_nearest_logradouro_and_bairro
+
+    def registrando_thread(latitude, longitude):
+        thread_da_consulta["nome"] = threading.current_thread()
+        return consulta_original(latitude, longitude)
+
+    monkeypatch.setattr(
+        service, "get_nearest_logradouro_and_bairro", registrando_thread
+    )
+
+    async def fake_get_ipp_street_code(**kwargs):
+        return {"logradouro_id": "99", "bairro_nome": "Centro"}
+
+    monkeypatch.setattr(service, "get_ipp_street_code", fake_get_ipp_street_code)
+
+    resultado = await service.get_endereco_info(-22.9, -43.2, "Rua A", "Centro")
+
+    assert resultado["logradouro_id"] == "99"
+    assert thread_da_consulta["nome"] is not threading.current_thread()
+
+
 @pytest.mark.asyncio
 async def test_address_service_get_ipp_street_code(monkeypatch):
     module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_ipp")
-    monkeypatch.setattr(module.AddressAPIService, "_load_shape_rj", lambda self: None)
     service = module.AddressAPIService()
 
     class DummyResponse:
