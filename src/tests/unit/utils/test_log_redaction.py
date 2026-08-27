@@ -18,6 +18,26 @@ from loguru import logger
 import src.utils.log as log_mod
 
 
+@pytest.fixture(autouse=True)
+def barreira_deste_modulo():
+    """
+    Garante que a barreira ativa é a **deste** objeto de módulo.
+
+    A suíte completa reexecuta o corpo de `src/utils/log.py`: outros testes
+    trocam `sys.modules["src.utils.log"]` por um fake, e um `import_module`
+    posterior de `src.app` reimporta o módulo de verdade. Cada reexecução cria
+    um objeto novo, com seu próprio `_redacao_instalada = False`, que dá
+    `logger.remove()` e instala **suas** funções -- e o `monkeypatch` daqui
+    passa a mirar funções que não são as ativas.
+
+    Sem esta fixture os testes de fail-closed passam isolados e falham na suíte,
+    que é o pior modo de falhar: some no desenvolvimento e aparece no CI.
+    """
+    log_mod._redacao_instalada = False
+    log_mod.instalar_redacao()
+    yield
+
+
 @pytest.fixture
 def capturado():
     """Sink de teste: recebe a mensagem já formatada, depois do patcher."""

@@ -234,6 +234,19 @@ def instalar_redacao() -> None:
     """
     Instala a barreira. Idempotente -- chamar de novo não duplica o sink.
 
+    A idempotência é por **objeto de módulo**, não por processo. Se o corpo
+    deste arquivo executar duas vezes -- reimport com `sys.modules` manipulado,
+    `importlib.reload`, ou duas identidades de módulo para o mesmo arquivo --, o
+    segundo objeto entra com `_redacao_instalada = False`, dá `logger.remove()`
+    no sink do primeiro e instala os seus. A barreira continua de pé (a nova
+    substitui a antiga), mas quem guardou referência às funções antigas fica com
+    referência morta.
+
+    Em produção isso não acontece: `src/main.py` importa uma vez só. Na suíte
+    acontece, e é por isso que `test_log_redaction.py` reinstala a barreira a
+    partir do próprio objeto de módulo antes de cada teste -- sem isso os testes
+    de fail-closed passam isolados e falham na suíte completa.
+
     `LOG_LEVEL` (default INFO) passa a valer de fato: o handler default do
     loguru é DEBUG, então tudo que era `logger.debug` estava saindo em staging e
     produção. Isso é defesa em profundidade, não o controle -- nível de log é
