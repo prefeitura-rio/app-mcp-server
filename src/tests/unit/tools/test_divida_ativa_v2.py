@@ -398,7 +398,8 @@ async def test_emitir_a_vista_caminho_feliz(pgm_mock):
     assert resultado["codigo_de_barras"] == "8360000000"
     assert resultado["link"] == "https://pgm.example/guia.pdf"
     assert resultado["data_vencimento"] == "2026-09-01"
-    assert resultado["pix"] == "00020126"
+    # O EMV saiu da resposta em CHATR-176; o PDF da guia já o carrega.
+    assert "pix" not in resultado
     assert "api_descricao_erro" not in resultado
 
     assert pgm_mock[0]["endpoint"] == "v2/guiapagamento/emitir/avista"
@@ -642,7 +643,6 @@ async def test_multiplos_registros_devolvem_todas_as_guias(monkeypatch):
             "codigo_de_barras": "111",
             "link": "a.pdf",
             "data_vencimento": "10/04/2026",
-            "pix": "pix-1",
             "valor": None,
         },
         {
@@ -650,13 +650,12 @@ async def test_multiplos_registros_devolvem_todas_as_guias(monkeypatch):
             "codigo_de_barras": "222",
             "link": "b.pdf",
             "data_vencimento": "11/04/2026",
-            "pix": "pix-2",
             "valor": None,
         },
     ]
     # Campos legado: a primeira guia, não a última.
     assert resultado["codigo_de_barras"] == "111"
-    assert resultado["pix"] == "pix-1"
+    assert "pix" not in resultado
 
 
 @pytest.mark.asyncio
@@ -759,7 +758,6 @@ def test_response_de_sucesso_mantem_contrato_da_v1():
         codigo_de_barras="8360000000",
         link="https://pgm.example/guia.pdf",
         data_vencimento="2026-09-01",
-        pix="00020126",
     )
 
     assert resposta.para_dict() == {
@@ -770,7 +768,6 @@ def test_response_de_sucesso_mantem_contrato_da_v1():
         "codigo_de_barras": "8360000000",
         "link": "https://pgm.example/guia.pdf",
         "data_vencimento": "2026-09-01",
-        "pix": "00020126",
     }
 
 
