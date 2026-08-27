@@ -257,6 +257,14 @@ mudou é que agora ele também cobre e-mail, CNPJ e blob em base64.
   que é outro caminho até o mesmo dado.
 - **Sink de terceiro não recebe a camada 2.** Se um exportador OTLP de logs for
   adicionado, o traceback precisa passar por `redigir_texto` na entrada dele.
+- **A barreira cobre só o loguru.** Não há ponte `logging` → loguru, então o que
+  uvicorn, starlette, opentelemetry e google-cloud escrevem pela stdlib não passa
+  por redação nenhuma — `src/utils/log.py` só ajusta o nível de `httpx` e
+  `httpcore`. Hoje o risco é baixo, porque o que sai por lá é log de acesso e de
+  infraestrutura, mas qualquer dependência nova que logue payload cai fora da
+  barreira sem aviso. A correção é um `InterceptHandler` roteando a raiz do
+  `logging` para o loguru, em ticket próprio: muda o roteamento de log de todas
+  as dependências de uma vez.
 
 ## Onde ficou
 

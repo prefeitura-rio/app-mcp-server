@@ -19,6 +19,11 @@ import time
 import pytest
 
 from src.utils.pii import (
+    CHAVES_CREDENCIAL,
+    CHAVES_EXATAS_SENSIVEIS,
+    TOKENS_NAO_SENSIVEIS,
+    TOKENS_SENSIVEIS,
+    TOKENS_SENSIVEIS_GENERICOS,
     chave_e_sensivel,
     mascarar_cpf,
     mascarar_email,
@@ -260,6 +265,43 @@ def test_redige_estrutura_aplica_padroes_no_que_sobra():
     limpo = redigir_estrutura({"observacao": "ligar para 5521999998888"})
 
     assert "5521999998888" not in limpo["observacao"]
+
+
+def test_redige_estrutura_alcanca_set_e_bytes():
+    """
+    Os dois caíam no `return obj` final e passavam intactos -- um telefone em
+    `{"21999998888"}` ou em `b"..."` sob chave não-sensível saía por inteiro.
+    """
+    assert redigir_estrutura({"valores": {"21999998888"}}) == {
+        "valores": {"[REDACTED-PHONE]"}
+    }
+    assert redigir_estrutura(b"cpf 123.456.789-01") == "cpf [REDACTED-CPF]"
+
+
+def test_redige_estrutura_nao_estoura_com_set_de_elemento_nao_hashable():
+    """
+    Redigir converte tupla em lista, que não é hashable. Deixar o `TypeError`
+    subir aqui suprimiria a linha de log inteira, porque a barreira falha
+    fechado -- então o set vira lista em vez de estourar.
+    """
+    assert redigir_estrutura({"itens": {("21999998888",)}}) == {
+        "itens": [["[REDACTED-PHONE]"]]
+    }
+
+
+def test_conjuntos_de_configuracao_sao_imutaveis():
+    """
+    `http_client.SENSITIVE_KEYS` é um alias para `CHAVES_CREDENCIAL`, não uma
+    cópia: um `.add()` em qualquer consumidor mudaria a barreira de log junto.
+    """
+    for conjunto in (
+        CHAVES_CREDENCIAL,
+        TOKENS_SENSIVEIS,
+        TOKENS_NAO_SENSIVEIS,
+        TOKENS_SENSIVEIS_GENERICOS,
+        CHAVES_EXATAS_SENSIVEIS,
+    ):
+        assert isinstance(conjunto, frozenset)
 
 
 def test_redige_estrutura_preserva_tipos_nao_estruturados():

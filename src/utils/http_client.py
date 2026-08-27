@@ -49,12 +49,15 @@ DEFAULT_ERROR_STATUS_CODES: FrozenSet[int] = frozenset(
 # barreira de log -- antes deste ticket havia uma cópia aqui e outra no
 # `error_interceptor`, e nenhuma das duas cobria a saída de `logger.*`.
 #
-# É um alias, não uma cópia: os três módulos apontam para o mesmo objeto. O que
-# o CHATR-153 tinha acrescentado neste bloco foi junto -- `x-goog-signature` na
-# lista, e as notas sobre a âncora `(?<!\w)`, o `re.escape` e o `sorted`
-# determinístico agora vivem em `_CREDENCIAL_EM_QUERY`, que é onde o padrão
+# É um alias, não uma cópia: os três módulos apontam para o mesmo objeto, e é
+# por isso que ele é `frozenset` -- um `.add()` distraído aqui mudaria também a
+# barreira de log.
+#
+# O que o CHATR-153 tinha acrescentado neste bloco foi junto: `x-goog-signature`
+# está na lista lá, e as notas sobre a âncora `(?<!\w)`, o `re.escape` e o
+# `sorted` determinístico vivem em `_CREDENCIAL_EM_QUERY`, que é onde o padrão
 # passou a ser compilado.
-SENSITIVE_KEYS: AbstractSet[str] = CHAVES_CREDENCIAL
+SENSITIVE_KEYS: FrozenSet[str] = CHAVES_CREDENCIAL
 
 
 def redact_text(texto: Optional[str]) -> Optional[str]:

@@ -35,7 +35,8 @@ ms), `1790000000` (epoch em s) e `12345678` (inscrição) atravessam intactos.
 """
 
 import re
-from typing import Any, Iterable, Optional, Set
+from functools import lru_cache
+from typing import Any, FrozenSet, Iterable, Optional, Set
 
 
 # ---------------------------------------------------------------------------
@@ -59,122 +60,136 @@ MARCADOR_CREDENCIAL = "<redacted>"
 # `proprietarioPrincipal`, `nomeRequerente`, `logradouro_nome_ipp`, `phones`.
 # Uma lista de chaves exatas erraria em quase todas.
 
+# Todos os conjuntos daqui são `frozenset`: `http_client.SENSITIVE_KEYS` é um
+# alias para `CHAVES_CREDENCIAL`, não uma cópia, então um `.add()` distraído em
+# qualquer um dos três módulos consumidores mudaria a barreira inteira.
+#
 # Credencial: comparação exata, usada pelo `redact_body` do `http_client` e pela
 # regex de query string. As três últimas são da signed URL do GCS -- ela é uma
 # capability, quem tem a URL baixa o arquivo sem autenticar, então redigir a
 # assinatura é o que invalida a URL para quem lê o log.
-CHAVES_CREDENCIAL: Set[str] = {
-    "token",
-    "access_token",
-    "refresh_token",
-    "id_token",
-    "api_key",
-    "apikey",
-    "key",
-    "secret",
-    "client_secret",
-    "password",
-    "senha",
-    "authorization",
-    "chaveacesso",
-    "chave_acesso",
-    "signature",
-    "x-goog-credential",
-    # Por extenso mesmo com `signature` na lista: `redigir_credenciais` casa por
-    # substring e cobriria os dois, mas o `redact_body` do `http_client` compara
-    # a chave inteira, e ali "X-Goog-Signature" não casava com "signature" -- a
-    # assinatura saía em claro sempre que chegasse como campo próprio, e não
-    # embutida na URL (CHATR-153).
-    "x-goog-signature",
-    "googleaccessid",
-}
+CHAVES_CREDENCIAL: FrozenSet[str] = frozenset(
+    {
+        "token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "api_key",
+        "apikey",
+        "key",
+        "secret",
+        "client_secret",
+        "password",
+        "senha",
+        "authorization",
+        "chaveacesso",
+        "chave_acesso",
+        "signature",
+        "x-goog-credential",
+        # Por extenso mesmo com `signature` na lista: `redigir_credenciais` casa
+        # por substring e cobriria os dois, mas o `redact_body` do `http_client`
+        # compara a chave inteira, e ali "X-Goog-Signature" não casava com
+        # "signature" -- a assinatura saía em claro sempre que chegasse como
+        # campo próprio, e não embutida na URL (CHATR-153).
+        "x-goog-signature",
+        "googleaccessid",
+    }
+)
 
 # Um token destes em qualquer parte da chave marca o valor como sensível.
-TOKENS_SENSIVEIS: Set[str] = {
-    # documento
-    "cpf",
-    "cnpj",
-    "cpfcnpj",
-    "documento",
-    "rg",
-    # identidade
-    "nome",
-    "name",
-    "proprietario",
-    "contribuinte",
-    "requerente",
-    "solicitante",
-    "cliente",
-    # contato
-    "email",
-    "mail",
-    "telefone",
-    "telefones",
-    "celular",
-    "whatsapp",
-    "phone",
-    "phones",
-    # endereço
-    "endereco",
-    "endereço",
-    "logradouro",
-    "complemento",
-    "cep",
-    # conteúdo
-    "base64",
-    "pdf",
-    # credencial
-    "token",
-    "secret",
-    "password",
-    "senha",
-    "authorization",
-    "signature",
-    "key",
-}
+TOKENS_SENSIVEIS: FrozenSet[str] = frozenset(
+    {
+        # documento
+        "cpf",
+        "cnpj",
+        "cpfcnpj",
+        "documento",
+        "rg",
+        # identidade
+        "nome",
+        "name",
+        "proprietario",
+        "contribuinte",
+        "requerente",
+        "solicitante",
+        "cliente",
+        # contato
+        "email",
+        "mail",
+        "telefone",
+        "telefones",
+        "celular",
+        "whatsapp",
+        "phone",
+        "phones",
+        # endereço
+        "endereco",
+        "endereço",
+        "logradouro",
+        "complemento",
+        "cep",
+        # conteúdo
+        "base64",
+        "pdf",
+        # credencial
+        "token",
+        "secret",
+        "password",
+        "senha",
+        "authorization",
+        "signature",
+        "key",
+    }
+)
 
 # Um token destes desarma os de cima na mesma chave. Sem isso, `nome_servico`,
 # `service_name`, `table_name` e `bairro_nome` seriam redigidos -- e são
 # exatamente o que sobra para entender a linha de log.
-TOKENS_NAO_SENSIVEIS: Set[str] = {
-    "servico",
-    "service",
-    "tool",
-    "table",
-    "tabela",
-    "field",
-    "campo",
-    "function",
-    "funcao",
-    "flow",
-    "flowname",
-    "event",
-    "evento",
-    "bairro",
-    "cidade",
-    "municipio",
-    "estado",
-    "uf",
-}
+TOKENS_NAO_SENSIVEIS: FrozenSet[str] = frozenset(
+    {
+        "servico",
+        "service",
+        "tool",
+        "table",
+        "tabela",
+        "field",
+        "campo",
+        "function",
+        "funcao",
+        "flow",
+        "flowname",
+        "event",
+        "evento",
+        "bairro",
+        "cidade",
+        "municipio",
+        "estado",
+        "uf",
+    }
+)
 
 # Token sensível que também serve de rótulo genérico para qualquer coisa: é o
 # único que o veto acima pode desarmar. `nome_servico` é o nome de um serviço,
 # mas `nome_do_cliente_do_servico` continua sendo o nome de uma pessoa -- deixar
 # `servico` desarmar a chave inteira era um veto mais forte do que o pretendido.
-TOKENS_SENSIVEIS_GENERICOS: Set[str] = {
-    "nome",
-    "name",
-}
+TOKENS_SENSIVEIS_GENERICOS: FrozenSet[str] = frozenset(
+    {
+        "nome",
+        "name",
+    }
+)
 
 # Chave sensível cujos tokens, isolados, não denunciam nada.
-CHAVES_EXATAS_SENSIVEIS: Set[str] = {
-    "userid",
-    "customerwhatsappnumber",
-    "chaveacesso",
-    "xgoogcredential",
-    "xgoogsignature",
-    "googleaccessid",
-}
+CHAVES_EXATAS_SENSIVEIS: FrozenSet[str] = frozenset(
+    {
+        "userid",
+        "customerwhatsappnumber",
+        "chaveacesso",
+        "xgoogcredential",
+        "xgoogsignature",
+        "googleaccessid",
+    }
+)
 
 
 def _tokens_da_chave(chave: str) -> Set[str]:
@@ -194,7 +209,20 @@ def _tokens_da_chave(chave: str) -> Set[str]:
 
 def chave_e_sensivel(chave: Any) -> bool:
     """True se o valor associado a esta chave não pode sair em claro."""
-    normalizada = re.sub(r"[^a-z0-9]", "", str(chave).lower())
+    return _chave_e_sensivel(str(chave))
+
+
+@lru_cache(maxsize=4096)
+def _chave_e_sensivel(chave: str) -> bool:
+    """
+    Decisão por chave, memoizada.
+
+    Roda para toda chave de todo dict de toda linha de log, e o conjunto de
+    chaves distintas de um serviço é pequeno e repete sem parar -- 32× medido.
+    O cache é keyed em `str(chave)` e não na chave crua de propósito: `1` e
+    `True` são iguais para o `lru_cache` e teriam normalizações diferentes.
+    """
+    normalizada = re.sub(r"[^a-z0-9]", "", chave.lower())
     if normalizada in CHAVES_EXATAS_SENSIVEIS:
         return True
     tokens = _tokens_da_chave(chave)
@@ -211,12 +239,13 @@ def chave_e_sensivel(chave: Any) -> bool:
 
 # Forma normalizada das chaves de credencial, para comparar com a chave do
 # payload sem depender da convenção de escrita (`api_key`, `apiKey`, `API-KEY`).
-_CREDENCIAIS_NORMALIZADAS: Set[str] = {
+_CREDENCIAIS_NORMALIZADAS: FrozenSet[str] = frozenset(
     re.sub(r"[^a-z0-9]", "", chave) for chave in CHAVES_CREDENCIAL
-}
+)
 
 
-def _chave_e_credencial(chave: Any) -> bool:
+@lru_cache(maxsize=4096)
+def _chave_e_credencial(chave: str) -> bool:
     """
     True se a chave nomeia um segredo, e não um dado pessoal.
 
@@ -225,7 +254,7 @@ def _chave_e_credencial(chave: Any) -> bool:
     PIN, OTP e código de acesso moram exatamente nessa faixa, e `senha: 1234`
     estava saindo em claro.
     """
-    return re.sub(r"[^a-z0-9]", "", str(chave).lower()) in _CREDENCIAIS_NORMALIZADAS
+    return re.sub(r"[^a-z0-9]", "", chave.lower()) in _CREDENCIAIS_NORMALIZADAS
 
 
 def _valor_e_inocuo(valor: Any) -> bool:
@@ -427,7 +456,7 @@ def _redigir_valor_da_chave(match: "re.Match") -> str:
     """Redige o valor se a chave for sensível e o valor não for flag/contador."""
     chave, valor = match.group("chave"), match.group("valor")
     if not chave_e_sensivel(chave) or (
-        _valor_e_inocuo(valor) and not _chave_e_credencial(chave)
+        _valor_e_inocuo(valor) and not _chave_e_credencial(str(chave))
     ):
         return match.group(0)
     limpo = valor.strip("'\"")
@@ -469,15 +498,30 @@ def redigir_estrutura(obj: Any, *, marcador: str = MARCADOR_GENERICO) -> Any:
             chave: (
                 marcador
                 if chave_e_sensivel(chave)
-                and (_chave_e_credencial(chave) or not _valor_e_inocuo(valor))
+                and (_chave_e_credencial(str(chave)) or not _valor_e_inocuo(valor))
                 else redigir_estrutura(valor, marcador=marcador)
             )
             for chave, valor in obj.items()
         }
     if isinstance(obj, (list, tuple)):
         return [redigir_estrutura(item, marcador=marcador) for item in obj]
+    if isinstance(obj, (set, frozenset)):
+        # Set caía no `return obj` e passava intacto: um `{"21999998888"}` sob
+        # chave não-sensível saía por inteiro. Volta a ser set quando dá -- um
+        # elemento redigido pode deixar de ser hashable (tupla vira lista), e
+        # deixar o `TypeError` subir aqui suprimiria a linha toda.
+        redigidos = [redigir_estrutura(item, marcador=marcador) for item in obj]
+        try:
+            return set(redigidos)
+        except TypeError:
+            return redigidos
     if isinstance(obj, str):
         return redigir_texto(obj)
+    if isinstance(obj, (bytes, bytearray)):
+        # Idem: bytes passavam intactos. Decodifica só para poder redigir; o
+        # que não for texto vira U+FFFD e não custa diagnóstico nenhum, porque
+        # byte cru já não era legível no log.
+        return redigir_texto(bytes(obj).decode("utf-8", errors="replace"))
     return obj
 
 
