@@ -59,7 +59,13 @@ COPY --from=build /app /app
 # Falha na build, e não na partida do pod, se o venv não tiver sobrevivido à
 # cópia entre estágios. Foi exatamente esse o modo de falha quando as duas
 # etapas usavam interpretadores diferentes.
-RUN .venv/bin/python -c "import pytz, fastmcp, shapely; print('venv OK')"
+#
+# `cryptography` e `aiofiles` estão na lista porque são o risco que este PR
+# cria: as duas eram usadas em produção mas chegavam de carona (via pyopenssl
+# e via crawl4ai), e agora dependem da declaração explícita no pyproject. Um
+# erro ali só apareceria no primeiro pagamento de IPTU ou na primeira escrita
+# de state — as duas coisas que este import cobre de graça.
+RUN .venv/bin/python -c "import pytz, fastmcp, shapely, cryptography, aiofiles; print('venv OK')"
 
 EXPOSE 80
 

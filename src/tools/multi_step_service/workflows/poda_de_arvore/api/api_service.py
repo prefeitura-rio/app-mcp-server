@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import re
+import threading
 import aiohttp
 import pandas as pd
 from functools import lru_cache
@@ -89,7 +90,7 @@ class _GeometryIndex:
 
 
 @lru_cache(maxsize=None)
-def _geometry_index(nome_arquivo: str) -> _GeometryIndex:
+def _build_geometry_index(nome_arquivo: str) -> _GeometryIndex:
     """
     Lê e indexa um arquivo de geometrias WKT uma única vez por processo.
 
@@ -97,10 +98,37 @@ def _geometry_index(nome_arquivo: str) -> _GeometryIndex:
     de WKT e copiado em profundidade a *cada* consulta — o custo linear inteiro
     pagava por chamada. Com o cache ele passa a ser pago uma vez, e o `STRtree`
     troca a varredura linear da consulta por uma busca O(log n).
+
+    Não chame direto: use `_geometry_index`, que serializa a construção.
     """
     registros = pd.read_json(env.DATA_DIR / nome_arquivo)
     registros["geometry"] = registros["geometry"].apply(loads)
     return _GeometryIndex(registros)
+
+
+# `lru_cache` não segura lock nenhum enquanto a função roda — ele só grava o
+# resultado no fim. Como o índice é construído de dentro de `asyncio.to_thread`,
+# uma rajada de requisições no cold start entraria inteira na função: cada
+# thread leria os dois JSON, reparsearia todo o WKT e montaria um STRtree
+# completo em paralelo, N vezes o custo para guardar um resultado só.
+_INDEX_LOCK = threading.Lock()
+
+
+def _geometry_index(nome_arquivo: str) -> _GeometryIndex:
+    """Devolve o índice do arquivo, construindo-o no máximo uma vez.
+
+    Segurar o lock também no acerto de cache é de propósito: o custo é uma
+    aquisição não contendida (dezenas de nanossegundos) contra um `dict.get`,
+    barato demais para justificar double-checked locking. No erro de cache o
+    primeiro a chegar constrói e os demais esperam por ele, em vez de fazerem
+    o mesmo trabalho em paralelo.
+
+    Aquecer isto no preflight resolveria também o pico de latência da primeira
+    consulta, mas `src/health/preflight.py` não pode importar `src.config.env`
+    — é o que garante que ele reporte todas as variáveis faltantes de uma vez.
+    """
+    with _INDEX_LOCK:
+        return _build_geometry_index(nome_arquivo)
 
 
 class AddressAPIService:

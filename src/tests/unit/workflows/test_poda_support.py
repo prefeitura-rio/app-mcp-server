@@ -1,7 +1,9 @@
 import importlib.util
 import json
+import random
 import sys
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -48,6 +50,12 @@ class FakeSTRtree:
     Com `shapely.wkt.loads` stubado para identidade, as geometrias chegam como
     os próprios números do JSON de fixture e `Point(x, y)` vira a tupla `(x, y)`
     — então o vizinho mais próximo é a menor diferença absoluta para a longitude.
+
+    Serve para os testes que só precisam de um vizinho previsível (cache,
+    `to_thread`). Ele *não* prova que a integração com o shapely de verdade
+    está certa — quem cobre isso é
+    `test_get_nearest_bate_com_a_varredura_linear_anterior`, que roda com
+    `stub_shapely=False`.
     """
 
     def __init__(self, geometries):
@@ -61,7 +69,16 @@ class FakeSTRtree:
         )
 
 
-def prepare_poda_api_module(monkeypatch, module_name="test_poda_api_service_module"):
+def prepare_poda_api_module(
+    monkeypatch, module_name="test_poda_api_service_module", stub_shapely=True
+):
+    """Carrega `api_service.py` com as dependências pesadas stubadas.
+
+    `stub_shapely=False` deixa o shapely de verdade no lugar. Isso era
+    impossível enquanto ele chegava de carona pelo geopandas; agora que o
+    `pyproject` o declara direto, o teste de paridade pode exercitar o
+    `STRtree` real em vez de um dublê que reimplementa a busca.
+    """
     _ensure_package("src", PROJECT_ROOT / "src")
     _ensure_package("src.config", PROJECT_ROOT / "src" / "config")
     _ensure_package("src.utils", PROJECT_ROOT / "src" / "utils")
@@ -124,21 +141,22 @@ def prepare_poda_api_module(monkeypatch, module_name="test_poda_api_service_modu
         "async_googlemaps",
         types.SimpleNamespace(AsyncClient=object),
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "shapely",
-        types.SimpleNamespace(STRtree=FakeSTRtree),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "shapely.geometry",
-        types.SimpleNamespace(Point=lambda x, y: (x, y)),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "shapely.wkt",
-        types.SimpleNamespace(loads=lambda value: value),
-    )
+    if stub_shapely:
+        monkeypatch.setitem(
+            sys.modules,
+            "shapely",
+            types.SimpleNamespace(STRtree=FakeSTRtree),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "shapely.geometry",
+            types.SimpleNamespace(Point=lambda x, y: (x, y)),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "shapely.wkt",
+            types.SimpleNamespace(loads=lambda value: value),
+        )
 
     return _load_module(
         module_name,
@@ -454,25 +472,163 @@ def test_get_nearest_le_cada_arquivo_uma_unica_vez(monkeypatch, tmp_path):
     """
     O conteúdo é imutável em runtime: reler e reparsear a cada consulta era o
     custo linear que o cache de processo elimina.
+
+    A prova vem do `cache_info()` do próprio cache, e não de um espião em
+    `pd.read_json`: `module.pd` é o pandas de verdade, então patchá-lo trocaria
+    a função no processo inteiro para provar um fato local deste módulo.
     """
     module = prepare_poda_api_module(monkeypatch, "test_poda_api_service_module_cache")
     monkeypatch.setattr(module.env, "DATA_DIR", tmp_path)
     _escrever_fixtures_de_geometria(tmp_path)
 
-    lidos = []
-    read_json_original = module.pd.read_json
-
-    def read_json_espiao(caminho, *args, **kwargs):
-        lidos.append(Path(caminho).name)
-        return read_json_original(caminho, *args, **kwargs)
-
-    monkeypatch.setattr(module.pd, "read_json", read_json_espiao)
-
     service = module.AddressAPIService()
     service.get_nearest_logradouro_and_bairro(latitude=-22.9, longitude=-43.2)
     service.get_nearest_logradouro_and_bairro(latitude=-22.8, longitude=-43.4)
 
-    assert sorted(lidos) == ["bairros.json", "logradouros.json"]
+    # Duas consultas x dois arquivos = quatro acessos; só os dois primeiros
+    # tocam o disco.
+    info = module._build_geometry_index.cache_info()
+    assert (info.misses, info.hits) == (2, 2)
+
+
+def _fixtures_wkt_reais(tmp_path, quantidade=40):
+    """Fixtures com WKT de verdade, para rodar contra o shapely real.
+
+    Os ids são espaçados e fora de ordem de propósito. O `STRtree` devolve um
+    índice *posicional*, enquanto a varredura linear que ele substituiu
+    indexava por rótulo (`.loc[idxmin()]`); com ids distintos de suas posições,
+    um desalinhamento entre a árvore e o DataFrame aparece como id trocado em
+    vez de passar despercebido.
+    """
+    rng = random.Random(20260828)
+
+    def registros(prefixo, base_id):
+        itens = []
+        for i in range(quantidade):
+            longitude = -43.8 + rng.random() * 0.9
+            latitude = -23.05 + rng.random() * 0.35
+            itens.append(
+                {
+                    "id": base_id + i * 7,
+                    "nome": f"{prefixo} {i}",
+                    "geometry": (
+                        f"LINESTRING ({longitude} {latitude}, "
+                        f"{longitude + 0.004} {latitude + 0.004})"
+                    ),
+                }
+            )
+        return itens
+
+    (tmp_path / "logradouros.json").write_text(
+        json.dumps(registros("Rua", 1000)), encoding="utf-8"
+    )
+    (tmp_path / "bairros.json").write_text(
+        json.dumps(registros("Bairro", 5000)), encoding="utf-8"
+    )
+
+
+# Pontos espalhados pela caixa das fixtures, incluindo dois fora dela, para
+# que o vizinho mais próximo não seja sempre o mesmo registro.
+CONSULTAS_DE_PARIDADE = [
+    (-22.90, -43.20),
+    (-22.95, -43.45),
+    (-23.00, -43.70),
+    (-22.88, -43.35),
+    (-22.70, -43.10),
+    (-23.30, -43.90),
+]
+
+
+def test_get_nearest_bate_com_a_varredura_linear_anterior(monkeypatch, tmp_path):
+    """Paridade com o `idxmin` que o `STRtree` substituiu, no shapely real.
+
+    Os outros testes deste bloco rodam com `FakeSTRtree`, que reimplementa a
+    busca — eles validam o dublê. O que pode quebrar em produção é a integração
+    de verdade: se o índice devolvido pela árvore não corresponder à linha do
+    DataFrame, a consulta devolve o logradouro errado sem levantar erro algum.
+    """
+    import shapely.wkt
+    from shapely.geometry import Point
+
+    module = prepare_poda_api_module(
+        monkeypatch, "test_poda_api_service_module_paridade", stub_shapely=False
+    )
+    monkeypatch.setattr(module.env, "DATA_DIR", tmp_path)
+    _fixtures_wkt_reais(tmp_path)
+
+    def varredura_linear(nome_arquivo, ponto):
+        """A implementação anterior, ponta a ponta."""
+        registros = module.pd.read_json(tmp_path / nome_arquivo)
+        registros["geometry"] = registros["geometry"].apply(shapely.wkt.loads)
+        distancias = registros["geometry"].apply(ponto.distance)
+        return registros.loc[distancias.idxmin()]
+
+    service = module.AddressAPIService()
+
+    for latitude, longitude in CONSULTAS_DE_PARIDADE:
+        resultado = service.get_nearest_logradouro_and_bairro(latitude, longitude)
+        ponto = Point(longitude, latitude)
+
+        esperado_logradouro = varredura_linear("logradouros.json", ponto)
+        esperado_bairro = varredura_linear("bairros.json", ponto)
+
+        assert (resultado.id_logradouro, resultado.name_logradouro) == (
+            esperado_logradouro["id"],
+            esperado_logradouro["nome"],
+        ), f"logradouro divergiu em {latitude}, {longitude}"
+        assert (resultado.id_bairro, resultado.name_bairro) == (
+            esperado_bairro["id"],
+            esperado_bairro["nome"],
+        ), f"bairro divergiu em {latitude}, {longitude}"
+
+
+def test_indice_e_construido_uma_unica_vez_sob_concorrencia(monkeypatch, tmp_path):
+    """O cold start não pode construir o índice N vezes em paralelo.
+
+    `lru_cache` só grava o resultado no fim: sozinho, ele não impede que N
+    threads entrem juntas na função e montem N índices completos, dos quais um
+    sobrevive. Como o índice é construído de dentro de `asyncio.to_thread`,
+    esse é exatamente o cenário de uma rajada de requisições no pod novo.
+    """
+    module = prepare_poda_api_module(
+        monkeypatch, "test_poda_api_service_module_concorrencia"
+    )
+    monkeypatch.setattr(module.env, "DATA_DIR", tmp_path)
+    _escrever_fixtures_de_geometria(tmp_path)
+
+    # O parse é o que custa caro no arquivo real; aqui ele fica lento de
+    # propósito, para que as threads se sobreponham de fato dentro da função.
+    parses = []
+    loads_original = module.loads
+
+    def loads_lento(valor):
+        parses.append(valor)
+        time.sleep(0.02)
+        return loads_original(valor)
+
+    monkeypatch.setattr(module, "loads", loads_lento)
+
+    QUANTIDADE_DE_THREADS = 8
+    largada = threading.Barrier(QUANTIDADE_DE_THREADS)
+    falhas = []
+
+    def consultar():
+        try:
+            largada.wait(timeout=10)
+            module._geometry_index("logradouros.json")
+        except Exception as exc:  # pragma: no cover - só falha se houver bug
+            falhas.append(exc)
+
+    threads = [threading.Thread(target=consultar) for _ in range(QUANTIDADE_DE_THREADS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert not falhas
+    assert module._build_geometry_index.cache_info().misses == 1
+    # Duas geometrias na fixture. Sem o lock seriam 2 x 8.
+    assert len(parses) == 2
 
 
 @pytest.mark.asyncio
