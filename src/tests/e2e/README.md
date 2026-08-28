@@ -174,3 +174,34 @@ O `2` e deliberado: sem massa, dizer "integro" seria falso conforto.
 aqui seria coletado pelo `pr-quality-gate` e falharia no CI, que nao tem
 credencial da PGM — nem deveria ter. O prefixo `run_` mantem estes runners fora
 da coleta, como os demais desta pasta.
+
+# Contrato do line-up do Rock in Rio (CHATR-187)
+
+O runner [`run_rock_in_rio_contract.py`](src/tests/e2e/run_rock_in_rio_contract.py)
+bate no site oficial do Rock in Rio e verifica se o HTML ainda tem a forma que
+o parser de `src/tools/rock_in_rio/scraper.py` espera.
+
+Existe por um motivo so: **avisar quando o site mudar**. A tool depende de
+raspar HTML de terceiro, que pode trocar de tema a qualquer momento e sem
+aviso — inclusive na vespera do festival. Os testes unitarios rodam sobre
+fixtures salvas e continuariam verdes nesse cenario.
+
+```bash
+uv run python src/tests/e2e/run_rock_in_rio_contract.py
+```
+
+Nao precisa de credencial nenhuma, so de rede. Valida, para cada um dos sete
+dias, que o numero de atracoes esta numa faixa plausivel e que os palcos
+pertencem ao catalogo conhecido. As faixas sao propositalmente largas: uma
+atracao a mais ou a menos e mudanca legitima de line-up, e reprovar por isso
+transformaria o runner em ruido. O que precisa disparar e a mudanca de ordem de
+grandeza — tipicamente o parser tendo parado de casar com o HTML.
+
+| Codigo | Significado |
+| --- | --- |
+| `0` | Contrato integro |
+| `1` | O site mudou, ou nao respondeu |
+
+Fica fora do CI pelo mesmo motivo dos demais runners desta pasta: uma
+indisponibilidade momentanea do `rockinrio.com` nao pode reprovar um PR que nao
+tem nada a ver com isso.

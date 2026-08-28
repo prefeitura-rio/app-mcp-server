@@ -49,6 +49,7 @@ TOOL_CATALOG = {
     "greeting_format",
     "multi_step_service",
     "report_incident",
+    "rock_in_rio_lineup",
     "time_current",
     "upsert_user_memory",
     "user_feedback",

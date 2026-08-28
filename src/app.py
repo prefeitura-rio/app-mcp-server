@@ -57,6 +57,11 @@ from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
 )
+from src.tools.rock_in_rio.cache import aquecer_lineup, run_refresh_loop
+from src.tools.rock_in_rio.tool import (
+    get_rock_in_rio_lineup,
+    _descricao_da_tool as rock_in_rio_description,
+)
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -188,10 +193,25 @@ def create_app() -> FastMCP:
 
             dlq_drain_task = asyncio.create_task(drain_bigquery_dlq_loop())
 
+        # Line-up do Rock in Rio (CHATR-187). O aquecimento é aguardado de
+        # propósito: sem ele o primeiro cidadão a perguntar depois de cada
+        # deploy pagaria o download dos sete dias dentro da própria conversa.
+        # `aquecer_lineup` engole as próprias exceções, então uma fonte fora do
+        # ar aqui atrasa o boot por alguns segundos e nada mais. Fica atrás do
+        # `set_ready(True)` acima, e portanto não segura a readiness do pod.
+        #
+        # Desligado em execução local pelo mesmo critério das tasks acima: em
+        # `mcp dev` a primeira chamada carrega o cache sozinha, pelo caminho
+        # preguiçoso de `obter_lineup`.
+        lineup_task = None
+        if not IS_LOCAL:
+            await aquecer_lineup()
+            lineup_task = asyncio.create_task(run_refresh_loop())
+
         try:
             yield {}
         finally:
-            for task in (probe_task, dlq_drain_task):
+            for task in (probe_task, dlq_drain_task, lineup_task):
                 if task is None:
                     continue
                 task.cancel()
@@ -380,6 +400,15 @@ def create_app() -> FastMCP:
             "categorias": categories,
         }
         return add_tool_version(response)
+
+    @conditional_mcp_tool(
+        "rock_in_rio_lineup",
+        description=rock_in_rio_description(TOOL_VERSION),
+    )
+    async def rock_in_rio_lineup() -> dict:
+        # Sem parâmetros de propósito: a grade inteira cabe na resposta, e é a
+        # LLM que faz o recorte pedido pelo cidadão. Ver `tool.py`.
+        return add_tool_version(await get_rock_in_rio_lineup())
 
     @conditional_mcp_tool("get_user_memory")
     async def get_user_memory(
