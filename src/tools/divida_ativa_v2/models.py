@@ -265,7 +265,6 @@ class GuiaEmitida(BaseModel):
     codigo_de_barras: str = Field(default="", description="Código de barras da guia.")
     link: str = Field(default="", description="Link para o PDF da guia.")
     data_vencimento: str = Field(default="", description="Data de vencimento da guia.")
-    pix: str = Field(default="", description="Código QR EMV do PIX da guia.")
     # Optional de verdade, ao contrário dos campos acima: a PGM não manda o
     # valor, ele é lido do código de pagamento, e essa leitura pode não
     # resolver. None diz "não foi possível apurar"; 0.0 diria "guia sem valor".
@@ -284,6 +283,9 @@ class GuiaEmitida(BaseModel):
         """Constrói a guia a partir do registro cru da PGM."""
         link = registro.get("pdf") or ""
         codigo_de_barras = registro.get("codigoDeBarras") or ""
+        # Lido, mas não exposto: o EMV é a fonte primária do valor e continua
+        # necessário aqui. Como campo de resposta ele saiu — o PDF da guia já
+        # traz o QR Code e o copia-e-cola (CHATR-176).
         pix = registro.get("codigoQrEMVPix") or ""
 
         return cls(
@@ -291,7 +293,6 @@ class GuiaEmitida(BaseModel):
             codigo_de_barras=codigo_de_barras,
             link=link,
             data_vencimento=registro.get("dataVencimento") or "",
-            pix=pix,
             valor=valor_da_guia(pix, codigo_de_barras),
         )
 
@@ -350,10 +351,6 @@ class EmitirGuiaResponse(BaseModel):
     data_vencimento: Optional[str] = Field(
         default=None,
         description="Data de vencimento da primeira guia emitida (legado).",
-    )
-    pix: Optional[str] = Field(
-        default=None,
-        description="Código QR EMV do PIX da primeira guia emitida (legado).",
     )
 
     @classmethod

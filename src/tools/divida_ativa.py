@@ -358,6 +358,10 @@ def _extrair_guias(registros: Any) -> List[Dict[str, Any]]:
 
         link = item.get("pdf") or ""
         codigo_de_barras = item.get("codigoDeBarras") or ""
+        # Lido, mas não devolvido: o EMV é a fonte primária do valor e continua
+        # necessário aqui. Fora isso ele saiu do payload — o PDF da guia já
+        # traz o QR Code e o copia-e-cola, e repetir o código cru na mensagem
+        # só somava um bloco ilegível ao que o cidadão recebe (CHATR-176).
         pix = item.get("codigoQrEMVPix") or ""
 
         guias.append(
@@ -366,7 +370,6 @@ def _extrair_guias(registros: Any) -> List[Dict[str, Any]]:
                 "codigo_de_barras": codigo_de_barras,
                 "link": link,
                 "data_vencimento": item.get("dataVencimento") or "",
-                "pix": pix,
                 "valor": valor_da_guia(pix, codigo_de_barras),
             }
         )
@@ -432,7 +435,6 @@ async def processar_registros(
     message["codigo_de_barras"] = primeira["codigo_de_barras"]
     message["link"] = primeira["link"]
     message["data_vencimento"] = primeira["data_vencimento"]
-    message["pix"] = primeira["pix"]
 
     return message
 

@@ -4,8 +4,10 @@ Modelos Pydantic para validação do workflow Dívida Ativa.
 
 import re
 from re import Pattern
+from types import MappingProxyType
 from typing import ClassVar
 from typing import Literal
+from typing import Mapping
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -16,99 +18,93 @@ _IDENTIFICADOR_GENERICO = re.compile(r"^[0-9./-]+$")
 _ANO = re.compile(r"^\d{4}$")
 _NUMERICO = re.compile(r"^\d+$")
 
-_OPTION_REGISTRY = {
-    "pagar_agora": {
-        "label": "Pagar agora",
-        "description": "Ver opções disponíveis para pagamento.",
-    },
-    "consultar_outro_debito": {
-        "label": "Consultar outro débito",
-        "description": "Limpar a consulta atual e buscar outro débito.",
-    },
-    "pagar_a_vista": {
-        "label": "Pagar à vista",
-        "description": "Emitir guia para pagamento integral",
-    },
-    "parcelar_debitos": {
-        "label": "Parcelar débitos",
-        "description": "Simular e aderir ao parcelamento",
-    },
-    "regularizar_debitos": {
-        "label": "Regularizar débitos",
-        "description": "Ver alternativas para ficar em dia",
-    },
-    "liquidar_parcelamento": {
-        "label": "Liquidar parcelamento",
-        "description": "Quitar o que falta do parcelamento",
-    },
-    "emitir_2_via": {
-        "label": "Emitir 2ª via",
-        "description": "Gerar segunda via de guia/parcela",
-    },
-    "voltar": {
-        "label": "Voltar",
-        "description": "Retornar ao menu Tipos de consulta",
-    },
-    "pagar_tudo": {
-        "label": "Pagar tudo",
-        "description": "Emitir guia com todos os débitos disponíveis.",
-    },
-    "escolher_debitos": {
-        "label": "Escolher os débitos",
-        "description": "Selecionar quais débitos deseja pagar.",
-    },
-    "sim": {
-        "label": "Sim",
-        "description": "Seguir para o pagamento.",
-    },
-    "nao": {
-        "label": "Não",
-        "description": "Voltar para as opções de pagamento.",
-    },
-    "boleto_bancario": {
-        "label": "Boleto bancário",
-        "description": "Gerar boleto bancário.",
-    },
-    "codigo_barras": {
-        "label": "Código de barras",
-        "description": "Receber o código de barras.",
-    },
-    "pix_copia_e_cola": {
-        "label": "Pix copia e cola",
-        "description": "Receber o Pix copia e cola.",
-    },
-    "opcoes_pagamento": {
-        "label": "Opções de pagamento",
-        "description": "Voltar para as opções de pagamento.",
-    },
-    "encerrar_atendimento": {
-        "label": "Encerrar atendimento",
-        "description": "Finalizar o atendimento.",
-    },
-    "cpf_cnpj": {
-        "label": "CPF/CNPJ",
-        "description": "Consulte por pessoa física ou jurídica.",
-    },
-    "inscricao_imobiliaria": {
-        "label": "Inscrição Imobiliária",
-        "description": "Consulte pelo número da inscrição do imóvel.",
-    },
-    "auto_infracao": {
-        "label": "Auto de infração",
-        "description": "Consulte pelo ano e número do auto de infração.",
-    },
-    "cda": {
-        "label": "CDA",
-        "description": "Consulte pelo número da Certidão de Dívida Ativa (CDA).",
-    },
-    "execucao_fiscal": {
-        "label": "Execução Fiscal",
-        "description": "Consulte processos em execução fiscal (EF).",
-    },
-}
+# Congelamento raso: `MappingProxyType` impede acrescentar/remover opções em
+# runtime, que é o risco real aqui. Os dicts internos seguem mutáveis — congelar
+# cada um custaria mais do que protege, já que ninguém os alcança sem passar por
+# esta chave.
+_OPTION_REGISTRY: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        "pagar_agora": {
+            "label": "Pagar agora",
+            "description": "Ver opções disponíveis para pagamento.",
+        },
+        "consultar_outro_debito": {
+            "label": "Consultar outro débito",
+            "description": "Limpar a consulta atual e buscar outro débito.",
+        },
+        "pagar_a_vista": {
+            "label": "Pagar à vista",
+            "description": "Emitir guia para pagamento integral",
+        },
+        "parcelar_debitos": {
+            "label": "Parcelar débitos",
+            "description": "Simular e aderir ao parcelamento",
+        },
+        "regularizar_debitos": {
+            "label": "Regularizar débitos",
+            "description": "Ver alternativas para ficar em dia",
+        },
+        "liquidar_parcelamento": {
+            "label": "Liquidar parcelamento",
+            "description": "Quitar o que falta do parcelamento",
+        },
+        "emitir_2_via": {
+            "label": "Emitir 2ª via",
+            "description": "Gerar segunda via de guia/parcela",
+        },
+        "voltar": {
+            "label": "Voltar",
+            "description": "Retornar ao menu Tipos de consulta",
+        },
+        "pagar_tudo": {
+            "label": "Pagar tudo",
+            "description": "Emitir guia com todos os débitos disponíveis.",
+        },
+        "escolher_debitos": {
+            "label": "Escolher os débitos",
+            "description": "Selecionar quais débitos deseja pagar.",
+        },
+        "sim": {
+            "label": "Sim",
+            "description": "Seguir para o pagamento.",
+        },
+        "nao": {
+            "label": "Não",
+            "description": "Voltar para as opções de pagamento.",
+        },
+        "opcoes_pagamento": {
+            "label": "Opções de pagamento",
+            "description": "Voltar para as opções de pagamento.",
+        },
+        "encerrar_atendimento": {
+            "label": "Encerrar atendimento",
+            "description": "Finalizar o atendimento.",
+        },
+        "cpf_cnpj": {
+            "label": "CPF/CNPJ",
+            "description": "Consulte por pessoa física ou jurídica.",
+        },
+        "inscricao_imobiliaria": {
+            "label": "Inscrição Imobiliária",
+            "description": "Consulte pelo número da inscrição do imóvel.",
+        },
+        "auto_infracao": {
+            "label": "Auto de infração",
+            "description": "Consulte pelo ano e número do auto de infração.",
+        },
+        "cda": {
+            "label": "CDA",
+            "description": "Consulte pelo número da Certidão de Dívida Ativa (CDA).",
+        },
+        "execucao_fiscal": {
+            "label": "Execução Fiscal",
+            "description": "Consulte processos em execução fiscal (EF).",
+        },
+    }
+)
 
 
-def _build_options(
+def build_options(
     values: list[str],
     overrides: dict[str, dict[str, str]] | None = None,
     include_description: bool = True,
@@ -298,7 +294,7 @@ class AcaoResultadoConsultaPayload(BaseModel):
         title="Próxima ação",
         description="Escolha como quer continuar.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["pagar_agora", "consultar_outro_debito"],
                 include_description=False,
             ),
@@ -322,7 +318,7 @@ class MenuPagamentoCompletoPayload(BaseModel):
         title="Opções de pagamento",
         description="Escolha uma opção",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 [
                     "pagar_a_vista",
                     "parcelar_debitos",
@@ -352,7 +348,7 @@ class MenuPagamentoParceladoPayload(BaseModel):
         title="Opções de pagamento",
         description="Escolha uma opção",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 [
                     "parcelar_debitos",
                     "regularizar_debitos",
@@ -378,7 +374,7 @@ class OpcaoPagarAVistaPayload(BaseModel):
         title="Pagamento à vista",
         description="Escolha como quer pagar à vista.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["pagar_tudo", "escolher_debitos"],
                 include_description=False,
             ),
@@ -411,29 +407,8 @@ class ConfirmacaoPagamentoAVistaPayload(BaseModel):
         title="Confirmar pagamento",
         description="Confirme se deseja seguir para o pagamento.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["sim", "nao"],
-                include_description=False,
-            ),
-            "x-render": "buttons",
-        },
-    )
-
-
-class FormaPagamentoAVistaPayload(BaseModel):
-    """Botões para escolher a forma de pagamento à vista."""
-
-    forma_pagamento_a_vista: Literal[
-        "boleto_bancario",
-        "codigo_barras",
-        "pix_copia_e_cola",
-    ] = Field(
-        ...,
-        title="Forma de pagamento",
-        description="Escolha uma forma de pagamento à vista.",
-        json_schema_extra={
-            "options": _build_options(
-                ["boleto_bancario", "codigo_barras", "pix_copia_e_cola"],
                 include_description=False,
             ),
             "x-render": "buttons",
@@ -453,7 +428,7 @@ class AcaoPagamentoRecusadoPayload(BaseModel):
         title="Próxima ação",
         description="Escolha como deseja continuar.",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 ["escolher_debitos", "opcoes_pagamento", "encerrar_atendimento"],
                 include_description=False,
             ),
@@ -476,7 +451,7 @@ class TipoConsultaPayload(BaseModel):
         title="Tipos de consulta",
         description="Escolha uma opção",
         json_schema_extra={
-            "options": _build_options(
+            "options": build_options(
                 [
                     "cpf_cnpj",
                     "inscricao_imobiliaria",

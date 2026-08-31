@@ -22,8 +22,10 @@ se comporta de forma diferente conforme as variáveis de ambiente:
   uma lista interna.
 """
 
+import asyncio
 import importlib
 import sys
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -49,6 +51,7 @@ TOOL_CATALOG = {
     "greeting_format",
     "multi_step_service",
     "report_incident",
+    "rock_in_rio_lineup",
     "time_current",
     "upsert_user_memory",
     "user_feedback",
@@ -168,3 +171,128 @@ def test_health_routes_are_served(app_module):
 def test_mcp_endpoint_is_served(app_module):
     """`/mcp` é o endpoint do protocolo — é o serviço inteiro."""
     assert "/mcp" in _served_route_paths(app_module.create_app())
+
+
+@pytest.fixture
+def importar_app_com_ambiente(monkeypatch):
+    """Reimporta `src.app` depois de o teste ajustar o ambiente.
+
+    `IS_LOCAL` e `EXCLUDED_TOOLS` são lidas no import de `src.config.env`: com o
+    módulo já carregado, trocá-las não tem efeito. Mesma higiene do
+    `app_module` — purga `src.*` antes do import e devolve o snapshot no fim.
+    """
+    ready_antes = health_state.is_ready()
+    snapshot = {
+        name: mod for name, mod in sys.modules.items() if name.startswith("src")
+    }
+
+    def _importar(**variaveis):
+        for nome, valor in variaveis.items():
+            monkeypatch.setenv(nome, valor)
+        for name in list(sys.modules):
+            if name.startswith("src"):
+                del sys.modules[name]
+        return importlib.import_module("src.app")
+
+    try:
+        yield _importar
+    finally:
+        for name in list(sys.modules):
+            if name.startswith("src"):
+                del sys.modules[name]
+        sys.modules.update(snapshot)
+        health_state.set_ready(ready_antes)
+
+
+async def _laco_parado():
+    """Substitui um laço de background: fica vivo até ser cancelado."""
+    await asyncio.Event().wait()
+
+
+def _lifespan_isolado(app_module, monkeypatch):
+    """Devolve `(lifespan, chamadas)` com o trabalho de fundo neutralizado.
+
+    O lifespan é uma closure de `create_app()`. Para alcançá-lo sem depender de
+    atributo privado do FastMCP — cujos nomes diferem entre as duas
+    implementações, ver o docstring do módulo — a própria classe é trocada por
+    um duplo que guarda os kwargs de construção.
+
+    Tudo o que sai para rede ou disco no startup é substituído: o que este teste
+    observa é a decisão de ligar ou não o line-up, e nada mais.
+    """
+    construcao = {}
+
+    class FastMCPDuplo(MagicMock):
+        def __init__(self, **kwargs):
+            super().__init__()
+            construcao.update(kwargs)
+
+    monkeypatch.setattr(app_module, "FastMCP", FastMCPDuplo)
+
+    async def _sem_dependencias(**_):
+        return []
+
+    monkeypatch.setattr(
+        app_module, "health_registry", MagicMock(run_all=_sem_dependencias)
+    )
+    monkeypatch.setattr(app_module, "run_probe_loop", _laco_parado)
+
+    bigquery = sys.modules["src.utils.bigquery"]
+
+    async def _nada(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bigquery, "expirar_arquivos_dlq_async", _nada)
+    monkeypatch.setattr(bigquery, "drain_bigquery_dlq_loop", _laco_parado)
+
+    chamadas = []
+
+    async def _aquecer():
+        chamadas.append("aquecer_lineup")
+        return True
+
+    async def _refresh():
+        chamadas.append("run_refresh_loop")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(app_module, "aquecer_lineup", _aquecer)
+    monkeypatch.setattr(app_module, "run_refresh_loop", _refresh)
+
+    app_module.create_app()
+    return construcao["lifespan"], chamadas
+
+
+@pytest.mark.asyncio
+async def test_lifespan_liga_o_line_up_quando_a_tool_esta_registrada(
+    monkeypatch, importar_app_com_ambiente
+):
+    app_module = importar_app_com_ambiente(
+        IS_LOCAL="false", EXCLUDED_TOOLS="user_feedback"
+    )
+    lifespan, chamadas = _lifespan_isolado(app_module, monkeypatch)
+
+    async with lifespan(None):
+        await asyncio.sleep(0)
+
+    assert chamadas == ["aquecer_lineup", "run_refresh_loop"]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_nao_bate_no_site_com_a_tool_excluida(
+    monkeypatch, importar_app_com_ambiente
+):
+    """`EXCLUDED_TOOLS` precisa desligar também o trabalho de fundo.
+
+    `conditional_mcp_tool` só controla o registro. Sem a guarda no lifespan, a
+    tool sumia do catálogo e o laço seguia baixando as sete páginas do site de
+    15 em 15 minutos, por réplica, para sempre — por ninguém.
+    """
+    app_module = importar_app_com_ambiente(
+        IS_LOCAL="false", EXCLUDED_TOOLS="rock_in_rio_lineup"
+    )
+    lifespan, chamadas = _lifespan_isolado(app_module, monkeypatch)
+
+    async with lifespan(None):
+        await asyncio.sleep(0)
+
+    assert chamadas == []

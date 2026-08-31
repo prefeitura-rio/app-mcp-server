@@ -294,7 +294,6 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
         codigo_de_barras=primeira.codigo_de_barras,
         link=primeira.link,
         data_vencimento=primeira.data_vencimento,
-        pix=primeira.pix,
     )
 
 

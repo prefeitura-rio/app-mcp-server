@@ -175,7 +175,8 @@ async def test_da_emitir_guia_and_processar_registros(divida_module, monkeypatch
     )
     assert result["api_resposta_sucesso"] is True
     assert result["codigo_de_barras"] == "123"
-    assert result["pix"] == "pix-code"
+    # O EMV saiu do payload em CHATR-176; o PDF da guia já o carrega.
+    assert "pix" not in result
 
     async def fake_pgm_api_error(endpoint, consumidor, data):
         return {"erro": True, "motivos": "Falhou"}
@@ -222,7 +223,7 @@ async def test_processar_registros_devolve_todas_as_guias(divida_module, monkeyp
     )
 
     assert result["total_guias"] == 2
-    assert [guia["pix"] for guia in result["guias_emitidas"]] == ["pix-1", "pix-2"]
+    assert all("pix" not in guia for guia in result["guias_emitidas"])
     # Campos no topo: a primeira guia, não a última.
     assert result["codigo_de_barras"] == "111"
     assert result["link"] == "a.pdf"

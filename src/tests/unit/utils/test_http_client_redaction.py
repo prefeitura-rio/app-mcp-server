@@ -15,11 +15,18 @@ import pytest
 
 import src.utils.http_client as http_client_mod
 from src.utils.http_client import (
+    SENSITIVE_KEYS,
     DEFAULT_ERROR_STATUS_CODES,
     InterceptedHTTPClient,
     redact_body,
     redact_text,
 )
+
+# O padrão compilado saiu do `http_client` no CHATR-167: a lista de chaves e os
+# padrões passaram a viver em `src/utils/pii.py`, para o log e o interceptor
+# consumirem a mesma fonte. `redact_text` continua sendo o ponto de entrada
+# testado aqui; só o objeto compilado mudou de casa.
+from src.utils.pii import _CREDENCIAL_EM_QUERY
 
 
 def test_redact_text_remove_token_de_query_string():
@@ -86,6 +93,84 @@ def test_redact_body_invalida_signed_url_no_payload_do_encurtador():
     assert "ASSINATURA-SECRETA" not in repr(limpo)
     assert limpo["title"] == "PDF para pagamento de cotas do IPTU"
     assert limpo["expires_at"] == "2026-09-02T15:00:00Z"
+
+
+def test_toda_chave_sensivel_e_redigida_nos_dois_caminhos():
+    """`redact_text` casa por substring; `redact_body`, pela chave inteira.
+
+    A divergência custou a assinatura do GCS: "signature" estava na lista e
+    cobria "X-Goog-Signature" no texto, mas em `redact_body` a comparação é de
+    chave inteira e "x-goog-signature" não estava lá — a assinatura saía em
+    claro sempre que chegasse como campo próprio. Varrer os dois caminhos para
+    toda a lista é o que impede a próxima chave de entrar pela metade.
+    """
+    for chave in SENSITIVE_KEYS:
+        assert "SEGREDO" not in redact_text(f"https://ex.com/a?{chave}=SEGREDO&x=1"), (
+            f"{chave} não é redigida em redact_text"
+        )
+        assert redact_body({chave: "SEGREDO"})[chave] == "<redacted>", (
+            f"{chave} não é redigida em redact_body"
+        )
+
+
+def test_redact_body_invalida_assinatura_do_gcs_como_campo_proprio():
+    """Regressão: a signed URL nem sempre chega inteira no campo destination."""
+    limpo = redact_body(
+        {
+            "X-Goog-Credential": "sa@proj.iam.gserviceaccount.com/20260826/auto",
+            "X-Goog-Signature": "ASSINATURA-SECRETA",
+            "GoogleAccessId": "sa@proj.iam.gserviceaccount.com",
+            "X-Goog-Expires": "604800",
+        }
+    )
+
+    assert "ASSINATURA-SECRETA" not in repr(limpo)
+    assert limpo["X-Goog-Signature"] == "<redacted>"
+    assert limpo["X-Goog-Credential"] == "<redacted>"
+    # O que não é credencial continua legível para diagnóstico
+    assert limpo["X-Goog-Expires"] == "604800"
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "callback?monkey=banana&x=1",
+        "webhook?turkey=peru&x=1",
+        "?donkey=burro",
+    ],
+)
+def test_redact_text_nao_redige_palavra_que_apenas_termina_em_chave(texto):
+    """`key` sem âncora casava dentro de qualquer palavra terminada nela.
+
+    Falhava para o lado seguro, mas comia o diagnóstico do relatório de erro.
+    """
+    assert redact_text(texto) == texto
+
+
+@pytest.mark.parametrize(
+    "chave",
+    ["X-Amz-Signature", "X-Ms-Signature", "x-vendor-api_key"],
+)
+def test_ancora_aceita_hifen_e_cobre_prefixo_de_fornecedor(chave):
+    r"""A âncora recusa `\w` e aceita `-`, e a diferença é o que cobre fornecedor.
+
+    `(?<!\w)` impede `key` de casar dentro de `monkey`, mas deixa `signature`
+    casar depois do hífen de `X-Amz-Signature`. Trocar por `(?<![\w-])` também
+    mataria a over-redaction e passaria em todo o resto da suíte — e desligaria
+    em silêncio a cobertura de toda signed URL de fornecedor que não esteja
+    listada por extenso. É essa ponta que este teste trava.
+    """
+    assert redact_text(f"?{chave}=SEGREDO&x=1") == f"?{chave}=<redacted>&x=1"
+
+
+def test_chaves_entram_escapadas_na_alternacao():
+    """`re.escape` nas chaves: sem ele, a primeira com `.` ou `+` vira curinga.
+
+    Hoje nenhuma chave tem metacaractere e o comportamento é idêntico com ou
+    sem — o que este teste protege é o idioma, não um bug ativo. O hífen de
+    "x-goog-signature" é o que torna a diferença visível no padrão compilado.
+    """
+    assert r"x\-goog\-signature" in _CREDENCIAL_EM_QUERY.pattern
 
 
 def test_redact_text_preserva_texto_sem_credencial():

@@ -1,17 +1,19 @@
+import asyncio
 import json
 import math
 import re
+import threading
 import aiohttp
 import pandas as pd
+from functools import lru_cache
 from src.config import env
 from loguru import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 from async_googlemaps import AsyncClient
+from shapely import STRtree
 from shapely.geometry import Point
 from shapely.wkt import loads
-import geopandas as gpd
-from pathlib import Path
 from pydantic import BaseModel
 from jellyfish import jaro_similarity
 from num2words import num2words
@@ -76,21 +78,60 @@ class NearestLocation(BaseModel):
     name_bairro: str
 
 
+class _GeometryIndex:
+    """Geometrias de um arquivo do `DATA_DIR` com índice espacial por cima."""
+
+    def __init__(self, registros: pd.DataFrame):
+        self._registros = registros
+        self._tree = STRtree(registros["geometry"].tolist())
+
+    def nearest(self, point: Point) -> pd.Series:
+        return self._registros.iloc[self._tree.nearest(point)]
+
+
+@lru_cache(maxsize=None)
+def _build_geometry_index(nome_arquivo: str) -> _GeometryIndex:
+    """
+    Lê e indexa um arquivo de geometrias WKT uma única vez por processo.
+
+    O conteúdo é imutável em runtime, mas antes era relido do disco, reparseado
+    de WKT e copiado em profundidade a *cada* consulta — o custo linear inteiro
+    pagava por chamada. Com o cache ele passa a ser pago uma vez, e o `STRtree`
+    troca a varredura linear da consulta por uma busca O(log n).
+
+    Não chame direto: use `_geometry_index`, que serializa a construção.
+    """
+    registros = pd.read_json(env.DATA_DIR / nome_arquivo)
+    registros["geometry"] = registros["geometry"].apply(loads)
+    return _GeometryIndex(registros)
+
+
+# `lru_cache` não segura lock nenhum enquanto a função roda — ele só grava o
+# resultado no fim. Como o índice é construído de dentro de `asyncio.to_thread`,
+# uma rajada de requisições no cold start entraria inteira na função: cada
+# thread leria os dois JSON, reparsearia todo o WKT e montaria um STRtree
+# completo em paralelo, N vezes o custo para guardar um resultado só.
+_INDEX_LOCK = threading.Lock()
+
+
+def _geometry_index(nome_arquivo: str) -> _GeometryIndex:
+    """Devolve o índice do arquivo, construindo-o no máximo uma vez.
+
+    Segurar o lock também no acerto de cache é de propósito: o custo é uma
+    aquisição não contendida (dezenas de nanossegundos) contra um `dict.get`,
+    barato demais para justificar double-checked locking. No erro de cache o
+    primeiro a chegar constrói e os demais esperam por ele, em vez de fazerem
+    o mesmo trabalho em paralelo.
+
+    Aquecer isto no preflight resolveria também o pico de latência da primeira
+    consulta, mas `src/health/preflight.py` não pode importar `src.config.env`
+    — é o que garante que ele reporte todas as variáveis faltantes de uma vez.
+    """
+    with _INDEX_LOCK:
+        return _build_geometry_index(nome_arquivo)
+
+
 class AddressAPIService:
-    def __init__(self):
-        self.shape_rj = None
-        self._load_shape_rj()
-
-    def _load_shape_rj(self):
-        """Carrega o shape do Rio de Janeiro uma única vez."""
-        try:
-            shape_path = Path(__file__).parent.parent.parent / "shape_rj.geojson"
-            if shape_path.exists():
-                self.shape_rj = gpd.read_file(shape_path).iloc[0]["geometry"]
-        except Exception as e:
-            logger.warning(f"Não foi possível carregar shape do RJ: {e}")
-            self.shape_rj = None
-
     @interceptor(
         source={
             "source": "mcp",
@@ -147,20 +188,10 @@ class AddressAPIService:
                 return None
             return cep
 
-        def validate_city(cidade: str, longitude, latitude) -> bool:
+        def validate_city(cidade: str) -> bool:
             if cidade and cidade != "Rio de Janeiro":
                 logger.info("O município do endereço é diferente de Rio de Janeiro")
                 return True
-
-            if not cidade and self.shape_rj:
-                logger.info("Não foi identificado um município para esse endereço")
-                point = Point(
-                    float(longitude),
-                    float(latitude),
-                )
-                if not self.shape_rj.contains(point):
-                    logger.info("O endereço identificado está fora do Rio de Janeiro")
-                    return True
 
             return False
 
@@ -199,9 +230,7 @@ class AddressAPIService:
 
         logger.info(f"Lat, Long: {logradouro_lat}, {logradouro_long}")
 
-        logradouro_fora_do_rj = validate_city(
-            address_info.get("cidade"), logradouro_long, logradouro_lat
-        )
+        logradouro_fora_do_rj = validate_city(address_info.get("cidade"))
         if logradouro_fora_do_rj:
             return {
                 "valid": False,
@@ -242,27 +271,16 @@ class AddressAPIService:
 
         Returns:
             NearestLocation: The nearest logradouro and bairro.
-        """
 
-        logradouros = pd.read_json(env.DATA_DIR / "logradouros.json")
-        logradouros["geometry"] = logradouros["geometry"].apply(loads)
-        bairros = pd.read_json(env.DATA_DIR / "bairros.json")
-        bairros["geometry"] = bairros["geometry"].apply(loads)
+        Síncrona de propósito: quem chama de um contexto async deve usar
+        `asyncio.to_thread`, porque a primeira chamada do processo lê e indexa
+        os dois arquivos do `DATA_DIR`.
+        """
 
         query_point = Point(longitude, latitude)
 
-        logradouros_copy = logradouros.copy(deep=True)
-        bairros_copy = bairros.copy(deep=True)
-
-        logradouros_copy["distance"] = logradouros_copy["geometry"].apply(
-            lambda x: x.distance(query_point)
-        )
-        bairros_copy["distance"] = bairros_copy["geometry"].apply(
-            lambda x: x.distance(query_point)
-        )
-
-        nearest_logradouro = logradouros_copy.loc[logradouros_copy["distance"].idxmin()]
-        nearest_bairro = bairros_copy.loc[bairros_copy["distance"].idxmin()]
+        nearest_logradouro = _geometry_index("logradouros.json").nearest(query_point)
+        nearest_bairro = _geometry_index("bairros.json").nearest(query_point)
 
         return NearestLocation(
             id_logradouro=nearest_logradouro["id"],
@@ -285,8 +303,8 @@ class AddressAPIService:
             latitude = float(latitude)
             longitude = float(longitude)
 
-            nearest_location: NearestLocation = self.get_nearest_logradouro_and_bairro(
-                latitude, longitude
+            nearest_location: NearestLocation = await asyncio.to_thread(
+                self.get_nearest_logradouro_and_bairro, latitude, longitude
             )
 
             logradouro_id_ipp = str(nearest_location.id_logradouro)

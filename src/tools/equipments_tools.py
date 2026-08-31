@@ -1,4 +1,3 @@
-from asyncio.log import logger
 from typing import Optional, List
 from src.tools.equipments.pluscode_service import (
     get_category_equipments,
@@ -9,8 +8,14 @@ from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_response_in_bq_background
 from src.config.env import EQUIPMENTS_VALID_THEMES
 
-# Bairros permitidos para pontos de apoio
-ALLOWED_NEIGHBORHOODS_PONTOS_APOIO = ["acari", "guaratiba", "jardim america"]
+# Bairros permitidos para pontos de apoio.
+#
+# Origem única: `equipments_workflow.py` importa daqui. Até CHATR-153 o mesmo
+# literal existia nos dois arquivos, e editar só um passaria despercebido — a
+# tool e o workflow aceitariam listas de bairros diferentes, sem erro nenhum.
+ALLOWED_NEIGHBORHOODS_PONTOS_APOIO: frozenset[str] = frozenset(
+    {"acari", "guaratiba", "jardim america"}
+)
 
 
 def get_valid_themes() -> List[str]:
@@ -155,54 +160,18 @@ async def get_equipments_with_instructions(
     is_pontos_apoio = "PONTOS_DE_APOIO" in categories
 
     if is_pontos_apoio:
-        # Geocodificar para obter bairro (usa mesma função que a busca usa)
-        from src.tools.equipments.utils import get_coords_from_google_maps_api
-        from src.utils.http_client import InterceptedHTTPClient
-        from src.config.env import GOOGLE_MAPS_API_URL, GOOGLE_MAPS_API_KEY
-        from src.tools.cor_alert_tools import (
-            _extract_google_neighborhood,
-            normalize_neighborhood,
-        )
+        # `geocode_address` é a geocodificação assíncrona do projeto: forward via
+        # `get_coordinates_google` e, se o bairro não vier, o mesmo fallback de
+        # reverse geocoding que este bloco fazia à mão. A versão anterior usava o
+        # cliente síncrono (`sync=True`/`get_sync`) dentro desta corrotina, o que
+        # travava o event loop por até 10s em cada uma das duas chamadas — o
+        # workflow gêmeo já tinha sido corrigido, este caminho tinha ficado para trás.
+        from src.tools.cor_alert_tools import geocode_address
 
-        coords = get_coords_from_google_maps_api(address)
+        coords = await geocode_address(address)
 
         if coords:
             bairro_normalizado = coords.get("bairro_normalizado")
-
-            # Fallback: se não encontrou bairro no forward geocoding, tenta reverse geocoding
-            if not bairro_normalizado and GOOGLE_MAPS_API_KEY:
-                try:
-                    params = {
-                        "latlng": f"{coords['lat']},{coords['lng']}",
-                        "key": GOOGLE_MAPS_API_KEY,
-                    }
-                    with InterceptedHTTPClient(
-                        user_id="unknown",
-                        source={
-                            "source": "mcp",
-                            "tool": "equipments",
-                            "function": "reverse_geocode",
-                        },
-                        sync=True,
-                        timeout=10.0,
-                    ) as client:
-                        response = client.get_sync(GOOGLE_MAPS_API_URL, params=params)
-                        response.raise_for_status()
-                        data = response.json()
-
-                    if data.get("status") == "OK":
-                        for result in data["results"]:
-                            bairro_raw = _extract_google_neighborhood(result)
-                            if bairro_raw:
-                                bairro_normalizado = normalize_neighborhood(bairro_raw)
-                                logger.info(
-                                    f"Bairro encontrado via reverse geocoding: {bairro_raw} -> {bairro_normalizado}"
-                                )
-                                break
-                except Exception as e:
-                    logger.warning(
-                        f"Erro ao fazer reverse geocoding para PONTOS_DE_APOIO: {str(e)}"
-                    )
 
             # Verificar se bairro está na whitelist
             if (

@@ -24,60 +24,57 @@ Uso sync:
 """
 
 import asyncio
-import re
 import traceback as tb
-from typing import Any, Dict, Optional, Set, Union
+from typing import AbstractSet, Any, Dict, FrozenSet, Optional, Union
 
 import httpx
 from loguru import logger
 
 from src.utils.error_interceptor import send_api_error
+from src.utils.pii import (
+    CHAVES_CREDENCIAL,
+    MARCADOR_CREDENCIAL,
+    redigir_credenciais,
+    redigir_padroes_pii,
+)
 
 
 # Status codes que devem ser interceptados por padrão
-DEFAULT_ERROR_STATUS_CODES: Set[int] = {400, 401, 403, 404, 500, 502, 503, 504}
-
-# Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro.
-#
-# As três últimas são da signed URL do GCS: ela é uma capability — quem tem a URL
-# baixa o arquivo, sem autenticar. Os fluxos de guia mandam essa URL ao encurtador
-# no campo "destination", e uma falha lá reportaria o payload inteiro ao
-# monitoramento. Redigir a assinatura invalida a URL para quem lê o log.
-SENSITIVE_KEYS: Set[str] = {
-    "token",
-    "access_token",
-    "refresh_token",
-    "api_key",
-    "apikey",
-    "key",
-    "secret",
-    "password",
-    "senha",
-    "authorization",
-    "chaveacesso",
-    "chave_acesso",
-    "signature",
-    "x-goog-credential",
-    "googleaccessid",
-}
-
-_SENSITIVE_QUERY_RE = re.compile(
-    rf"((?:{'|'.join(SENSITIVE_KEYS)})=)[^&\s'\"]+",
-    re.IGNORECASE,
+DEFAULT_ERROR_STATUS_CODES: FrozenSet[int] = frozenset(
+    {400, 401, 403, 404, 500, 502, 503, 504}
 )
+
+# Nomes de parâmetros/campos cujo valor nunca deve sair daqui em claro. A lista
+# vive em `src/utils/pii.py` desde o CHATR-167, junto com os padrões usados pela
+# barreira de log -- antes deste ticket havia uma cópia aqui e outra no
+# `error_interceptor`, e nenhuma das duas cobria a saída de `logger.*`.
+#
+# É um alias, não uma cópia: os três módulos apontam para o mesmo objeto, e é
+# por isso que ele é `frozenset` -- um `.add()` distraído aqui mudaria também a
+# barreira de log.
+#
+# O que o CHATR-153 tinha acrescentado neste bloco foi junto: `x-goog-signature`
+# está na lista lá, e as notas sobre a âncora `(?<!\w)`, o `re.escape` e o
+# `sorted` determinístico vivem em `_CREDENCIAL_EM_QUERY`, que é onde o padrão
+# passou a ser compilado.
+SENSITIVE_KEYS: FrozenSet[str] = CHAVES_CREDENCIAL
 
 
 def redact_text(texto: Optional[str]) -> Optional[str]:
     """
-    Redige valores sensíveis embutidos em texto livre.
+    Redige credencial e PII embutidas em texto livre.
 
-    Várias APIs (IPTU, entre outras) autenticam por query string, e exceções do httpx
-    como TooManyRedirects ou InvalidURL embutem a URL completa na mensagem. Sem isso,
-    a credencial acabaria no sistema de monitoramento.
+    Várias APIs (IPTU, entre outras) autenticam por query string, e exceções do
+    httpx como TooManyRedirects ou InvalidURL embutem a URL completa na
+    mensagem. Sem isso, a credencial acabaria no sistema de monitoramento.
+
+    Desde o CHATR-167 também passa pelos padrões de PII: `error_message` e
+    `traceback` chegam aqui a caminho do interceptor e carregam com frequência o
+    CPF ou o telefone que originou a chamada.
     """
     if not texto:
         return texto
-    return _SENSITIVE_QUERY_RE.sub(r"\1<redacted>", texto)
+    return redigir_padroes_pii(redigir_credenciais(texto))
 
 
 def redact_body(body: Any) -> Any:
@@ -85,7 +82,7 @@ def redact_body(body: Any) -> Any:
     if isinstance(body, dict):
         return {
             chave: (
-                "<redacted>"
+                MARCADOR_CREDENCIAL
                 if str(chave).lower() in SENSITIVE_KEYS
                 else redact_body(valor)
             )
@@ -98,7 +95,9 @@ def redact_body(body: Any) -> Any:
     return body
 
 
-def raise_for_status_except(response: httpx.Response, skip_codes: Set[int]) -> None:
+def raise_for_status_except(
+    response: httpx.Response, skip_codes: AbstractSet[int]
+) -> None:
     """Chama raise_for_status() ignorando status codes que representam estados válidos.
 
     Use sempre que um código 4xx for semanticamente um "resultado vazio" e não uma
@@ -242,7 +241,7 @@ class InterceptedHTTPClient:
         url: str,
         *,
         intercept_errors: bool = True,
-        error_status_codes: Optional[Set[int]] = None,
+        error_status_codes: Optional[AbstractSet[int]] = None,
         **kwargs,
     ) -> httpx.Response:
         """
@@ -325,7 +324,7 @@ class InterceptedHTTPClient:
         url: str,
         *,
         intercept_errors: bool = True,
-        error_status_codes: Optional[Set[int]] = None,
+        error_status_codes: Optional[AbstractSet[int]] = None,
         **kwargs,
     ) -> httpx.Response:
         """

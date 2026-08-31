@@ -155,15 +155,48 @@ porque o helper vai ganhar um segundo consumidor.
 | Redação da signed URL antes do interceptor | `src/utils/http_client.py` (`SENSITIVE_KEYS`) |
 | Testes dos helpers | `src/tests/unit/utils/test_{gcs_storage,short_url}.py` |
 
+## Adendo: o Pix copia-e-cola saiu da Dívida Ativa
+
+Durante o levantamento acima ficou claro que o EMV cru **não precisa** ir ao
+cidadão: o PDF que a PGM devolve na emissão já traz, na mesma folha, o QR Code,
+o código Pix copia-e-cola e o código de barras. Mandar o EMV junto repetia o
+que o arquivo entrega, num bloco de ~190 caracteres ilegível na conversa.
+
+Duas mudanças, em consequência:
+
+**O passo que perguntava a forma de pagamento saiu.** Havia três botões —
+boleto bancário, código de barras, Pix copia-e-cola — e cada um respondia com
+um pedaço do que o PDF já tem. Era um toque a mais para entregar menos. Hoje o
+"sim" da confirmação emite e entrega o PDF direto; `FormaPagamentoAVistaPayload`,
+a view `forma_pagamento_a_vista` e os três templates deixaram de existir, e no
+lugar deles ficou `guia_a_vista_emitida`.
+
+**O campo `pix` saiu dos payloads.** Do público do workflow (`GUIA_CAMPOS`), da
+resposta da v1 (`processar_registros`) e da v2 (`GuiaEmitida` e
+`EmitirGuiaResponse`). Isso é **breaking change** para quem lê a v2 direto:
+`extra="forbid"` faz um `pix=` na construção virar `ValidationError`, e não
+campo ignorado.
+
+O `codigoQrEMVPix` **continua sendo lido** em `_extrair_guias` e em
+`GuiaEmitida.de_registro`: é a fonte primária do valor da guia (campo 54 do
+EMV, com o código de barras como segunda fonte — ver CHATR-164). O que mudou é
+que ele não é mais devolvido, só consumido.
+
+Consequência para os itens abaixo: a **página Pix para a Dívida Ativa** deixa
+de ser o caminho óbvio. Ela só se justifica se a leitura do PDF no WhatsApp se
+mostrar pior que uma página com botão de copiar — e essa comparação precisa ser
+feita antes de construir, não depois.
+
 ## Em aberto
 
 - **`arquivoBase64` da Dívida Ativa** — o consumidor natural destes helpers.
   Quando for feito, o link curto entra **só na mensagem**, não no payload
   público: o CHATR-164 registrou que o payload volta a cada passo do workflow.
-- **Página Pix para a Dívida Ativa** — exige gerar o QR a partir do EMV
-  (`codigoQrEMVPix`), enquanto `build_pix_copy_page` hoje espera a imagem em
-  base64 que só o IPTU manda (`QrCodePIX`). Precisa de dependência nova
-  (`segno`/`qrcode`) e de parametrizar o título, fixo em "Pix IPTU".
+- **Página Pix para a Dívida Ativa** — *condicionada ao adendo acima*: só faz
+  sentido se o PDF sozinho se mostrar insuficiente. Se for feita, exige gerar o
+  QR a partir do EMV (`codigoQrEMVPix`), enquanto `build_pix_copy_page` espera a
+  imagem em base64 que só o IPTU manda (`QrCodePIX`) — precisa de dependência
+  nova (`segno`/`qrcode`) e de parametrizar o título, fixo em "Pix IPTU".
 - **Client do GCS por chamada** — `get_workflows_bucket` monta um
   `storage.Client` e parseia a chave RSA a cada upload. Fora do event loop isso
   deixou de travar o atendimento, mas segue sendo trabalho repetido; cachear

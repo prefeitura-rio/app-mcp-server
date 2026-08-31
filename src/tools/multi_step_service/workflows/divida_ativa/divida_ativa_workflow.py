@@ -15,6 +15,7 @@ from src.tools.multi_step_service.core import (
 )
 from src.tools.multi_step_service.workflows.divida_ativa.core.models import (
     AcaoResultadoConsultaPayload,
+    build_options,
     AcaoPagamentoRecusadoPayload,
     AutoInfracaoPayload,
     CdaPayload,
@@ -22,7 +23,6 @@ from src.tools.multi_step_service.workflows.divida_ativa.core.models import (
     DebitosEscolhidosPayload,
     CpfCnpjPayload,
     ExecucaoFiscalPayload,
-    FormaPagamentoAVistaPayload,
     InscricaoImobiliariaPayload,
     MenuPagamentoCompletoPayload,
     MenuPagamentoParceladoPayload,
@@ -76,7 +76,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "cpf_cnpj": [
             "divida_ativa",
@@ -85,7 +84,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "inscricao_imobiliaria": [
             "divida_ativa",
@@ -94,7 +92,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "ano_auto_infracao": [
             "numero_auto_infracao",
@@ -104,7 +101,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "numero_auto_infracao": [
             "divida_ativa",
@@ -113,7 +109,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "cda": [
             "divida_ativa",
@@ -122,7 +117,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "execucao_fiscal": [
             "divida_ativa",
@@ -131,32 +125,26 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "acao_resultado": [
             "opcao_menu",
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "opcao_menu": [
             "opcao_pagar_a_vista",
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "opcao_pagar_a_vista": [
             "debitos_escolhidos",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
         "debitos_escolhidos": [
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
         ],
-        "confirmar_pagamento_a_vista": ["forma_pagamento_a_vista"],
-        "forma_pagamento_a_vista": [],
+        "confirmar_pagamento_a_vista": [],
     }
     VIEW_TIPO_CONSULTA = "tipo_consulta"
     VIEW_ACAO_RESULTADO = "acao_resultado"
@@ -164,7 +152,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
     VIEW_OPCAO_PAGAR_A_VISTA = "opcao_pagar_a_vista"
     VIEW_DEBITOS_ESCOLHIDOS = "debitos_escolhidos"
     VIEW_CONFIRMAR_PAGAMENTO_A_VISTA = "confirmar_pagamento_a_vista"
-    VIEW_FORMA_PAGAMENTO_A_VISTA = "forma_pagamento_a_vista"
     VIEW_ACAO_PAGAMENTO_RECUSADO = "acao_pagamento_recusado"
     view_requirements = {
         VIEW_TIPO_CONSULTA: [],
@@ -176,10 +163,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "divida_ativa",
             "debitos_pagamento_a_vista",
         ],
-        VIEW_FORMA_PAGAMENTO_A_VISTA: [
-            "divida_ativa",
-            "debitos_pagamento_a_vista",
-        ],
         VIEW_ACAO_PAGAMENTO_RECUSADO: ["divida_ativa"],
     }
     view_back_targets = {
@@ -187,7 +170,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
         VIEW_OPCAO_PAGAR_A_VISTA: VIEW_OPCAO_MENU,
         VIEW_DEBITOS_ESCOLHIDOS: VIEW_OPCAO_PAGAR_A_VISTA,
         VIEW_CONFIRMAR_PAGAMENTO_A_VISTA: VIEW_OPCAO_PAGAR_A_VISTA,
-        VIEW_FORMA_PAGAMENTO_A_VISTA: VIEW_CONFIRMAR_PAGAMENTO_A_VISTA,
         VIEW_ACAO_PAGAMENTO_RECUSADO: VIEW_CONFIRMAR_PAGAMENTO_A_VISTA,
     }
     view_dependencies = {
@@ -198,7 +180,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 "opcao_pagar_a_vista",
                 "debitos_escolhidos",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
             ],
             "divida_ativa": [
                 "opcao_menu_selecionada",
@@ -206,7 +187,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 "debitos_pagamento_a_vista",
                 "debitos_pagamento_a_vista_labels",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
                 "guia_pagamento_a_vista",
                 "acao_pagamento_recusado",
                 "renderizacao_menu",
@@ -218,7 +198,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 "opcao_pagar_a_vista",
                 "debitos_escolhidos",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
             ],
             "divida_ativa": [
                 "opcao_menu_selecionada",
@@ -226,7 +205,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 "debitos_pagamento_a_vista",
                 "debitos_pagamento_a_vista_labels",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
                 "guia_pagamento_a_vista",
                 "acao_pagamento_recusado",
                 "renderizacao_menu",
@@ -237,14 +215,12 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 "opcao_pagar_a_vista",
                 "debitos_escolhidos",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
             ],
             "divida_ativa": [
                 "opcao_pagar_a_vista",
                 "debitos_pagamento_a_vista",
                 "debitos_pagamento_a_vista_labels",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
                 "guia_pagamento_a_vista",
                 "acao_pagamento_recusado",
             ],
@@ -253,29 +229,22 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "data": [
                 "debitos_escolhidos",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
             ],
             "divida_ativa": [
                 "debitos_pagamento_a_vista",
                 "debitos_pagamento_a_vista_labels",
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
                 "guia_pagamento_a_vista",
                 "acao_pagamento_recusado",
             ],
         },
         VIEW_CONFIRMAR_PAGAMENTO_A_VISTA: {
-            "data": ["confirmar_pagamento_a_vista", "forma_pagamento_a_vista"],
+            "data": ["confirmar_pagamento_a_vista"],
             "divida_ativa": [
                 "confirmar_pagamento_a_vista",
-                "forma_pagamento_a_vista",
                 "guia_pagamento_a_vista",
                 "acao_pagamento_recusado",
             ],
-        },
-        VIEW_FORMA_PAGAMENTO_A_VISTA: {
-            "data": ["forma_pagamento_a_vista"],
-            "divida_ativa": ["forma_pagamento_a_vista", "guia_pagamento_a_vista"],
         },
     }
     tipo_consulta_steps = {
@@ -501,7 +470,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
             "opcao_menu_selecionada",
             "opcao_pagar_a_vista",
             "confirmar_pagamento_a_vista",
-            "forma_pagamento_a_vista",
             "itens",
             "naturezas_divida",
         ]
@@ -525,7 +493,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
         "data_vencimento": ("data_vencimento", "dataVencimento"),
         "link": ("link", "pdf"),
         "codigo_de_barras": ("codigo_de_barras", "codigoDeBarras"),
-        "pix": ("pix", "codigoQrEMVPix"),
         "valor": ("valor",),
     }
 
@@ -932,13 +899,10 @@ class DividaAtivaWorkflow(BaseWorkflow):
         if self._processar_payload_fora_do_step(state):
             return state
 
-        if await self._processar_forma_pagamento_a_vista(state):
-            return state
-
         if self._processar_acao_pagamento_recusado(state):
             return state
 
-        if self._processar_confirmacao_pagamento_a_vista(state):
+        if await self._processar_confirmacao_pagamento_a_vista(state):
             return state
 
         if self._processar_debitos_escolhidos(state):
@@ -1112,15 +1076,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
                     "title": "Opções de pagamento",
                     "description": "Escolha uma opção.",
                     "enum": opcoes_menu,
-                    "options": [
-                        {
-                            "value": opcao,
-                            "label": DividaAtivaTemplates.OPCAO_MENU_LABELS.get(
-                                opcao, opcao
-                            ),
-                        }
-                        for opcao in opcoes_menu
-                    ],
+                    "options": build_options(opcoes_menu, include_description=False),
                     "x-render": renderizacao,
                 }
             },
@@ -1174,13 +1130,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
                 state,
                 DividaAtivaTemplates.confirmar_pagamento_a_vista(labels),
                 payload_schema=self._build_confirmacao_pagamento_schema(),
-            )
-
-        if view == self.VIEW_FORMA_PAGAMENTO_A_VISTA:
-            return self._opcao_pagamento_response(
-                state,
-                DividaAtivaTemplates.pagamento_a_vista_confirmado(),
-                payload_schema=self._build_forma_pagamento_schema(),
             )
 
         return self._tipo_consulta_response(state)
@@ -1286,11 +1235,6 @@ class DividaAtivaWorkflow(BaseWorkflow):
         schema["x-render"] = "buttons"
         return schema
 
-    def _build_forma_pagamento_schema(self) -> dict:
-        schema = FormaPagamentoAVistaPayload.model_json_schema()
-        schema["x-render"] = "buttons"
-        return schema
-
     def _build_acao_pagamento_recusado_schema(self) -> dict:
         schema = AcaoPagamentoRecusadoPayload.model_json_schema()
         schema["x-render"] = "buttons"
@@ -1383,7 +1327,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         return list(dict.fromkeys(indices))
 
-    def _processar_confirmacao_pagamento_a_vista(
+    async def _processar_confirmacao_pagamento_a_vista(
         self,
         state: ServiceState,
     ) -> bool:
@@ -1419,12 +1363,7 @@ class DividaAtivaWorkflow(BaseWorkflow):
             )
             return True
 
-        self._opcao_pagamento_response(
-            state,
-            DividaAtivaTemplates.pagamento_a_vista_confirmado(),
-            payload_schema=self._build_forma_pagamento_schema(),
-        )
-        return True
+        return await self._emitir_e_entregar_guia_a_vista(state)
 
     def _processar_acao_pagamento_recusado(
         self,
@@ -1466,42 +1405,20 @@ class DividaAtivaWorkflow(BaseWorkflow):
         )
         return True
 
-    def _formatar_resposta_forma_pagamento_a_vista(
-        self,
-        forma_pagamento: str,
-        guia: dict,
-    ) -> str:
-        guias = self._guias_da_resposta(guia, self.GUIA_CAMPOS_MENSAGEM)
+    async def _emitir_e_entregar_guia_a_vista(self, state: ServiceState) -> bool:
+        """
+        Emite a guia à vista e entrega o PDF.
 
-        if forma_pagamento == "boleto_bancario":
-            return DividaAtivaTemplates.boleto_bancario_a_vista(guias)
+        Era o corpo de `_processar_forma_pagamento_a_vista`, que rodava depois
+        de um passo de botões perguntando entre boleto bancário, código de
+        barras e Pix copia e cola. O passo saiu: o PDF da PGM traz os três na
+        mesma folha, então a pergunta cobrava um toque a mais do cidadão para
+        entregar um subconjunto do que o arquivo já entrega.
 
-        if forma_pagamento == "codigo_barras":
-            return DividaAtivaTemplates.codigo_barras_a_vista(guias)
-
-        return DividaAtivaTemplates.pix_copia_e_cola_a_vista(guias)
-
-    async def _processar_forma_pagamento_a_vista(self, state: ServiceState) -> bool:
-        if "forma_pagamento_a_vista" not in state.payload:
-            return False
-
-        if not self._ensure_debitos_a_vista(state):
-            return True
-
-        try:
-            validated = FormaPagamentoAVistaPayload.model_validate(state.payload)
-        except ValidationError:
-            self._opcao_pagamento_response(
-                state,
-                DividaAtivaTemplates.opcao_botao_indisponivel(),
-                payload_schema=self._build_forma_pagamento_schema(),
-            )
-            return True
-
-        divida_ativa = self._ensure_public_divida_ativa(state)
+        Chamado direto do "sim" da confirmação, que é quem já garantiu os
+        débitos selecionados — por isso não repete `_ensure_debitos_a_vista`.
+        """
         divida_ativa_cache = self._ensure_divida_ativa_cache(state)
-        divida_ativa["forma_pagamento_a_vista"] = validated.forma_pagamento_a_vista
-        state.data["forma_pagamento_a_vista"] = validated.forma_pagamento_a_vista
 
         cdas, efs = self._get_cdas_efs_para_emissao_a_vista(state)
         guia = await self.api_service.emitir_guia_a_vista(cdas=cdas, efs=efs)
@@ -1518,9 +1435,8 @@ class DividaAtivaWorkflow(BaseWorkflow):
 
         self._final_response(
             state,
-            self._formatar_resposta_forma_pagamento_a_vista(
-                validated.forma_pagamento_a_vista,
-                guia,
+            DividaAtivaTemplates.guia_a_vista_emitida(
+                self._guias_da_resposta(guia, self.GUIA_CAMPOS_MENSAGEM)
             ),
             data={
                 "guia_pagamento_a_vista": self._build_public_guia_data(guia),

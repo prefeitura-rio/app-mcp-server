@@ -61,6 +61,11 @@ from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
 )
+from src.tools.rock_in_rio.cache import aquecer_lineup, run_refresh_loop
+from src.tools.rock_in_rio.tool import (
+    get_rock_in_rio_lineup,
+    descricao_da_tool as rock_in_rio_description,
+)
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -219,10 +224,36 @@ def create_app() -> FastMCP:
 
             dlq_drain_task = asyncio.create_task(drain_bigquery_dlq_loop())
 
+        # Line-up do Rock in Rio (CHATR-187). O aquecimento é aguardado de
+        # propósito: sem ele o primeiro cidadão a perguntar depois de cada
+        # deploy pagaria o download dos sete dias dentro da própria conversa.
+        # `aquecer_lineup` engole as próprias exceções, então uma fonte fora do
+        # ar aqui custa o timeout (as sete páginas baixam concorrentes) e nada
+        # mais.
+        #
+        # Atenção ao custo: o `set_ready(True)` acima é anterior, mas isso NÃO
+        # livra a readiness. A uvicorn só cria o socket depois que o startup do
+        # lifespan retorna, então enquanto este `await` roda a porta sequer
+        # escuta e a probe leva connection refused. O atraso é limitado pelo
+        # `TIMEOUT_S` do scraper; qualquer coisa mais cara que isso aqui precisa
+        # virar task em vez de `await`.
+        #
+        # A exclusão da tool desliga junto o trabalho de fundo. Sem essa guarda,
+        # `EXCLUDED_TOOLS` tirava a tool do catálogo e deixava o laço batendo no
+        # site de 15 em 15 minutos, para sempre, por ninguém.
+        #
+        # Desligado em execução local pelo mesmo critério das tasks acima: em
+        # `mcp dev` a primeira chamada carrega o cache sozinha, pelo caminho
+        # preguiçoso de `obter_lineup`.
+        lineup_task = None
+        if not IS_LOCAL and "rock_in_rio_lineup" not in EXCLUDED_TOOLS:
+            await aquecer_lineup()
+            lineup_task = asyncio.create_task(run_refresh_loop())
+
         try:
             yield {}
         finally:
-            for task in (probe_task, dlq_drain_task):
+            for task in (probe_task, dlq_drain_task, lineup_task):
                 if task is None:
                     continue
                 task.cancel()
@@ -420,6 +451,15 @@ def create_app() -> FastMCP:
             "categorias": categories,
         }
         return add_tool_version(response)
+
+    @conditional_mcp_tool(
+        "rock_in_rio_lineup",
+        description=rock_in_rio_description(TOOL_VERSION),
+    )
+    async def rock_in_rio_lineup() -> dict:
+        # Sem parâmetros de propósito: a grade inteira cabe na resposta, e é a
+        # LLM que faz o recorte pedido pelo cidadão. Ver `tool.py`.
+        return add_tool_version(await get_rock_in_rio_lineup())
 
     @conditional_mcp_tool("get_user_memory")
     async def get_user_memory(

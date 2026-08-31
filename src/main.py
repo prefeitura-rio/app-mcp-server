@@ -8,6 +8,12 @@ from pathlib import Path
 # Adiciona o diretório raiz do projeto ao Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Antes de qualquer outra coisa: instala a barreira de redação de PII do
+# CHATR-167. `src.utils.log` configura o `logger` global do loguru, então a
+# primeira linha logada no processo -- inclusive as do preflight -- já sai
+# redigida.
+import src.utils.log  # noqa: F401,E402
+
 from src.health.preflight import run_startup_preflight
 
 # Precisa rodar ANTES de `src.app`, que importa `src.config.env` e aborta na
