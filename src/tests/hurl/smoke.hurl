@@ -85,6 +85,18 @@ body not matches "[a-z][a-z0-9+.-]*://"
 GET {{base_url}}/rota-que-nao-existe
 HTTP 401
 [Asserts]
+header "WWW-Authenticate" startsWith "Bearer"
+
+
+# Requisicao sem credencial recebe o desafio nu; com credencial invalida, o
+# desafio carrega `error="invalid_token"`. A distincao e da RFC 6750 3.1 e
+# vale para as duas camadas -- a nossa (`require_auth.py`) e a nativa do
+# FastMCP no `/mcp`. Anunciar `invalid_token` para quem nao mandou token
+# nenhum diria que um token foi rejeitado, o que nao aconteceu.
+GET {{base_url}}/rota-que-nao-existe
+Authorization: Bearer token-que-nao-existe
+HTTP 401
+[Asserts]
 header "WWW-Authenticate" contains "invalid_token"
 
 
@@ -101,7 +113,7 @@ Accept: application/json, text/event-stream
 ```
 HTTP 401
 [Asserts]
-header "WWW-Authenticate" contains "invalid_token"
+header "WWW-Authenticate" startsWith "Bearer"
 
 
 POST {{base_url}}/mcp

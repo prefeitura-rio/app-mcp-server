@@ -77,6 +77,32 @@ async def test_sem_token_recusa_e_nao_alcanca_o_handler():
 
 
 @pytest.mark.asyncio
+async def test_o_desafio_so_traz_error_quando_veio_credencial():
+    """RFC 6750 3.1: `error` so entra quando um token foi apresentado e
+    recusado.
+
+    Sem esta distincao o servidor responde dois formatos para a mesma
+    pergunta: o `/mcp`, protegido pelo middleware nativo do FastMCP, devolve o
+    desafio nu para requisicao sem credencial, e este middleware devolveria
+    `invalid_token`. Um cliente que le o desafio para decidir se renova o
+    token ou se pede um veria coisas diferentes conforme a rota.
+    """
+    async with _cliente(verifier=_VerificadorFalso()) as c:
+        sem = await c.post("/consulta_debitos", json={})
+        com = await c.post(
+            "/consulta_debitos", json={}, headers={"Authorization": "Bearer ruim"}
+        )
+
+    assert sem.status_code == com.status_code == 401
+    assert sem.headers["www-authenticate"] == "Bearer"
+    assert com.headers["www-authenticate"] == 'Bearer error="invalid_token"'
+
+    # O corpo nao distingue os dois: dizer a quem sonda se o token chegou a
+    # ser avaliado entrega informacao de graca.
+    assert sem.content == com.content
+
+
+@pytest.mark.asyncio
 async def test_token_invalido_recusa():
     async with _cliente(verifier=_VerificadorFalso()) as c:
         r = await c.post("/emitir_guia", headers={"Authorization": "Bearer ruim"})

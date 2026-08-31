@@ -113,12 +113,30 @@ def _client_ip(scope: dict) -> str | None:
     return client[0] if client else None
 
 
-async def _responder_401(send: Callable[[dict], Awaitable[None]]) -> None:
-    """401 no formato da RFC 6750, sem revelar por que o token falhou."""
+async def _responder_401(
+    send: Callable[[dict], Awaitable[None]], *, credencial_apresentada: bool
+) -> None:
+    """401 no formato da RFC 6750, sem revelar por que o token falhou.
+
+    O desafio distingue os dois casos porque a RFC 6750 §3.1 exige: o código
+    `error` só entra quando a requisição *trouxe* uma credencial e ela não
+    serviu. Requisição sem credencial alguma recebe o desafio nu — anunciar
+    `invalid_token` ali diria que um token foi rejeitado, quando nenhum foi
+    enviado.
+
+    Não é preciosismo de spec: é o mesmo desafio que o `/mcp` devolve pelo
+    middleware nativo do FastMCP, que passou a segui-la na versão 4. Sem esta
+    distinção o servidor responderia dois formatos diferentes para a mesma
+    pergunta, dependendo de qual rota o cliente tentou.
+
+    O corpo não muda entre os dois casos de propósito: distinguir ali diria a
+    quem sonda o servidor se o token enviado chegou a ser avaliado.
+    """
     corpo = (
         b'{"error":"invalid_token",'
         b'"error_description":"Token de autorizacao ausente ou invalido."}'
     )
+    desafio = b'Bearer error="invalid_token"' if credencial_apresentada else b"Bearer"
     await send(
         {
             "type": "http.response.start",
@@ -126,7 +144,7 @@ async def _responder_401(send: Callable[[dict], Awaitable[None]]) -> None:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(corpo)).encode()),
-                (b"www-authenticate", b'Bearer error="invalid_token"'),
+                (b"www-authenticate", desafio),
             ],
         }
     )
@@ -227,4 +245,4 @@ class RequireAuthOnAllRoutes:
 
         if modo == MODE_OBSERVE:
             return await self.app(scope, receive, send)
-        return await _responder_401(send)
+        return await _responder_401(send, credencial_apresentada=token is not None)
