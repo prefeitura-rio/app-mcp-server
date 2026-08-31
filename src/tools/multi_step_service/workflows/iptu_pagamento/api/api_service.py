@@ -741,7 +741,16 @@ class IPTUAPIService:
                 auth_response = await client.post(
                     f"{env.DIVIDA_ATIVA_API_URL}/security/token",
                     data={
-                        "verify": env.INTERNAL_TLS_VERIFY,
+                        # NÃO é a opção de TLS do httpx: esta chave vai dentro
+                        # de `data=`, ou seja, é enviada como campo do corpo
+                        # form-encoded para a API da PGM. `verify` do httpx é
+                        # argumento do cliente, não da requisição — esta linha
+                        # nunca desligou verificação alguma. Fica literal, e
+                        # fora do `INTERNAL_TLS_VERIFY`, porque amarrá-la à
+                        # variável faria ligar a verificação de TLS mudar o
+                        # payload enviado a um serviço externo, sem ganho de
+                        # segurança nenhum. Ver CHATR-178.
+                        "verify": False,
                         "grant_type": "password",
                         "Consumidor": "consultar-dividas-contribuinte",
                         "ChaveAcesso": env.DIVIDA_ATIVA_ACCESS_KEY,
