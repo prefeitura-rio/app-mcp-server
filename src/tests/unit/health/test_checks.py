@@ -82,7 +82,7 @@ async def test_keycloak_sem_configuracao_e_pulado(fake_env):
 
 @pytest.mark.asyncio
 async def test_tool_registry_com_tools_vira_up():
-    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={"alguma_tool": 1}))
+    mcp = types.SimpleNamespace(list_tools=AsyncMock(return_value=["alguma_tool"]))
 
     check = checks.make_tool_registry_check(mcp)
 
@@ -92,25 +92,12 @@ async def test_tool_registry_com_tools_vira_up():
 @pytest.mark.asyncio
 async def test_tool_registry_vazio_falha():
     # EXCLUDED_TOOLS mal configurado deixa o servidor de pé e sem tools.
-    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={}))
+    mcp = types.SimpleNamespace(list_tools=AsyncMock(return_value=[]))
 
     check = checks.make_tool_registry_check(mcp)
 
     with pytest.raises(HealthCheckError):
         await check()
-
-
-@pytest.mark.asyncio
-async def test_tool_registry_usa_list_tools_no_modo_local():
-    class LocalMcp:
-        """`mcp.server.fastmcp.FastMCP` não tem `get_tools`."""
-
-        async def list_tools(self):
-            return ["uma_tool"]
-
-    check = checks.make_tool_registry_check(LocalMcp())
-
-    assert await check() is CheckStatus.UP
 
 
 @pytest.mark.asyncio
@@ -208,7 +195,7 @@ def test_registro_local_omite_dependencias_de_rede(monkeypatch, fake_env):
 
     fake_env.IS_LOCAL = True
     registry = HealthRegistry()
-    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={"t": 1}))
+    mcp = types.SimpleNamespace(list_tools=AsyncMock(return_value=["t"]))
 
     checks.register_default_checks(mcp, registry)
 
@@ -223,7 +210,7 @@ def test_registro_em_producao_inclui_redis_e_bigquery(monkeypatch, fake_env):
 
     fake_env.IS_LOCAL = False
     registry = HealthRegistry()
-    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={"t": 1}))
+    mcp = types.SimpleNamespace(list_tools=AsyncMock(return_value=["t"]))
 
     checks.register_default_checks(mcp, registry)
 

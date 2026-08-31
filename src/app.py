@@ -77,10 +77,14 @@ from src.config.env import IS_LOCAL, EXCLUDED_TOOLS
 import src.config.env as env
 from src.utils.tool_versioning import add_tool_version, get_tool_version_from_file
 
-if IS_LOCAL:
-    from mcp.server.fastmcp import FastMCP
-else:
-    from fastmcp import FastMCP
+# Um único caminho de import, deliberadamente. Antes havia bifurcação — o
+# `mcp.server.fastmcp` quando `IS_LOCAL`, o `fastmcp` caso contrário — e ela
+# custava caro: o CI roda sempre com `IS_LOCAL` falso, então metade deste
+# módulo nunca era exercitada, e a divergência só aparecia na máquina de quem
+# estivesse desenvolvendo. O mcp 2.x fecha a questão de vez: `mcp.server.fastmcp`
+# deixou de existir (a classe virou `MCPServer`), então o ramo antigo hoje é um
+# ImportError esperando alguém rodar localmente.
+from fastmcp import FastMCP
 
 TOOL_VERSION = get_tool_version_from_file()["version"]
 
@@ -164,12 +168,6 @@ def create_app() -> FastMCP:
     _auth_provider = auth_provider
 
     # Inicializa o servidor FastMCP
-    # `FastMCP` é importado condicionalmente (mcp.server.fastmcp quando
-    # IS_LOCAL, fastmcp caso contrário — ver bloco de import acima), então o
-    # type checker só enxerga a assinatura de `auth` de uma das duas classes
-    # (AuthSettings). Em runtime a classe usada quando `not IS_LOCAL` é
-    # `fastmcp.FastMCP`, que aceita `auth: AuthProvider | None`, e
-    # `auth_provider` só é não-None nesse caso.
     # Observabilidade: habilita tracing OpenTelemetry (exportando para o
     # SigNoz) se OTEL_EXPORTER_OTLP_TRACES_ENDPOINT estiver configurado.
     # `setup_tracing()` é seguro mesmo sem configuração (retorna False).
@@ -187,6 +185,17 @@ def create_app() -> FastMCP:
         parcial em indisponibilidade total. O que impede o boot são erros de
         configuração, verificados antes disto por `run_startup_preflight()`.
         """
+        # Catálogo de tools registradas. Mora aqui, e não em `create_app()`,
+        # porque `list_tools()` é corrotina e a fábrica é síncrona. Antes isto
+        # lia `mcp._tool_manager._tools` — API privada, que sumiu no fastmcp 4.
+        # `list_tools()` é a pública, e como efeito colateral o catálogo passa a
+        # ser logado no startup do servidor, que é quando ele de fato importa.
+        try:
+            nomes = sorted(tool.name for tool in await mcp.list_tools())
+            logger.info(f"Tools registradas ({len(nomes)}): {nomes}")
+        except Exception as e:
+            logger.warning(f"Erro ao listar tools: {e}")
+
         try:
             results = await health_registry.run_all(force=True)
             for result in results:
@@ -787,16 +796,6 @@ def create_app() -> FastMCP:
     if Settings.DEBUG:
         logger.debug("Modo DEBUG ativado")
         logger.debug(f"Configurações: {Settings.get_server_info()}")
-
-    # Log todas as tools registradas
-    try:
-        if hasattr(mcp, "_tool_manager") and hasattr(mcp._tool_manager, "_tools"):
-            tool_names = list(mcp._tool_manager._tools.keys())
-            logger.info(f"Tools registradas ({len(tool_names)}): {sorted(tool_names)}")
-        else:
-            logger.warning("Não foi possível acessar a lista de tools registradas")
-    except Exception as e:
-        logger.warning(f"Erro ao listar tools: {e}")
 
     # Fallback para modos de execução que não entram no lifespan: nada é
     # servido por HTTP antes de `create_app()` retornar, então marcar aqui não

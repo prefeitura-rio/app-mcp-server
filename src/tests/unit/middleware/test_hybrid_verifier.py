@@ -4,6 +4,7 @@ import types
 from pathlib import Path
 
 import httpx
+import httpx2
 import pytest
 from authlib.jose import JsonWebKey
 from fastmcp.server.auth.providers.jwt import RSAKeyPair
@@ -81,6 +82,10 @@ def mock_jwks_endpoint(monkeypatch, *public_pems):
         return _FakeJWKSResponse(payload)
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    # O `JWTVerifier` do fastmcp 4 busca o JWKS com `httpx2`, nao com `httpx`.
+    # Sem este segundo patch a busca escapa do mock, falha, e o token valido
+    # deixa de autenticar -- falha que parece do verificador e e do teste.
+    monkeypatch.setattr(httpx2.AsyncClient, "get", fake_get)
 
 
 # (a)/(e) Token estático continua autenticando exatamente como hoje, quando

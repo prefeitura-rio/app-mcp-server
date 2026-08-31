@@ -14,9 +14,20 @@ O `maxLength` é lido do schema publicado, e não da assinatura em Python, porqu
 é o schema que o cliente enxerga — é ele que precisa estar certo.
 """
 
+import asyncio
+
 import pytest
 
 from src.app import mcp
+
+
+def _catalogo():
+    """Tools registradas, indexadas por nome.
+
+    Pela API pública: o acessor privado que servia para isto foi removido no
+    fastmcp 4. `list_tools()` e corrotina, e este modulo e sincrono.
+    """
+    return {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
 
 
 # Argumentos sem teto no schema, cada um com o motivo. Como a lista de legado do
@@ -59,7 +70,7 @@ def _tem_teto(esquema: dict) -> bool:
 
 
 def _argumentos():
-    for nome_tool, tool in sorted(mcp._tool_manager._tools.items()):
+    for nome_tool, tool in sorted(_catalogo().items()):
         propriedades = (tool.parameters or {}).get("properties", {})
         for nome_arg, esquema in propriedades.items():
             yield nome_tool, nome_arg, esquema
@@ -67,7 +78,7 @@ def _argumentos():
 
 def test_ha_tools_registradas():
     """Sanidade: com o catálogo vazio o teste passaria por vacuidade."""
-    assert mcp._tool_manager._tools
+    assert _catalogo()
 
 
 @pytest.mark.parametrize(
