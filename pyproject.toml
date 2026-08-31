@@ -6,23 +6,19 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "mcp[cli]",
-    "uvicorn",
     "pytz",
     "fastmcp>=2.14.7,<3",
     "loguru>=0.7.3",
     "fastapi>=0.115.14",
     "aiohttp>=3.13.3",
-    "dotenv>=0.9.9",
+    "python-dotenv>=1.0.0",
     "google-genai>=1.25.0",
-    "requests>=2.32.4",
     "google-cloud-storage>=2.18,<3",
     "google-cloud-bigquery>=3.35.0",
-    "crawl4ai>=0.7.2",
     "pydantic>=2.11.7",
     "redis>=7.0.1",
     "langgraph==0.6.4",
     "httpx>=0.27.0",
-    "langchain==0.3.30",
     "langchain-core==0.3.86",
     "langchain-mcp-adapters>=0.1.9",
     "opentelemetry-exporter-otlp-proto-http>=1.36.0",
@@ -33,7 +29,12 @@ dependencies = [
     # `async_googlemaps` importa `googlemaps` em runtime mas não o declara
     # no próprio metadata; sem esta linha o import quebra na coleta.
     "googlemaps>=4.10.0",
-    "geopandas>=1.1.2",
+    # Declaradas explicitamente: são usadas em produção mas antes chegavam
+    # de carona (shapely via geopandas, cryptography via pyjwt[crypto],
+    # aiofiles via crawl4ai). Sem isto, remover aquelas quebra o build.
+    "shapely>=2.1",
+    "cryptography>=50",
+    "aiofiles>=24.1",
     "jellyfish>=1.2.1",
     "num2words>=0.5.14",
     "prefeitura-rio>=1.1.2",
