@@ -99,6 +99,13 @@ LIMITE_BUSCA = 2000  # pergunta de cidadão em chat; 2000 já é um parágrafo l
 LIMITE_ENDERECO = 300  # logradouro + número + complemento + bairro
 LIMITE_RELATO = 4000  # relato de ocorrência ditado por voz
 LIMITE_FEEDBACK = 8000
+# `payload_json` do `multi_step_service` carrega o payload inteiro de um passo de
+# workflow — o maior deles é o `dicionario_itens` da Dívida Ativa, com centenas
+# de CDAs, na casa das dezenas de KB. 256 KiB é uma ordem de grandeza acima
+# disso. O teto que existia era o do transporte (`MAX_REQUEST_BODY_BYTES`, 1
+# MiB): limita a memória do processo, mas não impede que a string chegue inteira
+# ao `json.loads`, e não aparece no schema que o cliente MCP consulta.
+LIMITE_PAYLOAD = 262144
 LIMITE_ID = 64  # telefone em E.164 tem 15
 LIMITE_NOME_CURTO = 128  # nome de memória, tema, tipo de alerta
 
@@ -619,7 +626,7 @@ def create_app() -> FastMCP:
     async def multi_step_service(
         service_name: Annotated[str, Field(max_length=LIMITE_NOME_CURTO)],
         user_id: Annotated[str, Field(max_length=LIMITE_ID)],
-        payload_json: str = "{}",
+        payload_json: Annotated[str, Field(max_length=LIMITE_PAYLOAD)] = "{}",
     ) -> dict:
         try:
             payload = json.loads(payload_json or "{}")
