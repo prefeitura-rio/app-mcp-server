@@ -322,7 +322,7 @@ jobs:
           # container de propósito: a suíte confirma que /health e
           # /health/ready continuam 200 com dependência crítica fora do ar.
           # Nenhum service precisa subir para este job.
-          docker run -d --name mcp-smoke -p 8080:8080 \
+          docker run -d --name mcp-smoke -p 8080:80 \
             --env-file .github/ci.env \
             -e GCP_SERVICE_ACCOUNT_CREDENTIALS="$(cat /tmp/fake-sa.b64)" \
             -e DATA_DIR=/app/data \
