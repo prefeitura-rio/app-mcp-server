@@ -234,3 +234,95 @@ def test_intervalo_de_refresh_invalido_cai_no_padrao(monkeypatch):
 def test_intervalo_de_refresh_padrao_e_menor_que_o_teto():
     """O desenho depende disso: revalidar antes de o dado vencer."""
     assert cache_mod.DEFAULT_REFRESH_INTERVAL_S < cache_mod.DEFAULT_MAX_IDADE_S
+
+
+@pytest.mark.asyncio
+async def test_fallback_serve_a_memoria_sem_ir_ao_redis(monkeypatch):
+    """Com a fonte fora, o Redis só é consultado se a memória não servir.
+
+    As duas cópias estariam igualmente dentro do teto, que é o contrato; pagar
+    um round-trip (até o `socket_timeout`) para escolher a mais nova entre elas
+    é justamente o que não vale a pena na requisição em que a fonte já falhou.
+    """
+    fonte = _instalar_fonte(monkeypatch, FonteFalsa(falha=ConnectionError("fora")))
+    _semear_memoria(idade_s=30)
+
+    consultas = 0
+
+    async def contar_ler_redis():
+        nonlocal consultas
+        consultas += 1
+        return None
+
+    monkeypatch.setattr(cache_mod, "_ler_redis", contar_ler_redis)
+
+    carregado = await obter_lineup(forcar=True)
+
+    assert carregado.origem == "cache_stale"
+    assert fonte.chamadas == 1
+    assert consultas == 0
+
+
+@pytest.mark.asyncio
+async def test_shows_devolvidos_nao_sao_a_lista_do_cache(monkeypatch):
+    """A resposta da tool não pode dar acesso de escrita ao cache do processo."""
+    _instalar_fonte(monkeypatch, FonteFalsa())
+
+    primeira = await obter_lineup()
+    primeira.shows.clear()
+
+    segunda = await obter_lineup()
+
+    assert segunda.origem == "memoria"
+    assert segunda.shows[0]["artista"] == "FOO FIGHTERS"
+
+
+@pytest.mark.asyncio
+async def test_aquecer_lineup_carrega_no_startup(monkeypatch):
+    fonte = _instalar_fonte(monkeypatch, FonteFalsa())
+
+    assert await cache_mod.aquecer_lineup() is True
+    assert fonte.chamadas == 1
+
+
+@pytest.mark.asyncio
+async def test_aquecer_lineup_nao_derruba_o_boot(monkeypatch):
+    """Fonte fora do ar no boot é transitória.
+
+    Deixar a exceção subir converteria degradação parcial em indisponibilidade
+    total — o pod não subiria por causa de um site de terceiro.
+    """
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=ConnectionError("fora")))
+
+    assert await cache_mod.aquecer_lineup() is False
+
+
+@pytest.mark.asyncio
+async def test_laco_de_refresh_sobrevive_a_falha_da_fonte(monkeypatch):
+    """O laço precisa atravessar uma indisponibilidade para se recuperar depois.
+
+    Se morresse no primeiro erro, o pod ficaria sem revalidar até o próximo
+    deploy e o dado venceria o teto de idade em silêncio.
+    """
+    fonte = _instalar_fonte(monkeypatch, FonteFalsa(falha=ConnectionError("fora")))
+    monkeypatch.setattr(cache_mod, "intervalo_refresh_s", lambda: 0.01)
+
+    tarefa = asyncio.create_task(cache_mod.run_refresh_loop())
+    await asyncio.sleep(0.08)
+    tarefa.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tarefa
+
+    assert fonte.chamadas >= 2
+
+
+def test_ttl_do_redis_nunca_e_zero(monkeypatch):
+    """`SET ... EX 0` é erro no Redis.
+
+    Um teto configurado abaixo de um segundo zerava o TTL e fazia toda gravação
+    falhar dentro do `except` de `_gravar_redis` — o cache compartilhado nunca
+    chegaria a se formar, e ninguém veria o motivo.
+    """
+    monkeypatch.setenv("ROCK_IN_RIO_MAX_IDADE_S", "0.5")
+
+    assert cache_mod._ttl_redis_s() == 1

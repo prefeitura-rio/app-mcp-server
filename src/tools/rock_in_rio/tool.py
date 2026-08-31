@@ -115,7 +115,14 @@ def _situacao_temporal(agora: datetime) -> Dict[str, Any]:
         "proximo_dia_com_show": _descrever_dia(proximo_dia) if proximo_dia else None,
     }
 
-    if jornada != hoje:
+    # `jornada in DATAS_DO_EVENTO` não é redundante com `jornada != hoje`: a
+    # segunda condição é verdadeira em QUALQUER madrugada, inclusive fora do
+    # festival. Sem o filtro, às 3h de um dia 30/08 a resposta afirmava que "as
+    # atrações em andamento são as do dia 29/08", e às 3h do dia 09/09 — no
+    # intervalo do festival — afirmava isso ao lado de `hoje_tem_show: False` e
+    # da observação dizendo que hoje não há programação. Duas frases que se
+    # contradizem no mesmo payload é o pior insumo possível para o modelo.
+    if jornada != hoje and jornada in DATAS_DO_EVENTO:
         situacao["observacao_jornada"] = (
             f"Agora são {agora.strftime('%H:%M')} de "
             f"{hoje.strftime('%d/%m/%Y')}, ainda dentro da madrugada da "
@@ -179,10 +186,9 @@ async def get_rock_in_rio_lineup() -> Dict[str, Any]:
     agora = datetime.now(get_rio_timezone())
     shows: List[Dict[str, str]] = carregado.shows
 
-    palcos: List[str] = []
-    for show in shows:
-        if show["palco"] not in palcos:
-            palcos.append(show["palco"])
+    # `dict.fromkeys` deduplica preservando a ordem de aparição, que é o que
+    # importa aqui: é ela que reflete a ordem dos palcos na página.
+    palcos: List[str] = list(dict.fromkeys(show["palco"] for show in shows))
 
     atualizado_em = datetime.fromtimestamp(
         carregado.gerado_em_epoch, tz=get_rio_timezone()
@@ -216,7 +222,7 @@ async def get_rock_in_rio_lineup() -> Dict[str, Any]:
     }
 
 
-def _descricao_da_tool(tool_version: str) -> str:
+def descricao_da_tool(tool_version: str) -> str:
     """Descrição publicada no catálogo MCP.
 
     O aviso de ausência de horários aparece já aqui, e não só no retorno, para

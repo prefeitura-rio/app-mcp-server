@@ -35,7 +35,10 @@ from src.utils.log import logger
 
 # Chave do Redis. O sufixo de versão existe para que uma mudança no formato do
 # registro não seja lida por pods que ainda rodam a versão anterior do código.
-CHAVE_REDIS = "rock_in_rio:lineup:v1"
+# Foi para `v2` quando `url` e `dia_slug` saíram de cada show (ver
+# `Show.para_resposta`): durante um rollout, as duas formas conviveriam na
+# mesma chave.
+CHAVE_REDIS = "rock_in_rio:lineup:v2"
 
 DEFAULT_MAX_IDADE_S = 3600.0
 DEFAULT_REFRESH_INTERVAL_S = 900.0
@@ -62,6 +65,15 @@ class LineupCarregado:
         return max(0.0, time.time() - self.gerado_em_epoch)
 
 
+# Configuração já resolvida, guardada por processo. `getenv_or_action` cai no
+# `.env` da raiz quando a variável não está no ambiente, e esse caminho refaz um
+# `Path(".env").exists()` a cada chamada — que aqui aconteceria várias vezes por
+# requisição, porque `_dentro_do_teto` consulta o teto toda vez que roda. Os
+# valores não mudam em runtime; `resetar_cache` limpa junto, para os testes
+# poderem trocá-los.
+_config_cache: Dict[str, float] = {}
+
+
 def _config_float(nome: str, padrao: float) -> float:
     """Lê configuração numérica tolerando valor ausente ou inválido.
 
@@ -69,6 +81,12 @@ def _config_float(nome: str, padrao: float) -> float:
     `src/health/external_tables.py`: mantém o módulo importável isoladamente
     nos testes, sem exigir o ambiente inteiro do servidor.
     """
+    if nome not in _config_cache:
+        _config_cache[nome] = _ler_config_float(nome, padrao)
+    return _config_cache[nome]
+
+
+def _ler_config_float(nome: str, padrao: float) -> float:
     bruto = getenv_or_action(nome, default=str(padrao), action="ignore")
     try:
         valor = float(bruto)
@@ -84,6 +102,16 @@ def _config_float(nome: str, padrao: float) -> float:
 def max_idade_s() -> float:
     """Teto duro de idade do dado servido."""
     return _config_float("ROCK_IN_RIO_MAX_IDADE_S", DEFAULT_MAX_IDADE_S)
+
+
+def _ttl_redis_s() -> int:
+    """TTL do registro no Redis, espelhando o teto de idade.
+
+    Piso de 1s porque `SET ... EX 0` é erro no Redis: um teto configurado abaixo
+    de um segundo faria toda gravação falhar dentro do `except` de
+    `_gravar_redis`, e o cache compartilhado nunca chegaria a se formar.
+    """
+    return max(1, int(max_idade_s()))
 
 
 def intervalo_refresh_s() -> float:
@@ -131,6 +159,7 @@ def resetar_cache() -> None:
     """Descarta o cache de processo. Existe para isolamento entre testes."""
     global _memoria
     _memoria = None
+    _config_cache.clear()
 
 
 def _dentro_do_teto(registro: Optional[Dict[str, Any]]) -> bool:
@@ -171,7 +200,7 @@ async def _gravar_redis(registro: Dict[str, Any]) -> None:
         # O TTL do Redis espelha o teto de idade: assim a própria infraestrutura
         # descarta o registro velho, e nenhuma réplica que suba depois encontra
         # lá dentro algo que a regra de negócio proíbe servir.
-        await client.set(CHAVE_REDIS, json.dumps(registro), ex=int(max_idade_s()))
+        await client.set(CHAVE_REDIS, json.dumps(registro), ex=_ttl_redis_s())
     except Exception as erro:
         logger.warning(f"Falha ao gravar o line-up no Redis: {erro}")
 
@@ -179,8 +208,20 @@ async def _gravar_redis(registro: Dict[str, Any]) -> None:
 def _registro(shows: List[Show]) -> Dict[str, Any]:
     return {
         "gerado_em_epoch": time.time(),
-        "shows": [show.to_dict() for show in shows],
+        "shows": [show.para_resposta() for show in shows],
     }
+
+
+def _carregado(registro: Dict[str, Any], origem: str) -> LineupCarregado:
+    """Empacota o registro para entrega.
+
+    A lista é copiada de propósito: `LineupCarregado.shows` vai direto para a
+    resposta da tool, e devolver o próprio objeto do cache deixaria qualquer
+    reordenação ou filtragem in-place feita mais adiante envenenar o cache de
+    todas as requisições seguintes. Cópia rasa basta — os dicts de cada show
+    ninguém escreve.
+    """
+    return LineupCarregado(list(registro["shows"]), registro["gerado_em_epoch"], origem)
 
 
 async def _buscar_e_guardar() -> Dict[str, Any]:
@@ -204,44 +245,42 @@ async def obter_lineup(*, forcar: bool = False) -> LineupCarregado:
     global _memoria
 
     if not forcar and _dentro_do_teto(_memoria):
-        return LineupCarregado(
-            _memoria["shows"], _memoria["gerado_em_epoch"], "memoria"
-        )
+        return _carregado(_memoria, "memoria")
 
     async with _obter_lock():
         # Outra corrotina pode ter preenchido o cache enquanto esta esperava a
         # trava; sem esta recheca, a espera na fila viraria um download a mais.
         if not forcar and _dentro_do_teto(_memoria):
-            return LineupCarregado(
-                _memoria["shows"], _memoria["gerado_em_epoch"], "memoria"
-            )
+            return _carregado(_memoria, "memoria")
 
         if not forcar:
             compartilhado = await _ler_redis()
             if _dentro_do_teto(compartilhado):
                 _memoria = compartilhado
-                return LineupCarregado(
-                    compartilhado["shows"], compartilhado["gerado_em_epoch"], "redis"
-                )
+                return _carregado(compartilhado, "redis")
 
         try:
             registro = await _buscar_e_guardar()
-            return LineupCarregado(
-                registro["shows"], registro["gerado_em_epoch"], "site"
-            )
+            return _carregado(registro, "site")
         except Exception as erro:
             logger.warning(f"Falha ao buscar o line-up do Rock in Rio: {erro}")
 
-            # Último recurso: o dado mais recente que ainda respeite o teto. Uma
-            # queda curta do site durante o festival não pode virar erro para o
+            # Último recurso: qualquer dado que ainda respeite o teto. Uma queda
+            # curta do site durante o festival não pode virar erro para o
             # cidadão — mas uma queda longa precisa virar, e vira.
-            candidatos = [_memoria, await _ler_redis()]
-            validos = [c for c in candidatos if _dentro_do_teto(c)]
-            if validos:
-                melhor = max(validos, key=lambda c: c["gerado_em_epoch"])
-                return LineupCarregado(
-                    melhor["shows"], melhor["gerado_em_epoch"], "cache_stale"
-                )
+            #
+            # A memória é consultada primeiro e o Redis só se ela não servir. As
+            # duas cópias estão igualmente dentro do teto, que é o contrato; ir
+            # ao Redis para escolher a mais nova entre elas custaria um
+            # round-trip (até o `socket_timeout`) justamente na requisição em que
+            # a fonte já falhou. A idade real de quem for servido vai no
+            # `atualizado_em` da resposta de qualquer forma.
+            if _dentro_do_teto(_memoria):
+                return _carregado(_memoria, "cache_stale")
+
+            compartilhado = await _ler_redis()
+            if _dentro_do_teto(compartilhado):
+                return _carregado(compartilhado, "cache_stale")
 
             raise LineupIndisponivel(
                 "Line-up do Rock in Rio indisponível: a fonte não respondeu e não "

@@ -19,22 +19,19 @@ from src.tools.rock_in_rio.tool import (
 )
 from src.utils.datetime_utils import get_rio_timezone
 
+# Mesma forma que `Show.para_resposta` produz: sem `url` nem `dia_slug`.
 SHOWS = [
     {
         "data": "2026-09-04",
-        "dia_slug": "04-set",
         "palco": "Palco Mundo",
         "artista": "FOO FIGHTERS",
         "slug": "foo-fighters",
-        "url": "https://rockinrio.com/rio/pt-br/line-up/foo-fighters/",
     },
     {
         "data": "2026-09-13",
-        "dia_slug": "13-set",
         "palco": "Palco Sunset",
         "artista": "IVETE SANGALO",
         "slug": "ivete-sangalo",
-        "url": "https://rockinrio.com/rio/pt-br/line-up/ivete-sangalo/",
     },
 ]
 
@@ -76,6 +73,40 @@ def test_madrugada_ainda_pertence_a_programacao_da_vespera():
     assert situacao["hoje_tem_show"] is True
     assert "observacao_jornada" in situacao
     assert "04/09/2026" in situacao["observacao_jornada"]
+
+
+def test_madrugada_fora_do_festival_nao_inventa_programacao():
+    """`jornada != hoje` é verdade em toda madrugada, inclusive fora do evento.
+
+    Sem o filtro por dia de show, às 3h de 30/08 a resposta afirmava que "as
+    atrações em andamento são as do dia 29/08" — uma data em que o festival nem
+    tinha começado.
+    """
+    situacao = _situacao_temporal(_momento(2026, 8, 30, 3))
+
+    assert situacao["status"] == "antes_do_festival"
+    assert situacao["hoje_tem_show"] is False
+    assert "observacao_jornada" not in situacao
+
+
+def test_madrugada_no_intervalo_nao_contradiz_o_hoje_tem_show():
+    """Às 3h de 09/09 a jornada de referência é 08/09 — dia sem programação.
+
+    O payload chegava a carregar duas frases opostas: "hoje não há programação"
+    e "as atrações em andamento são as do dia 08/09".
+    """
+    situacao = _situacao_temporal(_momento(2026, 9, 9, 3))
+
+    assert situacao["hoje_tem_show"] is False
+    assert "observacao_jornada" not in situacao
+    assert "intervalo" in situacao["observacao"]
+
+
+def test_madrugada_depois_do_festival_nao_inventa_programacao():
+    situacao = _situacao_temporal(_momento(2027, 1, 10, 3))
+
+    assert situacao["status"] == "encerrado"
+    assert "observacao_jornada" not in situacao
 
 
 def test_intervalo_no_meio_do_festival():
@@ -132,6 +163,20 @@ async def test_resposta_traz_a_grade_e_os_links_do_app(lineup_ok):
     assert resposta["app_oficial"] == APP_OFICIAL
     assert "play.google.com" in resposta["app_oficial"]["android"]
     assert "apps.apple.com" in resposta["app_oficial"]["ios"]
+
+
+@pytest.mark.asyncio
+async def test_cada_show_traz_so_o_que_a_resposta_precisa(lineup_ok):
+    """Campo derivável repetido 156 vezes é contexto gasto à toa.
+
+    `url` sai do `slug` e `dia_slug` sai da `data`; juntos custavam ~13 KB por
+    chamada sem responder nada que a tool se proponha a responder. O critério de
+    aceite pede dia, palco, artista e slug — é exatamente o que fica.
+    """
+    resposta = await get_rock_in_rio_lineup()
+
+    for show in resposta["shows"]:
+        assert set(show) == {"data", "palco", "artista", "slug"}
 
 
 @pytest.mark.asyncio
@@ -206,7 +251,7 @@ async def test_erro_inesperado_tambem_degrada_com_seguranca(monkeypatch):
 
 def test_descricao_da_tool_avisa_que_nao_tem_horario():
     """O modelo precisa saber o que a tool não entrega antes de chamá-la."""
-    descricao = tool_mod._descricao_da_tool("vTESTE")
+    descricao = tool_mod.descricao_da_tool("vTESTE")
 
     assert "vTESTE" in descricao
     assert "NÃO devolve horários" in descricao

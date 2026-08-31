@@ -25,6 +25,7 @@ sys.path.insert(0, ".")
 
 from src.tools.rock_in_rio.scraper import (  # noqa: E402
     DIAS_DO_EVENTO,
+    MIN_ATRACOES_POR_DIA,
     LineupInvalido,
     buscar_lineup,
 )
@@ -33,7 +34,11 @@ from src.tools.rock_in_rio.scraper import (  # noqa: E402
 # legítima de line-up, e reprovar por isso transformaria o runner em ruído. O
 # que precisa disparar é a mudança de ordem de grandeza — tipicamente o parser
 # tendo parado de casar com o HTML.
-MIN_ATRACOES_POR_DIA = 12
+#
+# O piso vem do `scraper`, que passou a aplicá-lo também em produção: um número
+# aqui em paralelo sairia de sincronia na primeira vez que alguém mexesse em um
+# dos dois. O teto só existe neste runner — em produção, atrações demais não é
+# motivo para deixar o cidadão sem resposta.
 MAX_ATRACOES_POR_DIA = 60
 
 PALCOS_CONHECIDOS = {

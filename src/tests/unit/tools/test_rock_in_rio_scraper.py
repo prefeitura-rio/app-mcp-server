@@ -1,10 +1,11 @@
 """Testes do parser do line-up do Rock in Rio (CHATR-187).
 
-As fixtures `dia-04-set.html` e `dia-11-set.html` são páginas reais do site
-oficial, salvas na íntegra. É de propósito: o valor destes testes está em
-detectar que o tema do site mudou, e um HTML sintético reduzido não detectaria.
-O dia 11 entra junto porque tem uma atração a mais que o dia 04, num palco
-diferente — cobre o caso em que os palcos não têm todos o mesmo tamanho.
+As fixtures são as páginas reais dos sete dias do site oficial, salvas na
+íntegra. É de propósito: o valor destes testes está em detectar que o tema do
+site mudou, e um HTML sintético reduzido não detectaria. Salvar os sete, e não
+uma amostra, é o que dá cobertura offline à premissa de que todos os dias têm a
+mesma estrutura — foi assim que apareceu o `<span>` de nota de rodapé no nome
+da MEDUZA, presente só no dia 06.
 """
 
 from datetime import date
@@ -15,8 +16,12 @@ import pytest
 from src.tools.rock_in_rio import scraper as scraper_mod
 from src.tools.rock_in_rio.scraper import (
     DIAS_DO_EVENTO,
+    _INICIO_RESULTADO,
+    MAX_TAMANHO_NOME,
+    MIN_ATRACOES_POR_DIA,
     LineupInvalido,
     parse_dia,
+    url_do_artista,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "rock_in_rio"
@@ -98,13 +103,27 @@ def _palco(nome: str) -> str:
     return f'<div class="data"><span>{nome}</span></div>'
 
 
+def _enchimento(prefixo: str = "banda") -> str:
+    """Atrações de preenchimento até o dia passar do piso de sanidade.
+
+    `parse_dia` derruba o dia que vier com menos de `MIN_ATRACOES_POR_DIA`
+    atrações, então o HTML sintético precisa de volume mesmo quando o que o
+    teste observa é uma atração só — que continua sendo a primeira da lista.
+    """
+    return "".join(
+        _artista(f"{prefixo}-{i}", f"BANDA {i}") for i in range(MIN_ATRACOES_POR_DIA)
+    )
+
+
 def test_remove_caracteres_invisiveis_do_nome():
     """O CMS publica "AVENGED SEVENFOLD" com zero-width space no fim.
 
     Escrito como escape para o caractere ficar visível em revisão.
     """
     html = _pagina(
-        _palco("Palco Mundo") + _artista("avenged", "AVENGED SEVENFOLD\u200b")
+        _palco("Palco Mundo")
+        + _artista("avenged", "AVENGED SEVENFOLD\u200b")
+        + _enchimento()
     )
 
     shows = parse_dia(html, dia_slug="05-set", data=date(2026, 9, 5))
@@ -113,7 +132,11 @@ def test_remove_caracteres_invisiveis_do_nome():
 
 
 def test_desescapa_entidades_html_do_nome():
-    html = _pagina(_palco("Palco Sunset") + _artista("mumford", "MUMFORD &amp; SONS"))
+    html = _pagina(
+        _palco("Palco Sunset")
+        + _artista("mumford", "MUMFORD &amp; SONS")
+        + _enchimento()
+    )
 
     shows = parse_dia(html, dia_slug="12-set", data=date(2026, 9, 12))
 
@@ -121,7 +144,9 @@ def test_desescapa_entidades_html_do_nome():
 
 
 def test_normaliza_espacos_em_excesso():
-    html = _pagina(_palco("Palco Mundo") + _artista("x", "  FOO\n\n  FIGHTERS  "))
+    html = _pagina(
+        _palco("Palco Mundo") + _artista("x", "  FOO\n\n  FIGHTERS  ") + _enchimento()
+    )
 
     shows = parse_dia(html, dia_slug="04-set", data=date(2026, 9, 4))
 
@@ -156,6 +181,152 @@ def test_artista_antes_de_qualquer_palco_levanta():
         parse_dia(html, dia_slug="04-set", data=date(2026, 9, 4))
 
 
+_ANCORA_ARTISTA = '<a href="https://rockinrio.com/rio/pt-br/line-up/'
+
+
+def test_section_no_meio_do_bloco_nao_trunca_o_dia():
+    """Um `<section>` no meio da lista não pode cortar o dia pela metade.
+
+    Enquanto a varredura parava no primeiro `</section>`, bastava o tema passar
+    a inserir um banner entre as atrações para o dia sair truncado — e sem erro
+    nenhum, que é justamente o desfecho que o desenho inteiro tenta evitar.
+    """
+    html = _ler("dia-04-set.html")
+    inicio = html.index(_INICIO_RESULTADO)
+    segunda_atracao = html.index(
+        _ANCORA_ARTISTA, html.index(_ANCORA_ARTISTA, inicio) + 1
+    )
+    com_banner = (
+        html[:segunda_atracao]
+        + '<section class="banner"><p>publicidade</p></section>'
+        + html[segunda_atracao:]
+    )
+
+    shows = parse_dia(com_banner, dia_slug="04-set", data=date(2026, 9, 4))
+
+    assert len(shows) == 22
+
+
+def test_icone_ausente_nao_derruba_a_atracao():
+    """O `<i>` é decoração e não pode ser âncora de nada.
+
+    Enquanto o nome fechava nele, um tema que parasse de usá-lo fazia a atração
+    sumir da grade. Ancorado no `</h2>`, que é estrutural, o bloco continua
+    legível sem o ícone.
+    """
+    html = _ler("dia-04-set.html")
+    inicio = html.index(_INICIO_RESULTADO)
+    sem_icone = html[:inicio] + html[inicio:].replace("<i ", "<span ", 1)
+
+    shows = parse_dia(sem_icone, dia_slug="04-set", data=date(2026, 9, 4))
+
+    assert len(shows) == 22
+    assert shows[0].artista == "FOO FIGHTERS"
+
+
+def test_bloco_de_artista_malformado_levanta():
+    """Um `<h2>` sem fechamento faz o bloco não casar — e isso precisa gritar.
+
+    Sem a conferência de âncoras, o dia sairia com uma atração a menos e o
+    chatbot negaria uma banda que está no festival.
+    """
+    html = _ler("dia-04-set.html")
+    inicio = html.index(_INICIO_RESULTADO)
+    quebrado = html[:inicio] + html[inicio:].replace("</h2>", "</h3>", 1)
+
+    with pytest.raises(LineupInvalido, match="formato do bloco mudou"):
+        parse_dia(quebrado, dia_slug="04-set", data=date(2026, 9, 4))
+
+
+def test_marcador_de_nota_de_rodape_nao_entra_no_nome():
+    """O site publica `MEDUZA<span class="fonte-superscript-3">³</span>`.
+
+    O expoente é nota de rodapé do site, não parte do nome — e o NFKC de
+    `_limpar_texto` o converteria em dígito, entregando "MEDUZA3" ao cidadão.
+    """
+    shows = parse_dia(_ler("dia-06-set.html"), dia_slug="06-set", data=date(2026, 9, 6))
+
+    meduza = [s for s in shows if s.slug == "meduza"]
+    assert [s.artista for s in meduza] == ["MEDUZA"]
+
+
+def test_as_sete_paginas_reais_parseiam_com_a_mesma_estrutura():
+    """A premissa do desenho é que os sete dias têm a mesma forma.
+
+    O total de 156 atrações e os seis palcos são os números levantados na
+    investigação da fonte (CHATR-187); divergir deles é sinal de que o site
+    mudou ou de que uma fixture ficou desatualizada.
+    """
+    total = 0
+    palcos = set()
+    for slug, data in DIAS_DO_EVENTO:
+        shows = parse_dia(_ler(f"dia-{slug}.html"), dia_slug=slug, data=data)
+        assert len(shows) >= MIN_ATRACOES_POR_DIA, slug
+        assert all(s.artista and s.palco for s in shows), slug
+        total += len(shows)
+        palcos |= {s.palco for s in shows}
+
+    assert total == 156
+    assert palcos == set(PALCOS_ESPERADOS)
+
+
+def test_dia_abaixo_do_piso_de_atracoes_levanta():
+    """Meia grade é pior que grade nenhuma: o chatbot negaria bandas reais."""
+    html = _pagina(
+        _palco("Palco Mundo")
+        + "".join(
+            _artista(f"banda-{i}", f"BANDA {i}")
+            for i in range(MIN_ATRACOES_POR_DIA - 1)
+        )
+    )
+
+    with pytest.raises(LineupInvalido, match="abaixo do piso"):
+        parse_dia(html, dia_slug="04-set", data=date(2026, 9, 4))
+
+
+def test_nome_de_artista_acima_do_teto_levanta():
+    """Nome vindo do CMS de terceiro entra no contexto do modelo; tem teto."""
+    html = _pagina(
+        _palco("Palco Mundo")
+        + _artista("gigante", "X" * (MAX_TAMANHO_NOME + 1))
+        + _enchimento()
+    )
+
+    with pytest.raises(LineupInvalido, match="acima do teto"):
+        parse_dia(html, dia_slug="04-set", data=date(2026, 9, 4))
+
+
+def test_nome_de_palco_acima_do_teto_levanta():
+    html = _pagina(_palco("P" * (MAX_TAMANHO_NOME + 1)) + _enchimento())
+
+    with pytest.raises(LineupInvalido, match="acima do teto"):
+        parse_dia(html, dia_slug="04-set", data=date(2026, 9, 4))
+
+
+def test_url_do_artista_reproduz_a_url_publicada_em_todos_os_dias():
+    """A prova de que `url` pode sair da resposta sem perda.
+
+    Se um dia o site publicar a página do artista em outro caminho, é aqui que
+    isso aparece — e aí `Show.para_resposta` precisa voltar a levar o campo.
+    """
+    for slug, data in DIAS_DO_EVENTO:
+        for show in parse_dia(_ler(f"dia-{slug}.html"), dia_slug=slug, data=data):
+            assert url_do_artista(show.slug) == show.url
+
+
+def test_para_resposta_deixa_de_fora_os_campos_derivaveis():
+    """O `Show` guarda tudo; a resposta leva só o que não dá para derivar."""
+    shows = parse_dia(_ler("dia-04-set.html"), dia_slug="04-set", data=date(2026, 9, 4))
+
+    resposta = shows[0].para_resposta()
+
+    assert set(resposta) == {"data", "palco", "artista", "slug"}
+    assert resposta["slug"] == "foo-fighters"
+    # O `Show` continua com os dois: o runner de contrato agrupa por `dia_slug`.
+    assert shows[0].dia_slug == "04-set"
+    assert shows[0].url.endswith("/line-up/foo-fighters/")
+
+
 def test_dias_do_evento_cobre_as_sete_datas():
     assert len(DIAS_DO_EVENTO) == 7
     assert [slug for slug, _ in DIAS_DO_EVENTO] == [
@@ -177,7 +348,9 @@ def test_dias_do_evento_cobre_as_sete_datas():
 async def test_buscar_lineup_junta_os_sete_dias(monkeypatch):
     paginas = {
         slug: _pagina(
-            _palco("Palco Mundo") + _artista(f"banda-{slug}", f"BANDA {slug}")
+            _palco("Palco Mundo")
+            + _artista(f"banda-{slug}", f"BANDA {slug}")
+            + _enchimento(slug)
         )
         for slug, _ in DIAS_DO_EVENTO
     }
@@ -189,7 +362,7 @@ async def test_buscar_lineup_junta_os_sete_dias(monkeypatch):
 
     shows = await scraper_mod.buscar_lineup()
 
-    assert len(shows) == 7
+    assert len(shows) == 7 * (1 + MIN_ATRACOES_POR_DIA)
     assert {s.dia_slug for s in shows} == {slug for slug, _ in DIAS_DO_EVENTO}
 
 
@@ -204,7 +377,7 @@ async def test_buscar_lineup_e_tudo_ou_nada(monkeypatch):
     async def baixar(_client, dia_slug):
         if dia_slug == "11-set":
             raise ConnectionError("timeout")
-        return _pagina(_palco("Palco Mundo") + _artista("banda", "BANDA"))
+        return _pagina(_palco("Palco Mundo") + _enchimento())
 
     monkeypatch.setattr(scraper_mod, "_baixar_dia", baixar)
 
@@ -217,9 +390,11 @@ async def test_buscar_lineup_propaga_pagina_fora_do_formato(monkeypatch):
     async def baixar(_client, dia_slug):
         if dia_slug == "06-set":
             return "<html><body>o tema do site mudou</body></html>"
-        return _pagina(_palco("Palco Mundo") + _artista("banda", "BANDA"))
+        return _pagina(_palco("Palco Mundo") + _enchimento())
 
     monkeypatch.setattr(scraper_mod, "_baixar_dia", baixar)
 
-    with pytest.raises(LineupInvalido):
+    # Os dias anteriores ao 06 parseiam sem problema: a exceção precisa vir da
+    # página que mudou, e não de um dia sintético raquítico.
+    with pytest.raises(LineupInvalido, match="não encontrado"):
         await scraper_mod.buscar_lineup()

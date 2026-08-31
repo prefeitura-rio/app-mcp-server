@@ -60,7 +60,7 @@ from src.tools.langgraph_workflows import (
 from src.tools.rock_in_rio.cache import aquecer_lineup, run_refresh_loop
 from src.tools.rock_in_rio.tool import (
     get_rock_in_rio_lineup,
-    _descricao_da_tool as rock_in_rio_description,
+    descricao_da_tool as rock_in_rio_description,
 )
 
 from src.resources.rio_info import (
@@ -197,14 +197,25 @@ def create_app() -> FastMCP:
         # propósito: sem ele o primeiro cidadão a perguntar depois de cada
         # deploy pagaria o download dos sete dias dentro da própria conversa.
         # `aquecer_lineup` engole as próprias exceções, então uma fonte fora do
-        # ar aqui atrasa o boot por alguns segundos e nada mais. Fica atrás do
-        # `set_ready(True)` acima, e portanto não segura a readiness do pod.
+        # ar aqui custa o timeout (as sete páginas baixam concorrentes) e nada
+        # mais.
+        #
+        # Atenção ao custo: o `set_ready(True)` acima é anterior, mas isso NÃO
+        # livra a readiness. A uvicorn só cria o socket depois que o startup do
+        # lifespan retorna, então enquanto este `await` roda a porta sequer
+        # escuta e a probe leva connection refused. O atraso é limitado pelo
+        # `TIMEOUT_S` do scraper; qualquer coisa mais cara que isso aqui precisa
+        # virar task em vez de `await`.
+        #
+        # A exclusão da tool desliga junto o trabalho de fundo. Sem essa guarda,
+        # `EXCLUDED_TOOLS` tirava a tool do catálogo e deixava o laço batendo no
+        # site de 15 em 15 minutos, para sempre, por ninguém.
         #
         # Desligado em execução local pelo mesmo critério das tasks acima: em
         # `mcp dev` a primeira chamada carrega o cache sozinha, pelo caminho
         # preguiçoso de `obter_lineup`.
         lineup_task = None
-        if not IS_LOCAL:
+        if not IS_LOCAL and "rock_in_rio_lineup" not in EXCLUDED_TOOLS:
             await aquecer_lineup()
             lineup_task = asyncio.create_task(run_refresh_loop())
 

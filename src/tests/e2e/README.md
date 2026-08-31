@@ -205,3 +205,69 @@ grandeza — tipicamente o parser tendo parado de casar com o HTML.
 Fica fora do CI pelo mesmo motivo dos demais runners desta pasta: uma
 indisponibilidade momentanea do `rockinrio.com` nao pode reprovar um PR que nao
 tem nada a ver com isso.
+
+---
+
+# Chat local do Rock in Rio (CHATR-187)
+
+O runner [`run_chat_rock_in_rio.py`](run_chat_rock_in_rio.py) sobe uma página com
+cara de WhatsApp em `http://127.0.0.1:8100/` onde dá para perguntar o que o
+cidadão perguntaria e ver a resposta montada a partir do retorno real da tool
+`rock_in_rio_lineup`.
+
+```bash
+# a tool no próprio processo: sem servidor, sem Redis, sem token
+uv run python src/tests/e2e/run_chat_rock_in_rio.py
+
+# a tool publicada pelo servidor MCP (nome registrado, auth, serializacao)
+uv run python src/tests/e2e/run_chat_rock_in_rio.py --mcp
+```
+
+## Por que existe
+
+O `run_rock_in_rio_contract.py` responde se o parser ainda casa com o HTML. Ele
+não responde a outra metade da pergunta: **o que o cidadão recebe.** É uma tool
+de resposta única e sem argumentos, então o Inspector mostra só um JSON de 156
+atrações — nada ali diz se "quem toca hoje" acerta o dia, ou se quem pergunta
+por horário sai com a informação certa.
+
+Não tem LLM, e é de propósito: o roteamento da pergunta é determinístico e mora
+em Python, então duas execuções iguais dão a mesma resposta e dá para apontar o
+dedo para o que quebrou. Quem responde "o modelo escolhe a tool certa?" é o chat
+do VS Code em agent mode, não este runner.
+
+## O que dá para ver aqui
+
+- **A lógica de "hoje"** do `_situacao_temporal`: o festival ainda não começado,
+  o intervalo de 08 a 10 de setembro, a jornada que avança pela madrugada. A
+  página não recalcula nada disso — consome o campo `situacao` que a tool monta.
+- **Dia e palco de cada atração**, conferidos contra o que o site publica.
+- **A ausência de horários**, que é o risco número um da tool. Pergunte "que
+  horas começa" e veja a resposta que o cidadão recebe.
+- **A tela de indisponibilidade**: rode com a rede cortada (ou com `--mcp` sem
+  servidor no ar) e confirme que ela não vaza line-up nenhum.
+- **Nome errado ou com erro de digitação** — "avenged sevenfould" acha
+  `AVENGED SEVENFOLD`, e uma banda que não está na edição recebe um "não
+  encontrei" explícito em vez de silêncio.
+
+O painel do rodapé (`</>`) mostra a fatia crua do retorno usada em cada resposta,
+as `instrucoes_de_resposta` que a LLM receberia e a resposta completa da tool.
+
+## Flags
+
+| Flag | Padrão | Para que |
+| --- | --- | --- |
+| `--porta` | `8100` | porta do chat |
+| `--bind` | `127.0.0.1` | prefira loopback + `tailscale serve` |
+| `--mcp` | — | chama a tool pelo servidor MCP em vez de no processo |
+| `--url` | `http://127.0.0.1:80/mcp` | servidor MCP alvo (com `--mcp`) |
+| `--token` | 1º de `VALID_TOKENS` | Bearer do servidor (com `--mcp`) |
+| `--sem-navegador` | — | não abre o navegador sozinho |
+
+O botão `⟳` do cabeçalho refaz a busca na fonte sem reiniciar o processo — sem
+ele, o cache de processo devolveria o mesmo dado por até uma hora.
+
+Para mostrar a alguém, `tailscale serve --bg 8100`: a página só fala com dois
+endpoints que consultam uma tool de leitura, então não dá execução na sua
+máquina — diferente do Inspector. Não use `--bind 0.0.0.0`, que abre para a rede
+local inteira.

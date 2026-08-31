@@ -91,11 +91,19 @@ Depois de 14/09 às 6h, a tool responde `encerrado`. Ela não precisa ser removi
 
 ## Alarme de mudança do site
 
-O parser roda sobre fixtures salvas nos testes unitários — que continuariam verdes se o site mudasse de tema. O alarme é o runner `src/tests/e2e/run_rock_in_rio_contract.py`, que bate no site real e valida faixas de atrações e o catálogo de palcos. Fica fora do CI de propósito: uma indisponibilidade momentânea do rockinrio.com não pode reprovar um PR alheio.
+São três camadas, porque nenhuma delas sozinha resolve.
+
+**No parser, em produção.** `parse_dia` recusa a página em vez de devolver uma grade parcial: confronta o número de blocos de artista presentes no HTML com o número que conseguiu ler, exige um piso de atrações por dia (`MIN_ATRACOES_POR_DIA`) e recusa nome acima de `MAX_TAMANHO_NOME`. Sem isso, os dois modos de falha mais prováveis do site — uma `<section>` nova no meio da lista e um bloco de artista que mudou de forma — cortavam o dia pela metade em silêncio, e o chatbot passava a negar bandas que estão no festival. Grade parcial é o pior desfecho possível, então ela vira `LineupInvalido`, que o cache converte em indisponibilidade explícita.
+
+**Nos testes unitários.** As fixtures são os sete dias inteiros, e não uma amostra: foi assim que apareceu o `<span>` de nota de rodapé no nome da MEDUZA, que só existe no dia 06 e que um parser ancorado no ícone decorativo `<i>` engolia junto com o nome. Elas continuariam verdes se o site mudasse de tema — é o limite desta camada, e o motivo de existir a próxima.
+
+**Contra o site real.** O runner `src/tests/e2e/run_rock_in_rio_contract.py` valida faixas de atrações e o catálogo de palcos na fonte. Fica fora do CI de propósito: uma indisponibilidade momentânea do rockinrio.com não pode reprovar um PR alheio.
 
 ```bash
 uv run python src/tests/e2e/run_rock_in_rio_contract.py
 ```
+
+E o `src/tests/e2e/run_chat_rock_in_rio.py` responde a outra metade da pergunta — não "o parser ainda casa?", mas "o que o cidadão recebe?".
 
 ## O que muda se a produção liberar a grade horária
 
@@ -103,7 +111,7 @@ O ponto de troca é `scraper.py`, não o resto. Concretamente:
 
 1. Acrescentar o campo de horário ao dataclass `Show` — hoje ele existe deliberadamente sem esse campo.
 2. Trocar a fonte em `buscar_lineup`.
-3. Remover os avisos de ausência de horário em `tool.py` (`_AVISO_SEM_HORARIOS` e o parágrafo final de `_descricao_da_tool`).
+3. Remover os avisos de ausência de horário em `tool.py` (`_AVISO_SEM_HORARIOS` e o parágrafo final de `descricao_da_tool`).
 4. Só então passa a fazer sentido reabrir o "montar cronograma com detecção de conflito", que foi o pedido original e que esta fonte não permite atender.
 
 O teto de 60 min de idade fica ainda mais importante nesse cenário: mudança de horário de última hora é justamente o dado que não pode chegar velho.

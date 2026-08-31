@@ -55,6 +55,20 @@ DIAS_DO_EVENTO: Tuple[Tuple[str, date], ...] = (
 # num socket que aceitou a conexão e parou de responder.
 TIMEOUT_S = 15.0
 
+# Piso de sanidade por dia. Os dias observados têm 22 e 23 atrações; abaixo
+# disto o mais provável não é um line-up enxuto, e sim o parser tendo deixado de
+# casar com parte da página. Como grade parcial é o pior desfecho possível — o
+# chatbot negaria uma banda que está no festival —, o piso derruba o dia inteiro.
+# O runner de contrato em `src/tests/e2e/` importa daqui para não manter um
+# segundo número em paralelo.
+MIN_ATRACOES_POR_DIA = 12
+
+# Teto de tamanho para nome de artista e de palco. O conteúdo vem de um site de
+# terceiro e entra direto no contexto do modelo; sem teto, uma alteração no CMS
+# injetaria texto arbitrário na conversa com o cidadão. O maior nome observado
+# tem menos de 40 caracteres.
+MAX_TAMANHO_NOME = 120
+
 # User-Agent de navegador. Sem ele o site responde de forma inconsistente a
 # cliente HTTP simples.
 _USER_AGENT = (
@@ -73,13 +87,30 @@ _INICIO_RESULTADO = '<section class="resultado"'
 # não por aninhamento: cada artista pertence ao último cabeçalho visto.
 _RE_PALCO = re.compile(r'<div class="data"><span>(?P<palco>[^<]*)</span>\s*</div>')
 
-# Bloco de artista. O `<i ...>` é o ícone de seta que o tema coloca dentro do
-# `<h2>`, e serve de âncora para fechar o nome.
+# Bloco de artista. O nome vai do `<h2>` de abertura ao `</h2>` que o fecha.
+#
+# A âncora de fechamento é o `</h2>`, e não o `<i>` do ícone de seta, por dois
+# motivos. O `<i>` é decoração: se o tema deixar de usá-lo, ancorar nele deixa
+# de casar e a atração some da grade. E o conteúdo do `<h2>` nem sempre é texto
+# puro — o site publica "MEDUZA" com um `<span>` de nota de rodapé no meio do
+# nome, que um `[^<]*` não atravessaria.
+#
+# O corpo é `[^<]*(?:<[^>]*>[^<]*)*?`, e não `.*?`: os dois tokens são
+# disjuntos (um começa por `<`, o outro não), então a decomposição é única —
+# sem backtracking patológico — e o padrão não consegue atravessar para o bloco
+# seguinte como o `.*?` com `DOTALL` atravessava.
 _RE_ARTISTA = re.compile(
     r'<a href="(?P<url>' + re.escape(BASE_URL) + r"/rio/pt-br/line-up/"
     r'(?P<slug>[a-z0-9][a-z0-9-]*)/)"'
-    r">\s*<h2[^>]*>(?P<artista>.*?)<i\b",
-    re.DOTALL,
+    r">\s*<h2[^>]*>(?P<artista>[^<]*(?:<[^>]*>[^<]*)*?)</h2>"
+)
+
+# Só a âncora do link de artista, sem exigir o `<h2>` que a acompanha. Serve
+# para contar quantos blocos de artista o HTML tem e confrontar com quantos o
+# parser conseguiu ler — sem esse confronto, um bloco que mudou de forma some da
+# grade em silêncio.
+_RE_ANCORA_ARTISTA = re.compile(
+    r'<a href="' + re.escape(BASE_URL) + r'/rio/pt-br/line-up/[a-z0-9][a-z0-9-]*/"'
 )
 
 # Varre palcos e artistas numa passada só. Duas passadas separadas devolveriam
@@ -90,8 +121,7 @@ _RE_ITENS = re.compile(
     + _RE_PALCO.pattern
     + ")|(?P<artista_bloco>"
     + _RE_ARTISTA.pattern
-    + ")",
-    re.DOTALL,
+    + ")"
 )
 
 # Caracteres invisíveis que vêm colados nos nomes cadastrados no CMS — o site
@@ -112,6 +142,13 @@ _INVISIVEIS = dict.fromkeys(
         "\ufeff",  # zero-width no-break space (BOM)
     )
 )
+
+
+# Marcador de nota de rodapé que o site cola no fim de um nome: "MEDUZA" sai do
+# CMS como `MEDUZA<span class="fonte-superscript-3">³</span>`. Sai com conteúdo
+# e tudo, porque o expoente não faz parte do nome — e a normalização NFKC de
+# `_limpar_texto` o converteria em dígito comum, entregando "MEDUZA3" ao cidadão.
+_RE_NOTA_DE_RODAPE = re.compile(r'<span class="fonte-superscript[^"]*">[^<]*</span>')
 
 
 class LineupInvalido(RuntimeError):
@@ -140,10 +177,38 @@ class Show:
     def to_dict(self) -> Dict[str, str]:
         return asdict(self)
 
+    def para_resposta(self) -> Dict[str, str]:
+        """Projeção que vai para o cache e daí para a resposta da tool.
+
+        `url` e `dia_slug` ficam de fora porque são deriváveis — a URL é o
+        `BASE_URL` mais o slug, e o dia é a própria `data` — e, repetidos nas
+        156 atrações, custam ~13 KB por chamada, algo como 3,4 mil tokens de
+        contexto, sem responder a nenhuma das perguntas que a tool se propõe a
+        responder. Os dois campos continuam no `Show`, que é o que o runner de
+        contrato consome.
+        """
+        return {
+            "data": self.data,
+            "palco": self.palco,
+            "artista": self.artista,
+            "slug": self.slug,
+        }
+
+
+def url_do_artista(slug: str) -> str:
+    """Reconstrói a página do artista no site oficial a partir do slug.
+
+    É por esta derivação existir que `url` não precisa viajar em cada uma das
+    156 atrações da resposta (ver `Show.para_resposta`). Fica aqui, ao lado do
+    padrão que define a forma da URL, para que as duas nunca saiam de sincronia.
+    """
+    return f"{BASE_URL}/rio/pt-br/line-up/{slug}/"
+
 
 def _limpar_texto(bruto: str) -> str:
     """Reduz um trecho de HTML ao texto limpo que vai para a resposta."""
-    texto = re.sub(r"<[^>]+>", "", bruto)
+    texto = _RE_NOTA_DE_RODAPE.sub("", bruto)
+    texto = re.sub(r"<[^>]+>", "", texto)
     texto = html_lib.unescape(texto)
     texto = texto.translate(_INVISIVEIS)
     # NFKC resolve os espaços e travessões "especiais" que vêm do editor do CMS
@@ -164,7 +229,9 @@ def parse_dia(html: str, *, dia_slug: str, data: date) -> List[Show]:
         Lista de shows, na ordem em que aparecem na página.
 
     Raises:
-        LineupInvalido: Se a página não tiver a estrutura esperada.
+        LineupInvalido: Se a página não tiver a estrutura esperada, se algum
+            bloco de artista não puder ser lido, se um nome vier acima do teto
+            de tamanho ou se o dia vier abaixo do piso de atrações.
     """
     inicio = html.find(_INICIO_RESULTADO)
     if inicio == -1:
@@ -172,11 +239,13 @@ def parse_dia(html: str, *, dia_slug: str, data: date) -> List[Show]:
             f"Bloco '{_INICIO_RESULTADO}' não encontrado na página do dia {dia_slug}"
         )
 
-    # `</section>` fecha o bloco de resultados; se o tema deixar de fechá-lo,
-    # varrer até o fim da página ainda funciona — os padrões são específicos o
-    # bastante para não casarem com o rodapé.
-    fim = html.find("</section>", inicio)
-    trecho = html[inicio:fim] if fim != -1 else html[inicio:]
+    # Varre do início do bloco de resultados até o fim do documento, sem tentar
+    # fechar no `</section>` correspondente. Cortar no primeiro `</section>`
+    # parecia mais preciso e era o contrário: bastava o tema passar a inserir uma
+    # `<section>` no meio da lista — um banner, um carrossel — para o dia sair
+    # truncado pela metade, sem erro nenhum. Os padrões são específicos o
+    # bastante para não casarem com nada abaixo do bloco de resultados.
+    trecho = html[inicio:]
 
     shows: List[Show] = []
     palco_atual: str | None = None
@@ -184,6 +253,11 @@ def parse_dia(html: str, *, dia_slug: str, data: date) -> List[Show]:
     for match in _RE_ITENS.finditer(trecho):
         if match.group("palco_bloco") is not None:
             palco = _limpar_texto(match.group("palco"))
+            if len(palco) > MAX_TAMANHO_NOME:
+                raise LineupInvalido(
+                    f"Nome de palco com {len(palco)} caracteres na página do dia "
+                    f"{dia_slug}, acima do teto de {MAX_TAMANHO_NOME}"
+                )
             if palco:
                 palco_atual = palco
             continue
@@ -202,6 +276,12 @@ def parse_dia(html: str, *, dia_slug: str, data: date) -> List[Show]:
             raise LineupInvalido(
                 f"Artista sem nome (slug '{match.group('slug')}') no dia {dia_slug}"
             )
+        if len(artista) > MAX_TAMANHO_NOME:
+            raise LineupInvalido(
+                f"Nome de artista com {len(artista)} caracteres (slug "
+                f"'{match.group('slug')}') no dia {dia_slug}, acima do teto de "
+                f"{MAX_TAMANHO_NOME}"
+            )
 
         shows.append(
             Show(
@@ -217,12 +297,39 @@ def parse_dia(html: str, *, dia_slug: str, data: date) -> List[Show]:
     if not shows:
         raise LineupInvalido(f"Nenhuma atração encontrada na página do dia {dia_slug}")
 
+    # Confronta o que foi lido com o número de blocos de artista presentes no
+    # HTML. É o que transforma "um bloco mudou de forma e não casou" em erro:
+    # sem isso, o dia sairia com uma atração a menos e ninguém saberia.
+    ancoras = len(_RE_ANCORA_ARTISTA.findall(trecho))
+    if ancoras != len(shows):
+        raise LineupInvalido(
+            f"A página do dia {dia_slug} tem {ancoras} blocos de artista, mas o "
+            f"parser leu {len(shows)}: o formato do bloco mudou"
+        )
+
+    if len(shows) < MIN_ATRACOES_POR_DIA:
+        raise LineupInvalido(
+            f"Apenas {len(shows)} atrações no dia {dia_slug}, abaixo do piso de "
+            f"{MIN_ATRACOES_POR_DIA}: a página provavelmente veio incompleta"
+        )
+
     return shows
 
 
 async def _baixar_dia(client: InterceptedHTTPClient, dia_slug: str) -> str:
+    """Baixa uma página de dia.
+
+    `intercept_errors=False` porque quem chama é, na maior parte do tempo, o
+    laço de atualização em background. Com o padrão ligado, um site fora do ar
+    vira sete relatórios ao sistema de monitoramento a cada ciclo de 15 minutos
+    — centenas por dia, por réplica, para uma indisponibilidade de terceiro que
+    o cache já absorve e que o `logger.warning` do laço já registra. Mesmo
+    critério de `src/tools/google_search/gemini_service.py`.
+    """
     url = DAY_URL_TEMPLATE.format(slug=dia_slug)
-    response = await client.get(url, headers={"User-Agent": _USER_AGENT})
+    response = await client.get(
+        url, headers={"User-Agent": _USER_AGENT}, intercept_errors=False
+    )
     response.raise_for_status()
     return response.text
 
