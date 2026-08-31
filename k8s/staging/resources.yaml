@@ -58,11 +58,25 @@ spec:
             seccompProfile:
               type: RuntimeDefault
             # runAsNonRoot: true
-            #   PENDENTE: exige `USER` não-root no Dockerfile (hoje o processo
-            #   roda como root) e `chown` de DATA_DIR, onde ficam os arquivos
-            #   de fallback da DLQ e o state dos workflows em modo JSON.
-            #   Ligar isto sem o par no Dockerfile deixa o pod em
-            #   CreateContainerConfigError.
+            #   PENDENTE, e o bloqueio nao e o que parece. `USER 10001` no
+            #   Dockerfile mais `COPY --chown` resolve a imagem e o DATA_DIR;
+            #   isso foi implementado e verificado (build, uid 10001, escrita
+            #   em DATA_DIR/bq_dlq, hurl 100%) e revertido depois.
+            #
+            #   O que trava e a porta. Sem CAP_NET_BIND_SERVICE -- que o
+            #   `capabilities.drop: [ALL]` acima remove -- nao ha bind abaixo
+            #   de 1024, entao runAsNonRoot obriga a sair da porta 80. E o
+            #   `mcp-ilb` (modules/deployments/mcp.tf, no iac-superapp) tem
+            #   `target_port = 80` fixo e seleciona estes pods direto, sem
+            #   passar pelo Service: mudar a porta aqui derruba o agent-engine
+            #   ate um `terraform apply` correspondente. Depende de um par de
+            #   mudancas coordenadas, fora deste repositorio.
+            #
+            #   Armadilha ao retomar: o Docker seta
+            #   `net.ipv4.ip_unprivileged_port_start=0` e o Kubernetes nao, o
+            #   que faz a porta 80 ligar como nao-root numa prova local e
+            #   falhar no cluster. Reproduza a regra do cluster com
+            #   `--sysctl net.ipv4.ip_unprivileged_port_start=1024`.
             # readOnlyRootFilesystem: true
             #   NÃO aplicar como está: o app escreve em DATA_DIR/bq_dlq/ e o
             #   `JsonBackend` faz mkdir + write. Exigiria montar um emptyDir
