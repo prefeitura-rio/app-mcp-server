@@ -27,7 +27,7 @@ spec:
         - name: mcp
           image: ghcr.io/prefeitura-rio/app-mcp-server:eef9fd15a4e84d4b525cf85e4e8eaa112f17a566@sha256:e7477a2e4d34717d701515dcd17b3e7a3c9b782eb7f18f6513427cf640ce5649  # Updated by deploy-staging workflow
           ports:
-            - containerPort: 80
+            - containerPort: 8080
           env:
             - name: OTEL_SERVICE_NAME
               value: "app-mcp-server"
@@ -46,23 +46,22 @@ spec:
             - secretRef:
                 name: mcp-secrets
           securityContext:
-            # Hardening que não depende do usuário da imagem — por isso entra
-            # agora, enquanto o `runAsNonRoot` espera um build testado (ver
-            # abaixo). Nenhum deles altera comportamento de aplicação web em
-            # Python: o processo não escala privilégio, não usa capability de
-            # kernel e não precisa de syscall fora do perfil padrão.
+            # Nenhum destes altera comportamento de aplicação web em Python: o
+            # processo não escala privilégio, não usa capability de kernel e
+            # não precisa de syscall fora do perfil padrão.
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
             seccompProfile:
               type: RuntimeDefault
-            # runAsNonRoot: true
-            #   PENDENTE: exige `USER` não-root no Dockerfile (hoje o processo
-            #   roda como root) e `chown` de DATA_DIR, onde ficam os arquivos
-            #   de fallback da DLQ e o state dos workflows em modo JSON.
-            #   Ligar isto sem o par no Dockerfile deixa o pod em
-            #   CreateContainerConfigError.
+            # UID/GID batem com o `USER 10001:10001` do Dockerfile. Repetidos
+            # aqui de propósito: sem `runAsUser` explícito o kubelet teria de
+            # resolver o usuário da imagem para decidir se é root, e recusa o
+            # pod quando não consegue.
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
             # readOnlyRootFilesystem: true
             #   NÃO aplicar como está: o app escreve em DATA_DIR/bq_dlq/ e o
             #   `JsonBackend` faz mkdir + write. Exigiria montar um emptyDir
@@ -79,7 +78,7 @@ spec:
           startupProbe:
             httpGet:
               path: /health
-              port: 80
+              port: 8080
             periodSeconds: 5
             timeoutSeconds: 3
             successThreshold: 1
@@ -90,7 +89,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 80
+              port: 8080
             periodSeconds: 30
             timeoutSeconds: 5
             successThreshold: 1
@@ -103,7 +102,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: 80
+              port: 8080
             periodSeconds: 30
             timeoutSeconds: 5
             successThreshold: 1
@@ -145,7 +144,7 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8080
   type: ClusterIP
 
 ---
@@ -160,5 +159,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8080
   type: ClusterIP

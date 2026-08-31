@@ -25,6 +25,7 @@ def run_main_with_env(monkeypatch, is_local: bool):
     env_module = types.ModuleType("src.config.env")
     env_module.IS_LOCAL = is_local
     env_module.MCP_STATELESS_HTTP = not is_local
+    env_module.SERVER_PORT = 8080
 
     src_pkg = types.ModuleType("src")
     src_pkg.__path__ = [str(PROJECT_ROOT / "src")]
@@ -65,7 +66,7 @@ def test_main_runs_streamable_http_when_not_local(monkeypatch):
     app_module.mcp.run.assert_called_once_with(
         transport="streamable-http",
         host="0.0.0.0",
-        port=80,
+        port=8080,
         path="/mcp",
         middleware=MIDDLEWARE_MONTADO,
         stateless_http=True,

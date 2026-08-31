@@ -51,10 +51,21 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --upgrade "setuptools>=78.1.1"
 
+# Usuário sem privilégio, criado antes do COPY para que o `--chown` tenha a
+# quem atribuir. UID fixo e numérico de propósito: o `runAsNonRoot` do
+# Kubernetes precisa decidir, antes de subir o container, se o usuário é root,
+# e ele só consegue fazer isso com UID numérico — com um nome, o kubelet
+# recusa o pod por não saber resolvê-lo.
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app
+
 # O venv carrega o caminho absoluto do interpretador: precisa desembarcar no
 # mesmo `/app`, e o `/usr/local/bin/python3.11` que ele referencia é o desta
 # imagem — mesma base da etapa de build.
-COPY --from=build /app /app
+#
+# `--chown` no próprio COPY, e não um `chown -R` depois: aquele duplicaria a
+# camada inteira da aplicação no tamanho final da imagem.
+COPY --from=build --chown=10001:10001 /app /app
 
 # Falha na build, e não na partida do pod, se o venv não tiver sobrevivido à
 # cópia entre estágios. Foi exatamente esse o modo de falha quando as duas
@@ -65,9 +76,19 @@ COPY --from=build /app /app
 # e via crawl4ai), e agora dependem da declaração explícita no pyproject. Um
 # erro ali só apareceria no primeiro pagamento de IPTU ou na primeira escrita
 # de state — as duas coisas que este import cobre de graça.
+# A partir daqui o processo é não-root, e a checagem abaixo passa a valer
+# duplo: além de provar que o venv sobreviveu à cópia, prova que o usuário
+# sem privilégio consegue lê-lo. Um `--chown` errado falharia a build aqui, e
+# não no cluster.
+USER 10001:10001
+
 RUN .venv/bin/python -c "import pytz, fastmcp, shapely, cryptography, aiofiles; print('venv OK')"
 
-EXPOSE 80
+# 8080, não 80: sem CAP_NET_BIND_SERVICE — que o `capabilities.drop: [ALL]` do
+# securityContext remove — um processo não-root não liga abaixo de 1024. O
+# `Service` do Kubernetes segue publicando a 80 e apontando o `targetPort` para
+# cá, então nenhum consumidor enxerga a mudança.
+EXPOSE 8080
 
 # Chama o interpretador do venv direto: `uv run` recriaria o ambiente se o
 # achasse inconsistente, trocando um erro de build por um pod que não sobe.

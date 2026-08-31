@@ -57,7 +57,7 @@ spec:
               kubernetes.io/metadata.name: ingress-nginx
       ports:
         - protocol: TCP
-          port: 80
+          port: 8080
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -81,7 +81,7 @@ spec:
               kubernetes.io/metadata.name: eai
       ports:
         - protocol: TCP
-          port: 80
+          port: 8080
 
 # ---------------------------------------------------------------------------
 # Redis (`mcp-redis`) — o outro lado do problema.
