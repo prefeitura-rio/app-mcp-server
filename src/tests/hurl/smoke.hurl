@@ -26,18 +26,27 @@ body == "OK"
 
 
 # ===== READINESS =====
+# A partir da Task 7 do plano de resiliência do MCP (ver
+# src/health/routes.py, src/health/state.py), readiness passou a sondar o
+# Redis com teto curto — diferente de /health (liveness), que nunca toca
+# dependência alguma. Este job roda de propósito sem Redis alcançável, então
+# 503/`redis_unavailable` aqui é o resultado esperado, não uma falha: é o que
+# tira do balanceador só o pod sem Redis quando há réplicas saudáveis para
+# assumir o tráfego (ver test_ready_retorna_503_com_motivo_quando_redis_esta_fora
+# em src/tests/unit/health/test_routes.py).
 
 GET {{base_url}}/health/ready
-HTTP 200
+HTTP 503
 [Asserts]
-jsonpath "$.status" == "ready"
+jsonpath "$.status" == "not_ready"
+jsonpath "$.reason" == "redis_unavailable"
 
 
 # ===== DIAGNÓSTICO DAS DEPENDÊNCIAS =====
 # O invariante central do desenho de health (src/health/routes.py): uma
-# dependência fora do ar aparece aqui, mas NÃO derruba /health nem
-# /health/ready. As duas requisições acima já passaram com o Redis e o
-# BigQuery inalcançáveis — é isso que este bloco confirma do outro lado.
+# dependência fora do ar aparece aqui e agora também tira o pod do
+# balanceador via /health/ready (bloco acima), mas NÃO derruba /health, que
+# segue 200 mesmo com Redis e BigQuery inalcançáveis.
 #
 # `degraded` é o estado esperado no CI, não uma falha do teste: o container
 # roda com credenciais falsas e sem Redis, então esses checks reprovam de
