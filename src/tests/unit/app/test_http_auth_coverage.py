@@ -308,3 +308,52 @@ def test_mcp_segue_embrulhado_pelo_wrapper_nativo(app_module):
     assert endpoints.get("/mcp") == "RequireAuthMiddleware", (
         f"/mcp não está mais embrulhado pelo wrapper nativo: {endpoints.get('/mcp')!r}"
     )
+
+
+# Cada rota de Dívida Ativa e a função de negócio que ela chama. O teste
+# substitui a função por uma que estoura, para exercitar o `except` do handler
+# sem alcançar a PGM.
+ROTAS_E_FUNCOES = [
+    ("/consulta_debitos", "consultar_debitos"),
+    ("/emitir_guia", "emitir_guia_a_vista"),
+    ("/emitir_guia_regularizacao", "emitir_guia_regularizacao"),
+    ("/v2/emitir_guia", "emitir_guia_a_vista_v2"),
+    ("/v2/emitir_guia_regularizacao", "emitir_guia_regularizacao_v2"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rota,funcao", ROTAS_E_FUNCOES)
+async def test_erro_no_handler_nao_devolve_a_mensagem_da_excecao(
+    app_module, monkeypatch, rota, funcao
+):
+    """O corpo do 500 não pode carregar `str(e)`.
+
+    A mensagem de uma exceção imprevista não é escrita por nós: clientes de
+    rede e drivers põem ali a URL de conexão, com credencial dentro. Era o que
+    `{"error": str(e)}` devolvia a qualquer um — e estas cinco rotas atendem
+    sem token enquanto o legado não migra.
+
+    Mesma decisão que `sanitize_error` já aplicava em `/health/detail`, agora
+    também aqui.
+    """
+    segredo = "redis://default:senha-secreta@10.0.0.9:6379/0"
+
+    async def _estoura(*args, **kwargs):
+        raise RuntimeError(f"falha ao conectar em {segredo}")
+
+    monkeypatch.setattr(app_module, funcao, _estoura)
+    app = _asgi_app(app_module)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        resposta = await c.post(rota, json={})
+
+    assert resposta.status_code == 500
+    assert "senha-secreta" not in resposta.text, (
+        f"{rota} devolveu a mensagem da exceção: {resposta.text!r}"
+    )
+    assert segredo not in resposta.text
+    corpo = resposta.json()
+    assert corpo["error"] == "internal_error"
+    assert corpo["error_description"] == "RuntimeError"

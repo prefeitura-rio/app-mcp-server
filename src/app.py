@@ -25,7 +25,7 @@ from src.middleware.require_auth import RequireAuthOnAllRoutes
 from src.observability.tracing import ToolCallTracingMiddleware, setup_tracing
 from src.health.checks import register_default_checks
 from src.health.external_tables import run_probe_loop
-from src.health.registry import health_registry
+from src.health.registry import health_registry, sanitize_error
 from src.health.routes import register_health_routes
 from src.health.state import set_ready
 from src.tools.calculator import (
@@ -116,6 +116,26 @@ LIMITE_NOME_CURTO = 128  # nome de memória, tema, tipo de alerta
 # Preenchido por `create_app()`. Fica `None` em execução local, onde não há
 # autenticação por decisão explícita (ver o bloco de auth em `create_app`).
 _auth_provider = None
+
+
+def _erro_interno(rota: str, erro: Exception) -> JSONResponse:
+    """500 sem a mensagem da exceção no corpo.
+
+    Os handlers devolviam `{"error": str(e)}`. A mensagem de uma exceção que
+    ninguém previu não é um contrato: ela carrega o que o cliente de rede,
+    o driver ou a biblioteca resolveram colocar ali — no caso dos clientes
+    HTTP, rotineiramente a URL de conexão, com credencial dentro. É o mesmo
+    raciocínio que `sanitize_error` já aplicava em `/health/detail`, e por
+    isso reusa a função em vez de repetir a decisão.
+
+    O que o cliente perde em detalhe está no log, com traceback, junto do
+    trace_id — que é onde o operador de fato procura.
+    """
+    logger.exception(f"Erro ao processar {rota}")
+    return JSONResponse(
+        content={"error": "internal_error", "error_description": sanitize_error(erro)},
+        status_code=500,
+    )
 
 
 def create_app() -> FastMCP:
@@ -724,8 +744,7 @@ def create_app() -> FastMCP:
             result = await consultar_debitos(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/consulta_debitos", e)
 
     @mcp.custom_route("/emitir_guia", methods=["POST"])
     async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
@@ -740,8 +759,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_a_vista(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/emitir_guia", e)
 
     @mcp.custom_route("/emitir_guia_regularizacao", methods=["POST"])
     async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
@@ -756,8 +774,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_regularizacao(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/emitir_guia_regularizacao", e)
 
     # ===== DÍVIDA ATIVA V2 (entrada e saída validadas com Pydantic) =====
     # Erros de validação retornam HTTP 200 com api_resposta_sucesso=false,
@@ -773,8 +790,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_a_vista_v2(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/v2/emitir_guia", e)
 
     @mcp.custom_route("/v2/emitir_guia_regularizacao", methods=["POST"])
     async def da_emitir_guia_regularizacao_v2(request: Request) -> JSONResponse:
@@ -786,8 +802,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_regularizacao_v2(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/v2/emitir_guia_regularizacao", e)
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
