@@ -12,6 +12,10 @@ Esta pasta concentra os testes automatizados do projeto.
 
 ## Como pensar na suíte
 
+O racional completo — incluindo por que testcontainers não foi adotado e o que
+reabriria essa decisão — está em
+[docs/decisions/CHATR-133-politica-de-testes.md](../../docs/decisions/CHATR-133-politica-de-testes.md).
+
 Hoje a estratégia de testes está dividida assim:
 
 - `unit`: valida lógica de aplicação, wrappers, middleware, interceptors e workflows com dependências controladas;
