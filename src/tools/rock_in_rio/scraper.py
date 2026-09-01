@@ -101,7 +101,7 @@ _RE_PALCO = re.compile(r'<div class="data"><span>(?P<palco>[^<]*)</span>\s*</div
 # sem backtracking patológico — e o padrão não consegue atravessar para o bloco
 # seguinte como o `.*?` com `DOTALL` atravessava.
 _RE_ARTISTA = re.compile(
-    r'<a href="(?P<url>(?:' + re.escape(BASE_URL) + r')?/rio/pt-br/line-up/'
+    r'<a href="(?P<url>(?:' + re.escape(BASE_URL) + r")?/rio/pt-br/line-up/"
     r'(?P<slug>[a-z0-9][a-z0-9-]*)/)"'
     r">\s*<h2[^>]*>(?P<artista>[^<]*(?:<[^>]*>[^<]*)*?)</h2>"
 )
