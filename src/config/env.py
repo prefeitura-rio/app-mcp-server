@@ -186,6 +186,23 @@ MAX_REQUEST_BODY_BYTES = int(
 # O `Service` continua publicando a porta 80; o que muda e o `targetPort`.
 SERVER_PORT = int(getenv_or_action("SERVER_PORT", default="8080", action="ignore"))
 
+# Teto de taxa das chamadas MCP, por identidade (ver src/middleware/rate_limit.py).
+#
+# `0` desliga, e e o default: ligar um teto sem numero de producao para calibra-lo
+# troca um risco por outro. O valor quando ligado e por identidade, nao global --
+# uma rajada de cidadaos distintos nao soma num balde so.
+#
+# 20 rps por cidadao e cerca de duas ordens de grandeza acima do uso real (uma
+# pergunta a cada poucos segundos num chat): pega consumidor em laco sem chegar
+# perto do trafego legitimo.
+MCP_RATE_LIMIT_RPS = float(
+    getenv_or_action("MCP_RATE_LIMIT_RPS", default="0", action="ignore")
+)
+
+# Tamanho do balde. Vazio = 2x o `rps`, que e o default do FastMCP.
+_rate_limit_burst = getenv_or_action("MCP_RATE_LIMIT_BURST", action="ignore")
+MCP_RATE_LIMIT_BURST = int(_rate_limit_burst) if _rate_limit_burst else None
+
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
