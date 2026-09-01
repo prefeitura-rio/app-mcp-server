@@ -314,6 +314,18 @@ def test_url_do_artista_reproduz_a_url_publicada_em_todos_os_dias():
             assert url_do_artista(show.slug) == show.url
 
 
+def test_parse_dia_normaliza_link_relativo_do_artista():
+    html = _pagina(
+        _palco("Palco Mundo")
+        + _artista("foo-fighters", "FOO FIGHTERS").replace("https://rockinrio.com", "")
+        + _enchimento()
+    )
+
+    shows = parse_dia(html, dia_slug="04-set", data=date(2026, 9, 4))
+
+    assert shows[0].url == "https://rockinrio.com/rio/pt-br/line-up/foo-fighters/"
+
+
 def test_para_resposta_deixa_de_fora_os_campos_derivaveis():
     """O `Show` guarda tudo; a resposta leva só o que não dá para derivar."""
     shows = parse_dia(_ler("dia-04-set.html"), dia_slug="04-set", data=date(2026, 9, 4))

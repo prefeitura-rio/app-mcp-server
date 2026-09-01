@@ -27,6 +27,7 @@ import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Dict, List, Tuple
+from urllib.parse import urljoin
 
 from src.utils.http_client import InterceptedHTTPClient
 from src.utils.log import logger
@@ -100,7 +101,7 @@ _RE_PALCO = re.compile(r'<div class="data"><span>(?P<palco>[^<]*)</span>\s*</div
 # sem backtracking patológico — e o padrão não consegue atravessar para o bloco
 # seguinte como o `.*?` com `DOTALL` atravessava.
 _RE_ARTISTA = re.compile(
-    r'<a href="(?P<url>' + re.escape(BASE_URL) + r"/rio/pt-br/line-up/"
+    r'<a href="(?P<url>(?:' + re.escape(BASE_URL) + r")?/rio/pt-br/line-up/"
     r'(?P<slug>[a-z0-9][a-z0-9-]*)/)"'
     r">\s*<h2[^>]*>(?P<artista>[^<]*(?:<[^>]*>[^<]*)*?)</h2>"
 )
@@ -110,7 +111,7 @@ _RE_ARTISTA = re.compile(
 # parser conseguiu ler — sem esse confronto, um bloco que mudou de forma some da
 # grade em silêncio.
 _RE_ANCORA_ARTISTA = re.compile(
-    r'<a href="' + re.escape(BASE_URL) + r'/rio/pt-br/line-up/[a-z0-9][a-z0-9-]*/"'
+    r'<a href="(?:' + re.escape(BASE_URL) + r')?/rio/pt-br/line-up/[a-z0-9][a-z0-9-]*/"'
 )
 
 # Varre palcos e artistas numa passada só. Duas passadas separadas devolveriam
@@ -290,7 +291,7 @@ def parse_dia(html: str, *, dia_slug: str, data: date) -> List[Show]:
                 palco=palco_atual,
                 artista=artista,
                 slug=match.group("slug"),
-                url=match.group("url"),
+                url=urljoin(BASE_URL, match.group("url")),
             )
         )
 
