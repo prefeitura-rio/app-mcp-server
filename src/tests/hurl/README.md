@@ -61,12 +61,21 @@ print(base64.b64encode(json.dumps({
     "token_uri": "https://oauth2.googleapis.com/token",
 }).encode()).decode())')
 
-docker run -d --name mcp-smoke -p 8080:80 \
+# As flags de runtime reproduzem o `securityContext` dos manifestos: raiz
+# somente leitura, sem capability, uid não-root (vem do `USER` da imagem) e o
+# `ip_unprivileged_port_start` do kernel, que o Docker zera e o Kubernetes não.
+# Rodar sem elas é a prova local que dá verde e o pod que morre no deploy.
+docker run -d --name mcp-smoke -p 8080:8080 \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --sysctl net.ipv4.ip_unprivileged_port_start=1024 \
+  --tmpfs /tmp:mode=1777 \
+  --tmpfs /app/data/bq_dlq:mode=1777 \
   --env-file .github/ci.env \
   -e GCP_SERVICE_ACCOUNT_CREDENTIALS="$GCP_SA" \
   -e DATA_DIR=/app/data \
   -e REDIS_URL=redis://127.0.0.1:6379/0 \
-  -e MONGODB_URL=mongodb://127.0.0.1:27017 \
   app-mcp-server:local
 
 hurl --test --variable base_url=http://127.0.0.1:8080 --variable token=test-token \
@@ -75,8 +84,8 @@ hurl --test --variable base_url=http://127.0.0.1:8080 --variable token=test-toke
 docker rm -f mcp-smoke
 ```
 
-Redis e MongoDB apontam para portas inalcançáveis de dentro do container **de
-propósito**: os checks correspondentes reprovam, o agregado vira `degraded` e
+O Redis aponta para uma porta inalcançável de dentro do container **de
+propósito**: o check correspondente reprova, o agregado vira `degraded` e
 a suíte confirma que `/health` e `/health/ready` continuam 200 assim mesmo.
 Nenhuma infra precisa estar de pé.
 

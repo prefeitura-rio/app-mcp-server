@@ -4,6 +4,7 @@ import types
 from pathlib import Path
 
 import httpx
+import httpx2
 import pytest
 from authlib.jose import JsonWebKey
 from fastmcp.server.auth.providers.jwt import RSAKeyPair
@@ -81,6 +82,10 @@ def mock_jwks_endpoint(monkeypatch, *public_pems):
         return _FakeJWKSResponse(payload)
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    # O `JWTVerifier` do fastmcp 4 busca o JWKS com `httpx2`, nao com `httpx`.
+    # Sem este segundo patch a busca escapa do mock, falha, e o token valido
+    # deixa de autenticar -- falha que parece do verificador e e do teste.
+    monkeypatch.setattr(httpx2.AsyncClient, "get", fake_get)
 
 
 # (a)/(e) Token estático continua autenticando exatamente como hoje, quando
@@ -245,3 +250,53 @@ async def test_azp_constrained_verifier_accepts_any_client_when_allowlist_empty(
 
     assert result is not None
     assert result.claims["azp"] == "qualquer-client"
+
+
+# Comparação em tempo constante no caminho estático (CHATR-178). O `in set`
+# anterior decidia por hash e caía num `str.__eq__` que sai no primeiro byte
+# divergente; `_mesmo_token` usa `hmac.compare_digest`.
+@pytest.mark.asyncio
+async def test_token_fora_do_ascii_e_recusado_sem_estourar(monkeypatch):
+    """`compare_digest` recusa `str` com caractere fora do ASCII.
+
+    O token chega de um header `Authorization` decodificado em latin-1, então
+    byte alto é entrada alcançável pela rede. Comparando em `str`, isso viraria
+    `TypeError` — 500 no lugar de 401, e um jeito barato de derrubar a rota.
+    """
+    module = load_hybrid_verifier_module(monkeypatch)
+    verifier = module.HybridTokenVerifier(
+        static_tokens=["abc123"], jwks_uri=None, issuer=None, allowed_azp=[]
+    )
+
+    assert await verifier.verify_token("abc123\xff") is None
+    assert await verifier.verify_token("çãö") is None
+    assert await verifier.verify_token("\ud800") is None
+
+
+@pytest.mark.asyncio
+async def test_prefixo_e_sufixo_do_token_valido_nao_autenticam(monkeypatch):
+    """A comparação continua sendo de igualdade — só que sem atalho de tempo."""
+    module = load_hybrid_verifier_module(monkeypatch)
+    verifier = module.HybridTokenVerifier(
+        static_tokens=["abc123", "def456"], jwks_uri=None, issuer=None, allowed_azp=[]
+    )
+
+    for recusado in ("", "abc12", "abc1234", "ABC123", " abc123"):
+        assert await verifier.verify_token(recusado) is None, recusado
+
+    for aceito in ("abc123", "def456"):
+        assert await verifier.verify_token(aceito) is not None, aceito
+
+
+@pytest.mark.asyncio
+async def test_sem_token_estatico_configurado_nada_autentica(monkeypatch):
+    """`any()` sobre conjunto vazio é falso — o mesmo desfecho do `not in`
+    anterior. Fica travado porque é o caso em que uma inversão de sinal abriria
+    o servidor inteiro."""
+    module = load_hybrid_verifier_module(monkeypatch)
+    verifier = module.HybridTokenVerifier(
+        static_tokens=[], jwks_uri=None, issuer=None, allowed_azp=[]
+    )
+
+    assert await verifier.verify_token("qualquer") is None
+    assert await verifier.verify_token("") is None

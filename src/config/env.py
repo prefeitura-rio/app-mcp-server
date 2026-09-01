@@ -133,6 +133,59 @@ KEYCLOAK_TRUSTED_CLIENTS = list(
         if client_id.strip()
     )
 )
+# Modo de exigência de autenticação nas rotas HTTP que não são `/mcp`
+# (ver src/middleware/require_auth.py).
+#
+# `enforce` (default) recusa a requisição sem token válido. `observe` apenas
+# registra `http_auth_would_deny` e deixa passar — existe para uma janela curta
+# de rollout, em que é preciso descobrir quais consumidores ainda chamam
+# `/consulta_debitos` e `/emitir_guia` sem credencial antes de cortá-los.
+# O default é o modo seguro de propósito: esquecer de configurar não pode ser o
+# que deixa a porta aberta.
+HTTP_AUTH_MODE = getenv_or_action("HTTP_AUTH_MODE", default="enforce", action="ignore")
+
+# Rotas que passam sem token, apenas registrando `http_auth_would_deny`.
+#
+# Não configurado = usa a lista de legado do próprio middleware
+# (`LEGACY_OBSERVE_PATHS`: as cinco rotas de Dívida Ativa que já existiam antes
+# da exigência de autenticação). CSV vazio (`HTTP_AUTH_OBSERVE_PATHS=""`) exige
+# token em todas — é o estado final, depois que os consumidores migrarem.
+#
+# Existe para encolher uma rota de cada vez, sem deploy de código: assim que o
+# log parar de acusar chamadas sem token em `/v2/emitir_guia`, é só tirá-la
+# daqui. Rota nova nunca entra nesta lista sozinha.
+_observe_paths_raw = getenv_or_action("HTTP_AUTH_OBSERVE_PATHS", action="ignore")
+HTTP_AUTH_OBSERVE_PATHS = (
+    None
+    if _observe_paths_raw is None
+    else tuple(p.strip() for p in _observe_paths_raw.split(",") if p.strip())
+)
+
+# Teto do corpo de requisição HTTP, em bytes (ver src/middleware/body_limit.py).
+# 1 MiB é ~20x o maior payload plausível destas rotas (um `dicionario_itens`
+# com centenas de CDAs fica na casa das dezenas de KB), e bem abaixo do que
+# comprometeria o limite de 1536Mi do container.
+MAX_REQUEST_BODY_BYTES = int(
+    getenv_or_action("MAX_REQUEST_BODY_BYTES", default="1048576", action="ignore")
+)
+
+# Porta em que o servidor HTTP escuta dentro do container.
+#
+# 8080 e nao 80 porque o processo roda como usuario nao-root (`runAsNonRoot`).
+# Bind abaixo de 1024 exige CAP_NET_BIND_SERVICE, que o `capabilities.drop:
+# [ALL]` do securityContext remove -- e o `allowPrivilegeEscalation: false` do
+# mesmo bloco liga o `no_new_privs`, que impede recuperar a capability por file
+# capability (`setcap`). Nao ha combinacao que devolva a porta 80 a um processo
+# nao-root sem afrouxar um dos dois.
+#
+# Atencao a uma pegadinha: o Docker seta `ip_unprivileged_port_start=0` nos
+# containers, entao a porta 80 liga normalmente como nao-root numa prova local
+# -- e o Kubernetes nao seta esse sysctl, entao o mesmo bind falha no cluster.
+# Um teste local com a porta 80 daria verde e o pod morreria no deploy.
+#
+# O `Service` continua publicando a porta 80; o que muda e o `targetPort`.
+SERVER_PORT = int(getenv_or_action("SERVER_PORT", default="8080", action="ignore"))
+
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos
@@ -305,6 +358,19 @@ BIGQUERY_DLQ_DRAIN_ENABLED = getenv_bool("BIGQUERY_DLQ_DRAIN_ENABLED", default="
 COR_ALERT_WRITE_DEADLINE_SECONDS = float(
     getenv_or_action("COR_ALERT_WRITE_DEADLINE_SECONDS", default="8.0", action="ignore")
 )
+
+# Verificação de certificado TLS nas chamadas às APIs internas feitas através
+# do chatbot-integrations (PGM e IPTU). Hoje `false`, que é o comportamento que
+# já existia: essas chamadas eram feitas com `verify: False` fixo no código.
+#
+# O default preserva o comportamento de propósito — ligar a verificação sem o CA
+# bundle da cadeia interna no lugar quebraria a emissão de guia. O que esta
+# variável muda é que passar a verificar deixa de exigir deploy de código:
+# monte o bundle, vire para `true`, e reverta em segundos se algo quebrar.
+#
+# Enquanto estiver `false`, um MITM entre o chatbot-integrations e a PGM/IPTU lê
+# e altera requisições que carregam `chaveAcesso` e token de acesso.
+INTERNAL_TLS_VERIFY = getenv_bool("INTERNAL_TLS_VERIFY", default="false")
 
 PROXY_URL = getenv_or_action("PROXY_URL")
 

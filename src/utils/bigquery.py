@@ -489,7 +489,11 @@ def _dlq_poison_key(table_full_name: str) -> str:
 
 
 def _dlq_dir():
-    """Diretório do fallback em arquivo da DLQ."""
+    """Diretório do fallback em arquivo da DLQ.
+
+    Com `readOnlyRootFilesystem: true` este é o único caminho que o processo
+    escreve em runtime; o manifesto monta um emptyDir exatamente aqui.
+    """
     from pathlib import Path
 
     data_dir_path = getattr(env, "DATA_DIR", None) or "scratch"

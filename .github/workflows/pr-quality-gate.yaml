@@ -120,15 +120,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     outputs:
       coverage: ${{ steps.coverage.outputs.coverage }}
@@ -164,7 +155,6 @@ jobs:
           # executa o preflight — daí o placeholder de credencial bastar
           # aqui, mas não no container (ver job `build`).
           REDIS_URL: redis://localhost:6379/0
-          MONGODB_URL: mongodb://localhost:27017
           DATA_DIR: /tmp
           GCP_SERVICE_ACCOUNT_CREDENTIALS: e30=
         run: uv run pytest --junitxml=pytest.xml --cov=src --cov-report=xml --cov-report=term-missing
@@ -318,18 +308,32 @@ jobs:
           print(base64.b64encode(json.dumps(info).encode()).decode(), end="")
           PY
 
-          # Redis e MongoDB apontam para portas inalcançáveis de dentro do
-          # container de propósito: a suíte confirma que /health continua 200
-          # com dependência crítica fora do ar, e que /health/ready reflete
-          # essa indisponibilidade (503/`redis_unavailable`, Task 7 do plano
-          # de resiliência do MCP) em vez de mascará-la. Nenhum service
-          # precisa subir para este job.
-          docker run -d --name mcp-smoke -p 8080:80 \
+          # O Redis aponta para uma porta inalcançável de dentro do container
+          # de propósito: a suíte confirma que /health continua 200 com
+          # dependência crítica fora do ar, e que /health/ready reflete essa
+          # indisponibilidade (503/`redis_unavailable`, Task 7 do plano de
+          # resiliência do MCP) em vez de mascará-la. Nenhum service precisa
+          # subir para este job.
+          #
+          # As flags de runtime reproduzem o `securityContext` dos manifestos.
+          # Sem elas o smoke roda como root, com a raiz gravável e com
+          # `ip_unprivileged_port_start=0` (default do Docker, não do
+          # Kubernetes) — foi assim que um `drop: [ALL]` que quebrava o bind na
+          # porta 80 passou verde no CI e só apareceu na revisão.
+          #
+          # `mode=1777` nos tmpfs faz o papel do `fsGroup` do pod: sem ele o
+          # volume chega root:root e o uid 10001 não escreve.
+          docker run -d --name mcp-smoke -p 8080:8080 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --sysctl net.ipv4.ip_unprivileged_port_start=1024 \
+            --tmpfs /tmp:mode=1777 \
+            --tmpfs /app/data/bq_dlq:mode=1777 \
             --env-file .github/ci.env \
             -e GCP_SERVICE_ACCOUNT_CREDENTIALS="$(cat /tmp/fake-sa.b64)" \
             -e DATA_DIR=/app/data \
             -e REDIS_URL=redis://127.0.0.1:6379/0 \
-            -e MONGODB_URL=mongodb://127.0.0.1:27017 \
             app-mcp-server:pr-${{ github.sha }}
 
       - name: Wait for container to serve /health

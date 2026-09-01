@@ -47,7 +47,7 @@ spec:
         - name: mcp
           image: ghcr.io/prefeitura-rio/app-mcp-server:eef9fd15a4e84d4b525cf85e4e8eaa112f17a566@sha256:e7477a2e4d34717d701515dcd17b3e7a3c9b782eb7f18f6513427cf640ce5649  # Updated by deploy-staging workflow
           ports:
-            - containerPort: 80
+            - containerPort: 8080
           env:
             - name: OTEL_SERVICE_NAME
               value: "app-mcp-server"
@@ -65,6 +65,48 @@ spec:
           envFrom:
             - secretRef:
                 name: mcp-secrets
+          securityContext:
+            # Nenhum destes altera comportamento de aplicação web em Python: o
+            # processo não escala privilégio, não usa capability de kernel e não
+            # precisa de syscall fora do perfil padrão.
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+            # UID/GID numéricos, batendo com o `USER 10001:10001` do Dockerfile.
+            # Repetidos aqui de propósito: sem `runAsUser` explícito o kubelet
+            # teria de resolver o usuário da imagem para decidir se é root, e
+            # recusa o pod quando não consegue.
+            #
+            # É isto que obriga a porta 8080. O `drop: [ALL]` acima remove o
+            # CAP_NET_BIND_SERVICE e o `allowPrivilegeEscalation: false` liga o
+            # `no_new_privs`, que impede recuperá-lo por file capability
+            # (`setcap`): processo não-root não liga abaixo de 1024 nem com
+            # `capabilities.add`. O `Service` continua publicando a porta 80 — o
+            # que muda é o `targetPort`.
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            # Raiz somente leitura. Os dois caminhos que o processo escreve em
+            # runtime chegam por emptyDir (ver `volumes`):
+            #
+            #   /app/data/bq_dlq  fallback em arquivo da DLQ do BigQuery,
+            #                     acionado quando o Redis está fora. Montado
+            #                     no caminho exato do subdiretório, e não em
+            #                     `/app/data`: aquele guarda bairros.json e
+            #                     logradouros.json, que vêm da imagem e
+            #                     sumiriam debaixo de um emptyDir.
+            #   /tmp              rascunho de bibliotecas; é para onde o
+            #                     Dockerfile aponta o `HOME`, já que o
+            #                     usuário 10001 não tem home na imagem.
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: bq-dlq
+              mountPath: /app/data/bq_dlq
+            - name: tmp
+              mountPath: /tmp
           lifecycle:
             preStop:
               exec:
@@ -83,7 +125,7 @@ spec:
           startupProbe:
             httpGet:
               path: /health
-              port: 80
+              port: 8080
             periodSeconds: 5
             timeoutSeconds: 3
             successThreshold: 1
@@ -94,7 +136,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 80
+              port: 8080
             periodSeconds: 30
             timeoutSeconds: 5
             successThreshold: 1
@@ -112,11 +154,25 @@ spec:
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: 80
+              port: 8080
             periodSeconds: 30
             timeoutSeconds: 5
             successThreshold: 1
             failureThreshold: 3
+      # `fsGroup` é o que torna os emptyDir graváveis pelo uid 10001: o kubelet
+      # aplica o grupo ao volume no momento da montagem. Sem ele os dois chegam
+      # root:root 0755 e o processo não-root só lê — a DLQ falharia calada, e só
+      # no dia em que o Redis caísse.
+      securityContext:
+        fsGroup: 10001
+      volumes:
+        # Efêmero de propósito, como já era: o fallback da DLQ vale dentro da
+        # vida do pod (o worker de drain o reprocessa), não como armazenamento
+        # durável. Durabilidade exigiria PVC, que é outra decisão.
+        - name: bq-dlq
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
       restartPolicy: Always
       # Orçamento de encerramento único para todo o ciclo de shutdown do pod
       # (mesmo racional do prod, ver `k8s/prod/resources.yaml`): o shutdown
@@ -199,7 +255,7 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8080
   type: ClusterIP
 
 ---
@@ -214,5 +270,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8080
   type: ClusterIP

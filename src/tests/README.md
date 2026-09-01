@@ -4,22 +4,29 @@ Esta pasta concentra os testes automatizados do projeto.
 
 ## Estrutura
 
-- `src/tests/unit/`: testes unitários e de integração leve
+- `src/tests/unit/`: lógica de aplicação com dependências controladas (dublês)
+- `src/tests/integration/`: testes contra infra real (Redis), pulados quando ela não responde
 - `src/tests/hurl/`: smoke HTTP contra a imagem de produção rodando
 - `src/tests/e2e/`: testes E2E usados no preview de `staging`
 - `src/tests/conftest.py`: defaults de ambiente compartilhados pela suíte
 
 ## Como pensar na suíte
 
+O racional completo — incluindo por que testcontainers não foi adotado e o que
+reabriria essa decisão — está em
+[docs/decisions/CHATR-133-politica-de-testes.md](../../docs/decisions/CHATR-133-politica-de-testes.md).
+
 Hoje a estratégia de testes está dividida assim:
 
 - `unit`: valida lógica de aplicação, wrappers, middleware, interceptors e workflows com dependências controladas;
+- `integration`: valida o que só o servidor real prova — hoje, o Redis;
 - `hurl`: valida que o container sobe e fala HTTP — health, autenticação e handshake MCP;
 - `e2e`: valida o preview real no cluster antes da promoção em `staging`.
 
 Ou seja:
 
 - unit pega regressão cedo e barato;
+- integration pega divergência entre o dublê e o servidor de verdade;
 - hurl pega o que só aparece pela porta HTTP, ainda no PR;
 - e2e protege o deploy real antes de mexer no serviço estável.
 
@@ -35,12 +42,41 @@ cobertura**, que mede código de produção exercitado pelo pytest. Ele é camad
 adicional, não substituta — mover um teste de pytest para Hurl derrubaria o
 número e reprovaria o PR pela tolerância de 0,1 pp.
 
+### Quando um teste vai para `integration/`
+
+O critério é estreito de propósito: vai para lá o que **o dublê não consegue
+provar**. Verificar *quando* grava e *com que chave* é trabalho de unitário —
+mais rápido, sem infra, e conta para o gate de cobertura. O que exige servidor
+é o comportamento que mora dentro dele: que o TTL chega e é renovado, que o
+`LTRIM` do teto corta de fato, que o `SET NX` serializa duas varreduras
+concorrentes, que o valor sobrevive à ida e volta pelo cliente real.
+
+Vale o custo quando um dublê que divirja do servidor passaria despercebido
+justamente no caminho que só roda quando algo já deu errado — foi o caso da
+DLQ do BigQuery (`test_bigquery_dlq_redis.py`, CHATR-126) e do cache
+(`test_bigquery_cache_redis.py`, CHATR-115). Fora disso, prefira o unitário.
+
+Esses testes rodam **no mesmo job do gate** — o `pr-quality-gate.yaml` sobe
+`redis:7-alpine` como service e o `testpaths = ["src/tests"]` varre tudo de
+uma vez. Sem Redis alcançável em `REDIS_URL`, o módulo inteiro se pula via
+`skipif`. A consequência prática: **a suíte passar não significa que eles
+rodaram**. Em máquina sem Redis, `pytest` fica verde tendo pulado a camada
+inteira; quem mexe nesses caminhos precisa de um Redis de pé para saber.
+
 ## Comandos úteis
 
 ### Rodar todos os testes unitários
 
 ```bash
 uv run pytest src/tests/unit -q
+```
+
+### Rodar os testes de integração
+
+Exigem um Redis alcançável; sem ele, o pytest pula os módulos e reporta verde.
+
+```bash
+REDIS_URL=redis://localhost:6379/0 uv run pytest src/tests/integration -q
 ```
 
 ### Rodar a suíte inteira com coverage
@@ -99,4 +135,5 @@ Vale atualizar este README quando houver mudança em:
 - comandos principais da suíte;
 - policy de coverage;
 - comportamento do E2E de staging;
-- escopo do smoke HTTP (`src/tests/hurl/`).
+- escopo do smoke HTTP (`src/tests/hurl/`);
+- escopo dos testes de integração (`src/tests/integration/`).
