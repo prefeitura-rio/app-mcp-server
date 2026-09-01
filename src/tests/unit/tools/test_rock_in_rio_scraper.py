@@ -344,6 +344,12 @@ def test_dias_do_evento_cobre_as_sete_datas():
     assert all(data.year == 2026 and data.month == 9 for _, data in DIAS_DO_EVENTO)
 
 
+def test_urls_dos_dias_usam_o_prefixo_localizado():
+    assert scraper_mod.DAY_URL_TEMPLATE == (
+        "https://rockinrio.com/rio/pt-br/line-up/dia/{slug}/"
+    )
+
+
 @pytest.mark.asyncio
 async def test_buscar_lineup_junta_os_sete_dias(monkeypatch):
     paginas = {

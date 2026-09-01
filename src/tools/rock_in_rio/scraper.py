@@ -32,7 +32,7 @@ from src.utils.http_client import InterceptedHTTPClient
 from src.utils.log import logger
 
 BASE_URL = "https://rockinrio.com"
-DAY_URL_TEMPLATE = BASE_URL + "/rio/line-up/dia/{slug}/"
+DAY_URL_TEMPLATE = BASE_URL + "/rio/pt-br/line-up/dia/{slug}/"
 
 # Os sete dias da edição de 2026, na ordem em que acontecem. O mapa slug → data
 # é explícito de propósito: o slug do site (`04-set`) não carrega o ano, e
