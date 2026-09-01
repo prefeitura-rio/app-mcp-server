@@ -13,6 +13,15 @@ tamanho:
 2. Sem `Content-Length` (transferência em chunks): conta enquanto lê e aborta
    ao ultrapassar. É o caminho que de fato limita a memória, já que o header
    é só uma promessa do cliente.
+
+O caminho 2 não pode depender do handler. Os cinco handlers de Dívida Ativa
+embrulham o `await request.json()` em `except Exception` e devolvem 500 —
+engoliam o sentinel deste módulo e o 413 nunca saía, nem o log. Por isso a
+proteção está em dois pontos independentes: o sentinel herda de
+`BaseException`, fora do alcance de um `except Exception`, e o `send`
+embrulhado ainda troca por 413 qualquer resposta que um handler tente emitir
+depois de o teto estourar. Um handler novo nasce com teto sem precisar saber
+que este middleware existe.
 """
 
 from __future__ import annotations
@@ -22,8 +31,28 @@ from typing import Any, Awaitable, Callable
 from src.utils.log import logger
 
 
-class _CorpoGrandeDemais(Exception):
-    """Sinaliza estouro do teto de dentro do `receive` embrulhado."""
+class _CorpoGrandeDemais(BaseException):
+    """Sinaliza estouro do teto de dentro do `receive` embrulhado.
+
+    Herda de `BaseException` de propósito: `except Exception` — o que todo
+    handler deste servidor usa em volta do `await request.json()` — não o pega,
+    então o sentinel chega até aqui em vez de virar 500 no handler.
+    """
+
+
+def _achar_sentinel(erro: BaseException) -> bool:
+    """O sentinel pode chegar embrulhado em `BaseExceptionGroup`.
+
+    Quem atravessa um task group do anyio — o transporte MCP em streaming, por
+    exemplo — entrega as exceções das tarefas filhas dentro de um grupo. Um
+    `except _CorpoGrandeDemais` seco não pegaria, e a exceção vazaria para o
+    servidor ASGI com a requisição sem resposta.
+    """
+    if isinstance(erro, _CorpoGrandeDemais):
+        return True
+    if isinstance(erro, BaseExceptionGroup):
+        return any(_achar_sentinel(sub) for sub in erro.exceptions)
+    return False
 
 
 async def _responder_413(send: Callable[[dict], Awaitable[None]], limite: int) -> None:
@@ -70,55 +99,87 @@ class LimitRequestBodyMiddleware:
                 return False
         return False
 
+    def _logar_estouro(self, scope: dict, motivo: str) -> None:
+        logger.warning(
+            {
+                "event": "request_body_too_large",
+                "path": scope.get("path"),
+                "method": scope.get("method"),
+                "motivo": motivo,
+                "limite_bytes": self._max_bytes,
+            }
+        )
+
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)
 
         if self._declarado_acima_do_teto(scope.get("headers")):
-            logger.warning(
-                {
-                    "event": "request_body_too_large",
-                    "path": scope.get("path"),
-                    "method": scope.get("method"),
-                    "motivo": "content_length",
-                    "limite_bytes": self._max_bytes,
-                }
-            )
+            self._logar_estouro(scope, "content_length")
             return await _responder_413(send, self._max_bytes)
 
         lidos = 0
-        resposta_iniciada = False
+        estourou = False
+        handler_respondeu = False
+        trocado_por_413 = False
 
         async def receive_contando() -> dict:
-            nonlocal lidos
+            nonlocal lidos, estourou
+            if estourou:
+                # O handler engoliu o sentinel e voltou a pedir corpo. Não
+                # entregamos mais nada: parar de ler é a propriedade que este
+                # middleware existe para garantir.
+                raise _CorpoGrandeDemais
             mensagem = await receive()
             if mensagem.get("type") == "http.request":
                 lidos += len(mensagem.get("body") or b"")
                 if lidos > self._max_bytes:
+                    estourou = True
+                    # Logado aqui, e não no `except`, para o evento sair mesmo
+                    # que alguém no meio do caminho capture o sentinel.
+                    self._logar_estouro(scope, "streaming")
                     raise _CorpoGrandeDemais
             return mensagem
 
-        async def send_marcando(mensagem: dict) -> None:
-            nonlocal resposta_iniciada
+        async def send_filtrando(mensagem: dict) -> None:
+            nonlocal handler_respondeu, trocado_por_413
+            if trocado_por_413:
+                # Resto da resposta do handler, depois de já termos respondido
+                # 413 no lugar dela.
+                return
+            if estourou and not handler_respondeu:
+                # O handler tenta responder algo sobre um corpo que nunca
+                # terminou de chegar — 500, 200, tanto faz. Troca por 413.
+                trocado_por_413 = True
+                await _responder_413(send, self._max_bytes)
+                return
             if mensagem.get("type") == "http.response.start":
-                resposta_iniciada = True
+                handler_respondeu = True
             await send(mensagem)
 
         try:
-            return await self.app(scope, receive_contando, send_marcando)
-        except _CorpoGrandeDemais:
-            logger.warning(
-                {
-                    "event": "request_body_too_large",
-                    "path": scope.get("path"),
-                    "method": scope.get("method"),
-                    "motivo": "streaming",
-                    "limite_bytes": self._max_bytes,
-                }
-            )
-            if resposta_iniciada:
-                # O handler já começou a responder; não dá para trocar o status.
-                # A leitura parou, que é a propriedade que importa: a memória
-                # está limitada de qualquer forma.
-                return None
-            return await _responder_413(send, self._max_bytes)
+            await self.app(scope, receive_contando, send_filtrando)
+        except BaseException as erro:  # noqa: BLE001
+            # Só o estouro de corpo para aqui; todo o resto segue subindo.
+            if not _achar_sentinel(erro):
+                raise
+            if isinstance(erro, BaseExceptionGroup):
+                _, resto = erro.split(_CorpoGrandeDemais)
+                if resto is not None:
+                    # A requisição já vai ser respondida com 413; o que veio
+                    # junto no grupo é consequência do aborto da leitura, mas
+                    # some do traceback se não for registrado aqui.
+                    logger.warning(
+                        {
+                            "event": "request_body_too_large_com_erro_junto",
+                            "path": scope.get("path"),
+                            "erros": [repr(sub) for sub in resto.exceptions],
+                        }
+                    )
+
+        if estourou and not trocado_por_413 and not handler_respondeu:
+            await _responder_413(send, self._max_bytes)
+        # `handler_respondeu` sem `trocado_por_413` é o caso em que a resposta
+        # começou a sair antes do estouro: o status já foi para o cliente e não
+        # dá para trocar. A leitura parou de qualquer forma, que é o que limita
+        # a memória.

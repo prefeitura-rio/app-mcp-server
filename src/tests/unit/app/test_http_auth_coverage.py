@@ -20,6 +20,7 @@ import sys
 
 import httpx
 import pytest
+from loguru import logger as loguru_logger
 
 from src.health import state as health_state
 from src.middleware.require_auth import LEGACY_OBSERVE_PATHS, PUBLIC_PATHS
@@ -90,6 +91,31 @@ def _rotas(app):
             continue
         metodos = sorted((getattr(rota, "methods", None) or {"GET"}) - {"HEAD"})
         yield path, (metodos[0] if metodos else "GET")
+
+
+async def _corpo_em_chunks(total: int, pedaco: int = 64 * 1024):
+    """Corpo sem `Content-Length`.
+
+    O httpx só usa `Transfer-Encoding: chunked` quando o conteúdo é um
+    iterável — passar `bytes` faz ele declarar o tamanho, e aí quem recusa é o
+    outro caminho do middleware.
+    """
+    enviados = 0
+    while enviados < total:
+        atual = min(pedaco, total - enviados)
+        yield b"a" * atual
+        enviados += atual
+
+
+@pytest.fixture
+def eventos_de_log():
+    """Sink temporário do loguru, para afirmar o evento de telemetria."""
+    capturados = []
+    handler_id = loguru_logger.add(capturados.append, level="WARNING")
+    try:
+        yield capturados
+    finally:
+        loguru_logger.remove(handler_id)
 
 
 def test_o_provider_de_auth_existe(app_module):
@@ -178,6 +204,92 @@ async def test_corpo_acima_do_teto_e_recusado_antes_do_handler(app_module):
         resposta = await c.post("/consulta_debitos", content=b"a" * (limite + 1))
 
     assert resposta.status_code == 413
+
+    assert resposta.json()["error"] == "payload_too_large"
+
+
+@pytest.mark.asyncio
+async def test_corpo_chunked_acima_do_teto_devolve_413(app_module):
+    """O caminho sem `Content-Length` — o único que o teto de fato protege.
+
+    O teste acima manda `content=bytes`, e o httpx declara `Content-Length`: o
+    middleware recusa pelo header, antes de ler um byte. Quem não declara
+    tamanho cai no outro caminho, e ali o corpo passa pelo `receive` — que é
+    onde o handler entra no meio. Os cinco handlers de Dívida Ativa embrulham o
+    `await request.json()` em `except Exception`: enquanto o sentinel do
+    middleware herdava de `Exception`, esta requisição voltava 500 com
+    `{"error": ""}`, sem 413 e sem telemetria.
+    """
+    app = _asgi_app(app_module)
+    limite = app_module.env.MAX_REQUEST_BODY_BYTES
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        resposta = await c.post(
+            "/consulta_debitos", content=_corpo_em_chunks(limite + 1)
+        )
+
+    assert resposta.status_code == 413, (
+        f"chunked acima do teto devolveu {resposta.status_code}: {resposta.text!r}"
+    )
+    assert resposta.json()["error"] == "payload_too_large"
+
+
+@pytest.mark.asyncio
+async def test_estouro_em_chunks_registra_a_telemetria(app_module, eventos_de_log):
+    """O evento é o que permite ver o teto sendo batido em produção.
+
+    Sem ele, um cliente empurrando corpo grande em chunks fica indistinguível
+    de erro de aplicação no painel — que foi exatamente o efeito de o handler
+    engolir o sentinel e devolver 500.
+    """
+    app = _asgi_app(app_module)
+    limite = app_module.env.MAX_REQUEST_BODY_BYTES
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        await c.post("/consulta_debitos", content=_corpo_em_chunks(limite + 1))
+
+    estouros = [linha for linha in eventos_de_log if "request_body_too_large" in linha]
+    assert estouros, f"nenhum evento de estouro registrado: {eventos_de_log}"
+    assert any("streaming" in linha for linha in estouros), (
+        f"o evento saiu sem o motivo 'streaming': {estouros}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_nenhuma_rota_com_corpo_escapa_do_teto(app_module):
+    """A catraca: rota nova nasce com teto, sem depender do handler dela.
+
+    Mesmo espírito de `test_nenhuma_rota_nova_atende_sem_token` — enumera a
+    tabela de rotas em vez de conferir uma lista fixa. Um handler novo que
+    embrulhe tudo em `except Exception` (o padrão do arquivo) cai aqui.
+
+    Vai com token válido porque o teto é o middleware mais externo: sem token,
+    a camada de autenticação recusaria antes de alguém ler o corpo, e o 401
+    esconderia o que se quer medir. Nenhum handler chega a executar — o corpo
+    estoura dentro do `await request.json()`, antes de qualquer chamada à PGM.
+    """
+    app = _asgi_app(app_module)
+    limite = app_module.env.MAX_REQUEST_BODY_BYTES
+    cabecalhos = {"Authorization": "Bearer token-de-teste"}
+
+    alvos = [
+        path for path, metodo in _rotas(app) if metodo == "POST" and path not in ISENTAS
+    ]
+    assert alvos, "nenhuma rota POST enumerada — o teste não estaria testando nada"
+
+    resultados = {}
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        for path in alvos:
+            resposta = await c.post(
+                path, content=_corpo_em_chunks(limite + 1), headers=cabecalhos
+            )
+            resultados[path] = resposta.status_code
+
+    escaparam = {p: s for p, s in resultados.items() if s != 413}
+    assert not escaparam, f"rotas que não devolveram 413 em chunked: {escaparam}"
 
 
 def test_mcp_segue_embrulhado_pelo_wrapper_nativo(app_module):
