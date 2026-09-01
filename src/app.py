@@ -22,6 +22,7 @@ from src.config.settings import Settings
 from src.middleware.hybrid_verifier import HybridTokenVerifier
 from src.middleware.body_limit import LimitRequestBodyMiddleware
 from src.middleware.require_auth import RequireAuthOnAllRoutes
+from src.observability.metrics import setup_metrics
 from src.observability.tracing import ToolCallTracingMiddleware, setup_tracing
 from src.health.checks import register_default_checks
 from src.health.external_tables import run_probe_loop
@@ -188,11 +189,15 @@ def create_app() -> FastMCP:
     _auth_provider = auth_provider
 
     # Inicializa o servidor FastMCP
-    # Observabilidade: habilita tracing OpenTelemetry (exportando para o
-    # SigNoz) se OTEL_EXPORTER_OTLP_TRACES_ENDPOINT estiver configurado.
-    # `setup_tracing()` é seguro mesmo sem configuração (retorna False).
+    # Observabilidade: habilita tracing e métricas OpenTelemetry (exportando
+    # para o SigNoz) se OTEL_EXPORTER_OTLP_TRACES_ENDPOINT estiver
+    # configurado. Ambos os `setup_*()` são seguros mesmo sem configuração
+    # (retornam False) e independentes entre si — um pode ficar habilitado
+    # sem o outro se só um deles falhar ao configurar.
+    tracing_enabled = setup_tracing()
+    metrics_enabled = setup_metrics()
     mcp_middleware = []
-    if setup_tracing() and not IS_LOCAL:
+    if (tracing_enabled or metrics_enabled) and not IS_LOCAL:
         mcp_middleware.append(ToolCallTracingMiddleware())
 
     @asynccontextmanager

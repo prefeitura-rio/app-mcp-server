@@ -1,14 +1,20 @@
 """Testes das rotas de health (src/health/routes.py).
 
-A garantia central verificada aqui: uma dependência fora do ar aparece em
-`/health/detail`, mas NÃO faz `/health` nem `/health/ready` retornarem erro —
-caso contrário o kubelet mataria o pod (ou o tiraria do balanceador) por uma
-falha que quebra apenas parte das tools.
+Duas garantias centrais verificadas aqui:
+
+1. Uma dependência não-crítica fora do ar (BigQuery, Keycloak, ...) aparece
+   em `/health/detail`, mas NÃO faz `/health` nem `/health/ready` retornarem
+   erro — do contrário o kubelet mataria o pod (ou o tiraria do balanceador)
+   por uma falha que quebra apenas parte das tools.
+2. Redis fora do ar (a única dependência sem fallback em produção) faz
+   `/health/ready` retornar 503 sem afetar `/health` — ver
+   `src/health/state.py` para o porquê deste comportamento mudou na Task 7.
 """
 
 import json
 import sys
 import types
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,7 +25,7 @@ from src.health.registry import HealthRegistry
 
 @pytest.fixture(autouse=True)
 def fake_env(monkeypatch):
-    env = types.SimpleNamespace(ENVIRONMENT="test")
+    env = types.SimpleNamespace(ENVIRONMENT="test", IS_LOCAL=True)
     monkeypatch.setattr(sys.modules["src.config"], "env", env, raising=False)
     monkeypatch.setitem(sys.modules, "src.config.env", env)
     return env
@@ -53,11 +59,30 @@ async def test_health_e_sempre_ok():
 
 @pytest.mark.asyncio
 async def test_ready_reflete_o_estado_do_processo():
+    """Ambiente local (`fake_env.IS_LOCAL=True`) não sonda Redis — só o flag
+    de processo é relevante aqui. O caminho de sondagem tem cobertura própria
+    em `src/tests/unit/health/test_state.py`."""
     state.set_ready(False)
-    assert (await routes.ready(None)).status_code == 503
+    body = _body(await routes.ready(None))
+    assert body == {"status": "not_ready", "reason": "starting"}
 
     state.set_ready(True)
-    assert (await routes.ready(None)).status_code == 200
+    assert _body(await routes.ready(None)) == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_ready_retorna_503_com_motivo_quando_redis_esta_fora(monkeypatch):
+    state.set_ready(True)
+    monkeypatch.setattr(
+        routes,
+        "evaluate_readiness",
+        AsyncMock(return_value=(False, "redis_unavailable")),
+    )
+
+    response = await routes.ready(None)
+
+    assert response.status_code == 503
+    assert _body(response) == {"status": "not_ready", "reason": "redis_unavailable"}
 
 
 @pytest.mark.asyncio
@@ -111,16 +136,25 @@ async def test_check_pulado_nao_degrada_o_agregado(registry):
 
 
 @pytest.mark.asyncio
-async def test_dependencia_fora_nao_derruba_liveness_nem_readiness(registry):
-    async def down() -> CheckStatus:
-        raise ConnectionError("Error 111 connecting to redis://:senha@10.0.0.1:6379")
+async def test_dependencia_nao_critica_fora_nao_derruba_liveness_nem_readiness(
+    registry,
+):
+    """BigQuery/Keycloak/etc. só aparecem em `/health/detail`: sua queda
+    degrada uma tool específica, não o processo inteiro, então não devem
+    gatear tráfego. Isso é diferente do Redis, que passou a gatear
+    `/health/ready` a partir da Task 7 — ver `test_state.py`."""
 
-    registry.register("redis", down, critical=True)
+    async def down() -> CheckStatus:
+        raise ConnectionError("Error 111 connecting to bigquery.googleapis.com")
+
+    registry.register("bigquery", down, critical=True)
     state.set_ready(True)
 
     assert _body(await routes.detail(None))["status"] == "degraded"
-    # A garantia que sustenta o desenho inteiro:
     assert (await routes.health(None)).status_code == 200
+    # `IS_LOCAL=True` (fake_env) faz a readiness ignorar Redis por completo;
+    # o ponto aqui é que o check registrado acima (não-Redis) nunca é
+    # sequer consultado pela readiness.
     assert (await routes.ready(None)).status_code == 200
 
 

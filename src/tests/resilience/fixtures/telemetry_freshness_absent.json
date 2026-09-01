@@ -1,0 +1,4 @@
+{
+  "_comment": "No time series returned at all (collector never received anything) - alertOnAbsent=true must fire this the same as a below-threshold series.",
+  "span_count": []
+}
