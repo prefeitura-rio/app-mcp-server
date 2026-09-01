@@ -21,7 +21,6 @@ from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.hybrid_verifier import HybridTokenVerifier
 from src.middleware.body_limit import LimitRequestBodyMiddleware
-from src.middleware.rate_limit import montar_rate_limit
 from src.middleware.require_auth import RequireAuthOnAllRoutes
 from src.observability.tracing import ToolCallTracingMiddleware, setup_tracing
 from src.health.checks import register_default_checks
@@ -195,19 +194,6 @@ def create_app() -> FastMCP:
     mcp_middleware = []
     if setup_tracing() and not IS_LOCAL:
         mcp_middleware.append(ToolCallTracingMiddleware())
-
-    # Teto de taxa por identidade. Cobre `/mcp`, que e onde a cadeia de
-    # middleware do FastMCP roda -- as rotas de `custom_route` ficam fora, pelo
-    # mesmo motivo que obrigou `RequireAuthOnAllRoutes` a ser ASGI puro.
-    rate_limit = montar_rate_limit(
-        rps=env.MCP_RATE_LIMIT_RPS, burst=env.MCP_RATE_LIMIT_BURST
-    )
-    if rate_limit is not None:
-        mcp_middleware.append(rate_limit)
-        logger.info(
-            f"Rate limit por identidade ligado: {env.MCP_RATE_LIMIT_RPS} rps, "
-            f"burst {rate_limit.burst_capacity}."
-        )
 
     @asynccontextmanager
     async def health_lifespan(server):
