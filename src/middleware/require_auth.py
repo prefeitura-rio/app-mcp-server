@@ -45,6 +45,9 @@ PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/health/ready"})
 # registra essas rotas (só passaria a registrar se `base_url` fosse
 # configurado), mas a isenção fica aqui para que ligar OAuth não reabra o
 # problema por um caminho lateral.
+#
+# A comparação é por segmento de caminho, não por `startswith` seco — ver
+# `_sob_o_prefixo`.
 DELEGATED_PREFIXES: tuple[str, ...] = ("/mcp", "/.well-known/")
 
 # Rotas que já existiam quando a autenticação passou a ser exigida, e cujos
@@ -95,6 +98,20 @@ def _bearer_token(headers: Iterable[tuple[bytes, bytes]]) -> str | None:
         credencial = credencial.strip()
         return credencial or None
     return None
+
+
+def _sob_o_prefixo(path: str, prefixo: str) -> bool:
+    """Verdadeiro só quando `path` é o prefixo ou desce dele por uma barra.
+
+    `path.startswith("/mcp")` casaria também com `/mcp-debug` e `/mcpx`. Uma
+    `custom_route` com um desses nomes nasceria isenta *deste* middleware sem
+    estar sob o wrapper nativo do FastMCP, que embrulha o `/mcp` exato — o
+    mesmo buraco que este arquivo existe para fechar, reaberto por um caminho
+    lateral. `test_nenhuma_rota_nova_atende_sem_token` pegaria o caso, mas
+    teste é rede de segurança: a fronteira tem que estar no código.
+    """
+    base = prefixo.rstrip("/")
+    return path == base or path.startswith(base + "/")
 
 
 def _client_ip(scope: dict) -> str | None:
@@ -199,7 +216,9 @@ class RequireAuthOnAllRoutes:
     def _isento(self, path: str) -> bool:
         if path in self._public_paths:
             return True
-        return any(path.startswith(prefixo) for prefixo in self._delegated_prefixes)
+        return any(
+            _sob_o_prefixo(path, prefixo) for prefixo in self._delegated_prefixes
+        )
 
     async def _autenticado(self, token: str | None) -> bool:
         if token is None:

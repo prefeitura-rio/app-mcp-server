@@ -155,6 +155,44 @@ async def test_mcp_e_delegado_sem_segunda_verificacao():
     assert verificador.vistos == []
 
 
+@pytest.mark.parametrize(
+    "rota", ["/mcp-debug", "/mcpx", "/mcp_interno", "/.well-knownx"]
+)
+@pytest.mark.asyncio
+async def test_vizinho_do_prefixo_delegado_nao_e_isento(rota):
+    """A isenção é por segmento de caminho, não por prefixo de string.
+
+    Com `startswith` seco, uma `custom_route` chamada `/mcp-debug` ficaria
+    isenta deste middleware sem estar sob o wrapper nativo do FastMCP, que
+    embrulha o `/mcp` exato: nasceria pública, que é exatamente o defeito que
+    o middleware existe para corrigir.
+    """
+    async with _cliente(verifier=_VerificadorFalso()) as c:
+        r = await c.post(rota)
+    assert r.status_code == 401
+    assert _app_alvo.alcancada is False
+
+
+@pytest.mark.parametrize(
+    "rota",
+    [
+        "/mcp",
+        "/mcp/",
+        "/mcp/messages",
+        "/.well-known/oauth-protected-resource",
+    ],
+)
+@pytest.mark.asyncio
+async def test_o_que_desce_do_prefixo_segue_delegado(rota):
+    """O outro lado da mesma regra: apertar demais quebraria o transporte MCP
+    e a descoberta de OAuth, que é justamente o que a delegação protege."""
+    verificador = _VerificadorFalso()
+    async with _cliente(verifier=verificador) as c:
+        r = await c.post(rota)
+    assert r.status_code == 200
+    assert verificador.vistos == []
+
+
 @pytest.mark.asyncio
 async def test_verificador_que_explode_nega():
     """Fail-closed: falha ao verificar nunca vira acesso concedido."""
