@@ -1,9 +1,12 @@
 import os
 import json
+import asyncio
 from pathlib import Path
 from enum import Enum
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
+
+from loguru import logger
 
 from src.tools.multi_step_service.core.models import ServiceState, ServiceMetadata
 from src.config import env
@@ -108,9 +111,45 @@ class RedisBackend(StorageBackend):
     Backend de persistência usando Redis (async).
     Suporta URLs no formato: redis://:password@host:port/db
     Chaves: user_id
+
+    Reconexão/retry (Task 6 do plano de resiliência do MCP):
+    O Redis em produção é servido por Sentinel + HAProxy (infra/superapp,
+    Task 5): quando o primary cai, o Sentinel demora até
+    `down-after-milliseconds` (10s, ver
+    `modules/deployments/yamls/redis-ha-mcp/values.yaml` no repo de infra)
+    para declará-lo indisponível e promover uma réplica; o HAProxy então
+    redireciona `mcp-redis:6379` para o novo primary. Durante essa janela o
+    cliente recebe `redis.ConnectionError` do mesmo endpoint estável
+    (`REDIS_URL` não muda — não há descoberta de Sentinel/cluster aqui).
+
+    Este backend absorve essa janela com um orçamento de retry exponencial
+    limitado: apenas `redis.ConnectionError` é retentado (outros erros, como
+    de sintaxe de comando, não se resolvem tentando de novo e propagam na
+    hora). Esgotado o orçamento, o `ConnectionError` original é relançado —
+    o mesmo tipo que os chamadores (`CompositeBackend`, `health_check`) já
+    tratavam antes desta mudança, então nenhum caminho de erro existente
+    precisou mudar.
     """
 
-    def __init__(self, redis_url: str, ttl_seconds: Optional[int] = None):
+    # Tentativas totais (1 inicial + N retentativas) e backoff exponencial
+    # com teto. Com os padrões abaixo: 1s, 2s, 4s, 8s de espera acumulada
+    # (~15s) antes de desistir — acima dos 10s de `down-after-milliseconds`
+    # do Sentinel, com margem para a promoção da réplica e a atualização do
+    # HAProxy. Não depende de tempo real em teste: os testes injetam
+    # `max_attempts`/`base_delay_seconds` menores e substituem
+    # `asyncio.sleep`.
+    DEFAULT_MAX_ATTEMPTS = 5
+    DEFAULT_BASE_DELAY_SECONDS = 1.0
+    DEFAULT_MAX_DELAY_SECONDS = 8.0
+
+    def __init__(
+        self,
+        redis_url: str,
+        ttl_seconds: Optional[int] = None,
+        max_attempts: Optional[int] = None,
+        base_delay_seconds: Optional[float] = None,
+        max_delay_seconds: Optional[float] = None,
+    ):
         """
         Inicializa backend Redis a partir de uma URL (async).
 
@@ -120,6 +159,13 @@ class RedisBackend(StorageBackend):
                       - redis://localhost:6379/0
                       - redis://:mypassword@localhost:6379/0
                       - redis://host:6379
+            ttl_seconds: TTL aplicado às chaves gravadas (opcional).
+            max_attempts: Tentativas totais por operação diante de
+                `redis.ConnectionError` (padrão `DEFAULT_MAX_ATTEMPTS`).
+            base_delay_seconds: Espera antes da 2ª tentativa; dobra a cada
+                nova falha (padrão `DEFAULT_BASE_DELAY_SECONDS`).
+            max_delay_seconds: Teto da espera exponencial (padrão
+                `DEFAULT_MAX_DELAY_SECONDS`).
 
         Raises:
             ImportError: Se biblioteca redis não estiver instalada
@@ -131,6 +177,17 @@ class RedisBackend(StorageBackend):
 
         # Usa from_url do redis.asyncio que já faz todo o parsing
         self.ttl_seconds = ttl_seconds
+        self.max_attempts = max_attempts or self.DEFAULT_MAX_ATTEMPTS
+        self.base_delay_seconds = (
+            base_delay_seconds
+            if base_delay_seconds is not None
+            else self.DEFAULT_BASE_DELAY_SECONDS
+        )
+        self.max_delay_seconds = (
+            max_delay_seconds
+            if max_delay_seconds is not None
+            else self.DEFAULT_MAX_DELAY_SECONDS
+        )
         self.client = redis.Redis.from_url(
             redis_url,
             decode_responses=True,
@@ -141,9 +198,53 @@ class RedisBackend(StorageBackend):
     def _get_key(self, user_id: str) -> str:
         return user_id
 
+    async def _call_with_retry(
+        self, operation: str, func: Callable[..., Any], *args, **kwargs
+    ):
+        """Executa uma chamada Redis com retry exponencial limitado.
+
+        Só `redis.ConnectionError` é retentado — é o sintoma da janela de
+        failover do Sentinel/HAProxy. Qualquer outro erro propaga na
+        primeira falha, sem retry nem sleep. Esgotado `self.max_attempts`,
+        o `ConnectionError` original é relançado (não é convertido nem
+        engolido).
+        """
+        # `__init__` já falhou com ImportError se `redis` estivesse None;
+        # nenhuma instância existe sem essa garantia.
+        assert redis is not None
+        last_error: Optional[Exception] = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return await func(*args, **kwargs)
+            except redis.ConnectionError as exc:
+                last_error = exc
+                if attempt >= self.max_attempts:
+                    logger.error(
+                        f"Redis {operation}: orçamento de {self.max_attempts} "
+                        f"tentativa(s) esgotado, desistindo. Último erro: {exc}"
+                    )
+                    raise
+                delay = min(
+                    self.base_delay_seconds * (2 ** (attempt - 1)),
+                    self.max_delay_seconds,
+                )
+                logger.warning(
+                    f"Redis {operation}: tentativa {attempt}/{self.max_attempts} "
+                    f"falhou com ConnectionError ({exc}); nova tentativa em "
+                    f"{delay}s"
+                )
+                await asyncio.sleep(delay)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(
+            f"Redis {operation}: loop de retry terminou sem executar "
+            f"nenhuma tentativa (max_attempts={self.max_attempts})"
+        )
+
     async def load_user_data(self, user_id: str) -> Dict[str, Any]:
         key = self._get_key(user_id)
-        data = await self.client.get(key)  # type: ignore[arg-type]
+        data = await self._call_with_retry("get", self.client.get, key)  # type: ignore[arg-type]
         if data:
             return json.loads(data)  # type: ignore[arg-type]
         return {}
@@ -151,16 +252,18 @@ class RedisBackend(StorageBackend):
     async def save_user_data(self, user_id: str, data: Dict[str, Any]) -> None:
         key = self._get_key(user_id)
         serialized = json.dumps(data, ensure_ascii=False)
-        await self.client.set(name=key, value=serialized, ex=self.ttl_seconds)
+        await self._call_with_retry(
+            "set", self.client.set, name=key, value=serialized, ex=self.ttl_seconds
+        )
 
     async def remove_user_data(self, user_id: str) -> bool:
         key = self._get_key(user_id)
-        deleted = await self.client.delete(key)
+        deleted = await self._call_with_retry("delete", self.client.delete, key)
         return deleted > 0  # type: ignore[operator]
 
     async def health_check(self) -> bool:
         try:
-            result = await self.client.ping()  # type: ignore[misc]
+            result = await self._call_with_retry("ping", self.client.ping)  # type: ignore[misc]
             return bool(result)
         except Exception:
             return False

@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import time
 from concurrent.futures import Executor, Future
+from contextlib import nullcontext
 from typing import Any, Callable, TypeVar
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -28,6 +30,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Status, StatusCode
 
 import src.config.env as env
+from src.observability import metrics
 from src.utils.log import logger
 
 # Nome do tracer usado em toda a aplicação para spans de tool call.
@@ -196,16 +199,22 @@ def _extract_user_id(arguments: dict[str, Any] | None) -> str:
 
 
 class ToolCallTracingMiddleware(Middleware):
-    """Middleware do FastMCP que gera um span por chamada de tool.
+    """Middleware do FastMCP que instrumenta cada chamada de tool.
 
-    Atributos registrados no span:
-        - `mcp.tool.name`: nome da tool chamada.
-        - `mcp.tool.user_id`: melhor esforço de extração do usuário (ou
-          "unknown" se não disponível).
-        - `mcp.tool.success`: True/False conforme o resultado da chamada.
+    Dois sinais independentes, cada um opt-in por si só (um pode estar
+    habilitado sem o outro, dependendo do que `setup_tracing()`/
+    `setup_metrics()` conseguiram configurar):
 
-    Se o tracing não foi habilitado (`setup_tracing()` nunca retornou True),
-    este middleware é um passthrough e não adiciona overhead relevante.
+    - Trace: um span `mcp.tool_call` com atributos de nome, usuário
+      (melhor esforço; ver `_extract_user_id`) e sucesso/falha.
+    - Métricas de baixa cardinalidade (`src.observability.metrics`):
+      contagem, duração e trabalho-em-andamento por `mcp.tool.name` +
+      `status`, e latência/falha de dependência quando aplicável — nunca o
+      `user_id` ou texto de exceção, que ficam só no span (consumido em
+      ambiente de trace, não em séries temporais/dashboards agregados).
+
+    Se nem tracing nem métricas estiverem habilitados, este middleware é um
+    passthrough sem overhead relevante.
     """
 
     async def on_call_tool(
@@ -213,23 +222,39 @@ class ToolCallTracingMiddleware(Middleware):
         context: MiddlewareContext[CallToolRequestParams],
         call_next: CallNext[CallToolRequestParams, Any],
     ) -> Any:
-        if not _tracing_enabled:
+        if not _tracing_enabled and not metrics.is_metrics_enabled():
             return await call_next(context)
 
         tool_name = context.message.name
-        user_id = _extract_user_id(context.message.arguments)
+        started = time.monotonic()
 
-        tracer = get_tracer()
-        with tracer.start_as_current_span("mcp.tool_call") as span:
-            span.set_attribute("mcp.tool.name", tool_name)
-            span.set_attribute("mcp.tool.user_id", user_id)
+        span_context = (
+            get_tracer().start_as_current_span("mcp.tool_call")
+            if _tracing_enabled
+            else nullcontext()
+        )
+
+        with metrics.track_active_tool_call(tool_name), span_context as span:
+            if span is not None:
+                user_id = _extract_user_id(context.message.arguments)
+                span.set_attribute("mcp.tool.name", tool_name)
+                span.set_attribute("mcp.tool.user_id", user_id)
+
             try:
                 result = await call_next(context)
-                span.set_attribute("mcp.tool.success", True)
-                span.set_status(Status(StatusCode.OK))
+                if span is not None:
+                    span.set_attribute("mcp.tool.success", True)
+                    span.set_status(Status(StatusCode.OK))
+                metrics.record_tool_call(
+                    tool_name, success=True, duration_s=time.monotonic() - started
+                )
                 return result
             except Exception as e:
-                span.set_attribute("mcp.tool.success", False)
-                span.record_exception(e)
-                span.set_status(Status(StatusCode.ERROR, str(e)))
+                if span is not None:
+                    span.set_attribute("mcp.tool.success", False)
+                    span.record_exception(e)
+                    span.set_status(Status(StatusCode.ERROR, str(e)))
+                metrics.record_tool_call(
+                    tool_name, success=False, duration_s=time.monotonic() - started
+                )
                 raise

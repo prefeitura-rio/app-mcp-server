@@ -6,7 +6,11 @@ metadata:
   annotations:
     secrets.infisical.com/auto-reload: "true"
 spec:
-  replicas: 2
+  # `replicas` fica fora do spec pelo mesmo motivo do prod: o HPA abaixo
+  # mira este Rollout via `/scale` e fixar um valor aqui entraria em
+  # conflito com o autoscaler a cada sync do ArgoCD. `previewReplicaCount`
+  # abaixo continua fixo — o HPA só controla a ReplicaSet ativa/estável do
+  # blue-green (comportamento documentado do Argo Rollouts).
   revisionHistoryLimit: 3
   selector:
     matchLabels:
@@ -23,6 +27,22 @@ spec:
       labels:
         app: mcp
     spec:
+      # Mesmo racional de espalhamento do prod (ver k8s/prod/resources.yaml):
+      # soft constraint porque o node pool compartilhado autoescala com piso
+      # de 3 nós entre 4 zonas.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: mcp
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: mcp
       containers:
         - name: mcp
           image: ghcr.io/prefeitura-rio/app-mcp-server:eef9fd15a4e84d4b525cf85e4e8eaa112f17a566@sha256:e7477a2e4d34717d701515dcd17b3e7a3c9b782eb7f18f6513427cf640ce5649  # Updated by deploy-staging workflow
@@ -45,10 +65,16 @@ spec:
           envFrom:
             - secretRef:
                 name: mcp-secrets
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
           resources:
             requests:
+              cpu: "250m"
               memory: "512Mi"
             limits:
+              cpu: "2000m"
               memory: "1536Mi"
           # Cobre a inicialização, que carrega langgraph/geopandas/pandas e
           # roda o preflight de configuração. Enquanto não passar, liveness e
@@ -73,11 +99,16 @@ spec:
             timeoutSeconds: 5
             successThreshold: 1
             failureThreshold: 3
-          # Readiness reflete "inicialização concluída" — também sem depender
-          # de serviços externos. O estado das dependências fica em
-          # /health/detail, que nunca retorna 503. Apontar para uma rota
-          # própria desacopla as duas semânticas: verificações acrescentadas
-          # ao readiness no futuro não poderão matar o pod.
+          # Readiness (Task 7 do plano de resiliência do MCP): inicialização
+          # concluída E Redis alcançável dentro de um teto curto (2s, ver
+          # `src/health/state.py::READINESS_REDIS_TIMEOUT_S`) — nunca
+          # dependência de exportação de telemetria/coletor OTel. Mesmo
+          # racional do prod (ver `k8s/prod/resources.yaml`): com o HPA/PDB
+          # abaixo (mínimo de 2 réplicas, PDB permitindo perder 1), tirar SÓ
+          # o pod sem Redis do Service é o comportamento correto. Falha:
+          # `failureThreshold: 3` × `periodSeconds: 30` (~90s) marca o pod
+          # NotReady sem reiniciá-lo; o próximo sucesso religa o pod ao
+          # Service assim que o Redis volta.
           readinessProbe:
             httpGet:
               path: /health/ready
@@ -87,17 +118,62 @@ spec:
             successThreshold: 1
             failureThreshold: 3
       restartPolicy: Always
-      # Orçamento de encerramento, explícito porque o flush do buffer de escrita
-      # do BigQuery depende dele. Em SIGTERM, `src/utils/bigquery.py` drena o
-      # buffer de forma síncrona com teto de BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS
-      # (5s) por chamada de insert, uma por tabela em buffer. Estourar este
-      # prazo significa SIGKILL no meio do flush — e aí não sobra nem a DLQ,
-      # que é justamente a rede que o CHATR-103 construiu.
-      #
-      # 60s dá folga sobre o pior caso observável (4 tabelas x 5s = 20s) sem
-      # atrasar rollout de forma perceptível: o pod sai assim que termina, o
-      # valor é teto e não espera.
+      # Orçamento de encerramento único para todo o ciclo de shutdown do pod
+      # (mesmo racional do prod, ver `k8s/prod/resources.yaml`): o shutdown
+      # lifespan de `src/app.py` não roda em SIGTERM, então o `preStop: sleep
+      # 10` do container acima é quem dá tempo de o Endpoint/mesh parar de
+      # rotear tráfego novo para o pod antes do sinal chegar ao processo.
+      # Depois do SIGTERM, `src/utils/bigquery.py` drena o buffer de escrita
+      # de forma síncrona com teto de BIGQUERY_SHUTDOWN_TIMEOUT_SECONDS (5s)
+      # por chamada de insert, uma por tabela em buffer — estourar o grace
+      # period significa SIGKILL no meio do flush e perder a rede da DLQ que
+      # o CHATR-103 construiu. 60s cobre os dois: 10s de preStop + até 20s de
+      # flush (pior caso observável) com folga.
       terminationGracePeriodSeconds: 60
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mcp-hpa
+  labels:
+    app: mcp
+spec:
+  scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    name: mcp
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 30
+        - type: Pods
+          value: 2
+          periodSeconds: 30
 
 ---
 apiVersion: policy/v1
