@@ -12,6 +12,8 @@ MAIN_PATH = PROJECT_ROOT / "src" / "main.py"
 # chega a `mcp.run(middleware=...)`.
 MIDDLEWARE_MONTADO = ["middleware-montado"]
 
+PORTA_DO_STUB = 18080
+
 
 def run_main_with_env(monkeypatch, is_local: bool):
     app_module = types.ModuleType("src.app")
@@ -25,6 +27,10 @@ def run_main_with_env(monkeypatch, is_local: bool):
     env_module = types.ModuleType("src.config.env")
     env_module.IS_LOCAL = is_local
     env_module.MCP_STATELESS_HTTP = not is_local
+    # Valor arbitrário de propósito: o que se testa aqui é que `main.py`
+    # repassa `env.SERVER_PORT`, não qual porta ele escolhe. A porta efetiva
+    # bater com a do manifesto é assunto de `test_porta_privilegiada.py`.
+    env_module.SERVER_PORT = PORTA_DO_STUB
 
     src_pkg = types.ModuleType("src")
     src_pkg.__path__ = [str(PROJECT_ROOT / "src")]
@@ -65,7 +71,7 @@ def test_main_runs_streamable_http_when_not_local(monkeypatch):
     app_module.mcp.run.assert_called_once_with(
         transport="streamable-http",
         host="0.0.0.0",
-        port=80,
+        port=PORTA_DO_STUB,
         path="/mcp",
         middleware=MIDDLEWARE_MONTADO,
         stateless_http=True,

@@ -169,6 +169,23 @@ MAX_REQUEST_BODY_BYTES = int(
     getenv_or_action("MAX_REQUEST_BODY_BYTES", default="1048576", action="ignore")
 )
 
+# Porta em que o servidor HTTP escuta dentro do container.
+#
+# 8080 e nao 80 porque o processo roda como usuario nao-root (`runAsNonRoot`).
+# Bind abaixo de 1024 exige CAP_NET_BIND_SERVICE, que o `capabilities.drop:
+# [ALL]` do securityContext remove -- e o `allowPrivilegeEscalation: false` do
+# mesmo bloco liga o `no_new_privs`, que impede recuperar a capability por file
+# capability (`setcap`). Nao ha combinacao que devolva a porta 80 a um processo
+# nao-root sem afrouxar um dos dois.
+#
+# Atencao a uma pegadinha: o Docker seta `ip_unprivileged_port_start=0` nos
+# containers, entao a porta 80 liga normalmente como nao-root numa prova local
+# -- e o Kubernetes nao seta esse sysctl, entao o mesmo bind falha no cluster.
+# Um teste local com a porta 80 daria verde e o pod morreria no deploy.
+#
+# O `Service` continua publicando a porta 80; o que muda e o `targetPort`.
+SERVER_PORT = int(getenv_or_action("SERVER_PORT", default="8080", action="ignore"))
+
 LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
 
 # Configuração para temas válidos da ferramenta de equipamentos

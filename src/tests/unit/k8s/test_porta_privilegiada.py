@@ -79,8 +79,13 @@ def _tem_cap_de_bind(container):
     return True
 
 
-def _porta_do_main():
-    """Extrai a porta passada a `mcp.run()` em `src/main.py`, sem importar."""
+def _argumento_port_do_main():
+    """O que `src/main.py` passa em `mcp.run(port=...)`, sem importar o módulo.
+
+    Devolve `int` se for literal, ou o nome do atributo se for indireto
+    (`env.SERVER_PORT`) — é o segundo caso desde que o processo passou a rodar
+    como não-root.
+    """
     origem = (PROJECT_ROOT / "src" / "main.py").read_text(encoding="utf-8")
     for no in ast.walk(ast.parse(origem)):
         if not isinstance(no, ast.Call):
@@ -89,9 +94,45 @@ def _porta_do_main():
         if not (isinstance(alvo, ast.Attribute) and alvo.attr == "run"):
             continue
         for argumento in no.keywords:
-            if argumento.arg == "port" and isinstance(argumento.value, ast.Constant):
+            if argumento.arg != "port":
+                continue
+            if isinstance(argumento.value, ast.Constant):
                 return argumento.value.value
+            if isinstance(argumento.value, ast.Attribute):
+                return argumento.value.attr
     return None
+
+
+def _default_do_env(nome):
+    """O `default=` de `getenv_or_action` na atribuição de `nome` em env.py.
+
+    O default é a porta efetiva em qualquer ambiente que não sobrescreva a
+    variável — e nenhum manifesto deste repositório a sobrescreve.
+    """
+    origem = (PROJECT_ROOT / "src" / "config" / "env.py").read_text(encoding="utf-8")
+    for no in ast.walk(ast.parse(origem)):
+        if not isinstance(no, ast.Assign):
+            continue
+        nomes = {alvo.id for alvo in no.targets if isinstance(alvo, ast.Name)}
+        if nome not in nomes:
+            continue
+        for chamada in ast.walk(no.value):
+            if not isinstance(chamada, ast.Call):
+                continue
+            for argumento in chamada.keywords:
+                if argumento.arg == "default" and isinstance(
+                    argumento.value, ast.Constant
+                ):
+                    return int(argumento.value.value)
+    return None
+
+
+def _porta_do_codigo():
+    """Porta em que o servidor de fato sobe, atravessando a indireção."""
+    porta = _argumento_port_do_main()
+    if porta is None or isinstance(porta, int):
+        return porta
+    return _default_do_env(porta)
 
 
 @pytest.mark.parametrize("manifesto", MANIFESTOS)
@@ -120,10 +161,10 @@ def test_porta_privilegiada_exige_a_capability_de_bind(manifesto):
 
 @pytest.mark.parametrize("manifesto", MANIFESTOS)
 def test_porta_do_codigo_bate_com_o_manifesto(manifesto):
-    porta_codigo = _porta_do_main()
+    porta_codigo = _porta_do_codigo()
     assert porta_codigo is not None, (
-        "não achei `port=` em `mcp.run()` de src/main.py — se a porta virou "
-        "configurável, este teste precisa acompanhar"
+        "não achei a porta de `mcp.run()` em src/main.py — se ela mudou de "
+        "forma, este teste precisa acompanhar"
     )
 
     portas_manifesto = {
@@ -132,7 +173,86 @@ def test_porta_do_codigo_bate_com_o_manifesto(manifesto):
         for porta in container.get("ports") or ()
     }
     assert porta_codigo in portas_manifesto, (
-        f"src/main.py escuta em {porta_codigo}, mas {manifesto} declara "
+        f"o código escuta em {porta_codigo}, mas {manifesto} declara "
         f"{sorted(portas_manifesto)}. A probe bate na porta do manifesto: "
         f"divergir derruba o rollout."
     )
+
+
+@pytest.mark.parametrize("manifesto", MANIFESTOS)
+def test_probes_batem_na_porta_do_codigo(manifesto):
+    """A probe é quem descobre a divergência — em produção, com o pod já morto.
+
+    `containerPort` é declaração e não abre porta nenhuma; o que o kubelet
+    consulta é o `port` do `httpGet`. Os dois podem divergir sem nenhum outro
+    teste notar.
+    """
+    porta_codigo = _porta_do_codigo()
+    for nome, container in _containers_com_porta(manifesto):
+        for chave in ("startupProbe", "livenessProbe", "readinessProbe"):
+            probe = container.get(chave)
+            if not probe or "httpGet" not in probe:
+                continue
+            porta_probe = probe["httpGet"].get("port")
+            assert porta_probe == porta_codigo, (
+                f"{manifesto}: {chave} de '{container.get('name', nome)}' bate "
+                f"na porta {porta_probe}, mas o servidor escuta em "
+                f"{porta_codigo}."
+            )
+
+
+# Caminhos que o processo escreve em runtime e que, com a raiz somente leitura,
+# precisam cair dentro de um volume.
+#
+# `/app/data/bq_dlq` é `DATA_DIR/bq_dlq` (src/utils/bigquery.py). `/tmp` é para
+# onde o Dockerfile aponta o `HOME`, porque o usuário 10001 foi criado sem home.
+CAMINHOS_DE_ESCRITA = ("/app/data/bq_dlq", "/tmp")
+
+
+def _cobre(mount_paths, caminho):
+    """Verdadeiro se algum `mountPath` é o caminho ou um ancestral dele."""
+    return any(
+        caminho == ponto or caminho.startswith(ponto.rstrip("/") + "/")
+        for ponto in mount_paths
+    )
+
+
+@pytest.mark.parametrize("manifesto", MANIFESTOS)
+def test_raiz_somente_leitura_tem_volume_em_todo_caminho_de_escrita(manifesto):
+    """`readOnlyRootFilesystem: true` sem volume é escrita que falha calada.
+
+    A DLQ do BigQuery é o caso ruim: ela só é acionada quando o Redis está
+    fora, então um `mountPath` faltando não aparece em deploy nenhum — aparece
+    no dia do incidente, transformando degradação em perda de dado.
+    """
+    for doc in _carregar(manifesto):
+        if doc.get("kind") not in KINDS_COM_POD:
+            continue
+        pod_spec = doc["spec"]["template"]["spec"]
+        volumes = {volume["name"] for volume in pod_spec.get("volumes") or ()}
+
+        for container in pod_spec.get("containers", []):
+            contexto = container.get("securityContext") or {}
+            if not contexto.get("readOnlyRootFilesystem"):
+                continue
+
+            nome_container = container.get("name", "?")
+            montagens = container.get("volumeMounts") or ()
+            pontos = [m["mountPath"] for m in montagens]
+
+            for montagem in montagens:
+                assert montagem["name"] in volumes, (
+                    f"{manifesto}: '{nome_container}' monta "
+                    f"'{montagem['name']}', que não está em `volumes`."
+                )
+
+            for caminho in CAMINHOS_DE_ESCRITA:
+                assert _cobre(pontos, caminho), (
+                    f"{manifesto}: '{nome_container}' tem a raiz somente "
+                    f"leitura e nada montado em {caminho} ({pontos})."
+                )
+
+            assert pod_spec.get("securityContext", {}).get("fsGroup"), (
+                f"{manifesto}: sem `fsGroup` no pod, o emptyDir chega "
+                f"root:root 0755 e o uid não-root de '{nome_container}' só lê."
+            )
