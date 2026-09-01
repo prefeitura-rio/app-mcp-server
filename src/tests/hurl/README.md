@@ -76,7 +76,6 @@ docker run -d --name mcp-smoke -p 8080:8080 \
   -e GCP_SERVICE_ACCOUNT_CREDENTIALS="$GCP_SA" \
   -e DATA_DIR=/app/data \
   -e REDIS_URL=redis://127.0.0.1:6379/0 \
-  -e MONGODB_URL=mongodb://127.0.0.1:27017 \
   app-mcp-server:local
 
 hurl --test --variable base_url=http://127.0.0.1:8080 --variable token=test-token \
@@ -85,8 +84,8 @@ hurl --test --variable base_url=http://127.0.0.1:8080 --variable token=test-toke
 docker rm -f mcp-smoke
 ```
 
-Redis e MongoDB apontam para portas inalcançáveis de dentro do container **de
-propósito**: os checks correspondentes reprovam, o agregado vira `degraded` e
+O Redis aponta para uma porta inalcançável de dentro do container **de
+propósito**: o check correspondente reprova, o agregado vira `degraded` e
 a suíte confirma que `/health` e `/health/ready` continuam 200 assim mesmo.
 Nenhuma infra precisa estar de pé.
 
