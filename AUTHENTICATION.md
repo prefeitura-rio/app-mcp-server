@@ -45,6 +45,10 @@ Importante: essa validação roda apenas no pipeline de mensagens do protocolo M
 | `IS_LOCAL` | Não (default `false`) | Quando `true`, desativa toda autenticação (dev local). |
 | `DANGEROUSLY_OMIT_AUTH` | Não | Escape hatch de dev local, ver `README.md`. |
 | `MCP_STATELESS_HTTP` | Não (default `true` fora do local) | Controla o modo stateless do transporte Streamable HTTP em `/mcp`. Mantenha `true` em ambientes com múltiplas réplicas; use `false` apenas como rollback temporário. |
+| `HTTP_AUTH_MODE` | Não (default `enforce`) | `enforce` faz cada rota usar o próprio modo; `observe` força observação em tudo (válvula de emergência). Ver a seção de rollout abaixo. |
+| `HTTP_AUTH_OBSERVE_PATHS` | Não | CSV das rotas que passam sem token, apenas registrando. Não configurado = as cinco rotas legadas de Dívida Ativa. `""` = exigir token em todas. |
+| `INTERNAL_TLS_VERIFY` | Não (default `false`) | Verificação de certificado TLS nas chamadas à PGM e ao IPTU via chatbot-integrations. `false` preserva o comportamento atual; vire para `true` quando o CA bundle interno estiver no container. |
+| `MAX_REQUEST_BODY_BYTES` | Não (default `1048576`) | Teto do corpo de requisição, em bytes. Acima disso o servidor responde 413. |
 
 ### Transporte MCP (`/mcp`)
 
@@ -110,61 +114,114 @@ Este servidor atua como **Resource Server** (só valida tokens; não emite nem g
 - Este servidor **não implementa** descoberta automática via `.well-known/oauth-protected-resource` (RFC 9728) — foi uma decisão deliberada de manter simples, já que o cadastro no Salesforce é feito colando a URL do token endpoint e as credenciais manualmente, não via discovery automático. Se isso mudar (o conector do Salesforce passar a exigir discovery), avise para reavaliarmos.
 - Este servidor **não participa do login/emissão do token** — só valida. Qualquer dúvida sobre a emissão do token (client não reconhecido, erro `invalid_client`, etc.) deve ser tratada com a equipe da IplanRio, dona do Keycloak.
 
-## 🔒 Protegendo outros endpoints (`custom_route`)
+## 🔒 Autenticação nas rotas HTTP fora do `/mcp`
 
-O servidor expõe algumas rotas HTTP "puras" fora do protocolo MCP, via `@mcp.custom_route(...)` em `src/app.py` (ex: `/health`, `/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`). **Essas rotas não são cobertas automaticamente** pelo `HybridTokenVerifier`/`auth=` do `FastMCP` — essa proteção só se aplica ao endpoint `/mcp` (pipeline de mensagens do protocolo MCP).
+O servidor expõe rotas HTTP "puras" fora do protocolo MCP, via
+`@mcp.custom_route(...)` em `src/app.py` (`/health*`, `/consulta_debitos`,
+`/emitir_guia*`, `/v2/emitir_guia*`). **O `auth=` do `FastMCP` não cobre essas
+rotas**: em `fastmcp/server/http.py`, o `RequireAuthMiddleware` embrulha só o
+endpoint do transporte MCP, e as rotas de `custom_route` são anexadas depois,
+fora daquele wrapper. O middleware global que o provider instala
+(`AuthenticationMiddleware` do Starlette) apenas *popula* `request.user` — ele
+nunca rejeita ninguém.
 
-> ⚠️ **Gap conhecido, ainda não corrigido**: hoje, `/consulta_debitos`, `/emitir_guia` e `/emitir_guia_regularizacao` não exigem nenhuma autenticação. Isso é anterior a este trabalho e está fora do escopo desta mudança — documentado aqui para visibilidade, com a receita abaixo pronta para quando for priorizado.
+Até agosto/2026 isso significava que `/consulta_debitos` e as quatro rotas de
+emissão de guia atendiam **sem nenhuma autenticação**. Corrigido por
+`src/middleware/require_auth.py`.
 
-Se for necessário proteger uma `custom_route` (recomendado para as rotas de pagamento acima), o padrão é usar `get_access_token()` do próprio FastMCP, que já reflete o resultado do `HybridTokenVerifier` (nenhuma lógica de parsing de token precisa ser duplicada):
+### Como funciona agora
 
-```python
-# src/middleware/http_guard.py
-from functools import wraps
+`RequireAuthOnAllRoutes` é um middleware ASGI aplicado à aplicação inteira por
+`build_http_middleware()` (`src/app.py`), consumido por `src/main.py`. Ele
+**nega por padrão** e libera só o que está na allowlist:
 
-from fastmcp.server.dependencies import get_access_token
-from starlette.responses import JSONResponse
+| Rota | Tratamento |
+|---|---|
+| `/health`, `/health/ready` | Abertas. São as probes do kubelet, que não têm credencial — um 401 aqui derruba o pod. |
+| `/health/detail` | **Passou a exigir token.** Desenha o mapa das dependências e não é probe. |
+| `/mcp` | Isenta *deste* middleware, porque o `RequireAuthMiddleware` nativo já a protege e devolve o 401 no formato que a spec do MCP exige (com `resource_metadata` no `WWW-Authenticate`). Verificar de novo aqui quebraria a descoberta de OAuth no cliente. |
+| `/.well-known/*` | Aberta por definição (RFC 9728): é o documento que um cliente lê *antes* de ter token. |
+| Qualquer outra | Exige `Authorization: Bearer <token>` válido. |
 
-from src.config.env import IS_LOCAL
+O verificador é o mesmo `HybridTokenVerifier` de `/mcp`, então token estático e
+JWT do Keycloak funcionam igualmente e não há uma segunda noção de "token
+válido" para manter em sincronia.
 
+**Por que middleware e não um decorator por rota.** A versão anterior deste
+documento propunha um `@require_authenticated` aplicado rota a rota. O problema
+é que ele exige que alguém *lembre* de aplicá-lo — que é exatamente a falha que
+deixou cinco rotas abertas. Com o middleware, uma `custom_route` nova nasce
+protegida, e é preciso um ato deliberado (acrescentar à allowlist) para
+publicá-la. `src/tests/unit/app/test_http_auth_coverage.py` enumera a tabela de
+rotas da aplicação montada e falha se alguma responder sem token.
 
-def require_authenticated(handler):
-    """Decorator para exigir autenticação em uma `custom_route` Starlette.
+### Rollout: grandfathering das rotas legadas
 
-    Deve ser aplicado ABAIXO de `@mcp.custom_route(...)` (decorators aplicam
-    de baixo pra cima). Reaproveita o mesmo HybridTokenVerifier configurado
-    em `FastMCP(auth=...)` — nenhuma lógica de token é duplicada aqui.
-    """
+Exigir token de todo mundo de uma vez quebraria os consumidores que hoje chamam
+`/consulta_debitos` e `/emitir_guia*` sem credencial. Por isso a exigência é
+**por rota**, não global:
 
-    @wraps(handler)
-    async def wrapper(request):
-        if IS_LOCAL:
-            return await handler(request)
-        if get_access_token() is None:
-            return JSONResponse(
-                {"error": "invalid_token", "error_description": "Authentication required"},
-                status_code=401,
-                headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
-            )
-        return await handler(request)
+| Rota | Modo | Efeito |
+|---|---|---|
+| As cinco de Dívida Ativa | `observe` | Passa sem token. Registra `http_auth_would_deny` com rota, método, se veio token e o IP de origem. |
+| Todas as outras, inclusive as que ainda não existem | `enforce` | 401 sem token válido. |
 
-    return wrapper
+Essa assimetria é o ponto. Um `observe` global seria mais simples e devolveria o
+problema: rota nova voltaria a nascer aberta. Aqui, o grandfathering vale para
+os cinco nomes escritos em `LEGACY_OBSERVE_PATHS` — e para mais nada.
+
+**A lista existe para encolher.** Cada entrada é um consumidor a migrar, e a
+lista vazia é o estado final.
+
+```env
+# Ainda não configurado = as cinco rotas de Dívida Ativa (default do código).
+
+# Uma rota já migrada sai da lista, sem deploy:
+HTTP_AUTH_OBSERVE_PATHS="/consulta_debitos,/emitir_guia,/emitir_guia_regularizacao"
+
+# Estado final: token em todas.
+HTTP_AUTH_OBSERVE_PATHS=""
 ```
 
-Uso em `src/app.py`:
+O ciclo de migração é: ler os `http_auth_would_deny` de uma rota; identificar o
+consumidor pelo `client_ip`; fazê-lo mandar o `Authorization`; confirmar que os
+eventos pararam; tirar a rota da variável. Um teste
+(`test_a_lista_de_legado_nao_cresceu`) falha se alguém aumentar a lista, para
+que acrescentar uma isenção seja um ato revisado e não um jeito de calar um
+teste vermelho.
 
-```python
-from src.middleware.http_guard import require_authenticated
+#### Válvula de emergência: `HTTP_AUTH_MODE`
 
-@mcp.custom_route("/consulta_debitos", methods=["POST"])
-@require_authenticated
-async def da_consulta_debitos(request: Request) -> JSONResponse:
-    ...
-```
+| Valor | Comportamento |
+|---|---|
+| `enforce` (default) | Cada rota usa o próprio modo, conforme a tabela acima. |
+| `observe` | Força observação em **tudo**, inclusive rotas novas. |
 
-Isso funciona tanto com o token estático quanto com JWT do Keycloak, já que `get_access_token()` é populado pelo mesmo `HybridTokenVerifier` independente de qual dos dois métodos autenticou a requisição. **Não crie um novo mecanismo de auth para cada rota — sempre reaproveite este mesmo verifier.**
+Serve para o caso de a exigência quebrar em produção algo que ninguém previu:
+vira a variável, o tráfego volta, e o log continua mostrando o que seria
+recusado. Não é estado de repouso.
 
-Se, no futuro, for necessário restringir uma rota específica só para OAuth (rejeitando o token estático legado), dá pra checar `get_access_token().claims.get("auth_method")` (`"oauth"` ou `"static"`) dentro do handler — mas isso não está implementado hoje; adicione somente se surgir um caso de uso concreto.
+> Nada disto afrouxa `/mcp`, que segue exigindo token pelo wrapper nativo desde
+> sempre. O grandfathering só alcança rotas que já atendiam sem autenticação
+> nenhuma — ele não abre nada que estivesse fechado.
+
+### Teto de corpo de requisição
+
+`src/middleware/body_limit.py`, aplicado pelo mesmo `build_http_middleware()`,
+recusa com **413** corpo acima de `MAX_REQUEST_BODY_BYTES` (default 1 MiB).
+Os handlers fazem `await request.json()`, que carrega o corpo inteiro em
+memória — sem teto, um POST grande em rota sem auth vira OOMKill do pod, que em
+produção roda com `replicas: 1`. São dois caminhos: `Content-Length` acima do
+teto é recusado antes de ler um byte; sem `Content-Length` (chunks), a contagem
+corta durante a leitura, que é o que de fato limita a memória.
+
+### Restringir uma rota só para OAuth
+
+Se no futuro for preciso rejeitar o token estático numa rota específica, dá para
+checar `get_access_token().claims.get("auth_method")` (`"oauth"` ou `"static"`)
+dentro do handler. Não está implementado — acrescente só com caso de uso
+concreto. **Não crie um mecanismo de auth novo por rota; sempre reaproveite o
+mesmo verifier.**
 
 ## 🧪 Testando localmente sem depender do Keycloak
 

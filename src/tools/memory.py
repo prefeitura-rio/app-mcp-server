@@ -4,7 +4,7 @@ from enum import Enum
 from typing import List, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from src.config.env import RMI_API_URL
 from src.utils.rmi_oauth2 import get_authorization_header, is_oauth2_configured
@@ -24,8 +24,24 @@ class MemoryRelevance(Enum):
 
 
 class MemoryBank(BaseModel):
-    memory_name: str
-    description: str
+    """Banco de memória de um cidadão, validado na escrita (CHATR-178, B-06).
+
+    Os tetos ficam aqui, e não na assinatura de `upsert_user_memory`, porque
+    aquele argumento é declarado como `dict` — trocá-lo por este modelo mudaria
+    o JSON Schema que os clientes MCP já consomem. A validação continua
+    acontecendo no servidor; o que ela não faz é aparecer para o cliente.
+
+    `value` fica deliberadamente SEM teto. É o texto da memória do cidadão, não
+    há como saber daqui o tamanho do que já está gravado, e um teto apertado
+    passaria a recusar upsert que hoje funciona. Continua limitado pelo teto de
+    corpo de 1 MiB (`MAX_REQUEST_BODY_BYTES`). Dimensionar isto exige olhar a
+    distribuição real no RMI — ver o card.
+    """
+
+    # 128 é o mesmo teto que `get_user_memory.memory_name` já declara: um nome
+    # mais longo que isso seria gravável e nunca legível de volta pela tool.
+    memory_name: str = Field(max_length=128)
+    description: str = Field(max_length=512)
     relevance: MemoryRelevance
     memory_type: MemoryType
     value: str

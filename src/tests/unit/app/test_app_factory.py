@@ -97,7 +97,13 @@ def app_module():
 
 
 def _registered_tool_names(mcp) -> set:
-    return set(mcp._tool_manager._tools.keys())
+    """Nomes das tools registradas, pela API pública.
+
+    Era `mcp._tool_manager._tools`, que o fastmcp 4 removeu. `list_tools()` é
+    corrotina, daí o `asyncio.run` — estes testes são síncronos e não há loop
+    em curso.
+    """
+    return {tool.name for tool in asyncio.run(mcp.list_tools())}
 
 
 def _served_route_paths(mcp) -> set:

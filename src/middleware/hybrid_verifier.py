@@ -10,9 +10,34 @@ os consumidores existentes.
 
 from __future__ import annotations
 
+import hmac
+
 from fastmcp.server.auth import AccessToken, TokenVerifier
 
 from src.middleware.keycloak_verifier import AzpConstrainedJWTVerifier
+
+
+def _mesmo_token(apresentado: str, valido: str) -> bool:
+    """Compara dois tokens em tempo constante.
+
+    `token in self._static_tokens` decide por hash e, quando os hashes batem,
+    cai num `str.__eq__` que compara tamanho antes do conteúdo e sai no
+    primeiro byte divergente. O sinal que isso deixa é estreito — o ruído de
+    rede o cobre com folga, e o servidor não está exposto à internet aberta —
+    mas o `VALID_TOKENS` é segredo compartilhado, sem escopo, sem expiração e
+    sem rotação: um vazamento aqui não tem contenção depois. `compare_digest`
+    custa uma varredura sobre um punhado de tokens e tira o argumento da mesa.
+
+    Compara em bytes de propósito: `compare_digest` recusa `str` com caractere
+    fora do ASCII, e o token chega de um header decodificado em latin-1 — um
+    byte alto no `Authorization` viraria `TypeError`, isto é, 500 no lugar de
+    401. `surrogatepass` fecha o caso restante (surrogate solto) sem mapear
+    dois tokens distintos para os mesmos bytes.
+    """
+    return hmac.compare_digest(
+        apresentado.encode("utf-8", "surrogatepass"),
+        valido.encode("utf-8", "surrogatepass"),
+    )
 
 
 class HybridTokenVerifier(TokenVerifier):
@@ -51,7 +76,10 @@ class HybridTokenVerifier(TokenVerifier):
         return self._verify_static(token)
 
     def _verify_static(self, token: str) -> AccessToken | None:
-        if token not in self._static_tokens:
+        # Varre a lista inteira quando não há match — é o caminho que um
+        # atacante mede. O `any` só encurta quando o token já é válido, e aí
+        # não há o que descobrir.
+        if not any(_mesmo_token(token, valido) for valido in self._static_tokens):
             return None
         return AccessToken(
             token=token,

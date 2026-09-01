@@ -11,18 +11,22 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from typing import Optional, List, Union
+from typing import Annotated, Optional, List, Union
+
+from pydantic import Field
 
 from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.hybrid_verifier import HybridTokenVerifier
+from src.middleware.body_limit import LimitRequestBodyMiddleware
+from src.middleware.require_auth import RequireAuthOnAllRoutes
 from src.observability.metrics import setup_metrics
 from src.observability.tracing import ToolCallTracingMiddleware, setup_tracing
 from src.health.checks import register_default_checks
 from src.health.external_tables import run_probe_loop
-from src.health.registry import health_registry
+from src.health.registry import health_registry, sanitize_error
 from src.health.routes import register_health_routes
 from src.health.state import set_ready
 from src.tools.calculator import (
@@ -74,12 +78,65 @@ from src.config.env import IS_LOCAL, EXCLUDED_TOOLS
 import src.config.env as env
 from src.utils.tool_versioning import add_tool_version, get_tool_version_from_file
 
-if IS_LOCAL:
-    from mcp.server.fastmcp import FastMCP
-else:
-    from fastmcp import FastMCP
+# Um único caminho de import, deliberadamente. Antes havia bifurcação — o
+# `mcp.server.fastmcp` quando `IS_LOCAL`, o `fastmcp` caso contrário — e ela
+# custava caro: o CI roda sempre com `IS_LOCAL` falso, então metade deste
+# módulo nunca era exercitada, e a divergência só aparecia na máquina de quem
+# estivesse desenvolvendo. O mcp 2.x fecha a questão de vez: `mcp.server.fastmcp`
+# deixou de existir (a classe virou `MCPServer`), então o ramo antigo hoje é um
+# ImportError esperando alguém rodar localmente.
+from fastmcp import FastMCP
 
 TOOL_VERSION = get_tool_version_from_file()["version"]
+
+# Tetos de tamanho dos argumentos das tools (B-06).
+#
+# Nenhum dos 17 schemas declarava restrição, então `query`, `address` e
+# `description` aceitavam string de tamanho arbitrário — e `google_search` e
+# `dharma_search_tool` disparam Gemini a cada chamada. O teto não é validação de
+# negócio: é o limite acima do qual a entrada deixa de ser plausível e vira
+# custo. Por isso são folgados (ordens de grandeza acima do uso real): recusar
+# entrada legítima seria pior do que o problema que resolvem.
+#
+# O FastMCP propaga isto para o JSON Schema da tool, então o próprio cliente MCP
+# recusa a chamada malformada — antes de custar uma chamada de API paga.
+LIMITE_BUSCA = 2000  # pergunta de cidadão em chat; 2000 já é um parágrafo longo
+LIMITE_ENDERECO = 300  # logradouro + número + complemento + bairro
+LIMITE_RELATO = 4000  # relato de ocorrência ditado por voz
+LIMITE_FEEDBACK = 8000
+# `payload_json` do `multi_step_service` carrega o payload inteiro de um passo de
+# workflow — o maior deles é o `dicionario_itens` da Dívida Ativa, com centenas
+# de CDAs, na casa das dezenas de KB. 256 KiB é uma ordem de grandeza acima
+# disso. O teto que existia era o do transporte (`MAX_REQUEST_BODY_BYTES`, 1
+# MiB): limita a memória do processo, mas não impede que a string chegue inteira
+# ao `json.loads`, e não aparece no schema que o cliente MCP consulta.
+LIMITE_PAYLOAD = 262144
+LIMITE_ID = 64  # telefone em E.164 tem 15
+LIMITE_NOME_CURTO = 128  # nome de memória, tema, tipo de alerta
+
+# Preenchido por `create_app()`. Fica `None` em execução local, onde não há
+# autenticação por decisão explícita (ver o bloco de auth em `create_app`).
+_auth_provider = None
+
+
+def _erro_interno(rota: str, erro: Exception) -> JSONResponse:
+    """500 sem a mensagem da exceção no corpo.
+
+    Os handlers devolviam `{"error": str(e)}`. A mensagem de uma exceção que
+    ninguém previu não é um contrato: ela carrega o que o cliente de rede,
+    o driver ou a biblioteca resolveram colocar ali — no caso dos clientes
+    HTTP, rotineiramente a URL de conexão, com credencial dentro. É o mesmo
+    raciocínio que `sanitize_error` já aplicava em `/health/detail`, e por
+    isso reusa a função em vez de repetir a decisão.
+
+    O que o cliente perde em detalhe está no log, com traceback, junto do
+    trace_id — que é onde o operador de fato procura.
+    """
+    logger.exception(f"Erro ao processar {rota}")
+    return JSONResponse(
+        content={"error": "internal_error", "error_description": sanitize_error(erro)},
+        status_code=500,
+    )
 
 
 def create_app() -> FastMCP:
@@ -92,6 +149,7 @@ def create_app() -> FastMCP:
     # Monta o provider de autenticação híbrido (JWT do Keycloak "Identidade
     # Carioca" + token estático legado) apenas em ambientes não-locais,
     # preservando o comportamento local atual de zero fricção (sem auth).
+    global _auth_provider
     auth_provider = None
     if not IS_LOCAL:
         valid_tokens = env.VALID_TOKENS
@@ -125,14 +183,12 @@ def create_app() -> FastMCP:
             issuer=env.KEYCLOAK_ISSUER,
             allowed_azp=env.KEYCLOAK_TRUSTED_CLIENTS,
         )
+    # Guardado em nível de módulo para que `build_http_middleware()` use
+    # exatamente o mesmo verificador que o FastMCP usa em `/mcp` — sem uma
+    # segunda noção de "token válido" para manter em sincronia.
+    _auth_provider = auth_provider
 
     # Inicializa o servidor FastMCP
-    # `FastMCP` é importado condicionalmente (mcp.server.fastmcp quando
-    # IS_LOCAL, fastmcp caso contrário — ver bloco de import acima), então o
-    # type checker só enxerga a assinatura de `auth` de uma das duas classes
-    # (AuthSettings). Em runtime a classe usada quando `not IS_LOCAL` é
-    # `fastmcp.FastMCP`, que aceita `auth: AuthProvider | None`, e
-    # `auth_provider` só é não-None nesse caso.
     # Observabilidade: habilita tracing e métricas OpenTelemetry (exportando
     # para o SigNoz) se OTEL_EXPORTER_OTLP_TRACES_ENDPOINT estiver
     # configurado. Ambos os `setup_*()` são seguros mesmo sem configuração
@@ -154,6 +210,17 @@ def create_app() -> FastMCP:
         parcial em indisponibilidade total. O que impede o boot são erros de
         configuração, verificados antes disto por `run_startup_preflight()`.
         """
+        # Catálogo de tools registradas. Mora aqui, e não em `create_app()`,
+        # porque `list_tools()` é corrotina e a fábrica é síncrona. Antes isto
+        # lia `mcp._tool_manager._tools` — API privada, que sumiu no fastmcp 4.
+        # `list_tools()` é a pública, e como efeito colateral o catálogo passa a
+        # ser logado no startup do servidor, que é quando ele de fato importa.
+        try:
+            nomes = sorted(tool.name for tool in await mcp.list_tools())
+            logger.info(f"Tools registradas ({len(nomes)}): {nomes}")
+        except Exception as e:
+            logger.warning(f"Erro ao listar tools: {e}")
+
         try:
             results = await health_registry.run_all(force=True)
             for result in results:
@@ -325,13 +392,17 @@ def create_app() -> FastMCP:
         return format_greeting()
 
     @conditional_mcp_tool("google_search")
-    async def google_search(query: str) -> dict:
+    async def google_search(
+        query: Annotated[str, Field(max_length=LIMITE_BUSCA)],
+    ) -> dict:
         """Obtém os resultados da busca no Google"""
         response = await get_google_search(query)
         return response
 
     @conditional_mcp_tool("web_search_surkai")
-    async def web_search_surkai(query: str) -> dict:
+    async def web_search_surkai(
+        query: Annotated[str, Field(max_length=LIMITE_BUSCA)],
+    ) -> dict:
         """
         Calls the surkai api to retrieve a web search.
 
@@ -345,7 +416,9 @@ def create_app() -> FastMCP:
         return response
 
     @conditional_mcp_tool("dharma_search_tool")
-    async def dharma_search_tool(query: str) -> dict:
+    async def dharma_search_tool(
+        query: Annotated[str, Field(max_length=LIMITE_BUSCA)],
+    ) -> dict:
         """
         Calls the Dharma API to get AI-powered responses about Rio de Janeiro municipal services.
 
@@ -360,7 +433,8 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool("equipments_by_address")
     async def equipments_by_address(
-        address: str, categories: Optional[List[str]] = None
+        address: Annotated[str, Field(max_length=LIMITE_ENDERECO)],
+        categories: Annotated[Optional[List[str]], Field(max_length=40)] = None,
     ) -> dict:
         """
         Obtém os equipamentos mais proximos de um endereço.
@@ -400,7 +474,9 @@ def create_app() -> FastMCP:
             tool_version=TOOL_VERSION, valid_themes=env.EQUIPMENTS_VALID_THEMES
         ).strip(),
     )
-    async def equipments_instructions(tema: str = "geral") -> dict:
+    async def equipments_instructions(
+        tema: Annotated[str, Field(max_length=LIMITE_NOME_CURTO)] = "geral",
+    ) -> dict:
         instructions = await get_equipments_instructions(tema=tema)
         categories = await get_equipments_categories()
 
@@ -428,7 +504,10 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool("get_user_memory")
     async def get_user_memory(
-        user_id: str, memory_name: Optional[Union[str, None]] = None
+        user_id: Annotated[str, Field(max_length=LIMITE_ID)],
+        memory_name: Annotated[
+            Optional[Union[str, None]], Field(max_length=LIMITE_NOME_CURTO)
+        ] = None,
     ) -> Union[dict, List[dict]]:
         """Get a single memory bank of a user given its phone number and memory name. If no `memory_name` is passed as parameter, get the list of all memory banks of the user.
 
@@ -453,7 +532,10 @@ def create_app() -> FastMCP:
         return response
 
     @conditional_mcp_tool("upsert_user_memory")
-    async def upsert_user_memory(user_id: str, memory_bank: dict) -> dict:
+    async def upsert_user_memory(
+        user_id: Annotated[str, Field(max_length=LIMITE_ID)],
+        memory_bank: dict,
+    ) -> dict:
         """Create or update a memory bank for a user.
 
         Args:
@@ -490,7 +572,10 @@ def create_app() -> FastMCP:
         return response
 
     @conditional_mcp_tool("user_feedback")
-    async def user_feedback(user_id: str, feedback: str) -> dict:
+    async def user_feedback(
+        user_id: Annotated[str, Field(max_length=LIMITE_ID)],
+        feedback: Annotated[str, Field(max_length=LIMITE_FEEDBACK)],
+    ) -> dict:
         """
         Armazena feedback do usuário no BigQuery com timestamp automático.
 
@@ -551,7 +636,16 @@ def create_app() -> FastMCP:
         """.format(tool_version=TOOL_VERSION).strip(),
     )
     async def report_incident(
-        user_id: str, alert_type: str, severity: str, description: str, address: str
+        user_id: Annotated[str, Field(max_length=LIMITE_ID)],
+        # `alert_type` e `severity` NÃO viram `Literal`: `create_cor_alert` já
+        # valida os dois e devolve `{"success": False, "error": ...}` com a
+        # lista de valores aceitos, que é uma resposta que o agente sabe
+        # aproveitar. Um `Literal` trocaria isso por erro de schema — mudaria o
+        # contrato com o cliente MCP para proteger o que já está protegido.
+        alert_type: Annotated[str, Field(max_length=LIMITE_NOME_CURTO)],
+        severity: Annotated[str, Field(max_length=LIMITE_NOME_CURTO)],
+        description: Annotated[str, Field(max_length=LIMITE_RELATO)],
+        address: Annotated[str, Field(max_length=LIMITE_ENDERECO)],
     ) -> dict:
         response = await create_cor_alert(
             user_id=user_id,
@@ -564,7 +658,9 @@ def create_app() -> FastMCP:
 
     @conditional_mcp_tool("multi_step_service", description=mss_tools_description)
     async def multi_step_service(
-        service_name: str, user_id: str, payload_json: str = "{}"
+        service_name: Annotated[str, Field(max_length=LIMITE_NOME_CURTO)],
+        user_id: Annotated[str, Field(max_length=LIMITE_ID)],
+        payload_json: Annotated[str, Field(max_length=LIMITE_PAYLOAD)] = "{}",
     ) -> dict:
         try:
             payload = json.loads(payload_json or "{}")
@@ -653,8 +749,7 @@ def create_app() -> FastMCP:
             result = await consultar_debitos(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/consulta_debitos", e)
 
     @mcp.custom_route("/emitir_guia", methods=["POST"])
     async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
@@ -669,8 +764,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_a_vista(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/emitir_guia", e)
 
     @mcp.custom_route("/emitir_guia_regularizacao", methods=["POST"])
     async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
@@ -685,8 +779,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_regularizacao(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/emitir_guia_regularizacao", e)
 
     # ===== DÍVIDA ATIVA V2 (entrada e saída validadas com Pydantic) =====
     # Erros de validação retornam HTTP 200 com api_resposta_sucesso=false,
@@ -702,8 +795,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_a_vista_v2(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/v2/emitir_guia", e)
 
     @mcp.custom_route("/v2/emitir_guia_regularizacao", methods=["POST"])
     async def da_emitir_guia_regularizacao_v2(request: Request) -> JSONResponse:
@@ -715,8 +807,7 @@ def create_app() -> FastMCP:
             result = await emitir_guia_regularizacao_v2(parameters)
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+            return _erro_interno("/v2/emitir_guia_regularizacao", e)
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
@@ -726,16 +817,6 @@ def create_app() -> FastMCP:
         logger.debug("Modo DEBUG ativado")
         logger.debug(f"Configurações: {Settings.get_server_info()}")
 
-    # Log todas as tools registradas
-    try:
-        if hasattr(mcp, "_tool_manager") and hasattr(mcp._tool_manager, "_tools"):
-            tool_names = list(mcp._tool_manager._tools.keys())
-            logger.info(f"Tools registradas ({len(tool_names)}): {sorted(tool_names)}")
-        else:
-            logger.warning("Não foi possível acessar a lista de tools registradas")
-    except Exception as e:
-        logger.warning(f"Erro ao listar tools: {e}")
-
     # Fallback para modos de execução que não entram no lifespan: nada é
     # servido por HTTP antes de `create_app()` retornar, então marcar aqui não
     # abre janela para tráfego prematuro — e evita que `/health/ready` fique
@@ -743,6 +824,47 @@ def create_app() -> FastMCP:
     set_ready(True)
 
     return mcp
+
+
+def build_http_middleware(extra=None) -> list:
+    """Middleware ASGI aplicado a TODAS as rotas HTTP, não só a `/mcp`.
+
+    Precisa ser a mesma lista em todo caminho que monta a aplicação HTTP
+    (`src/main.py` em produção, os testes em CI), senão a proteção existe só
+    onde alguém lembrou de ligá-la. Por isso mora aqui, junto de quem constrói
+    o servidor, e não no ponto de entrada.
+
+    A ordem importa: o teto de corpo vem primeiro para que um POST gigante seja
+    cortado antes de qualquer trabalho de verificação de token.
+
+    Args:
+        extra: middleware adicional (ex.: instrumentação OTel), aplicado por
+            último — mais perto da rota.
+    """
+    from starlette.middleware import Middleware as StarletteMiddleware
+
+    middleware = [
+        StarletteMiddleware(
+            LimitRequestBodyMiddleware,
+            max_bytes=env.MAX_REQUEST_BODY_BYTES,
+        )
+    ]
+
+    # Sem provider não há o que verificar: é o caso de `IS_LOCAL`, em que a
+    # ausência de autenticação é deliberada. Ligar o middleware aqui recusaria
+    # toda requisição local, já que nenhum token seria válido.
+    if _auth_provider is not None:
+        kwargs = {"verifier": _auth_provider, "mode": env.HTTP_AUTH_MODE}
+        # Só sobrescreve a lista de legado quando o ambiente diz algo. Passar
+        # `None` aqui apagaria o default do middleware e exigiria token nas
+        # rotas antigas — que é justamente o que ainda não se quer.
+        if env.HTTP_AUTH_OBSERVE_PATHS is not None:
+            kwargs["observe_paths"] = env.HTTP_AUTH_OBSERVE_PATHS
+        middleware.append(StarletteMiddleware(RequireAuthOnAllRoutes, **kwargs))
+
+    if extra:
+        middleware.extend(extra)
+    return middleware
 
 
 # Instância global da aplicação

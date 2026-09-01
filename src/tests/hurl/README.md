@@ -61,7 +61,17 @@ print(base64.b64encode(json.dumps({
     "token_uri": "https://oauth2.googleapis.com/token",
 }).encode()).decode())')
 
-docker run -d --name mcp-smoke -p 8080:80 \
+# As flags de runtime reproduzem o `securityContext` dos manifestos: raiz
+# somente leitura, sem capability, uid não-root (vem do `USER` da imagem) e o
+# `ip_unprivileged_port_start` do kernel, que o Docker zera e o Kubernetes não.
+# Rodar sem elas é a prova local que dá verde e o pod que morre no deploy.
+docker run -d --name mcp-smoke -p 8080:8080 \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --sysctl net.ipv4.ip_unprivileged_port_start=1024 \
+  --tmpfs /tmp:mode=1777 \
+  --tmpfs /app/data/bq_dlq:mode=1777 \
   --env-file .github/ci.env \
   -e GCP_SERVICE_ACCOUNT_CREDENTIALS="$GCP_SA" \
   -e DATA_DIR=/app/data \

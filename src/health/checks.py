@@ -218,10 +218,11 @@ def make_tool_registry_check(mcp: Any):
     """
 
     async def check_tool_registry() -> CheckStatus:
-        if hasattr(mcp, "get_tools"):  # fastmcp
-            tools = await mcp.get_tools()
-        else:  # mcp.server.fastmcp, usado quando IS_LOCAL
-            tools = await mcp.list_tools()
+        # `list_tools()` e a API publica do fastmcp 4. A versao anterior deste
+        # bloco escolhia entre `get_tools()` e `list_tools()` conforme a classe
+        # importada, porque `IS_LOCAL` trocava a arvore de imports; essa
+        # bifurcacao deixou de existir (ver src/app.py).
+        tools = await mcp.list_tools()
 
         if not tools:
             raise HealthCheckError("nenhuma tool registrada")
