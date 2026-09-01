@@ -1,0 +1,18 @@
+{
+  "_comment": "Simulated inventory of what is currently deployed/confirmed, cross-checked by release_readiness_check.py against the fixed REQUIRED_SIGNALS spec in resilience_signals.py. This is NOT a live query result - see README.md's caveat that infra/superapp's signoz-resilience-*.tf files are, as of this task, uncommitted/unmerged. This fixture reflects what was read directly from those on-disk files during this task. A real release-readiness run should replace this file's contents with an actual query against the target environment (e.g. `tofu state list` + `tofu show` for the alert/dashboard/route-policy resources) before trusting a PASS verdict as production-accurate.",
+  "as_of": "2026-08-25",
+  "source": "infra/superapp/modules/deployments/signoz-resilience-{alerts,dashboard,route-policy}.tf (uncommitted worktree state, read during this task)",
+  "deployed_alerts": [
+    "signoz_alert.mcp_workload_unavailable",
+    "signoz_alert.mcp_pod_lifecycle_unhealthy",
+    "signoz_alert.mcp_redis_workload_unavailable",
+    "signoz_alert.mcp_telemetry_freshness"
+  ],
+  "deployed_dashboard_resource": "signoz_dashboard.mcp_namespace_health",
+  "deployed_dashboard_widgets": [
+    "MCP workload: desired vs available",
+    "MCP container restarts (delta, 10m window)",
+    "app-mcp-server telemetry freshness (trace count)"
+  ],
+  "deployed_route_policy_resource": "signoz_route_policy.mcp_page_level_alerts"
+}

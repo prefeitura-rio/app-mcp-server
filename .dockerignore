@@ -54,6 +54,7 @@ k8s/
 *.md
 !README.md
 debug_mcp_server.py
+scripts/
 
 # --- Sistema operacional ---
 .DS_Store

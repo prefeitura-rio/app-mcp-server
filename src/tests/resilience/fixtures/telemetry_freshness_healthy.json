@@ -1,0 +1,4 @@
+{
+  "_comment": "3 five-minute samples (evalWindow=15m, frequency=5m) of steady app-mcp-server span counts: mcp_telemetry_freshness must not fire.",
+  "span_count": [842, 910, 875]
+}

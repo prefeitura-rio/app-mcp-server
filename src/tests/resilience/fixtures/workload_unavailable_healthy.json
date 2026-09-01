@@ -1,0 +1,5 @@
+{
+  "_comment": "10 one-minute samples (evalWindow=10m, frequency=1m) for the non-redis mcp deployment. desired==available throughout: mcp_workload_unavailable must not fire.",
+  "desired": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+  "available": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+}

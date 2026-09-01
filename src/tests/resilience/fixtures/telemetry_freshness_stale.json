@@ -1,0 +1,4 @@
+{
+  "_comment": "Span count collapses to 0 for the last two samples of the 15m window: Below 1, AtLeastOnce fires.",
+  "span_count": [900, 0, 0]
+}
