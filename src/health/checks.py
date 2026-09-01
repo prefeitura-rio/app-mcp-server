@@ -14,11 +14,13 @@ o padrão já usado em `src/utils/bigquery.py`.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Optional
 
 from src.health import external_tables, preflight
 from src.health.models import CheckStatus, HealthCheckError
 from src.health.registry import HealthRegistry, health_registry
+from src.observability import metrics
 from src.utils.log import logger
 
 # Backend Redis dedicado ao health check, criado uma única vez: o cliente
@@ -50,10 +52,31 @@ async def check_redis() -> CheckStatus:
     Em produção o `StateManager` roda em `StateMode.REDIS` sem fallback para
     JSON, então Redis fora do ar quebra a tool `multi_step_service` inteira —
     e apenas ela.
+
+    Chamado tanto por `/health/detail` (via `health_registry`) quanto por
+    `/health/ready` (via `src/health/state.py::evaluate_readiness`), então a
+    métrica de dependência gravada aqui (`mcp.dependency.*`, ver
+    `src/observability/metrics.py`) cobre os dois caminhos sem duplicação.
+    Também é registrada como falha quando a chamada é cancelada por
+    `asyncio.wait_for` (timeout do chamador): `BaseException` inclui
+    `asyncio.CancelledError`, que não herda de `Exception`.
     """
     backend = _get_redis_backend()
-    if await backend.health_check():
+    started = time.monotonic()
+    try:
+        healthy = await backend.health_check()
+    except BaseException:
+        metrics.record_dependency_call(
+            "redis", success=False, duration_s=time.monotonic() - started
+        )
+        raise
+
+    duration_s = time.monotonic() - started
+    if healthy:
+        metrics.record_dependency_call("redis", success=True, duration_s=duration_s)
         return CheckStatus.UP
+
+    metrics.record_dependency_call("redis", success=False, duration_s=duration_s)
     raise HealthCheckError("ping sem resposta")
 
 

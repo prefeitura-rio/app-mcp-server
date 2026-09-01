@@ -1,0 +1,5 @@
+{
+  "_comment": "A rolling update loses one pod's readiness for several samples (desired=3, available drops to 2) before recovering to 3/3. matchType=AtLeastOnce means a single bad sample is enough to fire.",
+  "desired":   [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+  "available": [3, 3, 2, 2, 2, 2, 2, 3, 3, 3]
+}
