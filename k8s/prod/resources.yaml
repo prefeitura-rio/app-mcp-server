@@ -271,11 +271,17 @@ spec:
 # peso entre estável/canário é aproximada pela contagem de réplicas, não
 # por um VirtualService; adicionar traffic shaping via Istio ao MCP é uma
 # mudança de infraestrutura fora do escopo desta tarefa).
-# Endereço do Prometheus verificado contra o Service real definido em
-# infra/superapp `modules/deployments/yamls/istio/prometheus.yaml`
-# (`name: prometheus`, porta 9090) — não `prometheus-server`, hostname que
-# alguns AnalysisTemplates irmãos usam mas que não corresponde a nenhum
-# Service existente no cluster.
+# Endereço do Prometheus corrigido para `prometheus-server`: o release
+# v2026.09.01-1 quebrou os dois canaries em produção porque o AnalysisRun
+# não resolvia `prometheus.istio-system.svc.cluster.local` (Service
+# inexistente). O Service real em produção é `prometheus-server`, criado
+# pelo `helm_release.prometheus` (chart `prometheus-community/prometheus`)
+# em `infra/superapp` `modules/deployments/istio.tf` — o release name e o
+# chart name coincidem (`prometheus`), então o template de fullname do
+# chart produz `prometheus-server` (release + `server.name`), não
+# `prometheus`. `app-go-api`/`portal-interno`/`superapp` já usam o
+# hostname correto; este AnalysisTemplate e os de app-rmi/app-catalogo
+# ainda apontavam para o hostname antigo.
 #
 # Runbook (plan todo 8, comentário apenas — nenhum comportamento mudou
 # aqui): docs/runbooks/failed-canary.md documenta a semântica exata de
@@ -295,7 +301,7 @@ spec:
       failureLimit: 5
       provider:
         prometheus:
-          address: http://prometheus.istio-system.svc.cluster.local:9090
+          address: http://prometheus-server.istio-system.svc.cluster.local:9090
           query: |
             (sum(rate(istio_requests_total{destination_service_name=~"{{args.service-name}}",response_code!~"5.."}[2m])) or vector(0)) / (sum(rate(istio_requests_total{destination_service_name=~"{{args.service-name}}"}[2m])) > 0) or vector(1)
     - name: error-rate
@@ -304,6 +310,6 @@ spec:
       failureLimit: 5
       provider:
         prometheus:
-          address: http://prometheus.istio-system.svc.cluster.local:9090
+          address: http://prometheus-server.istio-system.svc.cluster.local:9090
           query: |
             (sum(rate(istio_requests_total{destination_service_name=~"{{args.service-name}}",response_code=~"5.."}[2m])) or vector(0)) / (sum(rate(istio_requests_total{destination_service_name=~"{{args.service-name}}"}[2m])) > 0) or vector(0)
