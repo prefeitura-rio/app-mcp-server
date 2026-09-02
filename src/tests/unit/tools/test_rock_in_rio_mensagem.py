@@ -10,8 +10,10 @@ import pytest
 
 from src.tools.rock_in_rio.mensagem import (
     bloco_do_dia,
+    bloco_do_palco,
     nome_de_exibicao,
     textos_por_dia,
+    textos_por_palco,
 )
 
 APP = {
@@ -117,3 +119,55 @@ def test_dia_sem_atracao_nao_vira_bloco():
     textos = textos_por_dia(shows, datas, "Rock in Rio 2026", AVISO, APP)
 
     assert list(textos) == ["2026-09-04"]
+
+
+def test_bloco_do_palco_lista_um_item_por_dia():
+    """Mesmo layout do bloco de dia, com o eixo trocado.
+
+    O cabeçalho não leva preposição colada ao nome do palco: "no Supernova" e
+    "na Supernova" soam ambos errados, e é o palco que varia aqui.
+    """
+    shows = [
+        _show("2026-09-04", "Palco Sunset", "HOT MILK"),
+        _show("2026-09-06", "Palco Sunset", "NE-YO"),
+        _show("2026-09-06", "Palco Sunset", "CALEMA"),
+    ]
+    datas = (date(2026, 9, 4), date(2026, 9, 5), date(2026, 9, 6))
+
+    bloco = bloco_do_palco("Palco Sunset", shows, datas, "Rock in Rio 2026", AVISO, APP)
+
+    assert bloco == (
+        "As atrações do Palco Sunset no Rock in Rio 2026 são:\n"
+        "\n"
+        "- 04/09 (sexta-feira): Hot Milk\n"
+        "\n"
+        "- 06/09 (domingo): Ne-Yo, Calema\n"
+        "\n"
+        "Os horários dos shows só aparecem no aplicativo oficial:\n"
+        "\n"
+        f"- iOS: {APP['ios']}\n"
+        "\n"
+        f"- Android: {APP['android']}"
+    )
+
+
+def test_bloco_do_palco_ignora_dia_sem_atracao_naquele_palco():
+    shows = [_show("2026-09-04", "Supernova", "ALEE")]
+    datas = (date(2026, 9, 4), date(2026, 9, 5))
+
+    bloco = bloco_do_palco("Supernova", shows, datas, "Rock in Rio 2026", AVISO, APP)
+
+    assert "05/09" not in bloco
+
+
+def test_textos_por_palco_segue_a_ordem_dos_palcos_na_pagina():
+    shows = [
+        _show("2026-09-04", "Supernova", "ALEE"),
+        _show("2026-09-04", "Palco Mundo", "FOO FIGHTERS"),
+    ]
+
+    textos = textos_por_palco(
+        shows, (date(2026, 9, 4),), "Rock in Rio 2026", AVISO, APP
+    )
+
+    assert list(textos) == ["Supernova", "Palco Mundo"]
