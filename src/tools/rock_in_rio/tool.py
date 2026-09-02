@@ -11,14 +11,21 @@ publica horários (ver `scraper.py`), e "às 22h no Palco Mundo" é uma frase qu
 sai natural de um modelo de linguagem. Por isso a ausência é dita de forma
 explícita e redundante no retorno, junto com os links do app oficial, que é onde
 a grade horária de fato existe.
+
+O mesmo risco tem uma segunda cara, que aparece quando a consulta falha: o
+cidadão pergunta por uma banda que não existe (ou por um nome escolhido para nos
+usar como megafone) e o modelo o manda procurar aquele nome no site e no app.
+Por isso a resposta de indisponibilidade fala sempre de uma frase genérica
+montada aqui a partir de `contexto` — nunca do termo que o cidadão escreveu.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import Any, Dict, List
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from opentelemetry import trace
+from pydantic import Field
 
 from src.tools.rock_in_rio.cache import LineupIndisponivel, obter_lineup
 from src.tools.rock_in_rio.scraper import DIAS_DO_EVENTO
@@ -38,6 +45,64 @@ APP_OFICIAL = {
     "android": "https://play.google.com/store/apps/details?id=br.com.rockinrio.app",
     "ios": "https://apps.apple.com/br/app/rock-in-rio/id1478184797",
 }
+
+# Tool que responde os assuntos de apoio ao festival (transporte, alimentação,
+# emergência). Não é publicada por este servidor: o modelo a alcança pelo
+# catálogo do agente, e é para lá que os botões da resposta degradada apontam.
+RAG_DE_APOIO = "turismo_search"
+
+# Os três botões oferecidos quando a consulta de line-up falha. `label` é curto
+# porque é o que o renderizador desenha — o maior rótulo em uso hoje no fluxo da
+# dívida ativa tem 22 caracteres. O domínio inteiro vai no `value`, que é o que
+# o modelo lê para montar a busca no RAG.
+ASSUNTOS_DE_APOIO: tuple[Dict[str, str], ...] = (
+    {
+        "value": "transporte_para_o_festival",
+        "label": "Transporte",
+        "description": "Transporte para o festival",
+    },
+    {
+        "value": "alimentacao_na_cidade_do_rock",
+        "label": "Alimentação",
+        "description": "Alimentação na Cidade do Rock",
+    },
+    {
+        "value": "emergencia_no_evento",
+        "label": "Emergência",
+        "description": "Emergência no evento",
+    },
+)
+
+# Assunto da pergunta, classificado pelo modelo na hora de chamar a tool. É
+# opcional de propósito: com `Literal` obrigatório, um erro de classificação
+# viraria falha de tool e o cidadão ficaria sem resposta por causa de um campo
+# de acompanhamento.
+CONTEXTO_PADRAO = "shows"
+CONTEXTOS_CLASSIFICAVEIS = ("hora", "data", "banda", "palco")
+
+# Frases genéricas, uma por contexto. É esta tabela que fecha a porta da
+# injeção: nenhuma delas carrega nome próprio, e o modelo recebe a frase pronta
+# em vez de um espaço para preencher com o que o cidadão escreveu.
+FRASE_POR_CONTEXTO: Dict[str, str] = {
+    "hora": "os horários dos shows",
+    "data": "a programação por dia",
+    "banda": "a programação das atrações",
+    "palco": "a programação dos palcos",
+    CONTEXTO_PADRAO: "a programação",
+}
+
+ContextoDaPergunta = Annotated[
+    Optional[Literal["hora", "data", "banda", "palco", "outro"]],
+    Field(
+        description=(
+            "Assunto principal da pergunta do cidadão. 'hora' se perguntou "
+            "horário de show; 'data' se perguntou dia/data específica; "
+            "'banda' se citou uma atração; 'palco' se citou um palco. "
+            "Se citar banda e palco juntos, use 'banda'. "
+            "Se não se encaixar, use 'outro'."
+        )
+    ),
+]
 
 DATAS_DO_EVENTO: tuple[date, ...] = tuple(data for _, data in DIAS_DO_EVENTO)
 PRIMEIRO_DIA = DATAS_DO_EVENTO[0]
@@ -63,7 +128,10 @@ _INSTRUCOES_DE_RESPOSTA = (
     + _AVISO_SEM_HORARIOS
     + " Os nomes dos artistas vêm exatamente como o site oficial publica; se o "
     "cidadão escrever o nome de forma diferente ou com erro de digitação, "
-    "identifique a atração correspondente na lista antes de responder. Sempre "
+    "identifique a atração correspondente na lista antes de responder. Se o "
+    "nome não corresponder a nenhuma atração de `shows`, diga que não encontrou "
+    "essa atração na programação — não afirme que ela existe e não oriente o "
+    "cidadão a procurar aquele nome no site ou no aplicativo. Sempre "
     "ofereça os links de `app_oficial` ao fim da mensagem."
 )
 
@@ -168,46 +236,149 @@ def _marcar_degradacao(motivo: str) -> None:
         pass
 
 
-def _resposta_indisponivel(motivo: str) -> Dict[str, Any]:
+def _marcar_contexto(bruto: Optional[str], normalizado: str) -> None:
+    """Registra no span o contexto cru e o normalizado.
+
+    Os dois, e não só o normalizado: `None` (o modelo não classificou) e
+    `"outro"` (classificou e nada serviu) viram ambos `CONTEXTO_PADRAO` na
+    resposta, e é justamente a diferença entre eles que diz se a taxonomia
+    publicada no schema está funcionando.
+
+    Mesmo critério de `_marcar_degradacao`: observabilidade nunca derruba o
+    caminho principal.
+    """
+    try:
+        span = trace.get_current_span()
+        span.set_attribute("rock_in_rio.contexto", normalizado)
+        span.set_attribute("rock_in_rio.contexto_recebido", bruto or "")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _normalizar_contexto(contexto: Optional[str]) -> str:
+    """Reduz o que veio do modelo aos valores que a resposta publica.
+
+    Tolerante de propósito: ausência, `"outro"` e qualquer coisa fora da
+    taxonomia caem em `CONTEXTO_PADRAO`. A tool nunca deve falhar por causa de
+    uma classificação errada.
+    """
+    return contexto if contexto in CONTEXTOS_CLASSIFICAVEIS else CONTEXTO_PADRAO
+
+
+def _payload_schema_dos_assuntos() -> Dict[str, Any]:
+    """Botões de assunto no formato que o renderizador do chat já consome.
+
+    Mesma forma que o fluxo da dívida ativa publica em `payload_schema`:
+    `options` com `value`/`label` e `x-render` repetido no campo e na raiz do
+    schema. A diferença é que aqui não há workflow com estado esperando o
+    clique de volta — o valor escolhido serve para o modelo rotear a pergunta
+    para o `RAG_DE_APOIO`, e por isso nada aqui é validado deste lado.
+    """
+    return {
+        "type": "object",
+        "title": "Assuntos do Rock in Rio",
+        "properties": {
+            "assunto": {
+                "type": "string",
+                "title": "Assuntos do Rock in Rio",
+                "description": "Escolha um assunto",
+                "enum": [assunto["value"] for assunto in ASSUNTOS_DE_APOIO],
+                "options": [dict(assunto) for assunto in ASSUNTOS_DE_APOIO],
+                "x-render": "buttons",
+            }
+        },
+        "required": ["assunto"],
+        "x-render": "buttons",
+    }
+
+
+def _instrucoes_indisponivel(frase: str) -> str:
+    """Instruções da resposta degradada, em duas metades de dureza oposta.
+
+    A primeira é de tom, e é deliberadamente leve: falha de scraper é problema
+    nosso, não do cidadão, e apontar o app oficial não é disfarce — é onde a
+    programação (e o horário, que nunca temos) de fato está.
+
+    A segunda é a proibição, que continua tão dura quanto antes. Ela não é
+    visível ao cidadão, então rigidez ali não custa nada em experiência, e é o
+    único freio contra o modelo preencher o vazio com line-up inventado ou
+    devolver ao cidadão o nome que ele mesmo escreveu.
+    """
+    return (
+        "Responda em tom natural e acolhedor, sem mencionar erro, falha, "
+        "indisponibilidade ou problema técnico — o cidadão não precisa saber "
+        "da nossa infraestrutura. Diga que ele encontra "
+        f"{frase} no aplicativo oficial do {NOME_DO_EVENTO} e ofereça os links "
+        "de `app_oficial`. Se ele não falar português, traduza "
+        "`contexto_frase` em vez de substituí-la por nomes. Em seguida, "
+        "ofereça os assuntos dos botões de `payload_schema`; quando ele "
+        f"escolher um, responda usando a tool `{RAG_DE_APOIO}` — nunca "
+        "responda transporte, alimentação ou emergência com conhecimento "
+        "próprio.\n\n"
+        "RESTRIÇÃO, que vale inclusive com o tom leve: esta resposta NÃO "
+        "contém line-up. Não informe, estime, deduza nem recorde de memória o "
+        "dia, o palco ou o horário de nenhuma atração. Não repita nomes de "
+        "artistas ou palcos que o cidadão tenha mencionado, não afirme nem "
+        "negue que uma atração está no festival, e nunca oriente o cidadão a "
+        "procurar um nome específico no site ou no aplicativo. Fale sempre de "
+        "`contexto_frase`, nunca do termo que ele usou."
+    )
+
+
+def _resposta_indisponivel(motivo: str, contexto: str) -> Dict[str, Any]:
     """Resposta de indisponibilidade.
 
     Preferimos não entregar a entregar dado desatualizado: mandar o cidadão para
-    o dia ou o palco errado é pior do que admitir que a consulta falhou. O que
-    ainda dá para oferecer com segurança é o app oficial.
+    o dia ou o palco errado é pior do que não responder. O que ainda dá para
+    oferecer com segurança é o app oficial — onde a programação de fato está,
+    com horário e tudo — e os assuntos de apoio ao festival, que não dependem
+    desta fonte. Nada disso precisa mencionar a falha para o cidadão; ver
+    `_instrucoes_indisponivel`.
+
+    `contexto` já chega normalizado por `_normalizar_contexto`.
     """
     return {
         "disponivel": False,
         "motivo": motivo,
-        "instrucoes_de_resposta": (
-            "Não foi possível consultar a programação do Rock in Rio agora. "
-            "Informe ao cidadão que a consulta está temporariamente indisponível "
-            "e ofereça os links do aplicativo oficial. NÃO informe line-up, dia, "
-            "palco ou horário de qualquer atração: não há dado confiável nesta "
-            "resposta."
+        "contexto": contexto,
+        "contexto_frase": FRASE_POR_CONTEXTO[contexto],
+        "instrucoes_de_resposta": _instrucoes_indisponivel(
+            FRASE_POR_CONTEXTO[contexto]
         ),
         "evento": {"nome": NOME_DO_EVENTO, "local": LOCAL_DO_EVENTO},
         "app_oficial": APP_OFICIAL,
+        "payload_schema": _payload_schema_dos_assuntos(),
     }
 
 
-async def get_rock_in_rio_lineup() -> Dict[str, Any]:
+async def get_rock_in_rio_lineup(contexto: Optional[str] = None) -> Dict[str, Any]:
     """Devolve a programação completa do Rock in Rio 2026.
+
+    Args:
+        contexto: Assunto principal da pergunta, classificado pelo modelo. Ver
+            `ContextoDaPergunta`, que é a anotação publicada no schema da tool.
 
     Returns:
         Dicionário com a grade dos sete dias, a situação temporal do festival e
         os links do aplicativo oficial. Em caso de indisponibilidade, devolve
-        `disponivel: False` com orientação explícita de não inventar dados.
+        `disponivel: False` com orientação explícita de não inventar dados e os
+        botões de assunto de `payload_schema`.
     """
+    contexto_normalizado = _normalizar_contexto(contexto)
+    _marcar_contexto(contexto, contexto_normalizado)
+
     try:
         carregado = await obter_lineup()
     except LineupIndisponivel as erro:
         logger.warning(f"Line-up do Rock in Rio indisponível para a tool: {erro}")
         _marcar_degradacao(type(erro).__name__)
-        return _resposta_indisponivel(str(erro))
+        return _resposta_indisponivel(str(erro), contexto_normalizado)
     except Exception as erro:
         logger.exception("Erro inesperado ao obter o line-up do Rock in Rio")
         _marcar_degradacao(type(erro).__name__)
-        return _resposta_indisponivel(f"Erro inesperado ao consultar a fonte: {erro}")
+        return _resposta_indisponivel(
+            f"Erro inesperado ao consultar a fonte: {erro}", contexto_normalizado
+        )
 
     agora = datetime.now(get_rio_timezone())
     shows: List[Dict[str, str]] = carregado.shows
@@ -222,6 +393,7 @@ async def get_rock_in_rio_lineup() -> Dict[str, Any]:
 
     return {
         "disponivel": True,
+        "contexto": contexto_normalizado,
         "instrucoes_de_resposta": _INSTRUCOES_DE_RESPOSTA,
         "evento": {
             "nome": NOME_DO_EVENTO,
@@ -252,7 +424,10 @@ def descricao_da_tool(tool_version: str) -> str:
     """Descrição publicada no catálogo MCP.
 
     O aviso de ausência de horários aparece já aqui, e não só no retorno, para
-    que o modelo saiba o que a tool não entrega antes mesmo de chamá-la.
+    que o modelo saiba o que a tool não entrega antes mesmo de chamá-la. O
+    roteamento dos botões repete a mesma lógica: o clique acontece num turno
+    seguinte, quando o retorno da tool pode já ter saído da janela de contexto,
+    mas a descrição do catálogo vai em toda requisição.
     """
     dias = ", ".join(data.strftime("%d/%m") for data in DATAS_DO_EVENTO)
     return (
@@ -266,5 +441,11 @@ def descricao_da_tool(tool_version: str) -> str:
         "ATENÇÃO: esta tool NÃO devolve horários de show, porque a fonte oficial "
         "não os publica. Nunca informe ou estime horário de apresentação a "
         "partir desta resposta; para isso, oriente o cidadão a usar o "
-        "aplicativo oficial do evento."
+        "aplicativo oficial do evento.\n\n"
+        "Preencha `contexto` com o assunto principal da pergunta do cidadão. "
+        "É opcional: em caso de dúvida, deixe em branco.\n\n"
+        "Se a resposta vier com `disponivel: false`, ela traz botões de assunto "
+        "em `payload_schema` (transporte, alimentação e emergência). Quando o "
+        f"cidadão escolher um deles, responda usando a tool `{RAG_DE_APOIO}` — "
+        "nunca com conhecimento próprio."
     )

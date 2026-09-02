@@ -197,6 +197,16 @@ class Lineup:
         self.app_oficial = bruto.get("app_oficial") or {}
         self.atualizado_em = bruto.get("atualizado_em") or {}
         self.instrucoes = bruto.get("instrucoes_de_resposta") or ""
+        self.contexto_frase = bruto.get("contexto_frase") or "a programação"
+        # Rótulos dos botões lidos do `payload_schema` que a própria tool
+        # devolve: hardcodá-los aqui faria a tela concordar consigo mesma em
+        # vez de conferir a tool, que é o ponto deste runner.
+        propriedades = (bruto.get("payload_schema") or {}).get("properties") or {}
+        self.assuntos: List[str] = [
+            opcao.get("label", "")
+            for opcao in (propriedades.get("assunto") or {}).get("options") or []
+            if opcao.get("label")
+        ]
         self.shows: List[Dict[str, str]] = bruto.get("shows") or []
         self.palcos: List[str] = self.evento.get("palcos") or []
         self.dias: List[Dict[str, str]] = self.evento.get("dias") or []
@@ -366,19 +376,30 @@ class Conversa:
 
         Vale rodar o chat com a rede cortada só para ver esta tela: é o que o
         cidadão recebe quando o site não responde, e ela não pode conter
-        line-up nenhum.
+        line-up nenhum. Duas coisas são de propósito e não devem "melhorar"
+        aqui: a mensagem não fala em falha nem indisponibilidade, e não repete
+        o nome que o cidadão escreveu — só a frase genérica de
+        `contexto_frase`. Os botões saem do `payload_schema` da tool.
         """
         bolhas = [
-            "A consulta à programação do Rock in Rio está indisponível agora, "
-            "então não consigo informar dia nem palco de nenhuma atração."
+            f"Você encontra {self.lineup.contexto_frase} no aplicativo oficial "
+            "do Rock in Rio."
         ]
         links = self._links_do_app()
         if links:
             bolhas.append(links)
+        if self.lineup.assuntos:
+            bolhas.append("Posso ajudar com mais alguma coisa do festival?")
         return Resposta(
             bolhas=bolhas,
-            sugestoes=["Tentar de novo"],
-            bruto={"disponivel": False, "motivo": self.lineup.motivo},
+            sugestoes=self.lineup.assuntos or ["Tentar de novo"],
+            bruto={
+                "disponivel": False,
+                "motivo": self.lineup.motivo,
+                "contexto": self.lineup.bruto.get("contexto"),
+                "contexto_frase": self.lineup.contexto_frase,
+                "payload_schema": self.lineup.bruto.get("payload_schema"),
+            },
         )
 
     def boas_vindas(self) -> Resposta:
