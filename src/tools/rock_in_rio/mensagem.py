@@ -1,4 +1,4 @@
-"""Blocos de mensagem prontos para o WhatsApp, um por dia de festival.
+"""Blocos de mensagem prontos para o WhatsApp: um por dia e um por palco.
 
 A grade é a mesma de `shows`; o que muda aqui é a apresentação. Ela vive no
 servidor, e não na cabeça do modelo, por dois motivos.
@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Dict, Iterable, List, Mapping
 
-from src.utils.datetime_utils import _get_month_pt
+from src.utils.datetime_utils import _get_month_pt, _get_weekday_pt
 
 # Palavras que ligam dois nomes numa mesma atração ("Luísa Sonza CONVIDA Roberto
 # Menescal"). O site publica tudo em caixa alta, e capitalizá-las junto com os
@@ -135,12 +135,24 @@ def nome_de_exibicao(nome: str) -> str:
     )
 
 
-def _por_palco(shows: Iterable[Mapping[str, str]]) -> Dict[str, List[str]]:
-    """Agrupa as atrações do dia por palco, na ordem em que a página as lista."""
+def _agrupar(shows: Iterable[Mapping[str, str]], chave: str) -> Dict[str, List[str]]:
+    """Agrupa nomes de exibição por palco ou por data, na ordem da página."""
     agrupado: Dict[str, List[str]] = {}
     for show in shows:
-        agrupado.setdefault(show["palco"], []).append(nome_de_exibicao(show["artista"]))
+        agrupado.setdefault(show[chave], []).append(nome_de_exibicao(show["artista"]))
     return agrupado
+
+
+def _rodape(aviso_de_horarios: str, app_oficial: Mapping[str, str]) -> List[str]:
+    """Aviso de horários e links, iguais em todo bloco."""
+    lojas = (("iOS", app_oficial.get("ios")), ("Android", app_oficial.get("android")))
+    return [aviso_de_horarios] + [f"- {loja}: {url}" for loja, url in lojas if url]
+
+
+def _juntar(partes: Iterable[str]) -> str:
+    # Linha em branco entre todos os itens: é o espaçamento combinado com o PO,
+    # e é o que separa os itens no aplicativo.
+    return "\n\n".join(partes)
 
 
 def bloco_do_dia(
@@ -153,26 +165,51 @@ def bloco_do_dia(
     """Monta a mensagem de um dia, pronta para ser copiada na conversa."""
     itens = [
         f"- {palco}: {', '.join(artistas)}"
-        for palco, artistas in _por_palco(shows_do_dia).items()
+        for palco, artistas in _agrupar(shows_do_dia, "palco").items()
     ]
     mes = _get_month_pt(data.month).lower()
 
-    partes = [
-        f"No dia {data.day} de {mes} do {nome_do_evento}, as atrações são:",
-        *itens,
-        aviso_de_horarios,
-    ]
-    partes += [
-        f"- {loja}: {url}"
-        for loja, url in (
-            ("iOS", app_oficial.get("ios")),
-            ("Android", app_oficial.get("android")),
-        )
-        if url
-    ]
-    # Linha em branco entre todos os itens: é o espaçamento combinado com o PO,
-    # e é o que separa os palcos no aplicativo.
-    return "\n\n".join(partes)
+    return _juntar(
+        [
+            f"No dia {data.day} de {mes} do {nome_do_evento}, as atrações são:",
+            *itens,
+            *_rodape(aviso_de_horarios, app_oficial),
+        ]
+    )
+
+
+def bloco_do_palco(
+    palco: str,
+    shows_do_palco: Iterable[Mapping[str, str]],
+    datas: Iterable[date],
+    nome_do_evento: str,
+    aviso_de_horarios: str,
+    app_oficial: Mapping[str, str],
+) -> str:
+    """Monta a mensagem de um palco: um item por dia em que ele tem atração.
+
+    Mesma frase de abertura do bloco de dia, com o eixo trocado: as duas
+    respostas chegam ao cidadão com a mesma cara, que foi o pedido. O preço é
+    "No Supernova", único nome de palco em que a preposição masculina soa
+    estranha — ela se sustenta pelo "palco" implícito.
+    """
+    por_data = _agrupar(shows_do_palco, "data")
+
+    itens = []
+    for data in datas:
+        artistas = por_data.get(data.isoformat())
+        if not artistas:
+            continue
+        semana = _get_weekday_pt(data.weekday()).lower()
+        itens.append(f"- {data.strftime('%d/%m')} ({semana}): {', '.join(artistas)}")
+
+    return _juntar(
+        [
+            f"No {palco} do {nome_do_evento}, as atrações são:",
+            *itens,
+            *_rodape(aviso_de_horarios, app_oficial),
+        ]
+    )
 
 
 def textos_por_dia(
@@ -201,4 +238,34 @@ def textos_por_dia(
         )
         for data in datas
         if por_data.get(data.isoformat())
+    }
+
+
+def textos_por_palco(
+    shows: Iterable[Mapping[str, str]],
+    datas: Iterable[date],
+    nome_do_evento: str,
+    aviso_de_horarios: str,
+    app_oficial: Mapping[str, str],
+) -> Dict[str, str]:
+    """Um bloco por palco, na ordem em que os palcos aparecem na página.
+
+    A chave é o nome do palco exatamente como o site publica — é o mesmo valor
+    que aparece em `evento.palcos` e em cada item de `shows`, então o modelo
+    acha o bloco com o nome que já tem em mãos.
+    """
+    por_palco: Dict[str, List[Mapping[str, str]]] = {}
+    for show in shows:
+        por_palco.setdefault(show["palco"], []).append(show)
+
+    return {
+        palco: bloco_do_palco(
+            palco,
+            shows_do_palco,
+            datas,
+            nome_do_evento,
+            aviso_de_horarios,
+            app_oficial,
+        )
+        for palco, shows_do_palco in por_palco.items()
     }

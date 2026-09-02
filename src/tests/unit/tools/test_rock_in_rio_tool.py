@@ -235,10 +235,25 @@ async def test_resposta_traz_o_bloco_pronto_de_cada_dia(lineup_ok):
 
 
 @pytest.mark.asyncio
-async def test_indisponibilidade_nao_traz_bloco_de_dia_nenhum(lineup_fora_do_ar):
+async def test_resposta_traz_o_bloco_pronto_de_cada_palco(lineup_ok):
+    resposta = await get_rock_in_rio_lineup()
+
+    # Mesma chave que `evento.palcos` e que cada item de `shows` publicam.
+    assert list(resposta["texto_por_palco"]) == resposta["evento"]["palcos"]
+    bloco = resposta["texto_por_palco"]["Palco Mundo"]
+    assert bloco.startswith("No Palco Mundo do Rock in Rio 2026, as atrações são:")
+    assert "- 04/09 (sexta-feira): Foo Fighters" in bloco
+    assert "`texto_por_palco`" in resposta["instrucoes_de_resposta"]
+
+
+@pytest.mark.asyncio
+async def test_indisponibilidade_nao_traz_bloco_de_dia_nem_de_palco(
+    lineup_fora_do_ar,
+):
     resposta = await get_rock_in_rio_lineup()
 
     assert "texto_por_dia" not in resposta
+    assert "texto_por_palco" not in resposta
 
 
 @pytest.mark.asyncio
