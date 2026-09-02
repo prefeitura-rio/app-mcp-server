@@ -18,6 +18,8 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List
 
+from opentelemetry import trace
+
 from src.tools.rock_in_rio.cache import LineupIndisponivel, obter_lineup
 from src.tools.rock_in_rio.scraper import DIAS_DO_EVENTO
 
@@ -144,6 +146,28 @@ def _situacao_temporal(agora: datetime) -> Dict[str, Any]:
     return situacao
 
 
+def _marcar_degradacao(motivo: str) -> None:
+    """Deixa a degradação visível no span da chamada de tool.
+
+    Sem isto a falha é invisível no SigNoz, e esse foi o motivo de a quebra de
+    01/09/2026 não ter gerado erro nenhum: o `ToolCallTracingMiddleware` só
+    marca `mcp.tool.success = False` quando a tool **levanta**, e esta aqui
+    devolve um dicionário de propósito (ver `_resposta_indisponivel`). O
+    atributo é o que permite filtrar por `rock_in_rio.degraded = true` sem
+    mudar o middleware nem o contrato de retorno.
+
+    Degrada em silêncio se não houver span ativo — `get_current_span()` devolve
+    um objeto no-op — pelo mesmo critério de `_get_current_trace_context` no
+    error interceptor: observabilidade nunca derruba o caminho principal.
+    """
+    try:
+        span = trace.get_current_span()
+        span.set_attribute("rock_in_rio.degraded", True)
+        span.set_attribute("rock_in_rio.motivo", motivo)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _resposta_indisponivel(motivo: str) -> Dict[str, Any]:
     """Resposta de indisponibilidade.
 
@@ -178,9 +202,11 @@ async def get_rock_in_rio_lineup() -> Dict[str, Any]:
         carregado = await obter_lineup()
     except LineupIndisponivel as erro:
         logger.warning(f"Line-up do Rock in Rio indisponível para a tool: {erro}")
+        _marcar_degradacao(type(erro).__name__)
         return _resposta_indisponivel(str(erro))
     except Exception as erro:
         logger.exception("Erro inesperado ao obter o line-up do Rock in Rio")
+        _marcar_degradacao(type(erro).__name__)
         return _resposta_indisponivel(f"Erro inesperado ao consultar a fonte: {erro}")
 
     agora = datetime.now(get_rio_timezone())

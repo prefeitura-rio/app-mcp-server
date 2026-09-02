@@ -13,13 +13,14 @@ import time
 import pytest
 
 from src.tools.rock_in_rio import cache as cache_mod
+from src.tools.rock_in_rio import estado
 from src.tools.rock_in_rio.cache import (
     LineupIndisponivel,
     intervalo_refresh_s,
     obter_lineup,
     resetar_cache,
 )
-from src.tools.rock_in_rio.scraper import Show
+from src.tools.rock_in_rio.scraper import LineupInvalido, Show
 
 # Capturados antes de qualquer teste rodar: a fixture `cache_limpo` substitui os
 # dois por dublês, e o teste de resiliência do Redis precisa dos originais.
@@ -326,3 +327,184 @@ def test_ttl_do_redis_nunca_e_zero(monkeypatch):
     monkeypatch.setenv("ROCK_IN_RIO_MAX_IDADE_S", "0.5")
 
     assert cache_mod._ttl_redis_s() == 1
+
+
+# --------------------------------------------------------------------------
+# Veredito do ciclo e alerta de transição
+#
+# Estes testes existem por causa de um incidente concreto: em 01/09/2026 o site
+# mudou de estrutura, a tool ficou fora do ar e nada acusou. O que se protege
+# aqui não é o cache, é o **sinal** — que a falha fique registrada, classificada
+# pelo modo certo, e que o alerta saia uma vez só.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def interceptor_falso(monkeypatch):
+    """Captura as chamadas ao error interceptor, sem sair para a rede."""
+    from src.utils import error_interceptor
+
+    chamadas = []
+
+    async def _capturar(**kwargs):
+        chamadas.append(kwargs)
+        return True
+
+    monkeypatch.setattr(error_interceptor, "send_general_error", _capturar)
+    return chamadas
+
+
+@pytest.mark.asyncio
+async def test_ciclo_bem_sucedido_registra_o_veredito(monkeypatch):
+    _instalar_fonte(monkeypatch, FonteFalsa())
+
+    await obter_lineup()
+
+    resultado = estado.ultimo_resultado()
+    assert resultado is not None
+    assert resultado.sucesso is True
+    assert resultado.atracoes == 1
+    assert resultado.palcos == 1
+    assert resultado.falha is None
+
+
+@pytest.mark.asyncio
+async def test_falha_de_formato_e_classificada_como_formato(monkeypatch):
+    """`LineupInvalido` é "o site mudou": exige código, não passa sozinho.
+
+    A classificação é o que torna o alerta acionável — sem ela, quem for
+    acordado não sabe se espera o próximo ciclo ou abre o parser.
+    """
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=LineupInvalido("formato")))
+
+    with pytest.raises(LineupIndisponivel):
+        await obter_lineup()
+
+    resultado = estado.ultimo_resultado()
+    assert resultado.sucesso is False
+    assert resultado.falha == estado.FALHA_FORMATO
+    assert resultado.detalhe == "LineupInvalido"
+
+
+@pytest.mark.asyncio
+async def test_falha_de_rede_e_classificada_como_fonte(monkeypatch):
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=ConnectionError("fora")))
+
+    with pytest.raises(LineupIndisponivel):
+        await obter_lineup()
+
+    resultado = estado.ultimo_resultado()
+    assert resultado.sucesso is False
+    assert resultado.falha == estado.FALHA_FONTE
+    assert resultado.detalhe == "ConnectionError"
+
+
+@pytest.mark.asyncio
+async def test_instrumentacao_nao_muda_o_fallback_para_o_cache(monkeypatch):
+    """O registro do veredito não pode alterar o que o cidadão recebe.
+
+    A regra de negócio continua sendo a mesma: com a fonte fora do ar e cache
+    dentro do teto, serve-se o cache. O sinal é para quem opera, não para quem
+    pergunta.
+    """
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=ConnectionError("fora")))
+    _semear_memoria(idade_s=60)
+
+    carregado = await obter_lineup(forcar=True)
+
+    assert carregado.origem == "cache_stale"
+    assert carregado.shows[0]["artista"] == "FOO FIGHTERS"
+    assert estado.ultimo_resultado().falha == estado.FALHA_FONTE
+
+
+@pytest.mark.asyncio
+async def test_resetar_cache_limpa_o_veredito(monkeypatch):
+    _instalar_fonte(monkeypatch, FonteFalsa())
+    await obter_lineup()
+    assert estado.ultimo_resultado() is not None
+
+    resetar_cache()
+
+    assert estado.ultimo_resultado() is None
+
+
+@pytest.mark.asyncio
+async def test_alerta_sai_uma_vez_na_virada_e_nao_a_cada_ciclo(
+    monkeypatch, interceptor_falso
+):
+    """O laço roda de 15 em 15 min: alertar por ciclo seria ~96 reports/dia.
+
+    Mesmo desenho de `_alert_transition` em `src/health/external_tables.py`.
+    """
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=LineupInvalido("formato")))
+
+    for _ in range(3):
+        with pytest.raises(LineupIndisponivel):
+            await obter_lineup(forcar=True)
+
+    assert len(interceptor_falso) == 1
+    assert interceptor_falso[0]["error_type"] == "LineupFormatoMudou"
+    assert "correção de código" in interceptor_falso[0]["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_alerta_de_fonte_diz_que_e_transitorio(monkeypatch, interceptor_falso):
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=ConnectionError("fora")))
+
+    with pytest.raises(LineupIndisponivel):
+        await obter_lineup(forcar=True)
+
+    assert interceptor_falso[0]["error_type"] == "LineupFonteIndisponivel"
+
+
+@pytest.mark.asyncio
+async def test_recuperacao_nao_gera_alerta(monkeypatch, interceptor_falso):
+    """Voltar a funcionar é log, não alerta — ninguém precisa ser acordado."""
+    fonte = FonteFalsa(falha=ConnectionError("fora"))
+    _instalar_fonte(monkeypatch, fonte)
+    with pytest.raises(LineupIndisponivel):
+        await obter_lineup(forcar=True)
+    assert len(interceptor_falso) == 1
+
+    fonte.falha = None
+    await obter_lineup(forcar=True)
+
+    assert len(interceptor_falso) == 1
+    assert estado.ultimo_resultado().sucesso is True
+
+
+@pytest.mark.asyncio
+async def test_interceptor_fora_do_ar_nao_engole_a_excecao_original(monkeypatch):
+    """Observabilidade nunca pode virar a causa da falha.
+
+    Se o interceptor cair, o que precisa continuar subindo é o erro do site —
+    senão a instrumentação transforma uma queda diagnosticável numa outra.
+    """
+    from src.utils import error_interceptor
+
+    async def _explodir(**kwargs):
+        raise RuntimeError("interceptor fora do ar")
+
+    monkeypatch.setattr(error_interceptor, "send_general_error", _explodir)
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=LineupInvalido("formato")))
+
+    with pytest.raises(LineupIndisponivel):
+        await obter_lineup(forcar=True)
+
+    assert estado.ultimo_resultado().falha == estado.FALHA_FORMATO
+
+
+@pytest.mark.asyncio
+async def test_cancelamento_nao_vira_falha_da_fonte(monkeypatch, interceptor_falso):
+    """O shutdown do pod cancela a task no meio do ciclo.
+
+    Tratar isso como queda inventaria uma falha a cada deploy que pegasse um
+    ciclo em andamento — e dispararia o alerta de transição por ela.
+    """
+    _instalar_fonte(monkeypatch, FonteFalsa(falha=asyncio.CancelledError()))
+
+    with pytest.raises(asyncio.CancelledError):
+        await obter_lineup(forcar=True)
+
+    assert estado.ultimo_resultado() is None
+    assert interceptor_falso == []

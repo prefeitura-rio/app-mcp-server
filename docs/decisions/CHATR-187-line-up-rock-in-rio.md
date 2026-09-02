@@ -8,7 +8,7 @@
 
 ## Resumo
 
-A tool `rock_in_rio_lineup` entrega **dia + palco + artista** das 156 atrações dos sete dias. Não entrega horário de show, porque a fonte disponível não publica horário. Este documento registra por que a fonte é essa, o que foi descartado e o que precisa mudar para o escopo aumentar.
+A tool `rock_in_rio_lineup` entrega **dia + palco + artista** das 170 atrações dos sete dias. Não entrega horário de show, porque a fonte disponível não publica horário. Este documento registra por que a fonte é essa, o que foi descartado e o que precisa mudar para o escopo aumentar.
 
 ---
 
@@ -22,7 +22,7 @@ O que viabiliza o caso é que as páginas de line-up são renderizadas no servid
 
 | Recurso | URL |
 |---|---|
-| Dia | `https://rockinrio.com/rio/line-up/dia/{DD}-set/` |
+| Dia | `https://rockinrio.com/rio/pt-br/line-up/dia/{DD}-set/` |
 | Palco | `https://rockinrio.com/rio/pt-br/line-up/palco/{slug}/` |
 | Artista | `https://rockinrio.com/rio/pt-br/line-up/{slug}/` |
 
@@ -89,9 +89,35 @@ Duas armadilhas, ambas com teste próprio em `test_rock_in_rio_tool.py`:
 
 Depois de 14/09 às 6h, a tool responde `encerrado`. Ela não precisa ser removida às pressas.
 
+## O que o site mudou em 01/09/2026 — e o que o incidente ensinou
+
+Duas mudanças no mesmo dia, sem aviso, três dias antes do festival:
+
+| Mudança | Efeito |
+|---|---|
+| A rota de dia ganhou o prefixo de idioma: `/rio/line-up/dia/{slug}/` → `/rio/pt-br/line-up/dia/{slug}/` | a rota antiga passou a devolver **403**; o `raise_for_status` derrubava antes do parse |
+| Os `href` de artista viraram **relativos**: `https://rockinrio.com/rio/pt-br/line-up/x/` → `/rio/pt-br/line-up/x/` | os padrões ancoravam em `re.escape(BASE_URL)` e não casavam com nada |
+
+Corrigido nos PRs #175 e #176 — o host virou opcional nos dois padrões, em vez
+de trocar absoluto por relativo, para que uma reversão do site não quebre de
+novo; e `Show.url` passou a ser normalizada com `urljoin`.
+
+O line-up também cresceu no mesmo movimento: **156 → 170 atrações** e um palco
+novo (`Highway Stage`), que precisou entrar no catálogo do runner de contrato.
+
+**O que o incidente expôs não foi o parser — foi a ausência de aviso.** As três
+camadas abaixo funcionaram como projetadas *dentro do processo*: o parser
+recusou a página em vez de entregar grade parcial, e o cache converteu isso em
+indisponibilidade explícita. Mas durante a queda inteira a suíte de testes
+ficou **verde** (roda sobre fixtures salvas), o `/health/detail` ficou **verde**
+(não havia check de line-up) e o SigNoz não registrou **um único erro** — porque
+a tool captura a exceção e devolve dicionário, e para o middleware de tracing um
+`return` normal é sucesso. Quem achou a quebra foi uma pessoa olhando a URL na
+mão. Daí a quarta camada.
+
 ## Alarme de mudança do site
 
-São três camadas, porque nenhuma delas sozinha resolve.
+São **quatro** camadas, porque nenhuma delas sozinha resolve.
 
 **No parser, em produção.** `parse_dia` recusa a página em vez de devolver uma grade parcial: confronta o número de blocos de artista presentes no HTML com o número que conseguiu ler, exige um piso de atrações por dia (`MIN_ATRACOES_POR_DIA`) e recusa nome acima de `MAX_TAMANHO_NOME`. Sem isso, os dois modos de falha mais prováveis do site — uma `<section>` nova no meio da lista e um bloco de artista que mudou de forma — cortavam o dia pela metade em silêncio, e o chatbot passava a negar bandas que estão no festival. Grade parcial é o pior desfecho possível, então ela vira `LineupInvalido`, que o cache converte em indisponibilidade explícita.
 
@@ -104,6 +130,39 @@ uv run python src/tests/e2e/run_rock_in_rio_contract.py
 ```
 
 E o `src/tests/e2e/run_chat_rock_in_rio.py` responde a outra metade da pergunta — não "o parser ainda casa?", mas "o que o cidadão recebe?".
+
+**Avisando alguém.** As três camadas acima recusam a página, mas nenhuma delas
+tira alguém do lugar — foi o buraco que o incidente de 01/09 escancarou. O laço
+de atualização, que já ia à fonte de 15 em 15 minutos, passou a registrar o
+veredito de cada ciclo em `src/tools/rock_in_rio/estado.py`, e disso saem três
+sinais:
+
+| Sinal | Onde aparece | Para quem |
+|---|---|---|
+| Check `rock_in_rio_lineup` | `/health/detail` (nunca `/health` nem `/health/ready`) | quem investiga um pod |
+| Span `rock_in_rio.lineup_fetch` + `rock_in_rio.degraded` no `mcp.tool_call` | SigNoz | quem investiga um incidente |
+| `mcp.dependency.errors` com `dependency.name = rock_in_rio` | SigNoz | alerta e dashboard |
+
+Duas decisões merecem registro:
+
+- **O check reporta a fonte, não o cache.** Um ciclo falho vira `DOWN` na hora,
+  mesmo com o cidadão ainda sendo atendido pelo cache dentro do teto de 60 min.
+  Essa hora de folga é justamente a janela em que dá para consertar antes de
+  alguém sentir; avisar só no fim dela desperdiçaria a única vantagem que o
+  desenho do cache oferece.
+- **O alerta sai só na virada.** O laço roda a cada 15 min, então reportar por
+  ciclo daria ~96 relatórios por dia e por réplica para uma única quebra —
+  mesma preocupação que já havia justificado o `intercept_errors=False` do
+  scraper. Copia o `_alert_transition` de `src/health/external_tables.py`.
+
+E o modo de falha é **classificado**: `formato` (o HTML mudou, exige correção de
+código) versus `fonte` (rede/HTTP, transitório). Um alerta que não diz qual dos
+dois aconteceu não diz o que fazer.
+
+Por fim, as fixtures ganharam um jeito barato de regravar —
+`scripts/regravar_fixtures_rock_in_rio.py`, que valida cada página pelo parser
+antes de gravar. Fixture que envelhece em silêncio é o que transformou a
+segunda camada em falso verde.
 
 ## O que muda se a produção liberar a grade horária
 

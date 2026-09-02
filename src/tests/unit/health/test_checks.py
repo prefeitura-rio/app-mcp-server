@@ -228,3 +228,88 @@ def test_registro_em_producao_inclui_redis_e_bigquery(monkeypatch, fake_env):
     checks.register_default_checks(mcp, registry)
 
     assert {"redis", "bigquery", "keycloak_jwks", "bigquery_dlq"} <= set(registry.names)
+
+
+# --------------------------------------------------------------------------
+# Line-up do Rock in Rio
+#
+# O check reporta a FONTE, não o cache: um ciclo falho vira DOWN na hora, mesmo
+# com o cidadão ainda sendo atendido pelo cache. A janela em que o cache ainda
+# cobre é justamente a janela em que dá para consertar antes de alguém sentir.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def estado_do_lineup():
+    """Isola o veredito do line-up entre os testes."""
+    from src.tools.rock_in_rio import estado
+
+    estado.resetar()
+    yield estado
+    estado.resetar()
+
+
+@pytest.mark.asyncio
+async def test_lineup_sem_ciclo_ainda_vira_skipped(estado_do_lineup):
+    """Pod recém-subido não é pod quebrado — e SKIPPED não degrada o agregado."""
+    assert await checks.check_rock_in_rio_lineup() is CheckStatus.SKIPPED
+
+
+@pytest.mark.asyncio
+async def test_lineup_com_ciclo_bem_sucedido_vira_up(estado_do_lineup):
+    estado_do_lineup.registrar_sucesso(atracoes=170, palcos=7)
+
+    assert await checks.check_rock_in_rio_lineup() is CheckStatus.UP
+
+
+@pytest.mark.asyncio
+async def test_lineup_com_formato_quebrado_diz_que_exige_codigo(estado_do_lineup):
+    """A mensagem precisa separar "espere" de "alguém precisa agir agora"."""
+    estado_do_lineup.registrar_falha(
+        falha=estado_do_lineup.FALHA_FORMATO, detalhe="LineupInvalido"
+    )
+
+    with pytest.raises(HealthCheckError, match="exige correção de código"):
+        await checks.check_rock_in_rio_lineup()
+
+
+@pytest.mark.asyncio
+async def test_lineup_com_fonte_fora_do_ar_reporta_a_classe_do_erro(estado_do_lineup):
+    estado_do_lineup.registrar_falha(
+        falha=estado_do_lineup.FALHA_FONTE, detalhe="ConnectError"
+    )
+
+    with pytest.raises(HealthCheckError, match="fonte do line-up inacessível"):
+        await checks.check_rock_in_rio_lineup()
+
+
+def test_registro_em_producao_inclui_o_lineup(monkeypatch, fake_env):
+    from src.health.registry import HealthRegistry
+
+    fake_env.IS_LOCAL = False
+    fake_env.EXCLUDED_TOOLS = []
+    registry = HealthRegistry()
+    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={"t": 1}))
+
+    checks.register_default_checks(mcp, registry)
+
+    assert "rock_in_rio_lineup" in registry.names
+
+
+def test_tool_excluida_nao_registra_o_check(monkeypatch, fake_env):
+    """Excluir a tool desliga o laço em `src/app.py`.
+
+    Sem esta guarda, o check ficaria `DOWN` para sempre esperando um ciclo que
+    ninguém vai rodar — um alarme permanentemente vermelho, que é o mesmo que
+    alarme nenhum.
+    """
+    from src.health.registry import HealthRegistry
+
+    fake_env.IS_LOCAL = False
+    fake_env.EXCLUDED_TOOLS = ["rock_in_rio_lineup"]
+    registry = HealthRegistry()
+    mcp = types.SimpleNamespace(get_tools=AsyncMock(return_value={"t": 1}))
+
+    checks.register_default_checks(mcp, registry)
+
+    assert "rock_in_rio_lineup" not in registry.names
