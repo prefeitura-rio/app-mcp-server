@@ -29,7 +29,17 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from src.tools.rock_in_rio.scraper import Show, buscar_lineup
+from opentelemetry.trace import Status, StatusCode
+
+from src.observability import metrics
+from src.observability.tracing import get_tracer
+from src.tools.rock_in_rio import estado
+from src.tools.rock_in_rio.scraper import (
+    DIAS_DO_EVENTO,
+    LineupInvalido,
+    Show,
+    buscar_lineup,
+)
 from src.utils.infisical import getenv_or_action
 from src.utils.log import logger
 
@@ -160,6 +170,7 @@ def resetar_cache() -> None:
     global _memoria
     _memoria = None
     _config_cache.clear()
+    estado.resetar()
 
 
 def _dentro_do_teto(registro: Optional[Dict[str, Any]]) -> bool:
@@ -224,9 +235,139 @@ def _carregado(registro: Dict[str, Any], origem: str) -> LineupCarregado:
     return LineupCarregado(list(registro["shows"]), registro["gerado_em_epoch"], origem)
 
 
+def _classificar(erro: BaseException) -> str:
+    """Separa "o site mudou" de "o site não respondeu".
+
+    A distinção é o que torna o alerta acionável: `formato` não passa sozinho e
+    exige mexer no parser; `fonte` tende a se resolver no próximo ciclo.
+    """
+    return (
+        estado.FALHA_FORMATO if isinstance(erro, LineupInvalido) else estado.FALHA_FONTE
+    )
+
+
+async def _alertar_transicao(
+    anterior: Optional[estado.ResultadoDoCiclo], atual: estado.ResultadoDoCiclo
+) -> None:
+    """Reporta ao error interceptor só na virada de saudável para quebrado.
+
+    Mesmo desenho de `_alert_transition` em `src/health/external_tables.py`, e
+    pelo mesmo motivo: o laço roda de 15 em 15 minutos, então alertar por ciclo
+    daria uma centena de reports por dia e por réplica para uma única quebra. É
+    a preocupação que já havia justificado o `intercept_errors=False` do
+    scraper.
+    """
+    from src.utils.error_interceptor import send_general_error
+
+    quebrou_agora = not atual.sucesso
+    estava_quebrado = anterior is not None and not anterior.sucesso
+
+    if quebrou_agora and not estava_quebrado:
+        if atual.falha == estado.FALHA_FORMATO:
+            mensagem = (
+                "O site do Rock in Rio mudou de estrutura: o parser não "
+                f"reconhece mais a página ({atual.detalhe}). Exige correção de "
+                "código — não se resolve sozinho."
+            )
+            tipo = "LineupFormatoMudou"
+        else:
+            mensagem = (
+                f"Fonte do line-up do Rock in Rio inacessível ({atual.detalhe}). "
+                "Provavelmente transitório."
+            )
+            tipo = "LineupFonteIndisponivel"
+
+        await send_general_error(
+            user_id="system",
+            source={
+                "source": "mcp",
+                "tool": "rock_in_rio_lineup",
+                "check": "lineup_fetch",
+            },
+            error_type=tipo,
+            error_message=mensagem,
+        )
+        return
+
+    if estava_quebrado and atual.sucesso:
+        logger.info(
+            "Line-up do Rock in Rio voltou a ser lido: "
+            f"{atual.atracoes} atrações em {atual.palcos} palcos."
+        )
+
+
 async def _buscar_e_guardar() -> Dict[str, Any]:
+    """Vai à fonte, guarda o resultado e registra o que aconteceu.
+
+    É o funil único de "fomos ao site" — passam por aqui tanto o cache frio
+    quanto o `forcar=True` do laço de atualização —, e é por isso que a
+    instrumentação mora aqui e não em `obter_lineup`: um ponto só, cobrindo os
+    dois caminhos, sem tocar na lógica de fallback de quem chama.
+
+    O span é raiz, não filho: o laço de background não atende requisição
+    nenhuma. Cada ciclo vira uma trace própria no SigNoz, e a falha cai na aba
+    Exceptions — que é exatamente o sinal que faltou em 01/09/2026.
+    """
     global _memoria
-    shows = await buscar_lineup()
+
+    anterior = estado.ultimo_resultado()
+    tracer = get_tracer()
+    iniciado = time.monotonic()
+
+    # `record_exception`/`set_status_on_exception` desligados porque o `except`
+    # abaixo já faz os dois, com a classificação do modo de falha junto. Com os
+    # padrões ligados, a exceção que sobe do bloco é registrada uma segunda vez
+    # e o span sai com dois eventos `exception` idênticos.
+    with tracer.start_as_current_span(
+        "rock_in_rio.lineup_fetch",
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        try:
+            shows = await buscar_lineup()
+        except asyncio.CancelledError:
+            # Cancelamento não é falha da fonte: é o lifespan derrubando a task
+            # no shutdown do pod. Registrar aqui inventaria uma queda a cada
+            # deploy que pegasse um ciclo no meio — e, pior, dispararia o
+            # alerta de transição por ela.
+            raise
+        except Exception as erro:
+            duracao = time.monotonic() - iniciado
+            falha = _classificar(erro)
+            atual = estado.registrar_falha(falha=falha, detalhe=type(erro).__name__)
+
+            span.set_attribute("rock_in_rio.success", False)
+            span.set_attribute("rock_in_rio.failure_kind", falha)
+            span.record_exception(erro)
+            span.set_status(Status(StatusCode.ERROR, str(erro)))
+            metrics.record_dependency_call(
+                "rock_in_rio", success=False, duration_s=duracao
+            )
+
+            # O alerta não pode derrubar o ciclo: se o interceptor estiver fora
+            # do ar, o que interessa é a exceção original continuar subindo.
+            try:
+                await _alertar_transicao(anterior, atual)
+            except Exception as erro_alerta:  # noqa: BLE001
+                logger.warning(f"Falha ao alertar a queda do line-up: {erro_alerta}")
+            raise
+
+        duracao = time.monotonic() - iniciado
+        palcos = len({show.palco for show in shows})
+        atual = estado.registrar_sucesso(atracoes=len(shows), palcos=palcos)
+
+        span.set_attribute("rock_in_rio.success", True)
+        span.set_attribute("rock_in_rio.atracoes", len(shows))
+        span.set_attribute("rock_in_rio.palcos", palcos)
+        span.set_attribute("rock_in_rio.dias", len(DIAS_DO_EVENTO))
+        span.set_status(Status(StatusCode.OK))
+        metrics.record_dependency_call("rock_in_rio", success=True, duration_s=duracao)
+
+        try:
+            await _alertar_transicao(anterior, atual)
+        except Exception as erro_alerta:  # noqa: BLE001
+            logger.warning(f"Falha ao registrar a volta do line-up: {erro_alerta}")
+
     registro = _registro(shows)
     _memoria = registro
     await _gravar_redis(registro)

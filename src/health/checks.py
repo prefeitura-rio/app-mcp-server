@@ -210,6 +210,44 @@ async def check_bigquery_dlq() -> CheckStatus:
     return CheckStatus.UP
 
 
+async def check_rock_in_rio_lineup() -> CheckStatus:
+    """Reporta se a última ida ao site do Rock in Rio deu certo — sem ir lá.
+
+    Segue `check_external_tables`: quem sonda é o laço de atualização que já
+    roda em background (`src/tools/rock_in_rio/cache.py`), e este check só lê o
+    veredito. Baixar as sete páginas aqui não caberia no orçamento de 1s da
+    rodada, e sondar de novo duplicaria a carga sobre um site de terceiro.
+
+    Isso também é o que concilia o check com a regra do docstring deste módulo:
+    ele não acrescenta sondagem nenhuma por probe, só publica um resultado que
+    já existia e não era visível.
+
+    Reporta a **fonte**, não o cache: um ciclo falho vira `DOWN` na hora, mesmo
+    com o cidadão ainda sendo atendido pelo cache dentro do teto de 60 min. A
+    janela em que o cache ainda cobre é justamente a janela em que dá para
+    consertar antes de alguém sentir — avisar só no fim dela desperdiçaria a
+    única folga que o desenho oferece.
+    """
+    from src.tools.rock_in_rio import estado
+
+    resultado = estado.ultimo_resultado()
+    if resultado is None:
+        # Ainda não houve ciclo: pod recém-subido, ou laço desligado. Não é
+        # falha — e `SKIPPED` não degrada o agregado.
+        return CheckStatus.SKIPPED
+
+    if resultado.sucesso:
+        return CheckStatus.UP
+
+    if resultado.falha == estado.FALHA_FORMATO:
+        raise HealthCheckError(
+            "o site mudou de estrutura e o parser não reconhece mais a página "
+            f"({resultado.detalhe}); exige correção de código"
+        )
+
+    raise HealthCheckError(f"fonte do line-up inacessível ({resultado.detalhe})")
+
+
 def make_tool_registry_check(mcp: Any):
     """Cria o check que confirma haver tools registradas.
 
@@ -253,5 +291,17 @@ def register_default_checks(
         # Consulta o Redis síncrono numa thread do pool de escrita, daí o
         # timeout maior que o dos checks que só leem estado em memória.
         registry.register("bigquery_dlq", check_bigquery_dlq, timeout_s=3.0)
+        # A guarda espelha a de `src/app.py`, que só liga o laço de atualização
+        # se a tool estiver no catálogo. Sem ela, excluir a tool desligaria o
+        # laço e deixaria este check `DOWN` para sempre, por ninguém.
+        # `getattr` com padrão, e não `env.EXCLUDED_TOOLS` direto, pelo mesmo
+        # motivo que `src/app.py` usa a forma em `BIGQUERY_DLQ_DRAIN_ENABLED`:
+        # os stubs de `env` dos testes são mínimos de propósito, e exigir mais
+        # um atributo deles acoplaria este registro a testes que não têm nada a
+        # ver com o line-up.
+        if "rock_in_rio_lineup" not in getattr(env, "EXCLUDED_TOOLS", ()):
+            registry.register(
+                "rock_in_rio_lineup", check_rock_in_rio_lineup, timeout_s=1.0
+            )
 
     logger.info(f"Health checks registrados: {', '.join(registry.names)}")

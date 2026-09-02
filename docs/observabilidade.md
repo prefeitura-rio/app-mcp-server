@@ -114,6 +114,37 @@ habilitado. Gera o span raiz da request (`POST /mcp`, `GET /health`, …).
 | `bigquery.save_feedback` | [bigquery.py:397](../src/utils/bigquery.py#L397) | `project_id`, `dataset_id`, `table_id`, `row_count`, `success` |
 | `bigquery.save_cor_alert` | [bigquery.py:495](../src/utils/bigquery.py#L495) | `project_id`, `dataset_id`, `table_id`, `alert_type`, `severity`, `row_count`, `success` |
 
+### 2.5 Span do line-up do Rock in Rio — `src/tools/rock_in_rio/cache.py`
+
+| Span | Origem | Atributos |
+|---|---|---|
+| `rock_in_rio.lineup_fetch` | [cache.py](../src/tools/rock_in_rio/cache.py) (`_buscar_e_guardar`) | `rock_in_rio.success`, `rock_in_rio.failure_kind` (`formato` \| `fonte`), `rock_in_rio.atracoes`, `rock_in_rio.palcos`, `rock_in_rio.dias` |
+
+É o **único span raiz que não nasce de uma request**: quem o emite é o laço de
+atualização em background, a cada 15 min. Vira uma trace própria, sem pai, e é
+por isso que ele existe — quando o site de terceiro muda de estrutura de
+madrugada, não há chamada de tool acontecendo para carregar o sinal.
+
+`rock_in_rio.failure_kind` separa os dois modos de falha porque a ação é oposta:
+`formato` é o site tendo mudado o HTML (exige correção de código, não passa
+sozinho) e `fonte` é rede/HTTP (transitório). Um alerta que não distingue os
+dois não diz o que fazer.
+
+O `mcp.tool_call` da `rock_in_rio_lineup` ganha `rock_in_rio.degraded = true` e
+`rock_in_rio.motivo` quando a tool devolve resposta indisponível. É o primeiro
+caso no projeto de tool que sinaliza degradação **sem levantar**: o
+`ToolCallTracingMiddleware` só marca `mcp.tool.success = False` em exceção, e
+esta tool devolve dicionário de propósito. Filtrar por `rock_in_rio.degraded`
+é o que encontra essas chamadas. O padrão vale para qualquer outra tool que
+passe a devolver resposta degradada em vez de falhar.
+
+A falha também alimenta `mcp.dependency.errors` e
+`mcp.dependency.call.duration` com `dependency.name = rock_in_rio` (seção 4) —
+é a série temporal, e não o span, que responde "quantas vezes isso caiu na
+última hora".
+
+---
+
 `bigquery.read` cobre a chamada **inteira** (cache + fila do single-flight +
 query) e é o span que mede a latência percebida pela tool; `bigquery.query` é
 filho dele e existe só em cache miss, medindo o custo do BigQuery em si.
@@ -292,6 +323,8 @@ Em ordem de impacto sobre a capacidade de investigar um incidente:
 | `tracing.py` sem teste unitário | `src/tests/unit/observability/test_tracing.py` |
 | Cache hit invisível | `cache.hit` e afins no `bigquery.read` (CHATR-115) |
 | Timeout de leitura não aparecia como erro | `bigquery.timeout` no `bigquery.query` (CHATR-125) |
+| Tool que devolve resposta degradada saía como sucesso no span | `rock_in_rio.degraded`, seção 2.5 — descoberto quando o site do Rock in Rio mudou (01/09/2026) e a queda não gerou erro nenhum |
+| Quebra de raspagem invisível fora de uma chamada de tool | `rock_in_rio.lineup_fetch`, seção 2.5 |
 
 ---
 
