@@ -307,7 +307,12 @@ def _instrucoes_indisponivel(frase: str) -> str:
     nosso, não do cidadão, e apontar o app oficial não é disfarce — é onde a
     programação (e o horário, que nunca temos) de fato está.
 
-    A segunda é a proibição, que continua tão dura quanto antes. Ela não é
+    No meio delas está o freio de repetição. Os botões saem em toda resposta
+    degradada, então nada impede o modelo de reapresentá-los a cada turno
+    enquanto o scraper não voltar — que é o loop mais provável aqui, e o único
+    que não depende de o clique voltar para esta tool.
+
+    A terceira parte é a proibição, que continua tão dura quanto antes. Ela não é
     visível ao cidadão, então rigidez ali não custa nada em experiência, e é o
     único freio contra o modelo preencher o vazio com line-up inventado ou
     devolver ao cidadão o nome que ele mesmo escreveu.
@@ -322,7 +327,9 @@ def _instrucoes_indisponivel(frase: str) -> str:
         "ofereça os assuntos dos botões de `payload_schema`; quando ele "
         f"escolher um, responda usando a tool `{RAG_DE_APOIO}` — nunca "
         "responda transporte, alimentação ou emergência com conhecimento "
-        "próprio.\n\n"
+        "próprio. Ofereça esses assuntos UMA ÚNICA VEZ: se o cidadão já "
+        "escolheu um deles ou já recebeu os botões nesta conversa, não os "
+        "apresente de novo — siga a partir do que ele escolheu.\n\n"
         "RESTRIÇÃO, que vale inclusive com o tom leve: esta resposta NÃO "
         "contém line-up. Não informe, estime, deduza nem recorde de memória o "
         "dia, o palco ou o horário de nenhuma atração. Não repita nomes de "

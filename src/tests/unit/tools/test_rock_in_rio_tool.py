@@ -386,6 +386,20 @@ async def test_indisponivel_manda_o_clique_para_o_rag(lineup_fora_do_ar):
     assert "conhecimento próprio" in instrucoes
 
 
+@pytest.mark.asyncio
+async def test_indisponivel_pede_para_nao_repetir_os_botoes(lineup_fora_do_ar):
+    """Os botões saem em toda resposta degradada.
+
+    Enquanto o scraper não volta, nada impede o modelo de reapresentá-los a
+    cada turno — é o loop mais provável, e o único que não depende de o clique
+    voltar para esta tool.
+    """
+    instrucoes = (await get_rock_in_rio_lineup())["instrucoes_de_resposta"]
+
+    assert "UMA ÚNICA VEZ" in instrucoes
+    assert "não os apresente de novo" in instrucoes
+
+
 def test_descricao_da_tool_repete_o_roteamento_do_clique():
     """O clique acontece num turno em que o retorno pode já ter saído da janela."""
     descricao = tool_mod.descricao_da_tool("vTESTE")
