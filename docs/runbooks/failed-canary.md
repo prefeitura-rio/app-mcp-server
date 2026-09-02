@@ -14,7 +14,7 @@
   has no canary-specific resource, and the Rollout does not use
   `trafficRouting.istio`, so a canary abort is entirely an Argo Rollouts
   controller decision based on its own Prometheus queries against
-  `prometheus.istio-system.svc.cluster.local:9090`, independent of SigNoz.
+  `prometheus-server.istio-system.svc.cluster.local:9090`, independent of SigNoz.
   The two `mcp_slo_error_budget_long_burn_*` SigNoz alerts
   (`infra/superapp/modules/deployments/signoz-resilience-alerts.tf:44-136`)
   measure a related but distinct signal (trace-based error rate over 1h/6h
