@@ -183,7 +183,7 @@ class Show:
 
         `url` e `dia_slug` ficam de fora porque são deriváveis — a URL é o
         `BASE_URL` mais o slug, e o dia é a própria `data` — e, repetidos nas
-        156 atrações, custam ~13 KB por chamada, algo como 3,4 mil tokens de
+        170 atrações, custam ~14 KB por chamada, algo como 3,7 mil tokens de
         contexto, sem responder a nenhuma das perguntas que a tool se propõe a
         responder. Os dois campos continuam no `Show`, que é o que o runner de
         contrato consome.
@@ -200,7 +200,7 @@ def url_do_artista(slug: str) -> str:
     """Reconstrói a página do artista no site oficial a partir do slug.
 
     É por esta derivação existir que `url` não precisa viajar em cada uma das
-    156 atrações da resposta (ver `Show.para_resposta`). Fica aqui, ao lado do
+    170 atrações da resposta (ver `Show.para_resposta`). Fica aqui, ao lado do
     padrão que define a forma da URL, para que as duas nunca saiam de sincronia.
     """
     return f"{BASE_URL}/rio/pt-br/line-up/{slug}/"

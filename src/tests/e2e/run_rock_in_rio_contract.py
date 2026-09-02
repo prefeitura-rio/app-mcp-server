@@ -48,6 +48,7 @@ PALCOS_CONHECIDOS = {
     "Espaço Favela",
     "Global Village",
     "Supernova",
+    "Highway Stage",
 }
 
 

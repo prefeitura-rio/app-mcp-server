@@ -6,6 +6,10 @@ site mudou, e um HTML sintético reduzido não detectaria. Salvar os sete, e nã
 uma amostra, é o que dá cobertura offline à premissa de que todos os dias têm a
 mesma estrutura — foi assim que apareceu o `<span>` de nota de rodapé no nome
 da MEDUZA, presente só no dia 06.
+
+Capturadas em 02/09/2026, depois de o site mover as páginas de dia para
+`/rio/pt-br/line-up/dia/{slug}/` e passar a publicar os links de artista em
+forma relativa. Para regravá-las: `python scripts/regravar_fixtures_rock_in_rio.py`.
 """
 
 from datetime import date
@@ -33,6 +37,7 @@ PALCOS_ESPERADOS = [
     "Espaço Favela",
     "Global Village",
     "Supernova",
+    "Highway Stage",
 ]
 
 
@@ -43,7 +48,7 @@ def _ler(nome: str) -> str:
 def test_parse_dia_04_extrai_a_grade_completa():
     shows = parse_dia(_ler("dia-04-set.html"), dia_slug="04-set", data=date(2026, 9, 4))
 
-    assert len(shows) == 22
+    assert len(shows) == 24
     assert [s.palco for s in shows][:1] == ["Palco Mundo"]
     assert shows[0].artista == "FOO FIGHTERS"
     assert shows[0].slug == "foo-fighters"
@@ -70,7 +75,7 @@ def test_parse_dia_11_tem_uma_atracao_a_mais_no_new_dance_order():
         _ler("dia-11-set.html"), dia_slug="11-set", data=date(2026, 9, 11)
     )
 
-    assert len(shows) == 23
+    assert len(shows) == 25
     assert sum(1 for s in shows if s.palco == "New Dance Order") == 5
     assert shows[0].artista == "STRAY KIDS"
 
@@ -181,7 +186,17 @@ def test_artista_antes_de_qualquer_palco_levanta():
         parse_dia(html, dia_slug="04-set", data=date(2026, 9, 4))
 
 
-_ANCORA_ARTISTA = '<a href="https://rockinrio.com/rio/pt-br/line-up/'
+def _inicio_da_ancora(html: str, desde: int, ordinal: int) -> int:
+    """Posição da n-ésima âncora de artista a partir de `desde`.
+
+    Derivada do próprio padrão do parser, e não de um literal: a versão
+    anterior era a string do href absoluto, e ficou obsoleta em silêncio quando
+    o site passou a publicar o link em forma relativa (01/09/2026) — o teste
+    quebrou por `substring not found`, que não diz nada sobre o que mudou.
+    """
+    return [m.start() for m in scraper_mod._RE_ANCORA_ARTISTA.finditer(html, desde)][
+        ordinal
+    ]
 
 
 def test_section_no_meio_do_bloco_nao_trunca_o_dia():
@@ -193,9 +208,7 @@ def test_section_no_meio_do_bloco_nao_trunca_o_dia():
     """
     html = _ler("dia-04-set.html")
     inicio = html.index(_INICIO_RESULTADO)
-    segunda_atracao = html.index(
-        _ANCORA_ARTISTA, html.index(_ANCORA_ARTISTA, inicio) + 1
-    )
+    segunda_atracao = _inicio_da_ancora(html, inicio, 1)
     com_banner = (
         html[:segunda_atracao]
         + '<section class="banner"><p>publicidade</p></section>'
@@ -204,7 +217,7 @@ def test_section_no_meio_do_bloco_nao_trunca_o_dia():
 
     shows = parse_dia(com_banner, dia_slug="04-set", data=date(2026, 9, 4))
 
-    assert len(shows) == 22
+    assert len(shows) == 24
 
 
 def test_icone_ausente_nao_derruba_a_atracao():
@@ -220,7 +233,7 @@ def test_icone_ausente_nao_derruba_a_atracao():
 
     shows = parse_dia(sem_icone, dia_slug="04-set", data=date(2026, 9, 4))
 
-    assert len(shows) == 22
+    assert len(shows) == 24
     assert shows[0].artista == "FOO FIGHTERS"
 
 
@@ -253,9 +266,9 @@ def test_marcador_de_nota_de_rodape_nao_entra_no_nome():
 def test_as_sete_paginas_reais_parseiam_com_a_mesma_estrutura():
     """A premissa do desenho é que os sete dias têm a mesma forma.
 
-    O total de 156 atrações e os seis palcos são os números levantados na
-    investigação da fonte (CHATR-187); divergir deles é sinal de que o site
-    mudou ou de que uma fixture ficou desatualizada.
+    O total de 170 atrações e os sete palcos são os números do site depois
+    da mudança de 01/09/2026; divergir deles é sinal de que o site mudou de
+    novo ou de que uma fixture ficou desatualizada.
     """
     total = 0
     palcos = set()
@@ -266,7 +279,7 @@ def test_as_sete_paginas_reais_parseiam_com_a_mesma_estrutura():
         total += len(shows)
         palcos |= {s.palco for s in shows}
 
-    assert total == 156
+    assert total == 170
     assert palcos == set(PALCOS_ESPERADOS)
 
 
