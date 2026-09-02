@@ -143,15 +143,15 @@ spec:
     apiVersion: argoproj.io/v1alpha1
     kind: Rollout
     name: mcp
-  minReplicas: 2
-  maxReplicas: 4
+  minReplicas: 6
+  maxReplicas: 16
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 70
+          averageUtilization: 50
     - type: Resource
       resource:
         name: memory
