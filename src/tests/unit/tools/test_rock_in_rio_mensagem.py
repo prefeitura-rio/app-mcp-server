@@ -122,10 +122,10 @@ def test_dia_sem_atracao_nao_vira_bloco():
 
 
 def test_bloco_do_palco_lista_um_item_por_dia():
-    """Mesmo layout do bloco de dia, com o eixo trocado.
+    """Mesma abertura do bloco de dia, com o eixo trocado.
 
-    O cabeçalho não leva preposição colada ao nome do palco: "no Supernova" e
-    "na Supernova" soam ambos errados, e é o palco que varia aqui.
+    As duas respostas precisam chegar ao cidadão com a mesma cara: "No <alvo>
+    do Rock in Rio 2026, as atrações são:" seguido dos itens.
     """
     shows = [
         _show("2026-09-04", "Palco Sunset", "HOT MILK"),
@@ -137,7 +137,7 @@ def test_bloco_do_palco_lista_um_item_por_dia():
     bloco = bloco_do_palco("Palco Sunset", shows, datas, "Rock in Rio 2026", AVISO, APP)
 
     assert bloco == (
-        "As atrações do Palco Sunset no Rock in Rio 2026 são:\n"
+        "No Palco Sunset do Rock in Rio 2026, as atrações são:\n"
         "\n"
         "- 04/09 (sexta-feira): Hot Milk\n"
         "\n"

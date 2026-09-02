@@ -241,7 +241,7 @@ async def test_resposta_traz_o_bloco_pronto_de_cada_palco(lineup_ok):
     # Mesma chave que `evento.palcos` e que cada item de `shows` publicam.
     assert list(resposta["texto_por_palco"]) == resposta["evento"]["palcos"]
     bloco = resposta["texto_por_palco"]["Palco Mundo"]
-    assert bloco.startswith("As atrações do Palco Mundo no Rock in Rio 2026 são:")
+    assert bloco.startswith("No Palco Mundo do Rock in Rio 2026, as atrações são:")
     assert "- 04/09 (sexta-feira): Foo Fighters" in bloco
     assert "`texto_por_palco`" in resposta["instrucoes_de_resposta"]
 

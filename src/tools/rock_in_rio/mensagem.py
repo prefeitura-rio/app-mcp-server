@@ -188,9 +188,10 @@ def bloco_do_palco(
 ) -> str:
     """Monta a mensagem de um palco: um item por dia em que ele tem atração.
 
-    O cabeçalho evita preposição colada ao nome do palco — "no Supernova" e "na
-    Supernova" soam ambos errados, e o palco é o que varia aqui. "As atrações
-    do X" funciona para todos os nomes que o site publica.
+    Mesma frase de abertura do bloco de dia, com o eixo trocado: as duas
+    respostas chegam ao cidadão com a mesma cara, que foi o pedido. O preço é
+    "No Supernova", único nome de palco em que a preposição masculina soa
+    estranha — ela se sustenta pelo "palco" implícito.
     """
     por_data = _agrupar(shows_do_palco, "data")
 
@@ -204,7 +205,7 @@ def bloco_do_palco(
 
     return _juntar(
         [
-            f"As atrações do {palco} no {nome_do_evento} são:",
+            f"No {palco} do {nome_do_evento}, as atrações são:",
             *itens,
             *_rodape(aviso_de_horarios, app_oficial),
         ]
