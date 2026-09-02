@@ -29,10 +29,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from src.observability import metrics
-from src.observability.tracing import get_tracer
+from src.observability.tracing import get_tracer, mark_span_error, traced_stage
 from src.tools.rock_in_rio import estado
 from src.tools.rock_in_rio.scraper import (
     DIAS_DO_EVENTO,
@@ -374,6 +375,14 @@ async def _buscar_e_guardar() -> Dict[str, Any]:
     return registro
 
 
+def _marcar_leitura(span: trace.Span, carregado: LineupCarregado) -> LineupCarregado:
+    """Anota o span de leitura com a procedência do dado, para todo retorno."""
+    span.set_attribute("rock_in_rio.cache.origem", carregado.origem)
+    span.set_attribute("rock_in_rio.cache.stale", carregado.origem == "cache_stale")
+    span.set_attribute("rock_in_rio.show_count", len(carregado.shows))
+    return carregado
+
+
 async def obter_lineup(*, forcar: bool = False) -> LineupCarregado:
     """Devolve a grade completa, dentro do teto de idade.
 
@@ -385,48 +394,70 @@ async def obter_lineup(*, forcar: bool = False) -> LineupCarregado:
     """
     global _memoria
 
-    if not forcar and _dentro_do_teto(_memoria):
-        return _carregado(_memoria, "memoria")
+    with traced_stage("rock_in_rio.cache.read") as span:
+        span.set_attribute("rock_in_rio.forced", forcar)
 
-    async with _obter_lock():
-        # Outra corrotina pode ter preenchido o cache enquanto esta esperava a
-        # trava; sem esta recheca, a espera na fila viraria um download a mais.
         if not forcar and _dentro_do_teto(_memoria):
-            return _carregado(_memoria, "memoria")
+            return _marcar_leitura(span, _carregado(_memoria, "memoria"))
 
-        if not forcar:
-            compartilhado = await _ler_redis()
-            if _dentro_do_teto(compartilhado):
-                _memoria = compartilhado
-                return _carregado(compartilhado, "redis")
+        async with _obter_lock():
+            # Outra corrotina pode ter preenchido o cache enquanto esta
+            # esperava a trava; sem esta recheca, a espera na fila viraria um
+            # download a mais.
+            if not forcar and _dentro_do_teto(_memoria):
+                return _marcar_leitura(span, _carregado(_memoria, "memoria"))
 
-        try:
-            registro = await _buscar_e_guardar()
-            return _carregado(registro, "site")
-        except Exception as erro:
-            logger.warning(f"Falha ao buscar o line-up do Rock in Rio: {erro}")
+            if not forcar:
+                compartilhado = await _ler_redis()
+                if _dentro_do_teto(compartilhado):
+                    _memoria = compartilhado
+                    return _marcar_leitura(span, _carregado(compartilhado, "redis"))
 
-            # Último recurso: qualquer dado que ainda respeite o teto. Uma queda
-            # curta do site durante o festival não pode virar erro para o
-            # cidadão — mas uma queda longa precisa virar, e vira.
-            #
-            # A memória é consultada primeiro e o Redis só se ela não servir. As
-            # duas cópias estão igualmente dentro do teto, que é o contrato; ir
-            # ao Redis para escolher a mais nova entre elas custaria um
-            # round-trip (até o `socket_timeout`) justamente na requisição em que
-            # a fonte já falhou. A idade real de quem for servido vai no
-            # `atualizado_em` da resposta de qualquer forma.
-            if _dentro_do_teto(_memoria):
-                return _carregado(_memoria, "cache_stale")
+            with get_tracer().start_as_current_span(
+                "rock_in_rio.cache.write",
+                attributes={"rock_in_rio.page_count": len(DIAS_DO_EVENTO)},
+                record_exception=False,
+                set_status_on_exception=False,
+            ) as write_span:
 
-            compartilhado = await _ler_redis()
-            if _dentro_do_teto(compartilhado):
-                return _carregado(compartilhado, "cache_stale")
+                def _servir_stale(dado: Dict[str, Any]) -> LineupCarregado:
+                    write_span.set_attribute("rock_in_rio.cache.fallback", True)
+                    return _marcar_leitura(span, _carregado(dado, "cache_stale"))
 
-            raise LineupIndisponivel(
-                "Line-up do Rock in Rio indisponível: a fonte não respondeu e não "
-                "há dado em cache dentro do teto de idade."
-            ) from erro
+                try:
+                    registro = await _buscar_e_guardar()
+                except Exception as erro:
+                    logger.warning(f"Falha ao buscar o line-up do Rock in Rio: {erro}")
+                    mark_span_error(write_span, erro)
+
+                    # Último recurso: qualquer dado que ainda respeite o teto.
+                    # Uma queda curta do site durante o festival não pode
+                    # virar erro para o cidadão — mas uma queda longa precisa
+                    # virar, e vira.
+                    #
+                    # A memória é consultada primeiro e o Redis só se ela não
+                    # servir. As duas cópias estão igualmente dentro do teto,
+                    # que é o contrato; ir ao Redis para escolher a mais nova
+                    # entre elas custaria um round-trip (até o
+                    # `socket_timeout`) justamente na requisição em que a
+                    # fonte já falhou. A idade real de quem for servido vai no
+                    # `atualizado_em` da resposta de qualquer forma.
+                    if _dentro_do_teto(_memoria):
+                        return _servir_stale(_memoria)
+
+                    compartilhado = await _ler_redis()
+                    if _dentro_do_teto(compartilhado):
+                        return _servir_stale(compartilhado)
+
+                    write_span.set_attribute("rock_in_rio.cache.fallback", False)
+                    raise LineupIndisponivel(
+                        "Line-up do Rock in Rio indisponível: a fonte não "
+                        "respondeu e não há dado em cache dentro do teto de "
+                        "idade."
+                    ) from erro
+
+                write_span.set_status(Status(StatusCode.OK))
+                return _marcar_leitura(span, _carregado(registro, "site"))
 
 
 async def aquecer_lineup() -> bool:
@@ -451,11 +482,20 @@ async def run_refresh_loop() -> None:
     """Revalida o line-up periodicamente, antes de o dado atingir o teto."""
     while True:
         await asyncio.sleep(intervalo_refresh_s())
-        try:
-            await obter_lineup(forcar=True)
-        except asyncio.CancelledError:
-            raise
-        except Exception as erro:
-            # Só loga: o laço precisa sobreviver a uma indisponibilidade
-            # passageira do site para conseguir se recuperar no próximo ciclo.
-            logger.warning(f"Ciclo de atualização do line-up falhou: {erro}")
+        with get_tracer().start_as_current_span(
+            "rock_in_rio.refresh",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                await obter_lineup(forcar=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as erro:
+                # Só loga: o laço precisa sobreviver a uma indisponibilidade
+                # passageira do site para conseguir se recuperar no próximo
+                # ciclo.
+                mark_span_error(span, erro)
+                logger.warning(f"Ciclo de atualização do line-up falhou: {erro}")
+            else:
+                span.set_status(Status(StatusCode.OK))

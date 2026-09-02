@@ -17,8 +17,8 @@ import asyncio
 import contextvars
 import time
 from concurrent.futures import Executor, Future
-from contextlib import nullcontext
-from typing import Any, Callable, TypeVar
+from contextlib import contextmanager, nullcontext
+from typing import Any, Callable, Generator, TypeVar
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from mcp.types import CallToolRequestParams
@@ -158,6 +158,43 @@ def setup_tracing() -> bool:
 def get_tracer() -> trace.Tracer:
     """Retorna o tracer nomeado usado para instrumentação manual."""
     return trace.get_tracer(_TRACER_NAME)
+
+
+def mark_span_error(span: trace.Span, erro: BaseException) -> None:
+    """Marca um span de instrumentação manual como erro sem texto de exceção.
+
+    Só o nome da classe vai para o span, no atributo semântico padrão do OTel
+    (`error.type`) — nunca `record_exception`/`str(erro)`, que embutiriam a
+    mensagem da exceção (que pode carregar corpo de resposta de um terceiro,
+    por exemplo) no backend de trace. Por isso os spans que chamam esta
+    função devem ser abertos com `record_exception=False,
+    set_status_on_exception=False`: sem isso, o `__exit__` do próprio span
+    registraria a mensagem por conta própria ao ver a exceção propagar.
+    """
+    span.set_attribute("error.type", type(erro).__name__)
+    span.set_status(Status(StatusCode.ERROR))
+
+
+@contextmanager
+def traced_stage(name: str) -> Generator[trace.Span, None, None]:
+    """Span de instrumentação manual para um estágio interno "tudo ou nada".
+
+    Só serve estágios em que exceção propagada == falha e retorno normal ==
+    sucesso — nunca um estágio que capture a própria exceção e ainda assim
+    retorne (aí a marcação de erro precisa ser manual; ver `mark_span_error`),
+    porque `Status(OK)`, ao final deste gerenciador, sobrescreveria um
+    `Status(ERROR)` já setado por quem chamou.
+    """
+    with get_tracer().start_as_current_span(
+        name, record_exception=False, set_status_on_exception=False
+    ) as span:
+        try:
+            yield span
+        except Exception as erro:
+            mark_span_error(span, erro)
+            raise
+        else:
+            span.set_status(Status(StatusCode.OK))
 
 
 def run_in_executor_with_context(

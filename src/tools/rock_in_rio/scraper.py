@@ -29,6 +29,7 @@ from datetime import date
 from typing import Dict, List, Tuple
 from urllib.parse import urljoin
 
+from src.observability.tracing import traced_stage
 from src.utils.http_client import InterceptedHTTPClient
 from src.utils.log import logger
 
@@ -234,87 +235,96 @@ def parse_dia(html: str, *, dia_slug: str, data: date) -> List[Show]:
             bloco de artista não puder ser lido, se um nome vier acima do teto
             de tamanho ou se o dia vier abaixo do piso de atrações.
     """
-    inicio = html.find(_INICIO_RESULTADO)
-    if inicio == -1:
-        raise LineupInvalido(
-            f"Bloco '{_INICIO_RESULTADO}' não encontrado na página do dia {dia_slug}"
-        )
+    with traced_stage("rock_in_rio.scrape.parse_day") as span:
+        span.set_attribute("rock_in_rio.dia_slug", dia_slug)
 
-    # Varre do início do bloco de resultados até o fim do documento, sem tentar
-    # fechar no `</section>` correspondente. Cortar no primeiro `</section>`
-    # parecia mais preciso e era o contrário: bastava o tema passar a inserir uma
-    # `<section>` no meio da lista — um banner, um carrossel — para o dia sair
-    # truncado pela metade, sem erro nenhum. Os padrões são específicos o
-    # bastante para não casarem com nada abaixo do bloco de resultados.
-    trecho = html[inicio:]
+        inicio = html.find(_INICIO_RESULTADO)
+        if inicio == -1:
+            raise LineupInvalido(
+                f"Bloco '{_INICIO_RESULTADO}' não encontrado na página do dia {dia_slug}"
+            )
 
-    shows: List[Show] = []
-    palco_atual: str | None = None
+        # Varre do início do bloco de resultados até o fim do documento, sem
+        # tentar fechar no `</section>` correspondente. Cortar no primeiro
+        # `</section>` parecia mais preciso e era o contrário: bastava o tema
+        # passar a inserir uma `<section>` no meio da lista — um banner, um
+        # carrossel — para o dia sair truncado pela metade, sem erro nenhum.
+        # Os padrões são específicos o bastante para não casarem com nada
+        # abaixo do bloco de resultados.
+        trecho = html[inicio:]
 
-    for match in _RE_ITENS.finditer(trecho):
-        if match.group("palco_bloco") is not None:
-            palco = _limpar_texto(match.group("palco"))
-            if len(palco) > MAX_TAMANHO_NOME:
+        shows: List[Show] = []
+        palco_atual: str | None = None
+
+        for match in _RE_ITENS.finditer(trecho):
+            if match.group("palco_bloco") is not None:
+                palco = _limpar_texto(match.group("palco"))
+                if len(palco) > MAX_TAMANHO_NOME:
+                    raise LineupInvalido(
+                        f"Nome de palco com {len(palco)} caracteres na página "
+                        f"do dia {dia_slug}, acima do teto de {MAX_TAMANHO_NOME}"
+                    )
+                if palco:
+                    palco_atual = palco
+                continue
+
+            if palco_atual is None:
+                # Artista antes de qualquer cabeçalho de palco significa que o
+                # agrupamento por ordem no documento deixou de valer — ou
+                # seja, a premissa central deste parser caiu.
                 raise LineupInvalido(
-                    f"Nome de palco com {len(palco)} caracteres na página do dia "
-                    f"{dia_slug}, acima do teto de {MAX_TAMANHO_NOME}"
+                    f"Artista '{match.group('slug')}' aparece antes de "
+                    f"qualquer palco na página do dia {dia_slug}"
                 )
-            if palco:
-                palco_atual = palco
-            continue
 
-        if palco_atual is None:
-            # Artista antes de qualquer cabeçalho de palco significa que o
-            # agrupamento por ordem no documento deixou de valer — ou seja, a
-            # premissa central deste parser caiu.
+            artista = _limpar_texto(match.group("artista"))
+            if not artista:
+                raise LineupInvalido(
+                    f"Artista sem nome (slug '{match.group('slug')}') no dia {dia_slug}"
+                )
+            if len(artista) > MAX_TAMANHO_NOME:
+                raise LineupInvalido(
+                    f"Nome de artista com {len(artista)} caracteres (slug "
+                    f"'{match.group('slug')}') no dia {dia_slug}, acima do "
+                    f"teto de {MAX_TAMANHO_NOME}"
+                )
+
+            shows.append(
+                Show(
+                    data=data.isoformat(),
+                    dia_slug=dia_slug,
+                    palco=palco_atual,
+                    artista=artista,
+                    slug=match.group("slug"),
+                    url=urljoin(BASE_URL, match.group("url")),
+                )
+            )
+
+        if not shows:
             raise LineupInvalido(
-                f"Artista '{match.group('slug')}' aparece antes de qualquer palco "
-                f"na página do dia {dia_slug}"
+                f"Nenhuma atração encontrada na página do dia {dia_slug}"
             )
 
-        artista = _limpar_texto(match.group("artista"))
-        if not artista:
+        # Confronta o que foi lido com o número de blocos de artista presentes
+        # no HTML. É o que transforma "um bloco mudou de forma e não casou" em
+        # erro: sem isso, o dia sairia com uma atração a menos e ninguém
+        # saberia.
+        ancoras = len(_RE_ANCORA_ARTISTA.findall(trecho))
+        if ancoras != len(shows):
             raise LineupInvalido(
-                f"Artista sem nome (slug '{match.group('slug')}') no dia {dia_slug}"
+                f"A página do dia {dia_slug} tem {ancoras} blocos de artista, "
+                f"mas o parser leu {len(shows)}: o formato do bloco mudou"
             )
-        if len(artista) > MAX_TAMANHO_NOME:
+
+        if len(shows) < MIN_ATRACOES_POR_DIA:
             raise LineupInvalido(
-                f"Nome de artista com {len(artista)} caracteres (slug "
-                f"'{match.group('slug')}') no dia {dia_slug}, acima do teto de "
-                f"{MAX_TAMANHO_NOME}"
+                f"Apenas {len(shows)} atrações no dia {dia_slug}, abaixo do "
+                f"piso de {MIN_ATRACOES_POR_DIA}: a página provavelmente veio "
+                "incompleta"
             )
 
-        shows.append(
-            Show(
-                data=data.isoformat(),
-                dia_slug=dia_slug,
-                palco=palco_atual,
-                artista=artista,
-                slug=match.group("slug"),
-                url=urljoin(BASE_URL, match.group("url")),
-            )
-        )
-
-    if not shows:
-        raise LineupInvalido(f"Nenhuma atração encontrada na página do dia {dia_slug}")
-
-    # Confronta o que foi lido com o número de blocos de artista presentes no
-    # HTML. É o que transforma "um bloco mudou de forma e não casou" em erro:
-    # sem isso, o dia sairia com uma atração a menos e ninguém saberia.
-    ancoras = len(_RE_ANCORA_ARTISTA.findall(trecho))
-    if ancoras != len(shows):
-        raise LineupInvalido(
-            f"A página do dia {dia_slug} tem {ancoras} blocos de artista, mas o "
-            f"parser leu {len(shows)}: o formato do bloco mudou"
-        )
-
-    if len(shows) < MIN_ATRACOES_POR_DIA:
-        raise LineupInvalido(
-            f"Apenas {len(shows)} atrações no dia {dia_slug}, abaixo do piso de "
-            f"{MIN_ATRACOES_POR_DIA}: a página provavelmente veio incompleta"
-        )
-
-    return shows
+        span.set_attribute("rock_in_rio.show_count", len(shows))
+        return shows
 
 
 async def _baixar_dia(client: InterceptedHTTPClient, dia_slug: str) -> str:
@@ -328,11 +338,13 @@ async def _baixar_dia(client: InterceptedHTTPClient, dia_slug: str) -> str:
     critério de `src/tools/google_search/gemini_service.py`.
     """
     url = DAY_URL_TEMPLATE.format(slug=dia_slug)
-    response = await client.get(
-        url, headers={"User-Agent": _USER_AGENT}, intercept_errors=False
-    )
-    response.raise_for_status()
-    return response.text
+    with traced_stage("rock_in_rio.scrape.fetch_day") as span:
+        span.set_attribute("rock_in_rio.dia_slug", dia_slug)
+        response = await client.get(
+            url, headers={"User-Agent": _USER_AGENT}, intercept_errors=False
+        )
+        response.raise_for_status()
+        return response.text
 
 
 async def buscar_lineup() -> List[Show]:
