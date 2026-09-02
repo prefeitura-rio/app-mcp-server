@@ -22,7 +22,7 @@ montada aqui a partir de `contexto` — nunca do termo que o cidadão escreveu.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from opentelemetry import trace
 from pydantic import Field
@@ -91,8 +91,15 @@ FRASE_POR_CONTEXTO: Dict[str, str] = {
     CONTEXTO_PADRAO: "a programação",
 }
 
+# `str` e não `Literal`, com o conjunto fechado publicado à mão no schema: o
+# modelo vê exatamente a mesma taxonomia, mas um valor fora dela é normalizado
+# por `_normalizar_contexto` em vez de virar `ValidationError`. Com `Literal`, um
+# "horarios" no lugar de "hora" derrubava a chamada, e o cidadão ficava sem
+# resposta por causa de um campo que só serve para acompanhamento.
+CONTEXTOS_PUBLICADOS = CONTEXTOS_CLASSIFICAVEIS + ("outro",)
+
 ContextoDaPergunta = Annotated[
-    Optional[Literal["hora", "data", "banda", "palco", "outro"]],
+    Optional[str],
     Field(
         description=(
             "Assunto principal da pergunta do cidadão. 'hora' se perguntou "
@@ -100,7 +107,8 @@ ContextoDaPergunta = Annotated[
             "'banda' se citou uma atração; 'palco' se citou um palco. "
             "Se citar banda e palco juntos, use 'banda'. "
             "Se não se encaixar, use 'outro'."
-        )
+        ),
+        json_schema_extra={"enum": list(CONTEXTOS_PUBLICADOS)},
     ),
 ]
 

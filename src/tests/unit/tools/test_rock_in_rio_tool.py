@@ -16,6 +16,8 @@ from src.tools.rock_in_rio.tool import (
     APP_OFICIAL,
     ASSUNTOS_DE_APOIO,
     CONTEXTO_PADRAO,
+    CONTEXTOS_PUBLICADOS,
+    ContextoDaPergunta,
     FRASE_POR_CONTEXTO,
     RAG_DE_APOIO,
     _normalizar_contexto,
@@ -390,3 +392,31 @@ def test_descricao_da_tool_repete_o_roteamento_do_clique():
 
     assert RAG_DE_APOIO in descricao
     assert "`contexto`" in descricao
+
+
+@pytest.mark.asyncio
+async def test_contexto_errado_atravessa_o_schema_em_vez_de_derrubar_a_chamada(
+    lineup_ok,
+):
+    """O conjunto fechado é publicado, mas não é validado — de propósito.
+
+    Com `Literal`, "horarios" no lugar de "hora" levantava `ValidationError` no
+    FastMCP e o cidadão ficava sem programação por causa de um campo que só
+    serve para acompanhamento. Aqui o teste passa pelo mesmo caminho que a
+    chamada MCP percorre, e não pela função direto.
+    """
+    from fastmcp.tools import Tool as FastMCPTool
+
+    async def rock_in_rio_lineup(contexto: ContextoDaPergunta = None) -> dict:
+        return await get_rock_in_rio_lineup(contexto=contexto)
+
+    tool = FastMCPTool.from_function(rock_in_rio_lineup)
+
+    # A taxonomia continua publicada: é ela que orienta o modelo a classificar.
+    assert tool.parameters["properties"]["contexto"]["enum"] == list(
+        CONTEXTOS_PUBLICADOS
+    )
+
+    resultado = await tool.run({"contexto": "horarios"})
+    assert resultado.structured_content["contexto"] == CONTEXTO_PADRAO
+    assert resultado.structured_content["disponivel"] is True
