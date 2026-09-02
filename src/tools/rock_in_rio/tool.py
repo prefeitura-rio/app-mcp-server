@@ -28,6 +28,7 @@ from opentelemetry import trace
 from pydantic import Field
 
 from src.tools.rock_in_rio.cache import LineupIndisponivel, obter_lineup
+from src.tools.rock_in_rio.mensagem import textos_por_dia
 from src.tools.rock_in_rio.scraper import DIAS_DO_EVENTO
 
 # `_get_weekday_pt` é privado por convenção de nome, mas é a única tradução de
@@ -140,7 +141,14 @@ _INSTRUCOES_DE_RESPOSTA = (
     "nome não corresponder a nenhuma atração de `shows`, diga que não encontrou "
     "essa atração na programação — não afirme que ela existe e não oriente o "
     "cidadão a procurar aquele nome no site ou no aplicativo. Sempre "
-    "ofereça os links de `app_oficial` ao fim da mensagem."
+    "ofereça os links de `app_oficial` ao fim da mensagem.\n\n"
+    'QUANDO A PERGUNTA FOR SOBRE UM DIA ("quem toca hoje", "quem toca no '
+    'dia 7"), responda copiando o bloco correspondente de `texto_por_dia`, '
+    "indexado pela data ISO daquele dia. Ele já vem formatado para o WhatsApp, "
+    "com os nomes das atrações como devem aparecer e com os links do "
+    "aplicativo ao final — copie como está, sem reescrever nomes, sem mudar a "
+    "ordem dos palcos e sem repetir os links depois. Em seguida, pergunte se o "
+    "cidadão quer o line-up de outro dia."
 )
 
 
@@ -426,6 +434,16 @@ async def get_rock_in_rio_lineup(contexto: Optional[str] = None) -> Dict[str, An
         "app_oficial": APP_OFICIAL,
         "total_de_atracoes": len(shows),
         "shows": shows,
+        # Mesma grade de `shows`, já montada para a conversa. `shows` continua
+        # sendo a fonte para tudo que não é "o dia inteiro" — por banda, por
+        # palco, comparações entre dias.
+        "texto_por_dia": textos_por_dia(
+            shows,
+            DATAS_DO_EVENTO,
+            NOME_DO_EVENTO,
+            "Os horários dos shows só aparecem no aplicativo oficial:",
+            APP_OFICIAL,
+        ),
         "atualizado_em": {
             "iso": atualizado_em.isoformat(),
             "hora_br": atualizado_em.strftime("%d/%m/%Y %H:%M"),

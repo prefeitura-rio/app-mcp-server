@@ -153,6 +153,14 @@ def test_muito_depois_do_festival_continua_encerrado():
 
 
 @pytest.fixture
+def lineup_fora_do_ar(monkeypatch):
+    async def explode(**_):
+        raise LineupIndisponivel("fonte fora do ar e cache vencido")
+
+    monkeypatch.setattr(tool_mod, "obter_lineup", explode)
+
+
+@pytest.fixture
 def lineup_ok(monkeypatch):
     async def falso_obter_lineup(**_):
         return LineupCarregado(SHOWS, __import__("time").time() - 120, "memoria")
@@ -211,6 +219,26 @@ async def test_resposta_lista_os_sete_dias_e_os_palcos(lineup_ok):
     assert dias[0]["data_br"] == "04/09/2026"
     assert dias[-1]["data"] == "2026-09-13"
     assert resposta["evento"]["palcos"] == ["Palco Mundo", "Palco Sunset"]
+
+
+@pytest.mark.asyncio
+async def test_resposta_traz_o_bloco_pronto_de_cada_dia(lineup_ok):
+    """O modelo copia o bloco em vez de redigitar ~25 nomes por dia."""
+    resposta = await get_rock_in_rio_lineup()
+
+    assert list(resposta["texto_por_dia"]) == ["2026-09-04", "2026-09-13"]
+    bloco = resposta["texto_por_dia"]["2026-09-04"]
+    assert bloco.startswith("No dia 4 de setembro do Rock in Rio 2026")
+    assert "- Palco Mundo: Foo Fighters" in bloco
+    assert resposta["app_oficial"]["ios"] in bloco
+    assert "`texto_por_dia`" in resposta["instrucoes_de_resposta"]
+
+
+@pytest.mark.asyncio
+async def test_indisponibilidade_nao_traz_bloco_de_dia_nenhum(lineup_fora_do_ar):
+    resposta = await get_rock_in_rio_lineup()
+
+    assert "texto_por_dia" not in resposta
 
 
 @pytest.mark.asyncio
@@ -305,14 +333,6 @@ async def test_sem_contexto_o_caminho_feliz_ecoa_o_padrao(lineup_ok):
     resposta = await get_rock_in_rio_lineup()
 
     assert resposta["contexto"] == CONTEXTO_PADRAO
-
-
-@pytest.fixture
-def lineup_fora_do_ar(monkeypatch):
-    async def explode(**_):
-        raise LineupIndisponivel("fonte fora do ar e cache vencido")
-
-    monkeypatch.setattr(tool_mod, "obter_lineup", explode)
 
 
 @pytest.mark.asyncio

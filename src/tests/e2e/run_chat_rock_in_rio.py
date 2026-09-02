@@ -207,6 +207,7 @@ class Lineup:
             for opcao in (propriedades.get("assunto") or {}).get("options") or []
             if opcao.get("label")
         ]
+        self.texto_por_dia: Dict[str, str] = bruto.get("texto_por_dia") or {}
         self.shows: List[Dict[str, str]] = bruto.get("shows") or []
         self.palcos: List[str] = self.evento.get("palcos") or []
         self.dias: List[Dict[str, str]] = self.evento.get("dias") or []
@@ -545,10 +546,21 @@ class Conversa:
             for s in self.lineup.por_data.get(iso, [])
             if not palco or s.get("palco") == palco
         ]
+
+        # "Quem toca no dia X" é a pergunta que a tool já responde pronta: o
+        # bloco de `texto_por_dia` é o que a LLM deve copiar, então é ele que
+        # precisa aparecer aqui. Filtrar por palco é outra pergunta, e continua
+        # sendo montada a partir de `shows`.
+        bloco = None if palco else self.lineup.texto_por_dia.get(iso)
         return Resposta(
-            bolhas=self._grade(iso, palco),
+            bolhas=[bloco] if bloco else self._grade(iso, palco),
             sugestoes=self._sugestoes_padrao(),
-            bruto={"data": iso, "palco": palco, "shows": shows},
+            bruto={
+                "data": iso,
+                "palco": palco,
+                "texto_por_dia": bloco,
+                "shows": shows,
+            },
         )
 
     def palco(self, nome: str) -> Resposta:
