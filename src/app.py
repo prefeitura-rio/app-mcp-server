@@ -60,6 +60,7 @@ from src.tools.langgraph_workflows import (
 )
 from src.tools.rock_in_rio.cache import aquecer_lineup, run_refresh_loop
 from src.tools.rock_in_rio.tool import (
+    ContextoDaPergunta,
     get_rock_in_rio_lineup,
     descricao_da_tool as rock_in_rio_description,
 )
@@ -421,10 +422,12 @@ def create_app() -> FastMCP:
         "rock_in_rio_lineup",
         description=rock_in_rio_description(TOOL_VERSION),
     )
-    async def rock_in_rio_lineup() -> dict:
-        # Sem parâmetros de propósito: a grade inteira cabe na resposta, e é a
-        # LLM que faz o recorte pedido pelo cidadão. Ver `tool.py`.
-        return add_tool_version(await get_rock_in_rio_lineup())
+    async def rock_in_rio_lineup(contexto: ContextoDaPergunta = None) -> dict:
+        # A grade inteira vai na resposta e é a LLM que faz o recorte pedido
+        # pelo cidadão — `contexto` não filtra nada. Ele diz sobre o que foi a
+        # pergunta, e serve para acompanhar o uso e para escolher a frase
+        # genérica da resposta degradada. Ver `tool.py`.
+        return add_tool_version(await get_rock_in_rio_lineup(contexto=contexto))
 
     @conditional_mcp_tool("get_user_memory")
     async def get_user_memory(

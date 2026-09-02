@@ -14,6 +14,13 @@ from src.tools.rock_in_rio import tool as tool_mod
 from src.tools.rock_in_rio.cache import LineupCarregado, LineupIndisponivel
 from src.tools.rock_in_rio.tool import (
     APP_OFICIAL,
+    ASSUNTOS_DE_APOIO,
+    CONTEXTO_PADRAO,
+    CONTEXTOS_PUBLICADOS,
+    ContextoDaPergunta,
+    FRASE_POR_CONTEXTO,
+    RAG_DE_APOIO,
+    _normalizar_contexto,
     _situacao_temporal,
     get_rock_in_rio_lineup,
 )
@@ -146,6 +153,14 @@ def test_muito_depois_do_festival_continua_encerrado():
 
 
 @pytest.fixture
+def lineup_fora_do_ar(monkeypatch):
+    async def explode(**_):
+        raise LineupIndisponivel("fonte fora do ar e cache vencido")
+
+    monkeypatch.setattr(tool_mod, "obter_lineup", explode)
+
+
+@pytest.fixture
 def lineup_ok(monkeypatch):
     async def falso_obter_lineup(**_):
         return LineupCarregado(SHOWS, __import__("time").time() - 120, "memoria")
@@ -207,6 +222,26 @@ async def test_resposta_lista_os_sete_dias_e_os_palcos(lineup_ok):
 
 
 @pytest.mark.asyncio
+async def test_resposta_traz_o_bloco_pronto_de_cada_dia(lineup_ok):
+    """O modelo copia o bloco em vez de redigitar ~25 nomes por dia."""
+    resposta = await get_rock_in_rio_lineup()
+
+    assert list(resposta["texto_por_dia"]) == ["2026-09-04", "2026-09-13"]
+    bloco = resposta["texto_por_dia"]["2026-09-04"]
+    assert bloco.startswith("No dia 4 de setembro do Rock in Rio 2026")
+    assert "- Palco Mundo: Foo Fighters" in bloco
+    assert resposta["app_oficial"]["ios"] in bloco
+    assert "`texto_por_dia`" in resposta["instrucoes_de_resposta"]
+
+
+@pytest.mark.asyncio
+async def test_indisponibilidade_nao_traz_bloco_de_dia_nenhum(lineup_fora_do_ar):
+    resposta = await get_rock_in_rio_lineup()
+
+    assert "texto_por_dia" not in resposta
+
+
+@pytest.mark.asyncio
 async def test_resposta_informa_a_procedencia_do_dado(lineup_ok):
     resposta = await get_rock_in_rio_lineup()
 
@@ -231,7 +266,7 @@ async def test_indisponibilidade_nao_entrega_grade_alguma(monkeypatch):
 
     assert resposta["disponivel"] is False
     assert "shows" not in resposta
-    assert "NÃO informe line-up" in resposta["instrucoes_de_resposta"]
+    assert "NÃO contém line-up" in resposta["instrucoes_de_resposta"]
     assert resposta["app_oficial"] == APP_OFICIAL
 
 
@@ -256,3 +291,166 @@ def test_descricao_da_tool_avisa_que_nao_tem_horario():
     assert "vTESTE" in descricao
     assert "NÃO devolve horários" in descricao
     assert "aplicativo oficial" in descricao
+
+
+# ----- contexto da pergunta -----
+
+
+@pytest.mark.parametrize(
+    "recebido, esperado",
+    [
+        ("hora", "hora"),
+        ("data", "data"),
+        ("banda", "banda"),
+        ("palco", "palco"),
+        ("outro", CONTEXTO_PADRAO),
+        (None, CONTEXTO_PADRAO),
+        ("horarios", CONTEXTO_PADRAO),
+    ],
+)
+def test_contexto_fora_da_taxonomia_cai_no_padrao(recebido, esperado):
+    """Classificação errada não pode custar a resposta do cidadão.
+
+    Inclui um valor que o schema rejeitaria (`"horarios"`) porque a função é
+    chamada direto por testes e pelo runner e2e, sem a validação do FastMCP no
+    caminho.
+    """
+    assert _normalizar_contexto(recebido) == esperado
+
+
+@pytest.mark.asyncio
+async def test_caminho_feliz_ecoa_o_contexto(lineup_ok):
+    resposta = await get_rock_in_rio_lineup(contexto="palco")
+
+    assert resposta["contexto"] == "palco"
+    # Botão é só do caminho degradado: aqui o cidadão pediu line-up e recebeu
+    # line-up, e três botões de outro assunto mudariam de conversa sem ele pedir.
+    assert "payload_schema" not in resposta
+
+
+@pytest.mark.asyncio
+async def test_sem_contexto_o_caminho_feliz_ecoa_o_padrao(lineup_ok):
+    resposta = await get_rock_in_rio_lineup()
+
+    assert resposta["contexto"] == CONTEXTO_PADRAO
+
+
+@pytest.mark.asyncio
+async def test_indisponivel_fala_por_frase_generica_e_nao_pelo_termo_do_cidadao(
+    lineup_fora_do_ar,
+):
+    """O vetor aqui é o cidadão citar uma banda inexistente (ou maliciosa).
+
+    Se a frase fosse montada pelo modelo a partir da pergunta, a resposta
+    acabaria mandando o cidadão procurar aquele nome no site e no app oficial.
+    A frase sai desta tabela fechada, e nenhuma entrada dela tem nome próprio.
+    """
+    resposta = await get_rock_in_rio_lineup(contexto="banda")
+
+    assert resposta["contexto"] == "banda"
+    assert resposta["contexto_frase"] == FRASE_POR_CONTEXTO["banda"]
+    assert resposta["contexto_frase"] in resposta["instrucoes_de_resposta"]
+
+    instrucoes = resposta["instrucoes_de_resposta"]
+    assert "não repita nomes de artistas" in instrucoes.lower()
+    assert "nunca oriente o cidadão a procurar um nome específico" in instrucoes
+
+
+@pytest.mark.asyncio
+async def test_indisponivel_nao_admite_a_falha_para_o_cidadao(lineup_fora_do_ar):
+    """Tom leve para o cidadão, proibição dura para o modelo — nesta ordem."""
+    instrucoes = (await get_rock_in_rio_lineup())["instrucoes_de_resposta"]
+
+    assert "sem mencionar erro, falha, indisponibilidade" in instrucoes
+    # A suavização do tom não pode ter levado junto o freio contra inventar.
+    assert "NÃO contém line-up" in instrucoes
+    assert "não afirme nem negue que uma atração está no festival" in instrucoes
+
+
+@pytest.mark.asyncio
+async def test_indisponivel_traz_os_tres_botoes_no_formato_do_renderizador(
+    lineup_fora_do_ar,
+):
+    schema = (await get_rock_in_rio_lineup())["payload_schema"]
+
+    # `x-render` no campo e na raiz: é como o fluxo da dívida ativa publica, e
+    # é o que o renderizador do chat já consome.
+    assert schema["x-render"] == "buttons"
+    campo = schema["properties"]["assunto"]
+    assert campo["x-render"] == "buttons"
+    assert schema["required"] == ["assunto"]
+
+    assert campo["enum"] == [assunto["value"] for assunto in ASSUNTOS_DE_APOIO]
+    assert [opcao["label"] for opcao in campo["options"]] == [
+        "Transporte",
+        "Alimentação",
+        "Emergência",
+    ]
+
+    # Três é o teto de `buttons`; a partir daí o renderizador pede `list`.
+    assert len(campo["options"]) == 3
+
+    for opcao in campo["options"]:
+        # Rótulo é o que aparece na tela, e o maior em uso hoje tem 22
+        # caracteres. O domínio inteiro fica no `value`, que é o que o modelo lê.
+        assert len(opcao["label"]) <= 22
+        assert opcao["description"]
+        assert len(opcao["value"]) > len(opcao["label"])
+
+
+@pytest.mark.asyncio
+async def test_indisponivel_manda_o_clique_para_o_rag(lineup_fora_do_ar):
+    instrucoes = (await get_rock_in_rio_lineup())["instrucoes_de_resposta"]
+
+    assert RAG_DE_APOIO in instrucoes
+    assert "conhecimento próprio" in instrucoes
+
+
+@pytest.mark.asyncio
+async def test_indisponivel_pede_para_nao_repetir_os_botoes(lineup_fora_do_ar):
+    """Os botões saem em toda resposta degradada.
+
+    Enquanto o scraper não volta, nada impede o modelo de reapresentá-los a
+    cada turno — é o loop mais provável, e o único que não depende de o clique
+    voltar para esta tool.
+    """
+    instrucoes = (await get_rock_in_rio_lineup())["instrucoes_de_resposta"]
+
+    assert "UMA ÚNICA VEZ" in instrucoes
+    assert "não os apresente de novo" in instrucoes
+
+
+def test_descricao_da_tool_repete_o_roteamento_do_clique():
+    """O clique acontece num turno em que o retorno pode já ter saído da janela."""
+    descricao = tool_mod.descricao_da_tool("vTESTE")
+
+    assert RAG_DE_APOIO in descricao
+    assert "`contexto`" in descricao
+
+
+@pytest.mark.asyncio
+async def test_contexto_errado_atravessa_o_schema_em_vez_de_derrubar_a_chamada(
+    lineup_ok,
+):
+    """O conjunto fechado é publicado, mas não é validado — de propósito.
+
+    Com `Literal`, "horarios" no lugar de "hora" levantava `ValidationError` no
+    FastMCP e o cidadão ficava sem programação por causa de um campo que só
+    serve para acompanhamento. Aqui o teste passa pelo mesmo caminho que a
+    chamada MCP percorre, e não pela função direto.
+    """
+    from fastmcp.tools import Tool as FastMCPTool
+
+    async def rock_in_rio_lineup(contexto: ContextoDaPergunta = None) -> dict:
+        return await get_rock_in_rio_lineup(contexto=contexto)
+
+    tool = FastMCPTool.from_function(rock_in_rio_lineup)
+
+    # A taxonomia continua publicada: é ela que orienta o modelo a classificar.
+    assert tool.parameters["properties"]["contexto"]["enum"] == list(
+        CONTEXTOS_PUBLICADOS
+    )
+
+    resultado = await tool.run({"contexto": "horarios"})
+    assert resultado.structured_content["contexto"] == CONTEXTO_PADRAO
+    assert resultado.structured_content["disponivel"] is True
