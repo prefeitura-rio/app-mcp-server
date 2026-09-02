@@ -208,6 +208,7 @@ class Lineup:
             if opcao.get("label")
         ]
         self.texto_por_dia: Dict[str, str] = bruto.get("texto_por_dia") or {}
+        self.texto_por_palco: Dict[str, str] = bruto.get("texto_por_palco") or {}
         self.shows: List[Dict[str, str]] = bruto.get("shows") or []
         self.palcos: List[str] = self.evento.get("palcos") or []
         self.dias: List[Dict[str, str]] = self.evento.get("dias") or []
@@ -570,6 +571,16 @@ class Conversa:
                 bolhas=[f"Não encontrei atração no *{nome}*."],
                 sugestoes=self._sugestoes_padrao(),
                 bruto={"palco": nome, "shows": []},
+            )
+
+        # Mesmo critério da resposta por dia: a pergunta "o que tem no palco X"
+        # já vem respondida pronta da tool, e é o bloco que a LLM copia.
+        bloco = self.lineup.texto_por_palco.get(nome)
+        if bloco:
+            return Resposta(
+                bolhas=[bloco],
+                sugestoes=self._sugestoes_padrao(),
+                bruto={"palco": nome, "texto_por_palco": bloco, "shows": shows},
             )
 
         bolhas = [f"*{nome}*\n{len(shows)} atrações no festival"]

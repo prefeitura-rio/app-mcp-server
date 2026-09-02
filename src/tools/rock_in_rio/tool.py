@@ -28,7 +28,7 @@ from opentelemetry import trace
 from pydantic import Field
 
 from src.tools.rock_in_rio.cache import LineupIndisponivel, obter_lineup
-from src.tools.rock_in_rio.mensagem import textos_por_dia
+from src.tools.rock_in_rio.mensagem import textos_por_dia, textos_por_palco
 from src.tools.rock_in_rio.scraper import DIAS_DO_EVENTO
 
 # `_get_weekday_pt` é privado por convenção de nome, mas é a única tradução de
@@ -131,6 +131,12 @@ _AVISO_SEM_HORARIOS = (
     "oriente o cidadão a consultar o aplicativo oficial do evento."
 )
 
+# Vai dentro dos blocos prontos, e não no lugar de `_AVISO_SEM_HORARIOS`: este
+# aqui é o que o cidadão lê, aquele é a ordem que o modelo recebe.
+_AVISO_DE_HORARIOS_NA_MENSAGEM = (
+    "Os horários dos shows só aparecem no aplicativo oficial:"
+)
+
 _INSTRUCOES_DE_RESPOSTA = (
     "Use os dados de `shows` para responder. Cada atração tem apenas data e "
     "palco — nunca horário. "
@@ -144,11 +150,15 @@ _INSTRUCOES_DE_RESPOSTA = (
     "ofereça os links de `app_oficial` ao fim da mensagem.\n\n"
     'QUANDO A PERGUNTA FOR SOBRE UM DIA ("quem toca hoje", "quem toca no '
     'dia 7"), responda copiando o bloco correspondente de `texto_por_dia`, '
-    "indexado pela data ISO daquele dia. Ele já vem formatado para o WhatsApp, "
-    "com os nomes das atrações como devem aparecer e com os links do "
-    "aplicativo ao final — copie como está, sem reescrever nomes, sem mudar a "
-    "ordem dos palcos e sem repetir os links depois. Em seguida, pergunte se o "
-    "cidadão quer o line-up de outro dia."
+    'indexado pela data ISO daquele dia. QUANDO FOR SOBRE UM PALCO ("o que '
+    'tem no Palco Sunset"), copie o bloco de `texto_por_palco`, indexado pelo '
+    "nome do palco como aparece em `evento.palcos`. Os dois já vêm formatados "
+    "para o WhatsApp, com os nomes das atrações como devem aparecer e com os "
+    "links do aplicativo ao final — copie como está, sem reescrever nomes, sem "
+    "mudar a ordem dos itens e sem repetir os links depois. Em seguida, "
+    "pergunte se o cidadão quer o line-up de outro dia ou de outro palco.\n\n"
+    'Pergunta que cruza os dois ("quem toca no Palco Mundo no dia 7") não '
+    "tem bloco pronto: monte a resposta a partir de `shows`."
 )
 
 
@@ -441,7 +451,14 @@ async def get_rock_in_rio_lineup(contexto: Optional[str] = None) -> Dict[str, An
             shows,
             DATAS_DO_EVENTO,
             NOME_DO_EVENTO,
-            "Os horários dos shows só aparecem no aplicativo oficial:",
+            _AVISO_DE_HORARIOS_NA_MENSAGEM,
+            APP_OFICIAL,
+        ),
+        "texto_por_palco": textos_por_palco(
+            shows,
+            DATAS_DO_EVENTO,
+            NOME_DO_EVENTO,
+            _AVISO_DE_HORARIOS_NA_MENSAGEM,
             APP_OFICIAL,
         ),
         "atualizado_em": {
