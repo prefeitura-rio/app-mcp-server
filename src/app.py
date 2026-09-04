@@ -64,6 +64,10 @@ from src.tools.rock_in_rio.tool import (
     get_rock_in_rio_lineup,
     descricao_da_tool as rock_in_rio_description,
 )
+from src.tools.rock_in_rio.mapa import (
+    get_mapa_rock_in_rio,
+    descricao_da_tool_mapa as rock_in_rio_mapa_description,
+)
 
 from src.resources.rio_info import (
     get_districts_list,
@@ -428,6 +432,16 @@ def create_app() -> FastMCP:
         # pergunta, e serve para acompanhar o uso e para escolher a frase
         # genérica da resposta degradada. Ver `tool.py`.
         return add_tool_version(await get_rock_in_rio_lineup(contexto=contexto))
+
+    @conditional_mcp_tool(
+        "rock_in_rio_mapa",
+        description=rock_in_rio_mapa_description(TOOL_VERSION),
+    )
+    async def rock_in_rio_mapa() -> dict:
+        # Sem parâmetros: o link é o mesmo para todos os cidadãos e não há
+        # recorte a aplicar. O `user_id` que o encurtador exige é a sentinela
+        # de `mapa.py`, não vem do modelo.
+        return add_tool_version(await get_mapa_rock_in_rio())
 
     @conditional_mcp_tool("get_user_memory")
     async def get_user_memory(
