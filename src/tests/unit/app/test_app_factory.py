@@ -52,6 +52,7 @@ TOOL_CATALOG = {
     "multi_step_service",
     "report_incident",
     "rock_in_rio_lineup",
+    "rock_in_rio_mapa",
     "time_current",
     "upsert_user_memory",
     "user_feedback",
