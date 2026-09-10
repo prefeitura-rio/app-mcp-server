@@ -330,18 +330,34 @@ Em ordem de impacto sobre a capacidade de investigar um incidente:
 
 ## 6. Alertas
 
-**Ainda não existem alertas ativos.** O estado (CHATR-112):
+**Produção tem alertas ativos** (CHATR-112). O desenho de dois alertas descrito
+em versões anteriores desta seção foi substituído: o `iac-superapp` migrou para o
+recurso `signoz_rule` (provider `SigNoz/signoz` `0.1.0`) e hoje aplica, em
+`modules/deployments/signoz-resilience-alerts.tf`, seis regras — todas roteadas
+para o Discord `#alerts-signoz`:
 
-- Terraform escrito e commitado em `iac-superapp`
-  (`modules/deployments/signoz-alerts.tf`), com dois recursos: taxa de erro de
-  traces > 5% / 5min (warning) e restarts de pod > 2 / 10min (critical), ambos
-  para o Discord `#alerts-signoz`.
-- Provider `SigNoz/signoz` **pinado em `0.0.17`** — o recurso `signoz_alert`
-  (API v1) foi removido em v0.1.0 em favor de `signoz_rule` (API v2), que está
-  quebrada nessa instância.
-- **Bloqueio**: `signoz_access_token` está como string vazia nos `.sops.json` de
-  staging e prod. Falta alguém com acesso admin gerar a Service Account API key
-  no SigNoz e rodar `apply`.
+| Regra | Tipo | Severidade |
+|---|---|---|
+| `mcp_slo_error_budget_long_burn_1h` | traces | critical |
+| `mcp_slo_error_budget_long_burn_6h` | traces | warning |
+| `mcp_workload_unavailable` | métricas | critical |
+| `mcp_redis_workload_unavailable` | métricas | critical |
+| `mcp_pod_lifecycle_unhealthy` | métricas | warning |
+| `mcp_telemetry_freshness` | traces | warning |
+
+Junto vão dois `signoz_dashboard` e um `signoz_route_policy`
+(`mcp_page_level_alerts`), todos presentes no state de prod.
+
+Duas lacunas conhecidas:
+
+- **`mcp_p99_latency_slo_burn` não existe.** Fica em `count = 0` enquanto
+  `var.mcp_p99_latency_ms_threshold_prod` for nulo — é deliberado, para não
+  fabricar limiar sem baseline observado. Definir esse número é o que falta.
+- **Staging não tem regra nenhuma.** As seis são
+  `count = var.environment == "prod" ? 1 : 0`; lá só existem os dois dashboards.
+
+O bloqueio histórico (token do SigNoz vazio no sops) está resolvido nos dois
+ambientes.
 
 ---
 

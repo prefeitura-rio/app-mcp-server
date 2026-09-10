@@ -20,27 +20,25 @@ this workspace), which this repository (`app-mcp-server`) does not own or
 modify. Every runbook below cites the exact resource address and, where the
 resource file was inspected during this task, the line range it was read at
 — so a reviewer can re-verify the claim against the current `infra/superapp`
-tree instead of trusting this document blindly. See each runbook's
-"Source of truth" section for the caveat about `infra/superapp`'s current
-review state (as of this task, the four `signoz_alert` resources referenced
-here are **not yet committed** to `infra/superapp`'s `main` branch — see
-below).
+tree instead of trusting this document blindly. Every resource referenced here
+is committed to `infra/superapp`'s `main` branch and present in production's
+Terraform state.
 
 ## What "linked from SigNoz rules" means here, precisely
 
-Every `signoz_alert` resource in `infra/superapp` carries a `labels.runbook_url`
-of the form `https://runbooks.example.internal/mcp/<slug>` (see
-`infra/superapp/modules/deployments/signoz-resilience-alerts.tf`). That
-hostname is an explicit **placeholder** written by the author of that file —
-it does not resolve to anything, by design (there is no runbook-hosting
-service in this stack yet). This document is the intended target content for
-each `<slug>`; the mapping from slug to file in this table is the "link".
-Making `https://runbooks.example.internal/...` actually resolve to this
-repository's rendered docs (e.g. via GitHub Pages, an internal wiki mirror, or
-changing the label to a `github.com/prefeitura-rio/app-mcp-server/blob/main/docs/runbooks/...`
-URL) is infrastructure/process work outside this repository's scope and is
-called out as a follow-up in each runbook's "Known gaps" section, not silently
-assumed.
+Every alert rule in `infra/superapp` carries a `labels.runbook_url` pointing
+directly at this repository's rendered docs, e.g.
+`https://github.com/prefeitura-rio/app-mcp-server/blob/main/docs/runbooks/mcp-unavailable.md`
+(see `modules/deployments/signoz-resilience-alerts.tf`). The placeholder host
+`runbooks.example.internal` described in earlier versions of this document is
+**obsolete** — the label resolves to a real URL today.
+
+Two consequences not yet reconciled in this repository, tracked separately:
+the resource type in the table below is still written as `signoz_alert` when
+the applied resources are `signoz_rule`, and
+`scripts/resilience/check_runbook_links.py` still validates the retired
+`runbooks.example.internal/mcp/<slug>` scheme against
+`scripts/resilience/resilience_signals.py`.
 
 The `failed-canary` row has no `runbook_url` label to link from because no
 `signoz_alert` models canary failure today (see
@@ -48,21 +46,6 @@ The `failed-canary` row has no `runbook_url` label to link from because no
 through a code comment placed next to `AnalysisTemplate/mcp-success-rate` in
 `k8s/prod/resources.yaml` (added by this task, comment-only, no behavior
 change).
-
-## Source-of-truth caveat: `infra/superapp` review state at the time of writing
-
-At the time this task ran, `infra/superapp/modules/deployments/signoz-resilience-alerts.tf`,
-`signoz-resilience-dashboard.tf`, and `signoz-resilience-route-policy.tf`
-existed as **uncommitted, untracked files** in the `infra/superapp` working
-tree (`git status` showed them as `??`), not yet merged to `main`. Every alert
-name, threshold, and `runbook_url` slug cited in these runbooks was read
-directly from those files' current on-disk content, not fabricated — but a
-reviewer should re-diff `infra/superapp` before treating any of this as
-authoritative for what is actually deployed. If those files are edited or
-renamed before merge, these runbooks (and the `scripts/resilience/signals_manifest.json`
-fixture used by the release-readiness checker) need a follow-up update. This
-repository does not and must not edit `infra/superapp` to "fix" that drift —
-see each runbook's guardrails.
 
 ## Common to every runbook below
 
