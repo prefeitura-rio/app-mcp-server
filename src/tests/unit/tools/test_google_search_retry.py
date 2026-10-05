@@ -1,9 +1,12 @@
-"""Testes da política de retry/backoff da busca via Gemini (CHATR-122).
+"""Testes da busca via Gemini: retry/backoff (CHATR-122) e limites (CHATR-234).
 
 O erro 503/UNAVAILABLE do Gemini é transitório. Estes testes cobrem: que a janela de
 retry é efetivamente exercida, que o esgotamento devolve mensagem tratada (nunca a
 exceção crua, que antes chegava ao usuário final) e que uma falha do Typesense cai no
 fallback do Google em vez de derrubar a tool.
+
+Do CHATR-234: os tetos de token enviados ao Gemini, o prazo total da busca, o
+`finish_reason` como sinal de falha e a falha técnica virando `isError`.
 """
 
 import asyncio
@@ -16,6 +19,18 @@ from pathlib import Path
 import httpx
 import pytest
 from google.genai import errors as genai_errors
+from google.genai.types import FinishReason, GenerateContentResponseUsageMetadata
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from opentelemetry.trace import StatusCode
+
+# Importado de verdade antes dos stubs de `src.config.env`/`src.utils.log` que as
+# fixtures instalam: se fosse carregado pela primeira vez dentro de uma fixture, o
+# módulo de tracing ficaria preso ao env falso para o resto da suíte.
+from src.observability import tracing
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -61,21 +76,53 @@ def client_error(code: int, status: str = "INVALID_ARGUMENT"):
     )
 
 
-def success_response():
-    grounding = types.SimpleNamespace(
-        grounding_chunks=[
+GROUNDING_URI = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc"
+
+
+def gemini_response(
+    finish_reason=FinishReason.STOP,
+    grounding=True,
+    thoughts=None,
+    candidates=None,
+):
+    """Resposta do Gemini com os campos que a busca lê."""
+    grounding_metadata = None
+    if grounding:
+        grounding_metadata = types.SimpleNamespace(
+            grounding_chunks=[
+                types.SimpleNamespace(
+                    web=types.SimpleNamespace(uri=GROUNDING_URI, title="X")
+                )
+            ],
+            grounding_supports=[],
+            web_search_queries=["iptu rio"],
+        )
+    usage = None
+    if thoughts is not None or candidates is not None:
+        usage = GenerateContentResponseUsageMetadata(
+            thoughts_token_count=thoughts, candidates_token_count=candidates
+        )
+    return types.SimpleNamespace(
+        candidates=[
             types.SimpleNamespace(
-                web=types.SimpleNamespace(uri="https://carioca.rio/x", title="X")
+                grounding_metadata=grounding_metadata, finish_reason=finish_reason
             )
         ],
-        grounding_supports=[],
-        web_search_queries=["iptu rio"],
-    )
-    return types.SimpleNamespace(
-        candidates=[types.SimpleNamespace(grounding_metadata=grounding)],
         text="Resposta com fonte oficial.",
-        usage_metadata=None,
+        usage_metadata=usage,
     )
+
+
+def success_response():
+    return gemini_response()
+
+
+def empty_response():
+    return types.SimpleNamespace(candidates=[], text=None, usage_metadata=None)
+
+
+# Desfecho que nunca termina: só o prazo da busca tira a chamada daqui.
+HANG = object()
 
 
 class FakeModels:
@@ -84,10 +131,14 @@ class FakeModels:
     def __init__(self, outcomes):
         self._outcomes = list(outcomes)
         self.calls = 0
+        self.kwargs = []
 
-    async def generate_content(self, **_kwargs):
+    async def generate_content(self, **kwargs):
         self.calls += 1
+        self.kwargs.append(kwargs)
         outcome = self._outcomes[min(self.calls - 1, len(self._outcomes) - 1)]
+        if outcome is HANG:
+            await asyncio.Event().wait()
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -101,7 +152,10 @@ def env_stub():
         GEMINI_SEARCH_RETRY_ATTEMPTS=4,
         GEMINI_SEARCH_RETRY_BASE_SECONDS=2.0,
         GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS=16.0,
-        GEMINI_SEARCH_RETRY_BUDGET_SECONDS=60.0,
+        GEMINI_SEARCH_REASONING_BUDGET_TOKENS=8192,
+        GEMINI_SEARCH_MAX_OUTPUT_TOKENS=12288,
+        GEMINI_SEARCH_DEADLINE_SECONDS=45.0,
+        IS_LOCAL=False,
         LINK_BLACKLIST=[],
         TYPESENSE_ACTIVE="false",
         TYPESENSE_HUB_SEARCH_URL="",
@@ -145,8 +199,14 @@ def gemini(monkeypatch, env_stub):
     async def fake_resolve_urls(**_kwargs):
         return {}
 
+    resolved_maps = []
+
+    def fake_get_citations(**kwargs):
+        resolved_maps.append(kwargs["resolved_urls_map"])
+        return []
+
     monkeypatch.setattr(module, "resolve_urls", fake_resolve_urls)
-    monkeypatch.setattr(module, "get_citations", lambda **_kwargs: [])
+    monkeypatch.setattr(module, "get_citations", fake_get_citations)
     monkeypatch.setattr(module, "format_text_with_citations", lambda text, _c: text)
     monkeypatch.setattr(
         module,
@@ -170,7 +230,11 @@ def gemini(monkeypatch, env_stub):
         return result, models
 
     return types.SimpleNamespace(
-        module=module, run=run, slept=slept, reported_errors=reported_errors
+        module=module,
+        run=run,
+        slept=slept,
+        reported_errors=reported_errors,
+        resolved_maps=resolved_maps,
     )
 
 
@@ -279,14 +343,231 @@ def test_backoff_respeita_o_teto(gemini, env_stub):
     assert all(3.0 <= wait <= 6.0 for wait in gemini.slept)
 
 
-def test_orcamento_de_latencia_interrompe_os_retries(gemini, env_stub):
-    """Não adianta retentar se a espera estoura o tempo que o usuário aguenta."""
-    env_stub.GEMINI_SEARCH_RETRY_BUDGET_SECONDS = 0.5
+def test_prazo_impede_tentativa_que_nao_caberia(gemini, env_stub):
+    """Depois da espera ainda precisa sobrar o piso da tentativa e a reserva das
+    URLs. Com 15,5 s de prazo a primeira tentativa cabe (5,5 s para o Gemini), mas
+    a segunda pediria ao menos 1 s de espera + 5 s de piso + 10 s de reserva."""
+    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 15.5
     result, models = gemini.run([server_error()])
 
     assert models.calls == 1
     assert gemini.slept == []
     assert result["error"]["attempts"] == 1
+    # O motivo da falha continua sendo o 503, não o prazo.
+    assert result["error"]["kind"] == "gemini_unavailable"
+
+
+def test_tetos_de_token_vao_para_o_gemini(gemini):
+    """Nunca mais `thinking_budget=-1` sem `max_output_tokens` (CHATR-234)."""
+    _, models = gemini.run([success_response()])
+
+    config = models.kwargs[0]["config"]
+    assert config.thinking_config.thinking_budget == 8192
+    assert config.max_output_tokens == 12288
+
+
+def test_budget_zero_desliga_o_raciocinio(gemini, env_stub):
+    env_stub.GEMINI_SEARCH_REASONING_BUDGET_TOKENS = 0
+    _, models = gemini.run([success_response()])
+
+    assert models.kwargs[0]["config"].thinking_config.thinking_budget == 0
+
+
+@pytest.mark.parametrize("grounding", [True, False], ids=["com_fonte", "sem_fonte"])
+def test_max_tokens_vira_falha_sem_retry(gemini, grounding):
+    """Resposta cortada no teto não é resposta. Sem fonte é o grupo D do doc de
+    loop: antes caía no ramo "sem fonte" com `success: True`."""
+    result, models = gemini.run(
+        [
+            gemini_response(
+                FinishReason.MAX_TOKENS,
+                grounding=grounding,
+                thoughts=8100,
+                candidates=4188,
+            )
+        ]
+    )
+
+    assert models.calls == 1
+    assert gemini.slept == []
+    assert result["success"] is False
+    assert result["error"]["kind"] == "max_tokens"
+    assert result["error"]["finish_reason"] == "MAX_TOKENS"
+    assert result["text"] == gemini.module.SEARCH_FAILED_MESSAGE
+    assert result["tokens_metadata"]["thoughts_token_count"] == 8100
+    assert "tokens_metadata" not in result["error"]
+    assert len(gemini.reported_errors) == 1
+
+
+def test_finish_reason_de_bloqueio_vira_falha_sem_retry(gemini):
+    """RECITATION e afins vêm com texto vazio: não é "sem fonte"."""
+    result, models = gemini.run(
+        [gemini_response(FinishReason.RECITATION, grounding=False)]
+    )
+
+    assert models.calls == 1
+    assert result["success"] is False
+    assert result["error"]["kind"] == "finish_reason:RECITATION"
+
+
+def test_sem_fonte_preserva_contadores_de_token(gemini):
+    """O ramo sem `grounding_chunks` gravava `tokens_metadata: {}` no BigQuery."""
+    result, _ = gemini.run(
+        [gemini_response(grounding=False, thoughts=1200, candidates=300)]
+    )
+
+    assert result["success"] is True
+    assert result["sources"] == []
+    assert result["tokens_metadata"]["thoughts_token_count"] == 1200
+    assert result["tokens_metadata"]["candidates_token_count"] == 300
+    assert result["finish_reason"] == "STOP"
+
+
+def test_raciocinio_no_teto_so_e_marcado(gemini):
+    """Loop cortado pelo budget termina com STOP: devolve a resposta e marca."""
+    result, models = gemini.run([gemini_response(thoughts=8190, candidates=107)])
+
+    assert models.calls == 1
+    assert result["success"] is True
+    assert result["reasoning_budget_hit"] is True
+
+
+def test_raciocinio_normal_nao_e_marcado(gemini):
+    result, _ = gemini.run([gemini_response(thoughts=1800, candidates=700)])
+
+    assert result["reasoning_budget_hit"] is False
+
+
+def test_resposta_vazia_esgota_e_falha(gemini):
+    result, models = gemini.run([empty_response()])
+
+    assert models.calls == 4
+    assert result["success"] is False
+    assert result["error"]["kind"] == "empty_response"
+    assert result["text"] == gemini.module.SEARCH_FAILED_MESSAGE
+    assert len(gemini.reported_errors) == 1
+
+
+def test_prazo_corta_o_gemini_lento(gemini, env_stub, monkeypatch):
+    """O `asyncio.timeout(180)` por tentativa deixava o loop correr 160 s."""
+    monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.0)
+    monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
+    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.2
+
+    result, models = gemini.run([HANG])
+
+    assert models.calls == 1
+    assert result["success"] is False
+    assert result["error"]["kind"] == "deadline"
+    assert result["text"] == gemini.module.SEARCH_UNAVAILABLE_MESSAGE
+
+
+def test_prazo_abaixo_do_piso_falha_sem_chamar_o_gemini(gemini, env_stub):
+    """É o que faz `GEMINI_SEARCH_DEADLINE_SECONDS=1` forçar a falha em staging."""
+    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 1.0
+
+    result, models = gemini.run([success_response()])
+
+    assert models.calls == 0
+    assert result["success"] is False
+    assert result["error"]["kind"] == "deadline"
+    assert result["error"]["attempts"] == 0
+
+
+def test_resolucao_de_urls_lenta_usa_uri_do_grounding(gemini, env_stub, monkeypatch):
+    """Estourar o prazo nas URLs não descarta a resposta nem retenta o Gemini."""
+    monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.1)
+    monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
+    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.3
+
+    async def hanging_resolve_urls(**_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(gemini.module, "resolve_urls", hanging_resolve_urls)
+
+    result, models = gemini.run([success_response()])
+
+    assert models.calls == 1
+    assert result["success"] is True
+    assert gemini.resolved_maps == [
+        {GROUNDING_URI: {"url": GROUNDING_URI, "error": "prazo esgotado"}}
+    ]
+
+
+@pytest.fixture
+def span_exporter(monkeypatch):
+    """Redireciona `get_tracer()` para um provider local em memória (molde de
+    `test_rock_in_rio_tracing.py`)."""
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    monkeypatch.setattr(tracing, "get_tracer", lambda: tracer)
+    return exporter
+
+
+def _spans(exporter, nome):
+    return [s for s in exporter.get_finished_spans() if s.name == nome]
+
+
+def test_estagios_da_busca_viram_spans(gemini, span_exporter):
+    result, _ = gemini.run([success_response()])
+
+    assert result["success"] is True
+    [geracao] = _spans(span_exporter, "gemini.generate_content")
+    [urls] = _spans(span_exporter, "gemini.resolve_urls")
+    assert geracao.status.status_code is StatusCode.OK
+    assert geracao.attributes["gemini.attempt"] == 1
+    assert urls.status.status_code is StatusCode.OK
+    assert urls.attributes["gemini.search.url_count"] == 1
+
+
+def test_cada_tentativa_tem_o_proprio_span(gemini, span_exporter):
+    gemini.run([server_error(), success_response()])
+
+    falha, sucesso = _spans(span_exporter, "gemini.generate_content")
+    assert falha.status.status_code is StatusCode.ERROR
+    assert falha.attributes["error.type"] == "ServerError"
+    assert falha.attributes["gemini.attempt"] == 1
+    assert sucesso.status.status_code is StatusCode.OK
+    assert sucesso.attributes["gemini.attempt"] == 2
+    # Só o tipo do erro vai para o span, nunca a mensagem (ver `mark_span_error`).
+    assert not falha.events
+
+
+def test_prazo_estourado_marca_o_span_do_gemini(
+    gemini, env_stub, monkeypatch, span_exporter
+):
+    monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.0)
+    monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
+    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.2
+
+    gemini.run([HANG])
+
+    [geracao] = _spans(span_exporter, "gemini.generate_content")
+    assert geracao.status.status_code is StatusCode.ERROR
+    assert geracao.attributes["error.type"] == "TimeoutError"
+    assert _spans(span_exporter, "gemini.resolve_urls") == []
+
+
+def test_urls_no_prazo_marcam_o_span_e_seguem_com_fallback(
+    gemini, env_stub, monkeypatch, span_exporter
+):
+    monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.1)
+    monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
+    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.3
+
+    async def hanging_resolve_urls(**_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(gemini.module, "resolve_urls", hanging_resolve_urls)
+
+    result, _ = gemini.run([success_response()])
+
+    assert result["success"] is True
+    [urls] = _spans(span_exporter, "gemini.resolve_urls")
+    assert urls.status.status_code is StatusCode.ERROR
+    assert urls.attributes["error.type"] == "TimeoutError"
 
 
 def test_retry_attempts_explicito_tem_precedencia_sobre_o_env(gemini):
@@ -376,6 +657,7 @@ def search(monkeypatch, env_stub):
     module = _load_module("test_search_retry_module", SEARCH_MODULE_PATH)
 
     created_tasks = []
+    state.created_tasks = created_tasks
     # A escrita vai por `disparar_em_background` (ver `src/utils/background.py`),
     # que guarda referência forte da task — `asyncio.create_task` direto deixava
     # a corrotina exposta ao coletor de lixo antes de gravar.
@@ -457,8 +739,10 @@ def test_hierarquia_de_excecoes_do_httpx_nao_regrediu():
     assert issubclass(json.JSONDecodeError, ValueError)
 
 
-def test_falha_do_gemini_propaga_success_e_error(search, monkeypatch):
-    """O agente precisa distinguir 'resultado de busca' de 'falha tratada'."""
+def test_falha_do_gemini_vira_falha_tecnica_depois_do_log(search, monkeypatch):
+    """Falha técnica vira `isError` para o Salesforce registrar (CHATR-234). O log
+    no BigQuery tem de ser agendado antes, senão a falha some do histórico."""
+    from src.utils.tool_errors import JA_REPORTADA
 
     async def empty_hub_search(request):
         return {"results": [], "results_clean": []}
@@ -473,10 +757,33 @@ def test_falha_do_gemini_propaga_success_e_error(search, monkeypatch):
         "error": {"kind": "gemini_unavailable", "code": 503, "attempts": 4},
     }
 
+    with pytest.raises(Exception) as excinfo:
+        asyncio.run(search.module.get_google_search("iptu"))
+
+    assert str(excinfo.value) == "mensagem tratada"
+    assert getattr(excinfo.value, JA_REPORTADA) is True
+    assert len(search.created_tasks) == 1
+    for coro in search.created_tasks:
+        coro.close()
+
+
+def test_busca_sem_fonte_continua_resultado_normal(search, monkeypatch):
+    async def empty_hub_search(request):
+        return {"results": [], "results_clean": []}
+
+    monkeypatch.setattr(search.module, "hub_search", empty_hub_search)
+    search.google_response = {
+        "text": "não encontrei fontes oficiais",
+        "sources": [],
+        "web_search_queries": [],
+        "id": "ok-1",
+        "success": True,
+    }
+
     result = search.run()
 
-    assert result["success"] is False
-    assert result["error"]["kind"] == "gemini_unavailable"
+    assert result["success"] is True
+    assert "error" not in result
 
 
 def test_resultado_do_typesense_nao_ganha_campo_de_erro(search, monkeypatch):
