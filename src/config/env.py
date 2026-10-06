@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from loguru import logger
+
 from src.utils.infisical import getenv_or_action
 
 
@@ -53,10 +55,55 @@ GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS = float(
         "GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS", default="16", action="ignore"
     )
 )
-GEMINI_SEARCH_RETRY_BUDGET_SECONDS = float(
-    getenv_or_action(
-        "GEMINI_SEARCH_RETRY_BUDGET_SECONDS", default="60", action="ignore"
+
+
+def _tokens_or_default(env_name: str, *, default: int, minimum: int) -> int:
+    """Lê um teto de tokens; ausente, ilegível ou abaixo do mínimo vira o default.
+
+    O default seguro mora aqui, e não no serviço: env ausente nunca pode virar
+    "sem limite". Foi o `thinking_budget=-1` sem `max_output_tokens` que deixou o
+    Gemini gerar ~65 mil tokens em loop por 120–160 s (CHATR-234).
+    """
+    raw = getenv_or_action(env_name, default=str(default), action="ignore")
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        logger.warning(f"{env_name}={raw!r} não é inteiro; usando {default}.")
+        return default
+    if value < minimum:
+        logger.warning(f"{env_name}={value} abaixo de {minimum}; usando {default}.")
+        return default
+    return value
+
+
+# Teto de raciocínio da busca (CHATR-234). `0` é válido e desliga o raciocínio;
+# negativo (inclusive o `-1`, "automático" no SDK) não é aceito. 8192 cobre o
+# p99,9 das chamadas normais do flash-lite (6.686) e corta o loop em ~30 s.
+GEMINI_SEARCH_REASONING_BUDGET_TOKENS = _tokens_or_default(
+    "GEMINI_SEARCH_REASONING_BUDGET_TOKENS", default=8192, minimum=0
+)
+# Teto de saída da busca. No Gemini 2.5 ele limita raciocínio + resposta **em
+# cada etapa de geração**, então precisa caber o budget inteiro mais a resposta
+# (p99,9 de 2.189 tokens). Pega o loop que acontece na resposta, que o budget de
+# raciocínio não alcança.
+GEMINI_SEARCH_MAX_OUTPUT_TOKENS = _tokens_or_default(
+    "GEMINI_SEARCH_MAX_OUTPUT_TOKENS", default=12288, minimum=1
+)
+if GEMINI_SEARCH_MAX_OUTPUT_TOKENS < GEMINI_SEARCH_REASONING_BUDGET_TOKENS + 2048:
+    logger.warning(
+        "GEMINI_SEARCH_MAX_OUTPUT_TOKENS "
+        f"({GEMINI_SEARCH_MAX_OUTPUT_TOKENS}) deixa menos de 2048 tokens de resposta "
+        f"acima do raciocínio ({GEMINI_SEARCH_REASONING_BUDGET_TOKENS}): respostas "
+        "podem sair cortadas em MAX_TOKENS."
     )
+
+# Prazo total da busca, em segundos: todas as tentativas, o backoff entre elas e
+# a resolução de URLs (CHATR-234). Substitui o antigo orçamento de retry, que só
+# decidia se começava outra tentativa e nunca limitava a duração de uma. Bem
+# abaixo dos 120 s que o Salesforce aguenta por chamada: o agente pode chamar a
+# busca duas vezes no mesmo turno quando a primeira falha.
+GEMINI_SEARCH_DEADLINE_SECONDS = float(
+    getenv_or_action("GEMINI_SEARCH_DEADLINE_SECONDS", default="45", action="ignore")
 )
 
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")

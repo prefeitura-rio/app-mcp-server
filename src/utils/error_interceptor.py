@@ -21,6 +21,7 @@ from opentelemetry import trace
 from src.config import env
 from src.utils.json_utils import CustomJSONEncoder
 from src.utils.pii import mascarar_ultimos_quatro, redigir_padroes_pii
+from src.utils.tool_errors import JA_REPORTADA
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +426,11 @@ def _track_interceptor_task(task: asyncio.Task) -> None:
     task.add_done_callback(_on_done)
 
 
+def _ja_reportada(e: BaseException) -> bool:
+    """Falha técnica levantada por `falha_tecnica`, cujo reporte já foi feito."""
+    return getattr(e, JA_REPORTADA, False) is True
+
+
 def interceptor(
     source: Dict[str, Any],
     error_types: tuple = (Exception,),
@@ -481,7 +487,8 @@ def interceptor(
             try:
                 return await func(*args, **kwargs)
             except error_types as e:
-                await _handle_error(func, args, kwargs, e)
+                if not _ja_reportada(e):
+                    await _handle_error(func, args, kwargs, e)
                 raise
 
         @wraps(func)
@@ -489,6 +496,8 @@ def interceptor(
             try:
                 return func(*args, **kwargs)
             except error_types as e:
+                if _ja_reportada(e):
+                    raise
                 # Para funções sync, executamos o report de forma síncrona via asyncio
                 try:
                     loop = asyncio.get_running_loop()

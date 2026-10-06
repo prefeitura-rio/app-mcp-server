@@ -7,6 +7,7 @@ from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_response_in_bq_background
 from src.utils.typesense_api import HubSearchRequest, hub_search
 from src.utils.error_interceptor import interceptor
+from src.utils.tool_errors import falha_tecnica
 
 from src.config import env
 
@@ -86,11 +87,8 @@ async def get_google_search(query: str):
             "sources": response_google.get("sources"),
             "web_search_queries": response_google.get("web_search_queries"),
             "id": response_google.get("id"),
-            # Sinaliza ao agente que o `text` é uma falha tratada, não conteúdo de busca.
             "success": response_google.get("success", True),
         }
-        if response_google.get("error"):
-            final_response["error"] = response_google["error"]
 
     # 4. Log em Background (BigQuery)
     disparar_em_background(
@@ -102,6 +100,12 @@ async def get_google_search(query: str):
         ),
         nome="bq:google_search",
     )
+
+    # Falha técnica vira `isError: true`, o único sinal que o Salesforce trata como
+    # falha (CHATR-234). Só depois do log, para a falha também ficar no BigQuery. O
+    # reporte ao error interceptor já foi feito pelo serviço do Gemini.
+    if response_data.get("success") is False:
+        falha_tecnica(response_data.get("text"))
 
     return final_response
 

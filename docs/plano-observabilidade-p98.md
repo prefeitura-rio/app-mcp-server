@@ -166,7 +166,9 @@ demonstrado.
 Levantados por leitura de código, ainda **não confirmados por medição** — servem
 de hipótese para a fase de otimização, não de conclusão.
 
-- **`google_search`** é o candidato mais forte. `asyncio.timeout(180)` é por
+- **`google_search`** é o candidato mais forte. *(Resolvido no CHATR-234: prazo total
+  de 45 s, tetos de token e spans de estágio — ver `observabilidade.md`, seção 2.6.
+  O texto abaixo descreve o código anterior.)* `asyncio.timeout(180)` é por
   tentativa (`gemini_service.py:172`), com até 4 tentativas
   (`GEMINI_SEARCH_RETRY_ATTEMPTS`, default 4) e budget de retry de 60s. Depois
   que o Gemini responde, `resolve_urls()` ainda valida cada link com HEAD+GET,

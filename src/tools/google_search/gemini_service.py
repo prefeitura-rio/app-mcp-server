@@ -23,6 +23,9 @@ from src.utils.log import logger
 from src.utils.error_interceptor import interceptor, send_api_error
 from src.utils.http_client import InterceptedHTTPClient
 from google.genai import errors as genai_errors
+from opentelemetry import trace
+
+from src.observability.tracing import traced_stage
 
 
 # Códigos 4xx que, apesar de "erro do cliente", são transitórios: 429 é saturação de
@@ -48,8 +51,22 @@ SEARCH_FAILED_MESSAGE = (
 # Falhas de capacidade/latência: o usuário deve ouvir "instabilidade momentânea", não
 # "erro". Qualquer outro tipo cai na mensagem genérica.
 TRANSIENT_ERROR_KINDS = frozenset(
-    {"gemini_unavailable", "gemini_rate_limited", "timeout"}
+    {"gemini_unavailable", "gemini_rate_limited", "timeout", "deadline"}
 )
+
+# Prazo total da busca (CHATR-234). A chamada ao Gemini não pode consumir o prazo
+# inteiro: a resolução de URLs vem depois e precisa de tempo para rodar.
+URL_RESOLUTION_RESERVE_SECONDS = 10.0
+# Abaixo disto uma tentativa nova quase certamente estoura o prazo; melhor desistir
+# do que começar uma chamada que vai ser cortada.
+MIN_ATTEMPT_SECONDS = 5.0
+# Fração do budget de raciocínio a partir da qual a chamada é marcada como "bateu no
+# teto". O Gemini para alguns tokens antes do valor configurado (8.190 de 8.192 nos
+# testes de 2026-10-05).
+REASONING_BUDGET_HIT_RATIO = 0.95
+# `finish_reason` que não indicam falha. `None` e `FINISH_REASON_UNSPECIFIED` seguem o
+# fluxo normal, como antes desta checagem existir.
+FINISH_REASONS_OK = frozenset({None, "STOP", "FINISH_REASON_UNSPECIFIED"})
 
 
 def classify_search_error(exc: BaseException) -> Dict[str, Any]:
@@ -139,6 +156,99 @@ def next_wait_seconds(
     return backoff_seconds(attempt, base, cap)
 
 
+def _deadline_error() -> Dict[str, Any]:
+    return {"kind": "deadline", "status": None, "code": None, "retryable": False}
+
+
+def _finish_reason_name(candidate: Any) -> str | None:
+    """`FinishReason` do SDK como string (`"STOP"`, `"MAX_TOKENS"`…), ou `None`."""
+    finish_reason = getattr(candidate, "finish_reason", None)
+    if finish_reason is None:
+        return None
+    return getattr(finish_reason, "value", None) or str(finish_reason)
+
+
+def _generation_config(temperature: float) -> GenerateContentConfig:
+    """Configuração da chamada, com os tetos de token lidos do env (CHATR-234)."""
+    return GenerateContentConfig(
+        temperature=temperature,
+        thinking_config=ThinkingConfig(
+            thinking_budget=env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS,
+        ),
+        max_output_tokens=env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS,
+        tools=[
+            Tool(google_search=GoogleSearch()),
+            Tool(url_context=UrlContext()),
+        ],
+        response_mime_type="text/plain",
+    )
+
+
+def _marcar_span(**atributos: Any) -> None:
+    """Grava atributos no span ativo; sem span, não faz nada."""
+    span = trace.get_current_span()
+    for chave, valor in atributos.items():
+        if valor is not None:
+            span.set_attribute(chave, valor)
+
+
+def _registrar_geracao(tokens_metadata: Dict[str, Any], finish_reason: str | None):
+    """Publica contadores e `finish_reason` no span e no log; devolve se o
+    raciocínio bateu no budget.
+
+    Bater no budget não é falha: com o teto, o loop de raciocínio termina em ~30 s
+    com uma resposta curta e `finish_reason=STOP`. Só fica marcado para medir.
+    """
+    budget = env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS
+    thoughts = tokens_metadata.get("thoughts_token_count")
+    candidates = tokens_metadata.get("candidates_token_count")
+    budget_hit = bool(
+        budget > 0 and thoughts and thoughts >= budget * REASONING_BUDGET_HIT_RATIO
+    )
+    _marcar_span(
+        **{
+            "gemini.finish_reason": finish_reason,
+            "gemini.thoughts_token_count": thoughts,
+            "gemini.candidates_token_count": candidates,
+            "gemini.reasoning_budget_hit": budget_hit,
+        }
+    )
+    logger.info(
+        f"Geração do Gemini | finish_reason={finish_reason} thoughts={thoughts} "
+        f"resposta={candidates} reasoning_budget={budget} "
+        f"max_output={env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS} "
+        f"reasoning_budget_hit={budget_hit}"
+    )
+    return budget_hit
+
+
+async def _resolver_urls_no_prazo(chunks: List[Any], deadline_at: float) -> dict:
+    """Resolve as URLs das fontes com o que sobra do prazo.
+
+    Se não der tempo, a resposta do Gemini não é descartada nem retentada: as fontes
+    saem com a URI crua do grounding, o mesmo fallback que `process_link` usa quando
+    um link falha.
+    """
+    restante = max(deadline_at - time.monotonic(), 0.0)
+    try:
+        # O span fica dentro do `try`: o estouro passa por ele (marcado como erro)
+        # antes de virar o fallback abaixo.
+        with traced_stage("gemini.resolve_urls") as stage:
+            stage.set_attribute("gemini.search.url_count", len(chunks))
+            async with asyncio.timeout(restante):
+                return await resolve_urls(urls_to_resolve=chunks)
+    except TimeoutError:
+        logger.warning(
+            f"Resolução de URLs estourou o prazo ({restante:.1f}s). "
+            f"Seguindo com as URIs do grounding."
+        )
+        _marcar_span(**{"gemini.search.urls_degraded": True})
+        return {
+            chunk.web.uri: {"url": chunk.web.uri, "error": "prazo esgotado"}
+            for chunk in chunks
+        }
+
+
 class GeminiService:
     def __init__(self):
         """Inicializa o cliente Gemini com as configurações do ambiente."""
@@ -162,140 +272,126 @@ class GeminiService:
         last_exception = None
         last_error = None
         attempt = 0
+        # Chamadas feitas ao Gemini. Difere de `attempt + 1` quando o prazo impede a
+        # tentativa antes de ela começar.
+        calls_made = 0
         started_at = time.monotonic()
+        deadline_at = started_at + env.GEMINI_SEARCH_DEADLINE_SECONDS
         retry_attempts = max(1, retry_attempts or env.GEMINI_SEARCH_RETRY_ATTEMPTS)
         backoff_cap = env.GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS
         formatted_prompt = web_searcher_instructions(research_topic=query)
+        _marcar_span(
+            **{
+                "gemini.reasoning_budget_tokens": env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS,
+                "gemini.max_output_tokens": env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS,
+                "gemini.search.deadline_s": env.GEMINI_SEARCH_DEADLINE_SECONDS,
+            }
+        )
+
+        def falha(error: Dict[str, Any], extra: Dict[str, Any] | None = None):
+            return self._failed_search_response(
+                request_id=request_id,
+                query=query,
+                model=model,
+                temperature=temperature,
+                attempts_used=calls_made,
+                elapsed_ms=int((time.monotonic() - started_at) * 1000),
+                last_error=error,
+                last_exception=last_exception,
+                extra=extra,
+            )
+
         for attempt in range(retry_attempts):
+            # O prazo é total. A chamada ao Gemini fica com o que sobra depois de
+            # reservar o tempo da resolução de URLs, que vem depois dela.
+            model_seconds = (
+                deadline_at - time.monotonic() - URL_RESOLUTION_RESERVE_SECONDS
+            )
+            if model_seconds < MIN_ATTEMPT_SECONDS:
+                logger.warning(
+                    f"Prazo da busca não comporta a tentativa {attempt + 1} "
+                    f"({model_seconds:.1f}s disponíveis para o Gemini). Desistindo."
+                )
+                last_error = last_error or _deadline_error()
+                break
             try:
-                # Timeout total para toda a operação
-                async with asyncio.timeout(180):  # 180 segundos para toda a operação
-                    logger.info(f"Prompt Length: {len(formatted_prompt)}")
-                    tools = [
-                        Tool(google_search=GoogleSearch()),
-                        Tool(url_context=UrlContext()),
-                    ]
-
-                    response = await self.client.aio.models.generate_content(
-                        model=model,
-                        contents=[
-                            Content(role="user", parts=[Part(text=formatted_prompt)])
-                        ],
-                        config=GenerateContentConfig(
-                            temperature=temperature,
-                            thinking_config=ThinkingConfig(
-                                thinking_budget=-1,
-                            ),
-                            tools=tools,
-                            response_mime_type="text/plain",
-                        ),
-                    )
-
-                    logger.info("Resposta recebida do Gemini")
-
-                    if not response.candidates or len(response.candidates) == 0:
-                        logger.warning("Resposta sem candidatos válidos do Gemini")
-                        if attempt >= retry_attempts - 1:
-                            return {
-                                "id": request_id,
-                                "text": "Não foi possível obter uma resposta válida para esta consulta. Por favor, tente reformular sua pergunta ou tente novamente mais tarde.",
-                                "sources": [],
-                                "web_search_queries": [],
-                                "tokens_metadata": {},
-                                "retry_attempts": attempt + 1,
-                                "success": False,
-                                "error": {"kind": "empty_response"},
-                                "model": model,
-                                "temperature": temperature,
-                                "query": query,
-                            }
-                        continue
-
-                    candidate = response.candidates[0]
-
-                    # Check if grounding metadata and chunks exist
-                    if (
-                        not candidate.grounding_metadata
-                        or not candidate.grounding_metadata.grounding_chunks
-                    ):
-                        # No grounding chunks found - likely all sources were filtered or unavailable
-                        logger.warning(
-                            "Nenhuma fonte confiável encontrada para a consulta"
-                        )
-                        return {
-                            "id": request_id,
-                            "text": "Desculpe, mas não consegui encontrar informações confiáveis sobre este tópico em fontes oficiais. Esta consulta pode estar fora do escopo do meu conhecimento, que se concentra em serviços municipais do Rio de Janeiro e fontes governamentais oficiais.",
-                            "sources": [],
-                            "web_search_queries": [],
-                            "tokens_metadata": {},
-                            "retry_attempts": attempt,
-                            "success": True,
-                            "model": model,
-                            "temperature": temperature,
-                            "query": query,
-                        }
-
-                    logger.info("Resolvendo URLs das fontes...")
-                    resolved_urls_map = await resolve_urls(
-                        urls_to_resolve=candidate.grounding_metadata.grounding_chunks
-                    )
-
-                    citations = get_citations(
-                        response=response, resolved_urls_map=resolved_urls_map
-                    )
-                    modified_text = format_text_with_citations(response.text, citations)
-                    sources_gathered = get_sources_list(citations, modified_text)
-
-                    # Check if all sources were filtered out by blacklist
-                    if not sources_gathered and citations:
-                        logger.warning("Todas as fontes encontradas estão na blacklist")
-                        return {
-                            "id": request_id,
-                            "text": "Desculpe, mas as informações encontradas para esta consulta vêm de fontes que estão fora do escopo do meu conhecimento. Eu me concentro em fornecer informações sobre serviços municipais do Rio de Janeiro usando apenas fontes governamentais oficiais e confiáveis.",
-                            "sources": [],
-                            "web_search_queries": (
-                                candidate.grounding_metadata.web_search_queries
-                                if candidate.grounding_metadata
-                                else []
-                            ),
-                            "tokens_metadata": self.get_tokens_metadata(
-                                response=response
-                            ),
-                            "retry_attempts": attempt,
-                            "success": True,
-                            "model": model,
-                            "temperature": temperature,
-                            "query": query,
-                        }
-
-                    web_search_queries = []
-                    if (
-                        candidate.grounding_metadata
-                        and candidate.grounding_metadata.web_search_queries
-                    ):
-                        web_search_queries = (
-                            candidate.grounding_metadata.web_search_queries
-                        )
-                    tokens_metadata = self.get_tokens_metadata(response=response)
-
-                    if attempt > 0:
-                        logger.info(
-                            f"Pesquisa Google recuperada após retry | "
-                            f"outcome=success attempts_used={attempt + 1} "
-                            f"error_kind={(last_error or {}).get('kind')} "
-                            f"elapsed_ms={int((time.monotonic() - started_at) * 1000)}"
+                logger.info(f"Prompt Length: {len(formatted_prompt)}")
+                calls_made += 1
+                # Span por fora do `timeout`: o estouro do prazo chega a ele como
+                # `TimeoutError` e fica marcado como erro da tentativa.
+                with traced_stage("gemini.generate_content") as stage:
+                    stage.set_attribute("gemini.attempt", attempt + 1)
+                    stage.set_attribute("gemini.model", model)
+                    async with asyncio.timeout(model_seconds):
+                        response = await self.client.aio.models.generate_content(
+                            model=model,
+                            contents=[
+                                Content(
+                                    role="user", parts=[Part(text=formatted_prompt)]
+                                )
+                            ],
+                            config=_generation_config(temperature),
                         )
 
-                    logger.info(
-                        f"Pesquisa concluída com {len(sources_gathered)} fontes"
+                logger.info("Resposta recebida do Gemini")
+
+                if not response.candidates:
+                    logger.warning("Resposta sem candidatos válidos do Gemini")
+                    last_error = {
+                        "kind": "empty_response",
+                        "status": None,
+                        "code": None,
+                        "retryable": True,
+                    }
+                    last_exception = None
+                    continue
+
+                candidate = response.candidates[0]
+                tokens_metadata = self.get_tokens_metadata(response=response)
+                finish_reason = _finish_reason_name(candidate)
+                reasoning_budget_hit = _registrar_geracao(
+                    tokens_metadata, finish_reason
+                )
+                geracao = {
+                    "finish_reason": finish_reason,
+                    "reasoning_budget_hit": reasoning_budget_hit,
+                }
+
+                # Antes do ramo "sem fonte": um loop cortado no teto costuma vir sem
+                # `grounding_metadata`, e cairia lá como `success: True`. Sem retry —
+                # a mesma pergunta tende a repetir o loop e só gastaria o prazo.
+                if finish_reason == "MAX_TOKENS":
+                    return await falha(
+                        {"kind": "max_tokens", "status": None, "code": None},
+                        extra={**geracao, "tokens_metadata": tokens_metadata},
+                    )
+                if finish_reason not in FINISH_REASONS_OK:
+                    # RECITATION, SAFETY etc. vêm com texto vazio: não é "sem fonte".
+                    return await falha(
+                        {
+                            "kind": f"finish_reason:{finish_reason}",
+                            "status": None,
+                            "code": None,
+                        },
+                        extra={**geracao, "tokens_metadata": tokens_metadata},
                     )
 
+                # Check if grounding metadata and chunks exist
+                if (
+                    not candidate.grounding_metadata
+                    or not candidate.grounding_metadata.grounding_chunks
+                ):
+                    # No grounding chunks found - likely all sources were filtered or unavailable
+                    logger.warning("Nenhuma fonte confiável encontrada para a consulta")
                     return {
                         "id": request_id,
-                        "text": modified_text,
-                        "sources": sources_gathered,
-                        "web_search_queries": web_search_queries,
+                        "text": "Desculpe, mas não consegui encontrar informações confiáveis sobre este tópico em fontes oficiais. Esta consulta pode estar fora do escopo do meu conhecimento, que se concentra em serviços municipais do Rio de Janeiro e fontes governamentais oficiais.",
+                        "sources": [],
+                        "web_search_queries": [],
+                        # Antes vinha `{}`: o loop sem fontes (grupo D do doc de
+                        # loop) ficava invisível no BigQuery.
                         "tokens_metadata": tokens_metadata,
+                        **geracao,
                         "retry_attempts": attempt,
                         "success": True,
                         "model": model,
@@ -303,9 +399,77 @@ class GeminiService:
                         "query": query,
                     }
 
+                logger.info("Resolvendo URLs das fontes...")
+                resolved_urls_map = await _resolver_urls_no_prazo(
+                    candidate.grounding_metadata.grounding_chunks, deadline_at
+                )
+
+                citations = get_citations(
+                    response=response, resolved_urls_map=resolved_urls_map
+                )
+                modified_text = format_text_with_citations(response.text, citations)
+                sources_gathered = get_sources_list(citations, modified_text)
+
+                # Check if all sources were filtered out by blacklist
+                if not sources_gathered and citations:
+                    logger.warning("Todas as fontes encontradas estão na blacklist")
+                    return {
+                        "id": request_id,
+                        "text": "Desculpe, mas as informações encontradas para esta consulta vêm de fontes que estão fora do escopo do meu conhecimento. Eu me concentro em fornecer informações sobre serviços municipais do Rio de Janeiro usando apenas fontes governamentais oficiais e confiáveis.",
+                        "sources": [],
+                        "web_search_queries": (
+                            candidate.grounding_metadata.web_search_queries
+                            if candidate.grounding_metadata
+                            else []
+                        ),
+                        "tokens_metadata": tokens_metadata,
+                        **geracao,
+                        "retry_attempts": attempt,
+                        "success": True,
+                        "model": model,
+                        "temperature": temperature,
+                        "query": query,
+                    }
+
+                web_search_queries = []
+                if (
+                    candidate.grounding_metadata
+                    and candidate.grounding_metadata.web_search_queries
+                ):
+                    web_search_queries = candidate.grounding_metadata.web_search_queries
+
+                if attempt > 0:
+                    logger.info(
+                        f"Pesquisa Google recuperada após retry | "
+                        f"outcome=success attempts_used={attempt + 1} "
+                        f"error_kind={(last_error or {}).get('kind')} "
+                        f"elapsed_ms={int((time.monotonic() - started_at) * 1000)}"
+                    )
+
+                logger.info(f"Pesquisa concluída com {len(sources_gathered)} fontes")
+
+                return {
+                    "id": request_id,
+                    "text": modified_text,
+                    "sources": sources_gathered,
+                    "web_search_queries": web_search_queries,
+                    "tokens_metadata": tokens_metadata,
+                    **geracao,
+                    "retry_attempts": attempt,
+                    "success": True,
+                    "model": model,
+                    "temperature": temperature,
+                    "query": query,
+                }
+
             except Exception as e:  # classificado logo abaixo
                 last_exception = e
-                last_error = classify_search_error(e)
+                # O único timeout desta etapa é o do prazo: não há o que retentar.
+                last_error = (
+                    _deadline_error()
+                    if isinstance(e, TimeoutError)
+                    else classify_search_error(e)
+                )
 
                 if not last_error["retryable"]:
                     logger.error(
@@ -326,13 +490,17 @@ class GeminiService:
                 wait_time = next_wait_seconds(
                     e, attempt, env.GEMINI_SEARCH_RETRY_BASE_SECONDS, backoff_cap
                 )
-                # Orçamento de latência: não iniciar uma tentativa que só terminaria
-                # depois de o usuário já ter desistido de esperar.
-                elapsed = time.monotonic() - started_at
-                if elapsed + wait_time > env.GEMINI_SEARCH_RETRY_BUDGET_SECONDS:
+                # Não iniciar uma tentativa que não caberia no prazo: depois da
+                # espera ainda precisa sobrar o piso da tentativa e a reserva das URLs.
+                remaining = deadline_at - time.monotonic()
+                needed = (
+                    wait_time + MIN_ATTEMPT_SECONDS + URL_RESOLUTION_RESERVE_SECONDS
+                )
+                if needed > remaining:
                     logger.warning(
-                        f"Orçamento de retry esgotado após {elapsed:.2f}s "
-                        f"({attempt + 1}/{retry_attempts} tentativas). Desistindo."
+                        f"Prazo da busca não comporta nova tentativa: restam "
+                        f"{remaining:.2f}s ({attempt + 1}/{retry_attempts} tentativas). "
+                        f"Desistindo."
                     )
                     break
 
@@ -342,18 +510,9 @@ class GeminiService:
                 )
                 await asyncio.sleep(wait_time)
 
-        return await self._exhausted_search_response(
-            request_id=request_id,
-            query=query,
-            model=model,
-            temperature=temperature,
-            attempts_used=attempt + 1,
-            elapsed_ms=int((time.monotonic() - started_at) * 1000),
-            last_error=last_error,
-            last_exception=last_exception,
-        )
+        return await falha(last_error or {"kind": "unknown"})
 
-    async def _exhausted_search_response(
+    async def _failed_search_response(
         self,
         request_id: str,
         query: str,
@@ -363,14 +522,18 @@ class GeminiService:
         elapsed_ms: int,
         last_error: Dict[str, Any] | None,
         last_exception: BaseException | None,
+        extra: Dict[str, Any] | None = None,
     ) -> dict:
-        """Resposta devolvida quando a busca não se recupera dentro do orçamento.
+        """Resposta devolvida quando a busca não pode ser concluída.
 
         Devolve uma mensagem tratada — nunca a exceção crua, que antes chegava ao
         usuário final — e reporta a falha ao interceptor. O report é explícito porque
         esta função *retorna* em vez de levantar, então o decorator `@interceptor` não
-        enxergaria nada aqui.
+        enxergaria nada aqui. Quem transforma isto em `isError` é `get_google_search`,
+        depois de gravar no BigQuery.
         """
+        extra = dict(extra or {})
+        tokens_metadata = extra.pop("tokens_metadata", {})
         error_kind = (last_error or {}).get("kind", "unknown")
         error_details = {
             "kind": error_kind,
@@ -378,11 +541,12 @@ class GeminiService:
             "code": (last_error or {}).get("code"),
             "attempts": attempts_used,
             "elapsed_ms": elapsed_ms,
+            **extra,
         }
 
         logger.error(
-            f"Todas as {attempts_used} tentativas de pesquisa falharam para a query: {query} | "
-            f"outcome=exhausted error_kind={error_kind} "
+            f"Pesquisa falhou após {attempts_used} tentativa(s) para a query: {query} | "
+            f"outcome=failed error_kind={error_kind} "
             f"error_code={error_details['code']} elapsed_ms={elapsed_ms} | "
             f"Último erro: {last_exception}"
         )
@@ -408,7 +572,7 @@ class GeminiService:
             ),
             "sources": [],
             "web_search_queries": [],
-            "tokens_metadata": {},
+            "tokens_metadata": tokens_metadata,
             "retry_attempts": attempts_used,
             "success": False,
             "error": error_details,

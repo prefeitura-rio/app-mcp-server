@@ -167,6 +167,26 @@ lenta até a query que a segurou.
 Além desses, a própria lib `google-cloud-bigquery` emite spans automáticos
 (ex.: `BigQuery.insertRowsJson`) quando o OTel está presente no processo.
 
+### 2.6 Busca na web — `src/tools/google_search/gemini_service.py`
+
+O `mcp.tool_call` da `google_search` (CHATR-234) carrega os tetos configurados
+(`gemini.reasoning_budget_tokens`, `gemini.max_output_tokens`,
+`gemini.search.deadline_s`) e o resultado da geração (`gemini.finish_reason`,
+`gemini.thoughts_token_count`, `gemini.candidates_token_count`).
+`gemini.reasoning_budget_hit = true` marca a chamada cujo raciocínio chegou a 95%
+do budget: é o loop de raciocínio cortado pelo teto, que termina com
+`finish_reason = STOP` e resposta curta, e por isso não vira falha.
+`gemini.search.urls_degraded = true` marca a resposta que saiu com as URIs cruas do
+grounding porque a resolução de URLs estourou o prazo. Já `MAX_TOKENS`, os demais
+`finish_reason` de bloqueio, o prazo esgotado e os retries esgotados viram falha
+técnica: a tool levanta `ToolError`, o span fica com `mcp.tool.success = False` e o
+Salesforce recebe `isError: true`.
+
+Dentro desse `mcp.tool_call`, dois spans de estágio (`traced_stage`) mostram onde o
+prazo foi gasto: `gemini.generate_content`, um por tentativa, com `gemini.attempt` e
+`gemini.model`, e `gemini.resolve_urls`, com `gemini.search.url_count`. O estouro do
+prazo aparece no estágio que o causou como `error.type = TimeoutError`.
+
 ### 2.5 Correlação de erros — `src/utils/error_interceptor.py`
 
 `_get_current_trace_context()` ([error_interceptor.py:39](../src/utils/error_interceptor.py#L39))
@@ -301,7 +321,8 @@ Em ordem de impacto sobre a capacidade de investigar um incidente:
    quase toda tool sai pela rede via `InterceptedHTTPClient`, o `mcp.tool_call`
    não mostra onde o tempo foi. É a **Etapa 2** de
    `docs/plano-observabilidade-p98.md`, e o maior retorno pelo menor esforço.
-2. **Sem spans para Gemini, Typesense, Redis, PGM, SGRC e Google Maps.** A
+2. **Sem spans para Typesense, Redis, PGM, SGRC e Google Maps.** O Gemini da
+   `google_search` ganhou spans de estágio no CHATR-234 (seção 2.6). A
    Etapa 2 cobre por tabela tudo que passa por httpx; o que sobrar precisa de
    span manual (Etapa 4 do mesmo plano).
 3. **Sem métricas OTel** (histogramas, contadores) e **sem log estruturado de
