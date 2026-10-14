@@ -1,0 +1,276 @@
+"""Testes do filtro de query da tool `google_search` (CHATR-294).
+
+Cobrem a normalização, cada estratégia (blacklist, whitelist, composto, nenhuma),
+a leitura do YAML e o arquivo versionado de verdade: as queries do incidente de
+09/10/2026 precisam ser barradas e serviços municipais comuns não.
+"""
+
+import importlib.util
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+FILTER_MODULE_PATH = (
+    PROJECT_ROOT / "src" / "tools" / "google_search" / "query_filter.py"
+)
+
+
+@pytest.fixture
+def qf(monkeypatch):
+    """Carrega query_filter.py isolado, com logger silencioso."""
+    noop = lambda *_a, **_k: None  # noqa: E731
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.log",
+        types.SimpleNamespace(logger=types.SimpleNamespace(info=noop, warning=noop)),
+    )
+    spec = importlib.util.spec_from_file_location(
+        "test_query_filter_module", FILTER_MODULE_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _yaml(tmp_path, conteudo: str) -> Path:
+    path = tmp_path / "filtro.yaml"
+    path.write_text(conteudo, encoding="utf-8")
+    return path
+
+
+# --------------------------------------------------------------------------------
+# Normalização
+# --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("entrada", "esperado"),
+    [
+        ("Eleição", "eleicao"),
+        ("  ELEIÇÕES!!  2026 ", "eleicoes 2026"),
+        ("e-Título", "e titulo"),
+        ("2º turno", "2o turno"),
+        ("2° turno", "2o turno"),
+        ("ＬＵＬＡ", "lula"),
+        ("lu\u200bla", "lula"),
+        ("Ferraço", "ferraco"),
+        ("", ""),
+    ],
+)
+def test_normalizar(qf, entrada, esperado):
+    assert qf.normalizar(entrada) == esperado
+
+
+# --------------------------------------------------------------------------------
+# Blacklist
+# --------------------------------------------------------------------------------
+
+
+def test_blacklist_casa_palavra_inteira(qf):
+    filtro = qf.BlacklistFilter(["lula", "omar aziz", "governador"])
+
+    decisao = filtro.check("Qual o número do Lula?")
+
+    assert decisao == qf.FilterDecision(False, "blacklist", "lula")
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["perdi meu celular", "onde tomar vacina", "Omar é meu vizinho"],
+)
+def test_blacklist_nao_casa_pedaco_de_palavra(qf, query):
+    filtro = qf.BlacklistFilter(["lula", "omar aziz"])
+
+    assert filtro.check(query).allowed is True
+
+
+def test_blacklist_ignora_acento_e_caixa_dos_dois_lados(qf):
+    filtro = qf.BlacklistFilter(["Celina Leão"])
+
+    assert filtro.check("CELINA LEAO é candidata?").matched == "celina leao"
+
+
+def test_blacklist_descarta_termo_vazio(qf):
+    """Termo vazio casaria com qualquer query e bloquearia tudo."""
+    filtro = qf.BlacklistFilter(["", "   ", "!!"])
+
+    assert not filtro
+    assert filtro.check("segunda via do iptu").allowed is True
+
+
+# --------------------------------------------------------------------------------
+# Whitelist
+# --------------------------------------------------------------------------------
+
+
+def test_whitelist_deixa_passar_o_que_casa(qf):
+    filtro = qf.WhitelistFilter([r"\biptu\b", r"\bcadunico\b"])
+
+    assert filtro.check("Segunda via do IPTU").allowed is True
+    assert filtro.check("Como me inscrever no CadÚnico").allowed is True
+
+
+def test_whitelist_barra_o_que_nao_casa(qf):
+    filtro = qf.WhitelistFilter([r"\biptu\b"])
+
+    assert filtro.check("receita de bolo") == qf.FilterDecision(
+        False, "whitelist", None
+    )
+
+
+def test_whitelist_so_enxerga_o_teto_de_caracteres(qf):
+    """Protege contra backtracking de expressão mal escrita em entrada longa."""
+    filtro = qf.WhitelistFilter([r"\biptu\b"])
+    query = "x " * qf.WHITELIST_MAX_CHARS + "iptu"
+
+    assert filtro.check(query).allowed is False
+
+
+def test_whitelist_com_expressao_invalida_falha_no_boot(qf):
+    with pytest.raises(ValueError, match="Expressão inválida"):
+        qf.WhitelistFilter([r"(iptu"])
+
+
+# --------------------------------------------------------------------------------
+# Escolha da estratégia
+# --------------------------------------------------------------------------------
+
+
+def test_sem_listas_opera_normalmente(qf):
+    filtro = qf.build_query_filter([], [""])
+
+    assert isinstance(filtro, qf.AllowAllFilter)
+    assert filtro.check("vou votar no lula").allowed is True
+
+
+def test_so_blacklist(qf):
+    assert isinstance(qf.build_query_filter([], ["lula"]), qf.BlacklistFilter)
+
+
+def test_so_whitelist(qf):
+    assert isinstance(qf.build_query_filter([r"iptu"], []), qf.WhitelistFilter)
+
+
+def test_com_as_duas_a_blacklist_veta_o_que_a_whitelist_deixou_passar(qf):
+    filtro = qf.build_query_filter([r"\biptu\b"], ["lula"])
+
+    assert isinstance(filtro, qf.CompositeFilter)
+    assert filtro.check("segunda via do iptu").allowed is True
+    assert filtro.check("o lula vai zerar o iptu?") == qf.FilterDecision(
+        False, "blacklist", "lula"
+    )
+    assert filtro.check("receita de bolo").reason == "whitelist"
+
+
+# --------------------------------------------------------------------------------
+# Leitura do YAML
+# --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "conteudo",
+    ["", "whitelist:\nblacklist:\n", "whitelist: []\nblacklist:\n  termos: []\n"],
+)
+def test_yaml_vazio_opera_normalmente(qf, tmp_path, conteudo):
+    filtro = qf.load_query_filter(_yaml(tmp_path, conteudo))
+
+    assert isinstance(filtro, qf.AllowAllFilter)
+
+
+def test_yaml_junta_as_secoes_da_blacklist(qf, tmp_path):
+    filtro = qf.load_query_filter(
+        _yaml(
+            tmp_path,
+            "blacklist:\n  candidatos: [lula]\n  termos: [eleição]\n",
+        )
+    )
+
+    assert filtro.check("lula").matched == "lula"
+    assert filtro.check("eleicao").matched == "eleicao"
+
+
+@pytest.mark.parametrize(
+    "conteudo",
+    [
+        "- lula\n",
+        "whitelist: iptu\n",
+        "blacklist: [lula]\n",
+        "blacklist:\n  termos: lula\n",
+        "blacklist:\n  termos: [1, 2]\n",
+    ],
+)
+def test_yaml_malformado_falha_no_boot(qf, tmp_path, conteudo):
+    with pytest.raises(ValueError):
+        qf.load_query_filter(_yaml(tmp_path, conteudo))
+
+
+# --------------------------------------------------------------------------------
+# Arquivo versionado
+# --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def filtro_real(qf):
+    return qf.load_query_filter(qf.CONFIG_PATH)
+
+
+def test_arquivo_versionado_carrega_e_filtra(qf, filtro_real):
+    """Uma whitelist entrando no arquivo muda o tipo: este teste avisa."""
+    assert isinstance(filtro_real, qf.BlacklistFilter)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # Turnos do incidente de 09/10/2026
+        "Sim, como posso votar no Lula?",
+        "Qual o número do Flávio Bolsonaro?",
+        "Qual o número do Lula?",
+        "Luis Inácio lula da Silva? Quero votar nele.",
+        # Variações
+        "número do candidato Flávio Bolsonaro",
+        "número eleitoral do Lula 2026",
+        "onde fica minha zona eleitoral",
+        "como justificar o voto",
+        "quem vai pro 2º turno em Tocantins",
+        "Professora Dorinha ou Vicentinho?",
+        "Celina Leão ou Leandro Grass",
+        "votando no domingo",
+        "L-U-L-A",
+        "deputado federal mais votado",
+    ],
+)
+def test_arquivo_versionado_barra_tema_eleitoral(filtro_real, query):
+    assert filtro_real.check(query).allowed is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "segunda via do IPTU",
+        "como me inscrever no CadÚnico",
+        "perdi meu celular no ônibus",
+        "onde tomar vacina da gripe",
+        "Clínica da Família na Ilha do Governador",
+        "horário do BRT na Avenida Presidente Vargas",
+        "urna cinerária no cemitério do Caju",
+        "resultado do concurso, sou candidato aprovado",
+        "matrícula no segundo semestre",
+        "campanha de vacinação contra a dengue",
+        "Clínica da Família na Rua Senador Dantas",
+        "apuração da denúncia na ouvidoria",
+        "a professora Maria do Carmo da escola do meu filho",
+    ],
+)
+def test_arquivo_versionado_deixa_passar_servico_municipal(filtro_real, query):
+    assert filtro_real.check(query).allowed is True
+
+
+def test_pronome_sem_contexto_passa(filtro_real):
+    """Limitação conhecida: o turno 2 do incidente não tem termo nenhum. Esse caso
+    fica com o agente, que tem o contexto da conversa."""
+    assert filtro_real.check("Qual o número dele?").allowed is True

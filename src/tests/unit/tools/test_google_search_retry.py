@@ -795,3 +795,90 @@ def test_resultado_do_typesense_nao_ganha_campo_de_erro(search, monkeypatch):
     result = search.run()
 
     assert result == {"response": [{"title": "A"}]}
+
+
+# --------------------------------------------------------------------------------
+# get_google_search: filtro de query antes de qualquer buscador (CHATR-294)
+# --------------------------------------------------------------------------------
+
+
+def _filtro_que_barra(search, monkeypatch, termo="lula"):
+    filtro = search.module.filtro
+    monkeypatch.setattr(filtro, "query_filter", filtro.BlacklistFilter([termo]))
+
+
+def test_query_barrada_nao_chega_a_nenhum_buscador(search, monkeypatch):
+    async def hub_search_nao_pode_rodar(request):
+        raise AssertionError("Typesense chamado com query barrada")
+
+    async def google_nao_pode_rodar(**_kwargs):
+        raise AssertionError("Gemini chamado com query barrada")
+
+    _filtro_que_barra(search, monkeypatch)
+    monkeypatch.setattr(search.module, "hub_search", hub_search_nao_pode_rodar)
+    monkeypatch.setattr(
+        search.module.gemini_service, "google_search", google_nao_pode_rodar
+    )
+
+    result = search.run("qual o número do Lula?")
+
+    assert result["text"] == search.module.QUERY_BLOCKED_MESSAGE
+    assert result["success"] is True
+    assert result["sources"] == [] and result["web_search_queries"] == []
+    # Motivo e termo não vão para o agente.
+    assert "filter_reason" not in result and "lula" not in str(result).lower()
+
+
+def test_query_barrada_vai_para_o_bigquery_com_o_motivo(search, monkeypatch):
+    _filtro_que_barra(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search("vou votar no lula"))
+
+    [coro] = search.created_tasks
+    asyncio.run(coro)
+    [chamada] = search.bq_calls
+    assert chamada["endpoint"] == "/tools/google_search"
+    assert chamada["data"]["source"] == "query_filter"
+    registro = chamada["data"]["response"]
+    assert registro["blocked"] is True
+    assert registro["filter_reason"] == "blacklist"
+    assert registro["filter_matched"] == "lula"
+    assert registro["query"] == "vou votar no lula"
+    assert registro["id"] == result["id"]
+
+
+def test_query_permitida_segue_o_fluxo_normal(search, monkeypatch):
+    async def empty_hub_search(request):
+        return {"results": [], "results_clean": []}
+
+    _filtro_que_barra(search, monkeypatch)
+    monkeypatch.setattr(search.module, "hub_search", empty_hub_search)
+
+    result = search.run("segunda via do iptu")
+
+    assert result["text"] == "resposta do google"
+
+
+def test_decisao_do_filtro_vai_para_o_span(search, monkeypatch):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    _filtro_que_barra(search, monkeypatch)
+
+    async def empty_hub_search(request):
+        return {"results": [], "results_clean": []}
+
+    monkeypatch.setattr(search.module, "hub_search", empty_hub_search)
+
+    with tracer.start_as_current_span("tool.barrada"):
+        search.run("vou votar no lula")
+    with tracer.start_as_current_span("tool.permitida"):
+        search.run("segunda via do iptu")
+
+    spans = {s.name: s.attributes for s in exporter.get_finished_spans()}
+    assert spans["tool.barrada"]["search.filter.blocked"] is True
+    assert spans["tool.barrada"]["search.filter.reason"] == "blacklist"
+    assert spans["tool.barrada"]["search.filter.matched"] == "lula"
+    assert spans["tool.permitida"]["search.filter.blocked"] is False
+    assert "search.filter.reason" not in spans["tool.permitida"]

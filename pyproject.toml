@@ -38,6 +38,9 @@ dependencies = [
     "jellyfish>=1.2.1",
     "num2words>=0.5.14",
     "prefeitura-rio>=1.1.2",
+    # Lê `src/tools/google_search/query_filter.yaml`. Já vinha de carona (fastmcp,
+    # langchain-core); declarada porque agora é usada em produção.
+    "pyyaml>=6.0",
 ]
 
 
