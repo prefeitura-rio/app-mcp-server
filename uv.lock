@@ -221,6 +221,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pytz" },
+    { name = "pyyaml" },
     { name = "redis" },
     { name = "shapely" },
 ]
@@ -261,6 +262,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pytz" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "redis", specifier = ">=7.0.1" },
     { name = "shapely", specifier = ">=2.1" },
 ]

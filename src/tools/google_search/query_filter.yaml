@@ -1,0 +1,198 @@
+# Filtro de query da tool `google_search` (CHATR-294).
+#
+# Roda antes do Typesense e do Gemini. Uma query barrada não chega a nenhum
+# buscador e recebe um texto fixo, igual para qualquer tema bloqueado.
+#
+# Regras:
+# - `whitelist`: expressões regulares do que PODE ser buscado. Vazia = tudo
+#   pode, salvo o que a blacklist vetar. Preenchida = só passa a query que
+#   casar com pelo menos uma expressão.
+# - `blacklist`: termos que VETAM a busca, mesmo que a whitelist tenha deixado
+#   passar. As seções existem só para organizar a revisão; todas valem igual.
+# - Sem nenhuma das duas preenchida, a busca opera normalmente.
+#
+# Como os termos são comparados:
+# - A query e os termos são normalizados do mesmo jeito: minúsculas, sem
+#   acento, pontuação vira espaço. Então "Eleição", "eleicao" e "ELEIÇÃO" são
+#   o mesmo termo, e pode escrever com acento aqui.
+# - O termo casa como palavra inteira (ou sequência de palavras inteiras):
+#   "lula" barra "vou votar no Lula", mas não "perdi meu celular".
+# - Plural e flexão não são inferidos: "eleição" não cobre "eleições".
+#
+# As expressões da whitelist rodam sobre o texto já normalizado: escreva-as em
+# minúsculas e sem acento.
+#
+# Toda mudança aqui passa por revisão em PR. Nomes de candidatos precisam de
+# validação de negócio: incluir um candidato e esquecer o adversário recria a
+# assimetria que originou este filtro.
+#
+# Decisões, alternativas descartadas e colisões aceitas:
+# docs/decisions/CHATR-294-filtro-eleitoral.md. Mudou a lista? Atualize o
+# documento e rode src/tests/e2e/filtro_query/run_filtro_query.py --modo offline.
+
+whitelist: []
+
+blacklist:
+  # 2º turno de 25/10/2026: Presidente e Governador (AC, AM, DF, ES, RN, TO).
+  # Fonte: TSE, dados abertos `consulta_cand_2026` (gerado em 14/10/2026).
+  # Primeiro nome comum vai composto ("alan rick", não "alan").
+  candidatos:
+    # Presidente: LULA (PT 13) e FLAVIO BOLSONARO (PL 22)
+    - lula
+    - luiz inácio
+    - luis inácio
+    - bolsonaro
+    # AC: MAILZA ASSIS (PP 11) e ALAN RICK (REPUBLICANOS 10)
+    - mailza
+    - alan rick
+    # AM: OMAR AZIZ (PSD 55) e PROFESSORA MARIA DO CARMO (PL 22)
+    - omar aziz
+    - abdelaziz
+    # "professora maria do carmo" sozinho barrava qualquer professora com esse nome.
+    - professora maria do carmo é candidata
+    - número da professora maria do carmo
+    - seffair
+    # DF: CELINA LEÃO (PP 11) e LEANDRO GRASS (PT 13)
+    - celina leão
+    - leandro grass
+    - grass
+    # ES: LORENZO PAZOLINI (REPUBLICANOS 10) e RICARDO FERRAÇO (MDB 15)
+    - pazolini
+    - ferraço
+    # RN: ALLYSON (UNIÃO 44) e CADU DE LULA (PT 13; o nome de urna já cai em "lula")
+    - allyson bezerra
+    - número do allyson
+    - cadu xavier
+    - número do cadu
+    # TO: PROFESSORA DORINHA (UNIÃO 44) e VICENTINHO JÚNIOR (PSDB 45)
+    - dorinha
+    - vicentinho
+
+  # Grafias quebradas ou trocadas de nomes e termos. Não cobre toda variação
+  # possível: é a parte que a whitelist em regex vai resolver melhor.
+  grafias:
+    - l u l a
+    - lu la
+    - lula13
+    - lulla
+    - bolsonaru
+    - bolsonar0
+    - eleisão
+    - eleisões
+
+  termos:
+    # Eleição e eleitor
+    - eleição
+    - eleições
+    - eleitoral
+    - eleitorais
+    - eleitor
+    - eleitora
+    - eleitoras
+    - eleitores
+    # Voto
+    - votar
+    - voto
+    - votos
+    - votei
+    - votação
+    - votações
+    - vote
+    - votem
+    - votou
+    - votaram
+    - votam
+    - votamos
+    - votando
+    - votarei
+    - votaria
+    - votariam
+    - intenção de voto
+    # Documentos e local de votação
+    - título de eleitor
+    - e-título
+    - etitulo
+    - zona eleitoral
+    - seção eleitoral
+    - local de votação
+    - urna eletrônica
+    - boca de urna
+    - mesário
+    - mesária
+    - mesários
+    # Justiça Eleitoral
+    - tse
+    - tre
+    - justiça eleitoral
+    # Candidatura e cargos
+    - número do candidato
+    - número de candidato
+    - número eleitoral
+    - candidatura
+    - candidaturas
+    - candidato a presidente
+    - candidato a governador
+    - candidato a senador
+    - candidato a deputado
+    - candidato ao governo
+    - candidata a presidente
+    - candidata a governadora
+    - candidata a senadora
+    - candidata a deputada
+    - candidata ao governo
+    # "deputado", "senador" e "vereador" sozinhos barravam endereço ("Rua Senador
+    # Dantas", "Rua Deputado Soares Filho"). Ficam só em expressão eleitoral.
+    # Vereador saiu: não há eleição de vereador em 2026.
+    - deputado federal
+    - deputada federal
+    - deputados federais
+    - deputado estadual
+    - deputada estadual
+    - deputados estaduais
+    - deputado eleito
+    - deputada eleita
+    - deputados eleitos
+    - senador eleito
+    - senadora eleita
+    - senadores eleitos
+    - mais votado
+    - mais votada
+    - mais votados
+    - mais votadas
+    # Campanha e turnos
+    - propaganda eleitoral
+    - horário eleitoral
+    - pesquisa eleitoral
+    # "apuração" sozinho barrava "apuração da denúncia"; "apuração dos votos" já
+    # cai em "votos".
+    - santinho
+    - comício
+    - primeiro turno
+    - segundo turno
+    - 1º turno
+    - 2º turno
+    # Partidos (só nomes sem colisão: "pt", "pl", "novo", "rede", "podemos" ficam de fora)
+    - partido dos trabalhadores
+    - partido liberal
+    - psdb
+    - psol
+    - mdb
+    - união brasil
+    # Institutos de pesquisa
+    - datafolha
+    - quaest
+    - atlasintel
+    - ipec
+    # Derivados políticos
+    - bolsonarista
+    - bolsonaristas
+    - lulista
+    - lulistas
+    - petista
+    - petistas
+    - eleitoreiro
+    - eleitoreira
+    # Inglês ("vote" já está em Voto)
+    - election
+    - elections
+    - voting

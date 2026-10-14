@@ -1,7 +1,10 @@
 import json
+from uuid import uuid4
 
 import httpx
+from opentelemetry import trace
 
+from src.tools.google_search import query_filter as filtro
 from src.tools.google_search.gemini_service import gemini_service
 from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_response_in_bq_background
@@ -13,12 +16,29 @@ from src.config import env
 
 from src.utils.log import logger
 
+# Resposta a uma query barrada pelo filtro (CHATR-294). Igual para qualquer tema e
+# qualquer candidato: variar o texto por termo recriaria a assimetria do incidente.
+# Quem lê é o agente, não o cidadão: o texto é instrução. Sem termo, query ou
+# mecanismo, que ficam no span e no BigQuery. "Não refaça a busca" impede que o
+# agente reformule a query para contornar o filtro.
+QUERY_BLOCKED_MESSAGE = (
+    "Busca não realizada: o tema está fora do catálogo de serviços da Prefeitura do "
+    "Rio. Responda ao cidadão que não é possível ajudar com esse assunto por aqui, "
+    "sem citar candidatos, partidos, números ou resultados, e ofereça ajuda com os "
+    "serviços municipais. Não refaça a busca com outras palavras."
+)
+
 
 @interceptor(source={"source": "mcp", "tool": "search"})
 async def get_google_search(query: str):
     """
     Obtém resultados de busca via Typesense (se ativo) ou Google Search como fallback.
     """
+    # 0. Filtro de query antes de qualquer buscador (CHATR-294)
+    decisao = filtro.query_filter.check(query)
+    _marcar_filtro_no_span(decisao)
+    if not decisao.allowed:
+        return _resposta_bloqueada(query, decisao)
 
     # 1. Configurações iniciais e Logs
     is_typesense_active = (
@@ -108,6 +128,57 @@ async def get_google_search(query: str):
         falha_tecnica(response_data.get("text"))
 
     return final_response
+
+
+def _marcar_filtro_no_span(decisao: filtro.FilterDecision) -> None:
+    """Publica a decisão no span da tool. Marca toda chamada, não só as barradas,
+    para a taxa de bloqueio sair de uma contagem no SigNoz."""
+    span = trace.get_current_span()
+    span.set_attribute("search.filter.blocked", not decisao.allowed)
+    if decisao.reason:
+        span.set_attribute("search.filter.reason", decisao.reason)
+    if decisao.matched:
+        span.set_attribute("search.filter.matched", decisao.matched)
+
+
+def _resposta_bloqueada(query: str, decisao: filtro.FilterDecision) -> dict:
+    """Resposta a uma query barrada pelo filtro, já registrada no BigQuery.
+
+    Sai como sucesso, no mesmo formato da busca normal: é recusa de tema, não falha
+    técnica, então não pode virar `isError` (o Salesforce a contaria como falha). O
+    motivo e o termo que casou ficam no log e no BigQuery, não na resposta ao agente.
+    """
+    request_id = str(uuid4())
+    logger.info(
+        f"Busca barrada pelo filtro de query | id={request_id} "
+        f"motivo={decisao.reason} termo={decisao.matched}"
+    )
+    resposta = {
+        "text": QUERY_BLOCKED_MESSAGE,
+        "sources": [],
+        "web_search_queries": [],
+        "id": request_id,
+        "success": True,
+    }
+    disparar_em_background(
+        save_response_in_bq_background(
+            data={
+                "source": "query_filter",
+                "response": {
+                    **resposta,
+                    "query": query,
+                    "blocked": True,
+                    "filter_reason": decisao.reason,
+                    "filter_matched": decisao.matched,
+                },
+            },
+            endpoint="/tools/google_search",
+            dataset_id="brutos_eai_logs",
+            table_id="mcp",
+        ),
+        nome="bq:google_search",
+    )
+    return resposta
 
 
 async def _try_hub_search(hub_request: HubSearchRequest) -> dict | None:
