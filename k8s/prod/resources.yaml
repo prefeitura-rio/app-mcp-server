@@ -72,7 +72,7 @@ spec:
               app: mcp
       containers:
         - name: mcp
-          image: ghcr.io/prefeitura-rio/app-mcp-server:v2026.10.09-1@sha256:148f53b35ffe1ebc94379339773deee94e04f07e7208ba9b616ab5858119903e  # Updated by release workflow
+          image: ghcr.io/prefeitura-rio/app-mcp-server:v2026.10.14-1@sha256:849a4ce8bdaaa643842d98513b72f1f972b8cce9520072512da8f74b0eb0b5a8  # Updated by release workflow
           ports:
             - containerPort: 80
           env:
