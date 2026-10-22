@@ -137,8 +137,17 @@ def test_max_output_nao_aceita_zero(monkeypatch):
 
 
 def test_defaults_da_busca():
-    """Sem env no ambiente de teste, valem os defaults calibrados no CHATR-234."""
+    """Sem env no ambiente de teste, valem os defaults calibrados no CHATR-234 e
+    revistos no CHATR-298 (fallback entre modelos)."""
     assert env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS == 8192
     assert env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS == 12288
-    assert env.GEMINI_SEARCH_DEADLINE_SECONDS == 45.0
+    assert env.GEMINI_SEARCH_DEADLINE_SECONDS == 100.0
+    assert env.GEMINI_SEARCH_MODEL_DEADLINE_SECONDS == 45.0
+    assert env.GEMINI_SEARCH_MODELS == [
+        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
+    ]
+    assert env.GEMINI_SEARCH_ATTEMPTS_PER_MODEL == 2
+    assert env.GEMINI_SEARCH_THINKING_LEVEL == "MINIMAL"
     assert not hasattr(env, "GEMINI_SEARCH_RETRY_BUDGET_SECONDS")
+    assert not hasattr(env, "GEMINI_SEARCH_RETRY_ATTEMPTS")

@@ -40,12 +40,30 @@ GEMINI_MODEL = getenv_or_action(
     "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
 )
 
-# Política de retry da busca via Gemini (CHATR-122).
-# Erros 503/UNAVAILABLE do Gemini são transitórios: a janela de espera precisa ser larga
-# o bastante para atravessar um pico de saturação, mas curta o bastante para o chat.
-# Parametrizado por env para permitir recalibrar sem deploy de código.
-GEMINI_SEARCH_RETRY_ATTEMPTS = int(
-    getenv_or_action("GEMINI_SEARCH_RETRY_ATTEMPTS", default="4", action="ignore")
+# Modelos da busca, em ordem de prioridade (CHATR-298). Quando o 503 "high demand"
+# derruba um modelo, ele derruba o modelo inteiro: insistir nele não adianta, e o
+# próximo da lista tem outra capacidade. O 2.5 vem primeiro por custo — o grounding
+# dele é cobrado por prompt, com franquia diária; o do 3.x, por query de busca.
+# O `GEMINI_MODEL` não vale para a busca.
+GEMINI_SEARCH_MODELS = [
+    modelo.strip()
+    for modelo in getenv_or_action(
+        "GEMINI_SEARCH_MODELS",
+        default="gemini-2.5-flash-lite,gemini-3.5-flash-lite",
+        action="ignore",
+    ).split(",")
+    if modelo.strip()
+]
+# Raciocínio dos modelos 3.x, que usam nível em vez de budget de tokens.
+GEMINI_SEARCH_THINKING_LEVEL = getenv_or_action(
+    "GEMINI_SEARCH_THINKING_LEVEL", default="MINIMAL", action="ignore"
+)
+
+# Política de retry da busca via Gemini (CHATR-122, revista no CHATR-298).
+# Um erro transitório (503, 429, 5xx) ganha uma nova tentativa curta no mesmo modelo;
+# se falhar de novo, a busca passa para o próximo modelo da lista.
+GEMINI_SEARCH_ATTEMPTS_PER_MODEL = int(
+    getenv_or_action("GEMINI_SEARCH_ATTEMPTS_PER_MODEL", default="2", action="ignore")
 )
 GEMINI_SEARCH_RETRY_BASE_SECONDS = float(
     getenv_or_action("GEMINI_SEARCH_RETRY_BASE_SECONDS", default="2", action="ignore")
@@ -97,13 +115,22 @@ if GEMINI_SEARCH_MAX_OUTPUT_TOKENS < GEMINI_SEARCH_REASONING_BUDGET_TOKENS + 204
         "podem sair cortadas em MAX_TOKENS."
     )
 
-# Prazo total da busca, em segundos: todas as tentativas, o backoff entre elas e
-# a resolução de URLs (CHATR-234). Substitui o antigo orçamento de retry, que só
-# decidia se começava outra tentativa e nunca limitava a duração de uma. Bem
-# abaixo dos 120 s que o Salesforce aguenta por chamada: o agente pode chamar a
-# busca duas vezes no mesmo turno quando a primeira falha.
+# Prazo total da busca, em segundos: todos os modelos, as tentativas, o backoff
+# entre elas e a resolução de URLs (CHATR-234). Com dois modelos: 45 + 45 + 10 de
+# URLs. O limite real do Salesforce é o teto de 120 s de callout por transação — o
+# `setTimeout` de 60 s do Apex não dispara, porque os pings SSE a cada 15 s zeram o
+# timeout de leitura — e o Apex vê uns 6 s a mais que o prazo daqui. A segunda
+# busca do turno só acontece depois de um sucesso sem resultado útil: o `.agent`
+# encerra as tentativas do turno em erro técnico (CHATR-298).
 GEMINI_SEARCH_DEADLINE_SECONDS = float(
-    getenv_or_action("GEMINI_SEARCH_DEADLINE_SECONDS", default="45", action="ignore")
+    getenv_or_action("GEMINI_SEARCH_DEADLINE_SECONDS", default="100", action="ignore")
+)
+# Prazo de cada modelo da lista, dentro do prazo total. Cobre o p99 das chamadas
+# bem-sucedidas (27,6 s em out/2026) com folga.
+GEMINI_SEARCH_MODEL_DEADLINE_SECONDS = float(
+    getenv_or_action(
+        "GEMINI_SEARCH_MODEL_DEADLINE_SECONDS", default="45", action="ignore"
+    )
 )
 
 GOOGLE_MAPS_API_URL = getenv_or_action("GOOGLE_MAPS_API_URL")
