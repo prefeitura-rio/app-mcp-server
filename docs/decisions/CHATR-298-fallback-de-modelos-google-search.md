@@ -1,4 +1,4 @@
-# Fallback de modelos no google_search: variáveis de ambiente e operação
+# Fallback de modelos no google_search: configuração e operação
 
 **Jira:** [CHATR-298](https://iplanrio-pcrj.atlassian.net/browse/CHATR-298)
 **PR:** [#193](https://github.com/prefeitura-rio/app-mcp-server/pull/193)
@@ -9,44 +9,99 @@
 
 ## Resumo
 
-A busca percorre uma lista de modelos em ordem de prioridade. Cada modelo tem o seu prazo dentro do prazo total. Um erro transitório (503, 429, 5xx) ganha uma nova tentativa curta no mesmo modelo; qualquer outra falha (prazo do modelo, `RECITATION`, `MAX_TOKENS`, resposta vazia, 4xx) passa direto para o próximo. Só quando todos falham a busca vira falha técnica e gera alerta.
+A busca percorre uma lista de modelos em ordem de prioridade. Cada modelo tem o seu prazo e os seus parâmetros de invocação. Um erro transitório (503, 429, 5xx) ganha uma nova tentativa curta no mesmo modelo; qualquer outra falha (prazo do modelo, `RECITATION`, `MAX_TOKENS`, resposta vazia, 4xx) passa direto para o próximo. Só quando todos falham a busca vira falha técnica e gera alerta.
 
-Tudo isso é controlado por variáveis de ambiente, para que a ordem dos modelos e os prazos possam mudar **sem deploy**. Este documento descreve cada variável, o estado de cada ambiente e o procedimento para alterar.
+A lista inteira fica numa variável de ambiente, `GEMINI_SEARCH_MODELS`, em JSON, para que modelos, ordem e parâmetros mudem **sem deploy**. Sem a variável, vale a configuração de produção do código.
 
 ---
 
-## Variáveis
+## `GEMINI_SEARCH_MODELS`
 
-Definidas em [`src/config/env.py`](../../src/config/env.py). Quando ausentes no ambiente, vale o default do código.
+Lista JSON, um objeto por modelo, na ordem em que serão tentados. Lida e validada no boot por [`src/config/gemini_search.py`](../../src/config/gemini_search.py).
+
+```json
+[
+  {"model": "gemini-2.5-flash-lite", "timeout_s": 45},
+  {"model": "gemini-3.5-flash-lite", "timeout_s": 20, "thinking_level": "MINIMAL"}
+]
+```
+
+Só `model` é obrigatório. Campo omitido vale o default do campo:
+
+| Campo | Default | Faixa aceita | O que controla |
+| --- | --- | --- | --- |
+| `model` | (obrigatório) | texto não vazio, sem repetir na lista | Nome do modelo na API do Gemini |
+| `timeout_s` | `45` | 5 a 95 | Prazo do modelo, somando as tentativas e a espera entre elas |
+| `attempts` | `2` | 1 a 4 | Chamadas no mesmo modelo em erro transitório (1 + retries) |
+| `thinking_budget` | `8192` nos `gemini-2.*` | ≥ 0 (`0` desliga) | Raciocínio dos 2.x, em tokens. Só nos `gemini-2.*` |
+| `thinking_level` | `MINIMAL` nos demais | `MINIMAL`, `LOW`, `MEDIUM`, `HIGH` | Raciocínio dos 3.x. Não vale nos `gemini-2.*` |
+| `max_output_tokens` | `12288` | ≥ 1 | Teto de saída. Nos 2.x precisa ser ≥ `thinking_budget + 2048` |
+| `temperature` | `0` | 0 a 2 | Temperatura da geração |
+
+Regras da lista:
+
+- Ao menos um modelo, sem nomes repetidos.
+- Campo desconhecido é erro (pega erro de digitação como `"timout_s"`).
+- `thinking_budget` e `thinking_level` não vão juntos. Omitidos os dois, vale o default da geração do modelo.
+- **Prazo total = soma dos `timeout_s` + 10s** de resolução de URLs, e não pode passar de **105s**. O limite real do Salesforce é o teto de 120s de callout por transação Apex: o Apex vê cerca de 6s a mais que o prazo daqui, e a transação ainda faz `initialize` antes do `tools/call`. O `setTimeout` de 60s do `HttpToolHelperBase` não dispara, porque os pings SSE a cada 15s zeram o timeout de leitura.
+
+### Configuração de produção (default do código)
+
+| Ordem | Modelo | `timeout_s` | `attempts` | Raciocínio | `max_output_tokens` | `temperature` |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `gemini-2.5-flash-lite` | 45 | 2 | `thinking_budget=8192` | 12288 | 0 |
+| 2 | `gemini-3.5-flash-lite` | 20 | 2 | `thinking_level=MINIMAL` | 12288 | 0 |
+
+Prazo total: 45 + 20 + 10 = **75s**. O 45s do 2.5 cobre o p99 das chamadas bem-sucedidas (27,6s em out/2026). O 3.5 fica com 20s porque, na bateria do CHATR-298, teve p95 de 6,4s e máximo de 9,3s. Assim o pior caso de uma busca deixa folga para uma segunda busca no mesmo turno.
+
+### Comportamento no boot
+
+| Valor da variável | Resultado |
+| --- | --- |
+| Ausente ou vazia | Sobe com a configuração de produção |
+| JSON válido | Sobe com a lista da variável |
+| Inválido (JSON quebrado, campo errado, valor fora da faixa, prazo acima do teto) | **O pod não sobe.** O preflight registra no log cada problema, com o item e o campo |
+
+O valor inválido não cai no default de propósito: quem preencheu quis mudar algo, e seguir em silêncio com outra configuração esconderia o erro. Com o canary do Argo Rollouts (`maxUnavailable: 0`), o pod novo não fica pronto e os pods estáveis continuam atendendo.
+
+Exemplo do log de erro:
+
+```
+Preflight de configuração falhou com 2 erro(s). A aplicação NÃO será iniciada:
+  - GEMINI_SEARCH_MODELS[0] (gemini-2.5-flash-lite).timout_s: campo desconhecido (recebido: 45)
+  - GEMINI_SEARCH_MODELS[1].model: campo obrigatório ausente
+```
+
+Com a configuração válida, o boot registra a configuração efetiva e a origem dela:
+
+```
+Modelos da busca web (origem: env): gemini-2.5-flash-lite(45s, 2x, budget=8192, max_output=12288, temp=0) → gemini-3.5-flash-lite(20s, 2x, level=MINIMAL, max_output=12288, temp=0); prazo total 75s
+```
+
+---
+
+## Outras variáveis
+
+Continuam globais, porque são política da busca e não de um modelo:
 
 | Variável | Default | O que controla |
 | --- | --- | --- |
-| `GEMINI_SEARCH_MODELS` | `gemini-2.5-flash-lite,gemini-3.5-flash-lite` | Modelos da busca, em ordem de prioridade, separados por vírgula. Vazia (ou só vírgulas e espaços) vale o default, com warning no log |
-| `GEMINI_SEARCH_MODEL_DEADLINE_SECONDS` | `45` | Prazo de cada modelo (todas as tentativas nele). Cobre o p99 das chamadas bem-sucedidas (27,6s em out/2026) |
-| `GEMINI_SEARCH_DEADLINE_SECONDS` | `100` (era `45`) | Prazo total da busca: todos os modelos, o backoff e a resolução de URLs |
-| `GEMINI_SEARCH_ATTEMPTS_PER_MODEL` | `2` | Tentativas por modelo em erro transitório (1 chamada + 1 retry) |
-| `GEMINI_SEARCH_THINKING_LEVEL` | `MINIMAL` | Raciocínio dos modelos 3.x (`MINIMAL`, `LOW`, `MEDIUM`, `HIGH`) |
-| `GEMINI_SEARCH_REASONING_BUDGET_TOKENS` | `8192` | Raciocínio dos modelos 2.x. Não vale para os 3.x (inalterada) |
-| `GEMINI_SEARCH_MAX_OUTPUT_TOKENS` | `12288` | Teto de saída de qualquer modelo (inalterada) |
-| `GEMINI_SEARCH_RETRY_BASE_SECONDS` | `2` | Base do backoff do retry: espera entre 1 e 2s (inalterada) |
-| `GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS` | `16` | Teto da espera, inclusive quando a API informa `retryDelay` (inalterada) |
+| `GEMINI_SEARCH_RETRY_BASE_SECONDS` | `2` | Base do backoff do retry: espera entre 1 e 2s |
+| `GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS` | `16` | Teto da espera, inclusive quando a API informa `retryDelay` |
 
-Variáveis que **deixaram de valer para a busca**:
+Variáveis **removidas do código**. Se ainda existirem no Infisical, são ignoradas, e o boot registra um warning para cada uma:
 
-| Variável | Situação |
+| Variável | Substituída por |
 | --- | --- |
-| `GEMINI_MODEL` | Removida do código. A chave ainda existe no Infisical de staging e prod e é ignorada; pode ser apagada depois |
-| `GEMINI_SEARCH_RETRY_ATTEMPTS` | Removida, substituída por `GEMINI_SEARCH_ATTEMPTS_PER_MODEL`. Se existir no Infisical, é ignorada |
+| `GEMINI_MODEL` | `model` do primeiro item |
+| `GEMINI_SEARCH_DEADLINE_SECONDS` | Prazo total calculado (soma dos `timeout_s` + 10s) |
+| `GEMINI_SEARCH_MODEL_DEADLINE_SECONDS` | `timeout_s` |
+| `GEMINI_SEARCH_ATTEMPTS_PER_MODEL` / `GEMINI_SEARCH_RETRY_ATTEMPTS` | `attempts` |
+| `GEMINI_SEARCH_THINKING_LEVEL` | `thinking_level` |
+| `GEMINI_SEARCH_REASONING_BUDGET_TOKENS` | `thinking_budget` |
+| `GEMINI_SEARCH_MAX_OUTPUT_TOKENS` | `max_output_tokens` |
 
-A geração do modelo é deduzida pelo nome: `gemini-2.*` usa `thinking_budget`; qualquer outro usa `thinking_level`.
-
----
-
-## Regras para mexer nos prazos
-
-1. **O total precisa caber todos os modelos:** `GEMINI_SEARCH_DEADLINE_SECONDS ≥ nº de modelos × GEMINI_SEARCH_MODEL_DEADLINE_SECONDS + 10`. Os 10s são a reserva da resolução de URLs. Abaixo disso, o último modelo da lista fica com pouco ou nenhum tempo quando os anteriores travam.
-2. **O total não pode passar de ~105s.** O limite real do Salesforce é o teto de 120s de callout por transação Apex. O Apex vê cerca de 6s a mais que o prazo daqui, e a transação ainda faz `initialize` e `notifications/initialized` antes do `tools/call`. O `setTimeout` de 60s do `HttpToolHelperBase` não dispara, porque os pings SSE a cada 15s zeram o timeout de leitura.
-3. **Para três modelos ou mais**, reduza o prazo por modelo em vez de aumentar o total. Exemplo: 3 modelos × 30s + 10s = 100s.
+Mudança de comportamento: antes, um valor inválido nessas variáveis virava o default com warning (`thinking_budget=-1`, por exemplo). Agora, um valor inválido na lista derruba o boot.
 
 ---
 
@@ -56,36 +111,46 @@ Levantado em 22/10/2026 nas chaves do secret `mcp-secrets` (namespace `mcp`), qu
 
 | Variável | Staging | Prod | Ação |
 | --- | --- | --- | --- |
-| `GEMINI_SEARCH_DEADLINE_SECONDS` | `45` | não definida (vale `100`) | **Staging: remover a chave ou pôr `100` antes de validar o PR.** Com `45`, o segundo modelo só ganha tempo quando o primeiro falha rápido. Prod: nada |
-| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | `gemini-2.5-flash-lite` | Nenhuma. Removida do código; a chave é ignorada e pode ser apagada depois |
-| Demais variáveis da tabela acima | não definidas | não definidas | Nenhuma: valem os defaults |
+| `GEMINI_SEARCH_MODELS` | não definida | não definida | Nenhuma: vale a configuração de produção |
+| `GEMINI_SEARCH_DEADLINE_SECONDS` | `45` | não definida | Nenhuma. Ignorada; pode ser apagada de staging |
+| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | `gemini-2.5-flash-lite` | Nenhuma. Ignorada; pode ser apagada depois |
 
-**Este PR não exige mudança de variável em prod.**
+**Este PR não exige mudança de variável em prod nem em staging.**
 
 ---
 
 ## Quando prod vai precisar de mudança
 
-| Situação | O que mudar |
+| Situação | O que mudar em `GEMINI_SEARCH_MODELS` |
 | --- | --- |
-| Promover um 3.x a modelo principal ([CHATR-302](https://iplanrio-pcrj.atlassian.net/browse/CHATR-302)) | `GEMINI_SEARCH_MODELS`. Atenção ao custo: nos 3.x o grounding é cobrado por query de busca (5.000 grátis por mês, depois US$ 14/1.000) |
-| O Google desligar ou bloquear o 2.5 | Tirar o 2.5 de `GEMINI_SEARCH_MODELS`. Sem isso a busca continua funcionando: o 4xx do 2.5 passa direto para o próximo, mas cada busca paga uma chamada perdida |
-| Incidente prolongado num modelo específico | Inverter a ordem em `GEMINI_SEARCH_MODELS` até o modelo voltar. Evita que toda busca espere o modelo degradado antes do fallback |
-| Adicionar um terceiro modelo | `GEMINI_SEARCH_MODELS` e `GEMINI_SEARCH_MODEL_DEADLINE_SECONDS`, respeitando as regras de prazo acima |
+| Promover um 3.x a modelo principal ([CHATR-302](https://iplanrio-pcrj.atlassian.net/browse/CHATR-302)) | A ordem da lista. Atenção ao custo: nos 3.x o grounding é cobrado por query de busca (5.000 grátis por mês, depois US$ 14/1.000) |
+| O Google desligar ou bloquear o 2.5 | Tirar o 2.5 da lista. Sem isso a busca continua funcionando: o 4xx do 2.5 passa direto para o próximo, mas cada busca paga uma chamada perdida |
+| Incidente prolongado num modelo específico | Inverter a ordem até o modelo voltar. Evita que toda busca espere o modelo degradado antes do fallback |
+| Adicionar um terceiro modelo | Acrescentar o item, ajustando os `timeout_s` para a soma + 10s caber em 105s. Exemplo: 45 + 20 + 20 + 10 = 95s |
 
 ---
 
 ## Como alterar
 
-1. **Editar no Infisical do cluster**, não no `infisical.iplan.dados.rio`: mudar valor lá não chega aos pods. O `InfisicalSecret mcp-secrets` sincroniza o projeto `mcp-hzj1`, path `/`, com resync de 60s. Em staging, a instância é `https://infisical-superapp-staging.squirrel-regulus.ts.net` (env `staging`). Prod segue o mesmo padrão; ver `iac-superapp/modules/deployments/infisical.tf`.
-2. **Reiniciar o rollout.** O app só lê o ambiente no boot, e a anotação de auto-reload não reinicia o Rollout do Argo:
+1. **Montar o JSON numa linha só**, com aspas retas (`"`). Para conferir antes, rode a validação localmente:
+
+   ```bash
+   uv run python -c 'from src.config.gemini_search import parse_search_config as p; print(p(open("/dev/stdin").read())[0].resumo())' <<< '<json>'
+   ```
+
+2. **Editar no Infisical do cluster**, não no `infisical.iplan.dados.rio`: mudar valor lá não chega aos pods. O `InfisicalSecret mcp-secrets` sincroniza o projeto `mcp-hzj1`, path `/`, com resync de 60s. Em staging, a instância é `https://infisical-superapp-staging.squirrel-regulus.ts.net` (env `staging`). Prod segue o mesmo padrão; ver `iac-superapp/modules/deployments/infisical.tf`.
+3. **Reiniciar o rollout.** O app só lê o ambiente no boot, e a anotação de auto-reload não reinicia o Rollout do Argo:
 
    ```bash
    kubectl argo rollouts restart mcp -n mcp --context gke_rj-superapp-staging_us-central1_application  # staging
    kubectl argo rollouts restart mcp -n mcp --context gke_rj-superapp_us-central1_application          # prod
    ```
 
-3. **Conferir.** Cada busca grava a lista e os prazos efetivos no span da tool: `gemini.search.models`, `gemini.search.deadline_s` e `gemini.search.model_deadline_s`. Quem respondeu fica em `gemini.search.model_used` e `gemini.search.fallback_used`, e também nos campos `model`, `models_tried` e `fallback_used` do BigQuery (`rj-iplanrio.brutos_eai_logs.mcp`).
+4. **Conferir.**
+   - No log do boot, a linha `Modelos da busca web (origem: env)`.
+   - Se o pod novo não ficar pronto, o log do preflight lista o problema. Corrigir o valor no Infisical e reiniciar de novo.
+   - Em cada busca, o span da tool traz `gemini.search.models` e `gemini.search.deadline_s`. Cada chamada (`gemini.generate_content`) traz `gemini.model`, `gemini.model_deadline_s`, `gemini.max_output_tokens` e `gemini.reasoning_budget_tokens` ou `gemini.thinking_level`.
+   - Quem respondeu fica em `gemini.search.model_used` e `gemini.search.fallback_used`, e também nos campos `model`, `models_tried`, `fallback_used` e `temperature` do BigQuery (`rj-iplanrio.brutos_eai_logs.mcp`).
 
 ---
 
@@ -93,22 +158,28 @@ Levantado em 22/10/2026 nas chaves do secret `mcp-secrets` (namespace `mcp`), qu
 
 O QA do Salesforce chama o MCP de staging (`callout:MCPRioStaging`), então o teste ponta a ponta é feito conversando no WhatsApp de QA.
 
-1. Em staging: `GEMINI_SEARCH_DEADLINE_SECONDS=100` (ou remover a chave) e `GEMINI_SEARCH_MODELS=gemini-inexistente,gemini-3.5-flash-lite`. Reiniciar o rollout.
-2. No QA, fazer 2 ou 3 perguntas que caiam na busca web.
+1. Em staging, definir:
+
+   ```json
+   [{"model": "gemini-inexistente", "timeout_s": 20}, {"model": "gemini-3.5-flash-lite", "timeout_s": 20}]
+   ```
+
+   Reiniciar o rollout.
+2. No QA, fazer 2 ou 3 perguntas que caiam na busca web, e ao menos um turno com duas buscas.
 3. Esperado: resposta com fontes, vinda do 3.5, sem alerta no canal do interceptor; `fallback_used: true` e `models_tried` com o primeiro modelo marcado `gemini_client_error`.
-4. Medir a latência e conferir que uma segunda busca no mesmo turno não estoura os 120s do Apex. No `Log_Event__c` do QA, uma falha aparece como o par `MCP_ERROR` + `ACTION_FAILED`.
-5. Voltar `GEMINI_SEARCH_MODELS` ao default (remover a chave) e reiniciar o rollout.
+4. Medir a latência e conferir que a soma das duas buscas do turno fica abaixo dos 120s do Apex. No `Log_Event__c` do QA, uma falha aparece como o par `MCP_ERROR` + `ACTION_FAILED`.
+5. Apagar a chave `GEMINI_SEARCH_MODELS` e reiniciar o rollout.
+
+Para forçar a falha técnica de toda busca (teste do caminho de erro no Salesforce), use `[{"model": "gemini-inexistente"}]`.
 
 ---
 
 ## Rollback sem deploy
 
-Para voltar a um comportamento próximo do anterior (um modelo só) sem reverter o código:
+Para voltar ao comportamento anterior ao CHATR-298 (um modelo só, prazo total de 45s, 4 tentativas) sem reverter o código:
 
-| Variável | Valor |
-| --- | --- |
-| `GEMINI_SEARCH_MODELS` | `gemini-2.5-flash-lite` |
-| `GEMINI_SEARCH_MODEL_DEADLINE_SECONDS` | `35` |
-| `GEMINI_SEARCH_DEADLINE_SECONDS` | `45` |
+```json
+[{"model": "gemini-2.5-flash-lite", "timeout_s": 35, "attempts": 4}]
+```
 
-Diferença em relação ao código anterior: 2 tentativas por modelo em erro transitório, em vez de 4 (`GEMINI_SEARCH_ATTEMPTS_PER_MODEL` pode ir a `4` se necessário), e a resolução de URLs limitada a 10s.
+Diferença em relação ao código anterior: a resolução de URLs fica limitada a 10s.

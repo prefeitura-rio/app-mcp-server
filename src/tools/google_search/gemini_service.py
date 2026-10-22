@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Sequence
 import asyncio
 from google import genai
 from google.genai.types import (
@@ -12,6 +12,12 @@ from google.genai.types import (
     GenerateContentResponse,
 )
 import src.config.env as env
+from src.config.gemini_search import (
+    MIN_ATTEMPT_SECONDS,
+    URL_RESOLUTION_RESERVE_SECONDS,
+    SearchModelConfig,
+    search_deadline_seconds,
+)
 from uuid import uuid4
 
 from datetime import datetime
@@ -54,13 +60,8 @@ TRANSIENT_ERROR_KINDS = frozenset(
     {"gemini_unavailable", "gemini_rate_limited", "timeout", "deadline"}
 )
 
-# Prazo total da busca (CHATR-234). A chamada ao Gemini não pode consumir o prazo
-# inteiro: a resolução de URLs vem depois e precisa de tempo para rodar. É também o
-# teto da resolução de URLs (CHATR-298).
-URL_RESOLUTION_RESERVE_SECONDS = 10.0
-# Abaixo disto uma tentativa nova quase certamente estoura o prazo; melhor desistir
-# do que começar uma chamada que vai ser cortada.
-MIN_ATTEMPT_SECONDS = 5.0
+# `URL_RESOLUTION_RESERVE_SECONDS` e `MIN_ATTEMPT_SECONDS` vêm de
+# `src/config/gemini_search.py`, que valida a lista de modelos contra eles.
 # Fração do budget de raciocínio a partir da qual a chamada é marcada como "bateu no
 # teto". O Gemini para alguns tokens antes do valor configurado (8.190 de 8.192 nos
 # testes de 2026-10-05).
@@ -169,20 +170,21 @@ def _finish_reason_name(candidate: Any) -> str | None:
     return getattr(finish_reason, "value", None) or str(finish_reason)
 
 
-def _thinking_config(model: str) -> ThinkingConfig:
+def _thinking_config(config: SearchModelConfig) -> ThinkingConfig:
     """Raciocínio por geração de modelo (CHATR-298): os 2.x usam budget de tokens
-    (CHATR-234); os 3.x usam nível, e no `MINIMAL` não gastam raciocínio."""
-    if model.startswith("gemini-2."):
-        return ThinkingConfig(thinking_budget=env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS)
-    return ThinkingConfig(thinking_level=env.GEMINI_SEARCH_THINKING_LEVEL)
+    (CHATR-234); os 3.x usam nível, e no `MINIMAL` não gastam raciocínio. A
+    configuração já chega com exatamente um dos dois."""
+    if config.thinking_budget is not None:
+        return ThinkingConfig(thinking_budget=config.thinking_budget)
+    return ThinkingConfig(thinking_level=config.thinking_level)
 
 
-def _generation_config(temperature: float, model: str) -> GenerateContentConfig:
-    """Configuração da chamada, com os tetos de token lidos do env (CHATR-234)."""
+def _generation_config(config: SearchModelConfig) -> GenerateContentConfig:
+    """Parâmetros da chamada, vindos da configuração do modelo (CHATR-298)."""
     return GenerateContentConfig(
-        temperature=temperature,
-        thinking_config=_thinking_config(model),
-        max_output_tokens=env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS,
+        temperature=config.temperature,
+        thinking_config=_thinking_config(config),
+        max_output_tokens=config.max_output_tokens,
         tools=[
             Tool(google_search=GoogleSearch()),
             Tool(url_context=UrlContext()),
@@ -199,14 +201,19 @@ def _marcar_span(**atributos: Any) -> None:
             span.set_attribute(chave, valor)
 
 
-def _registrar_geracao(tokens_metadata: Dict[str, Any], finish_reason: str | None):
+def _registrar_geracao(
+    tokens_metadata: Dict[str, Any],
+    finish_reason: str | None,
+    config: SearchModelConfig,
+):
     """Publica contadores e `finish_reason` no span e no log; devolve se o
     raciocínio bateu no budget.
 
     Bater no budget não é falha: com o teto, o loop de raciocínio termina em ~30 s
     com uma resposta curta e `finish_reason=STOP`. Só fica marcado para medir.
     """
-    budget = env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS
+    # Os 3.x não têm budget: nunca "batem no teto".
+    budget = config.thinking_budget or 0
     thoughts = tokens_metadata.get("thoughts_token_count")
     candidates = tokens_metadata.get("candidates_token_count")
     budget_hit = bool(
@@ -223,7 +230,7 @@ def _registrar_geracao(tokens_metadata: Dict[str, Any], finish_reason: str | Non
     logger.info(
         f"Geração do Gemini | finish_reason={finish_reason} thoughts={thoughts} "
         f"resposta={candidates} reasoning_budget={budget} "
-        f"max_output={env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS} "
+        f"max_output={config.max_output_tokens} "
         f"reasoning_budget_hit={budget_hit}"
     )
     return budget_hit
@@ -274,8 +281,7 @@ class GeminiService:
     async def google_search(
         self,
         query: str,
-        models: List[str] | None = None,
-        temperature: float = 0.0,
+        models: Sequence[SearchModelConfig] | None = None,
     ):
         """Busca com fallback entre modelos (CHATR-298).
 
@@ -283,10 +289,13 @@ class GeminiService:
         ganha uma nova tentativa curta no mesmo modelo; qualquer outra falha — prazo
         do modelo, `RECITATION`, `MAX_TOKENS`, resposta vazia, 4xx — passa direto
         para o próximo. Só quando todos falham a busca vira falha técnica e alerta.
+
+        `models` substitui a lista do env (`GEMINI_SEARCH_MODELS`). O prazo total é a
+        soma dos prazos dos modelos mais a reserva da resolução de URLs.
         """
         logger.info(f"Iniciando pesquisa Google para: {query}")
         request_id = str(uuid4())
-        models = list(models or env.GEMINI_SEARCH_MODELS)
+        models = tuple(models or env.GEMINI_SEARCH_CONFIG.models)
         last_exception = None
         last_error = None
         # Contadores da última geração que falhou, para irem ao BigQuery.
@@ -296,25 +305,24 @@ class GeminiService:
         # Um item por modelo tentado, com o motivo de a busca ter passado adiante.
         models_tried: List[Dict[str, Any]] = []
         started_at = time.monotonic()
-        deadline_at = started_at + env.GEMINI_SEARCH_DEADLINE_SECONDS
-        attempts_per_model = max(1, env.GEMINI_SEARCH_ATTEMPTS_PER_MODEL)
+        deadline_s = search_deadline_seconds(models, URL_RESOLUTION_RESERVE_SECONDS)
+        deadline_at = started_at + deadline_s
         backoff_cap = env.GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS
         formatted_prompt = web_searcher_instructions(research_topic=query)
         _marcar_span(
             **{
-                "gemini.reasoning_budget_tokens": env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS,
-                "gemini.max_output_tokens": env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS,
-                "gemini.search.deadline_s": env.GEMINI_SEARCH_DEADLINE_SECONDS,
-                "gemini.search.model_deadline_s": env.GEMINI_SEARCH_MODEL_DEADLINE_SECONDS,
-                "gemini.search.models": ",".join(models),
+                "gemini.search.deadline_s": deadline_s,
+                "gemini.search.models": ",".join(m.model for m in models),
             }
         )
 
-        for model_index, model in enumerate(models):
+        for model_index, model_config in enumerate(models):
+            model = model_config.model
+            attempts_per_model = model_config.attempts
             # O modelo fica com o próprio prazo, limitado pelo que sobra do total
             # depois de reservar o tempo da resolução de URLs, que vem no fim.
             model_deadline_at = min(
-                time.monotonic() + env.GEMINI_SEARCH_MODEL_DEADLINE_SECONDS,
+                time.monotonic() + model_config.timeout_s,
                 deadline_at - URL_RESOLUTION_RESERVE_SECONDS,
             )
             if model_deadline_at - time.monotonic() < MIN_ATTEMPT_SECONDS:
@@ -346,6 +354,21 @@ class GeminiService:
                         stage.set_attribute("gemini.attempt", calls_made)
                         stage.set_attribute("gemini.model", model)
                         stage.set_attribute("gemini.model_index", model_index)
+                        stage.set_attribute(
+                            "gemini.model_deadline_s", model_config.timeout_s
+                        )
+                        stage.set_attribute(
+                            "gemini.max_output_tokens", model_config.max_output_tokens
+                        )
+                        if model_config.thinking_budget is not None:
+                            stage.set_attribute(
+                                "gemini.reasoning_budget_tokens",
+                                model_config.thinking_budget,
+                            )
+                        else:
+                            stage.set_attribute(
+                                "gemini.thinking_level", model_config.thinking_level
+                            )
                         async with asyncio.timeout(model_seconds):
                             response = await self.client.aio.models.generate_content(
                                 model=model,
@@ -355,7 +378,7 @@ class GeminiService:
                                         parts=[Part(text=formatted_prompt)],
                                     )
                                 ],
-                                config=_generation_config(temperature, model),
+                                config=_generation_config(model_config),
                             )
                 except Exception as e:  # classificado logo abaixo
                     last_exception = e
@@ -420,7 +443,7 @@ class GeminiService:
                 tokens_metadata = self.get_tokens_metadata(response=response)
                 finish_reason = _finish_reason_name(candidate)
                 reasoning_budget_hit = _registrar_geracao(
-                    tokens_metadata, finish_reason
+                    tokens_metadata, finish_reason, model_config
                 )
                 geracao = {
                     "finish_reason": finish_reason,
@@ -459,7 +482,7 @@ class GeminiService:
                     request_id=request_id,
                     query=query,
                     model=model,
-                    temperature=temperature,
+                    temperature=model_config.temperature,
                     response=response,
                     candidate=candidate,
                     tokens_metadata=tokens_metadata,
@@ -476,11 +499,12 @@ class GeminiService:
             last_error = model_error
             models_tried.append({"model": model, "error_kind": model_error["kind"]})
 
+        ultimo_modelo = models[len(models_tried) - 1] if models_tried else models[0]
         return await self._failed_search_response(
             request_id=request_id,
             query=query,
-            model=models_tried[-1]["model"] if models_tried else models[0],
-            temperature=temperature,
+            model=ultimo_modelo.model,
+            temperature=ultimo_modelo.temperature,
             attempts_used=calls_made,
             elapsed_ms=int((time.monotonic() - started_at) * 1000),
             last_error=last_error or _deadline_error(),

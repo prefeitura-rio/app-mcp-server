@@ -3,6 +3,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from src.config.gemini_search import ENV_NAME as SEARCH_CONFIG_ENV_NAME
+from src.config.gemini_search import parse_search_config
 from src.utils.infisical import getenv_or_action
 
 
@@ -37,106 +39,45 @@ WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")
 
 GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
 
-# Modelos da busca, em ordem de prioridade (CHATR-298). Quando o 503 "high demand"
-# derruba um modelo, ele derruba o modelo inteiro: insistir nele não adianta, e o
-# próximo da lista tem outra capacidade. O 2.5 vem primeiro por custo — o grounding
-# dele é cobrado por prompt, com franquia diária; o do 3.x, por query de busca.
-GEMINI_SEARCH_MODELS_DEFAULT = "gemini-2.5-flash-lite,gemini-3.5-flash-lite"
-
-
-def _models_or_default(env_name: str, *, default: str) -> list[str]:
-    """Lê a lista de modelos; vazia (ou só vírgulas e espaços) vira o default.
-
-    A chave existir vazia no Infisical devolve "", não `None`. Sem este piso, a
-    lista sairia `[]` e toda busca falharia sem chamar modelo nenhum.
-    """
-    raw = getenv_or_action(env_name, default=default, action="ignore")
-    models = [modelo.strip() for modelo in str(raw or "").split(",") if modelo.strip()]
-    if not models:
-        logger.warning(f"{env_name}={raw!r} sem nenhum modelo; usando {default}.")
-        models = [modelo.strip() for modelo in default.split(",") if modelo.strip()]
-    return models
-
-
-GEMINI_SEARCH_MODELS = _models_or_default(
-    "GEMINI_SEARCH_MODELS", default=GEMINI_SEARCH_MODELS_DEFAULT
+# Modelos da busca, em ordem de prioridade, com os parâmetros de cada um
+# (CHATR-298). Quando o 503 "high demand" derruba um modelo, ele derruba o modelo
+# inteiro: insistir nele não adianta, e o próximo da lista tem outra capacidade.
+# Ausente ou vazia, vale a configuração de produção do código; preenchida e
+# inválida, derruba o boot com a lista de erros (o preflight já reprova antes).
+# Formato, defaults e regras em `src/config/gemini_search.py`.
+GEMINI_SEARCH_CONFIG, _origem_da_busca = parse_search_config(
+    getenv_or_action(SEARCH_CONFIG_ENV_NAME, action="ignore")
 )
-# Raciocínio dos modelos 3.x, que usam nível em vez de budget de tokens.
-GEMINI_SEARCH_THINKING_LEVEL = getenv_or_action(
-    "GEMINI_SEARCH_THINKING_LEVEL", default="MINIMAL", action="ignore"
+logger.info(
+    f"Modelos da busca web (origem: {_origem_da_busca}): "
+    f"{GEMINI_SEARCH_CONFIG.resumo()}"
 )
+# Substituídas pela lista acima no CHATR-298. Se ainda estiverem no Infisical, são
+# ignoradas; o aviso evita que alguém mude uma delas achando que vale.
+for _aposentada in (
+    "GEMINI_MODEL",
+    "GEMINI_SEARCH_DEADLINE_SECONDS",
+    "GEMINI_SEARCH_MODEL_DEADLINE_SECONDS",
+    "GEMINI_SEARCH_ATTEMPTS_PER_MODEL",
+    "GEMINI_SEARCH_RETRY_ATTEMPTS",
+    "GEMINI_SEARCH_THINKING_LEVEL",
+    "GEMINI_SEARCH_REASONING_BUDGET_TOKENS",
+    "GEMINI_SEARCH_MAX_OUTPUT_TOKENS",
+):
+    if getenv_or_action(_aposentada, action="ignore") is not None:
+        logger.warning(
+            f"{_aposentada} não é mais lida e pode ser apagada: os parâmetros da "
+            f"busca vêm de {SEARCH_CONFIG_ENV_NAME}."
+        )
 
-# Política de retry da busca via Gemini (CHATR-122, revista no CHATR-298).
-# Um erro transitório (503, 429, 5xx) ganha uma nova tentativa curta no mesmo modelo;
-# se falhar de novo, a busca passa para o próximo modelo da lista.
-GEMINI_SEARCH_ATTEMPTS_PER_MODEL = int(
-    getenv_or_action("GEMINI_SEARCH_ATTEMPTS_PER_MODEL", default="2", action="ignore")
-)
+# Backoff entre as tentativas no mesmo modelo (CHATR-122). É política da busca,
+# igual para todos os modelos: fica fora da lista.
 GEMINI_SEARCH_RETRY_BASE_SECONDS = float(
     getenv_or_action("GEMINI_SEARCH_RETRY_BASE_SECONDS", default="2", action="ignore")
 )
 GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS = float(
     getenv_or_action(
         "GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS", default="16", action="ignore"
-    )
-)
-
-
-def _tokens_or_default(env_name: str, *, default: int, minimum: int) -> int:
-    """Lê um teto de tokens; ausente, ilegível ou abaixo do mínimo vira o default.
-
-    O default seguro mora aqui, e não no serviço: env ausente nunca pode virar
-    "sem limite". Foi o `thinking_budget=-1` sem `max_output_tokens` que deixou o
-    Gemini gerar ~65 mil tokens em loop por 120–160 s (CHATR-234).
-    """
-    raw = getenv_or_action(env_name, default=str(default), action="ignore")
-    try:
-        value = int(str(raw).strip())
-    except ValueError:
-        logger.warning(f"{env_name}={raw!r} não é inteiro; usando {default}.")
-        return default
-    if value < minimum:
-        logger.warning(f"{env_name}={value} abaixo de {minimum}; usando {default}.")
-        return default
-    return value
-
-
-# Teto de raciocínio da busca (CHATR-234). `0` é válido e desliga o raciocínio;
-# negativo (inclusive o `-1`, "automático" no SDK) não é aceito. 8192 cobre o
-# p99,9 das chamadas normais do flash-lite (6.686) e corta o loop em ~30 s.
-GEMINI_SEARCH_REASONING_BUDGET_TOKENS = _tokens_or_default(
-    "GEMINI_SEARCH_REASONING_BUDGET_TOKENS", default=8192, minimum=0
-)
-# Teto de saída da busca. No Gemini 2.5 ele limita raciocínio + resposta **em
-# cada etapa de geração**, então precisa caber o budget inteiro mais a resposta
-# (p99,9 de 2.189 tokens). Pega o loop que acontece na resposta, que o budget de
-# raciocínio não alcança.
-GEMINI_SEARCH_MAX_OUTPUT_TOKENS = _tokens_or_default(
-    "GEMINI_SEARCH_MAX_OUTPUT_TOKENS", default=12288, minimum=1
-)
-if GEMINI_SEARCH_MAX_OUTPUT_TOKENS < GEMINI_SEARCH_REASONING_BUDGET_TOKENS + 2048:
-    logger.warning(
-        "GEMINI_SEARCH_MAX_OUTPUT_TOKENS "
-        f"({GEMINI_SEARCH_MAX_OUTPUT_TOKENS}) deixa menos de 2048 tokens de resposta "
-        f"acima do raciocínio ({GEMINI_SEARCH_REASONING_BUDGET_TOKENS}): respostas "
-        "podem sair cortadas em MAX_TOKENS."
-    )
-
-# Prazo total da busca, em segundos: todos os modelos, as tentativas, o backoff
-# entre elas e a resolução de URLs (CHATR-234). Com dois modelos: 45 + 45 + 10 de
-# URLs. O limite real do Salesforce é o teto de 120 s de callout por transação — o
-# `setTimeout` de 60 s do Apex não dispara, porque os pings SSE a cada 15 s zeram o
-# timeout de leitura — e o Apex vê uns 6 s a mais que o prazo daqui. A segunda
-# busca do turno só acontece depois de um sucesso sem resultado útil: o `.agent`
-# encerra as tentativas do turno em erro técnico (CHATR-298).
-GEMINI_SEARCH_DEADLINE_SECONDS = float(
-    getenv_or_action("GEMINI_SEARCH_DEADLINE_SECONDS", default="100", action="ignore")
-)
-# Prazo de cada modelo da lista, dentro do prazo total. Cobre o p99 das chamadas
-# bem-sucedidas (27,6 s em out/2026) com folga.
-GEMINI_SEARCH_MODEL_DEADLINE_SECONDS = float(
-    getenv_or_action(
-        "GEMINI_SEARCH_MODEL_DEADLINE_SECONDS", default="45", action="ignore"
     )
 )
 

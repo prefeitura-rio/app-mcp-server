@@ -95,11 +95,8 @@ async def get_google_search(query: str):
     if not response_data:
         logger.info("Executing Google Search via Gemini Service")
         source = "google"
-        # Modelos, tentativas e prazos vêm do env dentro do serviço (CHATR-298).
-        response_google = await gemini_service.google_search(
-            query=query,
-            temperature=0.0,
-        )
+        # Modelos e parâmetros de cada um vêm de GEMINI_SEARCH_MODELS (CHATR-298).
+        response_google = await gemini_service.google_search(query=query)
         response_data = response_google
         final_response = {
             "text": response_google.get("text"),

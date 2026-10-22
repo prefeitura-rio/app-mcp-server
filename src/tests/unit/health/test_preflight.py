@@ -149,3 +149,33 @@ def test_preflight_aborta_o_processo_quando_ha_erro(full_env, monkeypatch):
 
 def test_preflight_nao_aborta_com_ambiente_valido(full_env):
     preflight.run_startup_preflight()  # não deve levantar
+
+
+def test_lista_de_modelos_da_busca_ausente_e_valida(full_env, monkeypatch):
+    monkeypatch.delenv("GEMINI_SEARCH_MODELS", raising=False)
+    assert preflight.check_gemini_search_config() == []
+
+
+def test_lista_de_modelos_da_busca_valida_passa(full_env, monkeypatch):
+    monkeypatch.setenv(
+        "GEMINI_SEARCH_MODELS", '[{"model": "gemini-3.5-flash-lite", "timeout_s": 20}]'
+    )
+    assert preflight.check_gemini_search_config() == []
+
+
+def test_lista_de_modelos_da_busca_invalida_aborta_o_boot(full_env, monkeypatch):
+    """Cada problema da lista vira um erro, junto com os demais do preflight."""
+    monkeypatch.setenv(
+        "GEMINI_SEARCH_MODELS",
+        '[{"model": "gemini-2.5-flash-lite", "timout_s": 45}, {"timeout_s": 20}]',
+    )
+
+    errors = preflight.collect_preflight_errors()
+
+    assert errors == [
+        "GEMINI_SEARCH_MODELS[0] (gemini-2.5-flash-lite).timout_s: campo desconhecido "
+        "(recebido: 45)",
+        "GEMINI_SEARCH_MODELS[1].model: campo obrigatório ausente",
+    ]
+    with pytest.raises(SystemExit):
+        preflight.run_startup_preflight()
