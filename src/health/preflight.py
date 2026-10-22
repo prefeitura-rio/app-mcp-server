@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from src.config import gemini_search
 from src.utils.infisical import getenv_or_action
 from src.utils.log import logger
 
@@ -217,11 +218,26 @@ def check_redis_url() -> Optional[str]:
     return None
 
 
+def check_gemini_search_config() -> List[str]:
+    """Valida `GEMINI_SEARCH_MODELS` com o mesmo parser do `src.config.env`.
+
+    Ausente ou vazia é válida (vale a configuração do código). Preenchida e
+    inválida, cada problema vira um erro: o import de `src.config.env` também
+    falharia, mas só depois de reportar as variáveis obrigatórias.
+    """
+    try:
+        gemini_search.parse_search_config(_get(gemini_search.ENV_NAME))
+    except gemini_search.SearchConfigError as exc:
+        return exc.errors
+    return []
+
+
 def collect_preflight_errors() -> List[str]:
     """Roda todas as validações e devolve a lista consolidada de erros."""
     errors: List[str] = []
     errors.extend(check_required_env())
     errors.extend(check_data_files())
+    errors.extend(check_gemini_search_config())
     for check in (check_gcp_credentials, check_valid_tokens, check_redis_url):
         error = check()
         if error:

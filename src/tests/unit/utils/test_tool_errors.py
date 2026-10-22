@@ -1,4 +1,4 @@
-"""Testes da falha técnica de tool e dos tetos da busca (CHATR-234).
+"""Testes da falha técnica de tool (CHATR-234) e dos defaults da busca (CHATR-298).
 
 A falha técnica precisa sair como `isError: true` com a mensagem intacta — é o único
 sinal que o Apex do Salesforce trata como falha — e não pode ser reportada duas vezes
@@ -103,42 +103,29 @@ def test_interceptor_sync_nao_reporta_falha_tecnica(
 
 
 # --------------------------------------------------------------------------------
-# Tetos de token da busca: o default seguro mora no env, nunca "sem limite"
+# Configuração da busca: a lista de modelos substitui as variáveis avulsas (CHATR-298)
 # --------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("valor", "esperado"),
-    [
-        pytest.param(None, 8192, id="ausente"),
-        pytest.param("4096", 4096, id="valido"),
-        pytest.param("0", 0, id="zero_desliga_o_raciocinio"),
-        pytest.param("-1", 8192, id="automatico_do_sdk_rejeitado"),
-        pytest.param("-50", 8192, id="negativo"),
-        pytest.param("muito", 8192, id="nao_inteiro"),
-        pytest.param(" 2048 ", 2048, id="com_espacos"),
-    ],
-)
-def test_budget_de_raciocinio(monkeypatch, valor, esperado):
-    nome = "TESTE_CHATR234_REASONING_BUDGET"
-    if valor is None:
-        monkeypatch.delenv(nome, raising=False)
-    else:
-        monkeypatch.setenv(nome, valor)
-
-    assert env._tokens_or_default(nome, default=8192, minimum=0) == esperado
-
-
-def test_max_output_nao_aceita_zero(monkeypatch):
-    nome = "TESTE_CHATR234_MAX_OUTPUT"
-    monkeypatch.setenv(nome, "0")
-
-    assert env._tokens_or_default(nome, default=12288, minimum=1) == 12288
-
-
 def test_defaults_da_busca():
-    """Sem env no ambiente de teste, valem os defaults calibrados no CHATR-234."""
-    assert env.GEMINI_SEARCH_REASONING_BUDGET_TOKENS == 8192
-    assert env.GEMINI_SEARCH_MAX_OUTPUT_TOKENS == 12288
-    assert env.GEMINI_SEARCH_DEADLINE_SECONDS == 45.0
-    assert not hasattr(env, "GEMINI_SEARCH_RETRY_BUDGET_SECONDS")
+    """Sem env no ambiente de teste, vale a configuração de produção do código. Os
+    tetos de token, o prazo e as tentativas agora são por modelo (ver
+    `src/tests/unit/config/test_gemini_search.py`)."""
+    from src.config import gemini_search
+
+    assert env.GEMINI_SEARCH_CONFIG is gemini_search.DEFAULT_CONFIG
+    assert env.GEMINI_SEARCH_RETRY_BASE_SECONDS == 2.0
+    assert env.GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS == 16.0
+    for aposentada in (
+        "GEMINI_MODEL",
+        "GEMINI_SEARCH_MODELS",
+        "GEMINI_SEARCH_DEADLINE_SECONDS",
+        "GEMINI_SEARCH_MODEL_DEADLINE_SECONDS",
+        "GEMINI_SEARCH_ATTEMPTS_PER_MODEL",
+        "GEMINI_SEARCH_RETRY_ATTEMPTS",
+        "GEMINI_SEARCH_RETRY_BUDGET_SECONDS",
+        "GEMINI_SEARCH_THINKING_LEVEL",
+        "GEMINI_SEARCH_REASONING_BUDGET_TOKENS",
+        "GEMINI_SEARCH_MAX_OUTPUT_TOKENS",
+    ):
+        assert not hasattr(env, aposentada), aposentada

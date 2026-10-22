@@ -32,6 +32,10 @@ from opentelemetry.trace import StatusCode
 # módulo de tracing ficaria preso ao env falso para o resto da suíte.
 from src.observability import tracing
 
+# Idem: a configuração dos modelos é real (não depende do env) e precisa estar em
+# `sys.modules` antes do stub de `src.config`, que não é pacote.
+from src.config import gemini_search
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 GEMINI_MODULE_PATH = (
@@ -77,6 +81,21 @@ def client_error(code: int, status: str = "INVALID_ARGUMENT"):
 
 
 GROUNDING_URI = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc"
+MODELO_PRINCIPAL = "gemini-2.5-flash-lite"
+MODELO_FALLBACK = "gemini-3.5-flash-lite"
+
+
+def modelo(nome, **campos):
+    """Configuração de um modelo com os defaults do campo, sem revalidar o que muda:
+    os testes de prazo usam frações de segundo, abaixo do piso de produção."""
+    return gemini_search.SearchModelConfig(model=nome).model_copy(update=campos)
+
+
+def usar_modelos(env_stub, *configs):
+    """Troca a lista do env, como se viesse de `GEMINI_SEARCH_MODELS`."""
+    env_stub.GEMINI_SEARCH_CONFIG = gemini_search.GeminiSearchConfig.model_construct(
+        root=tuple(configs)
+    )
 
 
 def gemini_response(
@@ -148,13 +167,10 @@ class FakeModels:
 def env_stub():
     return types.SimpleNamespace(
         GEMINI_API_KEY="test-gemini-key",
-        GEMINI_MODEL="gemini-test",
-        GEMINI_SEARCH_RETRY_ATTEMPTS=4,
+        # 2.5 (45 s, budget 8192) → 3.5 (20 s, MINIMAL): a de produção.
+        GEMINI_SEARCH_CONFIG=gemini_search.DEFAULT_CONFIG,
         GEMINI_SEARCH_RETRY_BASE_SECONDS=2.0,
         GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS=16.0,
-        GEMINI_SEARCH_REASONING_BUDGET_TOKENS=8192,
-        GEMINI_SEARCH_MAX_OUTPUT_TOKENS=12288,
-        GEMINI_SEARCH_DEADLINE_SECONDS=45.0,
         IS_LOCAL=False,
         LINK_BLACKLIST=[],
         TYPESENSE_ACTIVE="false",
@@ -239,18 +255,49 @@ def gemini(monkeypatch, env_stub):
 
 
 def test_recupera_apos_503_transitorio(gemini):
-    """Dois 503 seguidos de sucesso: a busca se recupera dentro da janela de retry."""
-    result, models = gemini.run([server_error(), server_error(), success_response()])
+    """Um 503 seguido de sucesso: o retry curto no mesmo modelo resolve."""
+    result, models = gemini.run([server_error(), success_response()])
 
-    assert models.calls == 3
+    assert models.calls == 2
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL] * 2
     assert result["success"] is True
     assert result["text"] == "Resposta com fonte oficial."
     assert result["sources"]
+    assert result["model"] == MODELO_PRINCIPAL
+    assert result["fallback_used"] is False
 
-    # Backoff exponencial com teto e equal jitter: base 2 -> [1,2]s, depois [2,4]s.
-    assert len(gemini.slept) == 2
+    # Backoff com equal jitter: base 2 -> espera entre 1 e 2 s.
+    assert len(gemini.slept) == 1
     assert 1.0 <= gemini.slept[0] <= 2.0
-    assert 2.0 <= gemini.slept[1] <= 4.0
+
+
+def test_503_persistente_passa_para_o_proximo_modelo(gemini):
+    """O 503 "high demand" derruba o modelo inteiro (CHATR-298): depois do retry
+    curto, a busca vai para o próximo modelo da lista, sem esperar para trocar."""
+    result, models = gemini.run([server_error(), server_error(), success_response()])
+
+    assert [k["model"] for k in models.kwargs] == [
+        MODELO_PRINCIPAL,
+        MODELO_PRINCIPAL,
+        MODELO_FALLBACK,
+    ]
+    assert len(gemini.slept) == 1
+    assert result["success"] is True
+    assert result["model"] == MODELO_FALLBACK
+    assert result["fallback_used"] is True
+    assert result["models_tried"] == [
+        {"model": MODELO_PRINCIPAL, "error_kind": "gemini_unavailable"},
+        {"model": MODELO_FALLBACK, "error_kind": None},
+    ]
+
+
+def test_fallback_que_salva_a_busca_nao_alerta(gemini):
+    """O interceptor só recebe a falha de todos os modelos; a busca salva fica no
+    log e no span."""
+    result, _ = gemini.run([server_error(), server_error(), success_response()])
+
+    assert result["success"] is True
+    assert gemini.reported_errors == []
 
 
 def test_esgotamento_devolve_mensagem_tratada(gemini):
@@ -285,15 +332,16 @@ def test_esgotamento_e_reportado_ao_interceptor(gemini):
     assert reported["source"]["function"] == "google_search"
 
 
-def test_erro_4xx_nao_retenta(gemini):
-    """4xx não melhora com repetição: uma tentativa e para."""
+def test_erro_4xx_nao_retenta_no_mesmo_modelo(gemini):
+    """4xx não melhora com repetição no mesmo modelo, mas pode ser do modelo (ex.:
+    modelo inexistente): vai direto para o próximo, sem espera."""
     result, models = gemini.run([client_error(400)])
 
-    assert models.calls == 1
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL, MODELO_FALLBACK]
     assert gemini.slept == []
     assert result["success"] is False
     assert result["error"]["kind"] == "gemini_client_error"
-    assert result["error"]["attempts"] == 1
+    assert result["error"]["attempts"] == 2
     assert result["text"] == gemini.module.SEARCH_FAILED_MESSAGE
 
 
@@ -343,16 +391,19 @@ def test_backoff_respeita_o_teto(gemini, env_stub):
     assert all(3.0 <= wait <= 6.0 for wait in gemini.slept)
 
 
-def test_prazo_impede_tentativa_que_nao_caberia(gemini, env_stub):
-    """Depois da espera ainda precisa sobrar o piso da tentativa e a reserva das
-    URLs. Com 15,5 s de prazo a primeira tentativa cabe (5,5 s para o Gemini), mas
-    a segunda pediria ao menos 1 s de espera + 5 s de piso + 10 s de reserva."""
-    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 15.5
+def test_prazo_impede_retry_mas_nao_o_proximo_modelo(gemini, env_stub):
+    """Com 5,5 s por modelo, o retry no mesmo modelo pediria ao menos 1 s de espera
+    + 5 s de piso e não cabe; trocar de modelo não tem espera e cabe."""
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, timeout_s=5.5),
+        modelo(MODELO_FALLBACK, timeout_s=5.5),
+    )
     result, models = gemini.run([server_error()])
 
-    assert models.calls == 1
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL, MODELO_FALLBACK]
     assert gemini.slept == []
-    assert result["error"]["attempts"] == 1
+    assert result["error"]["attempts"] == 2
     # O motivo da falha continua sendo o 503, não o prazo.
     assert result["error"]["kind"] == "gemini_unavailable"
 
@@ -364,19 +415,21 @@ def test_tetos_de_token_vao_para_o_gemini(gemini):
     config = models.kwargs[0]["config"]
     assert config.thinking_config.thinking_budget == 8192
     assert config.max_output_tokens == 12288
+    assert config.temperature == 0.0
 
 
 def test_budget_zero_desliga_o_raciocinio(gemini, env_stub):
-    env_stub.GEMINI_SEARCH_REASONING_BUDGET_TOKENS = 0
+    usar_modelos(env_stub, modelo(MODELO_PRINCIPAL, thinking_budget=0))
     _, models = gemini.run([success_response()])
 
     assert models.kwargs[0]["config"].thinking_config.thinking_budget == 0
 
 
 @pytest.mark.parametrize("grounding", [True, False], ids=["com_fonte", "sem_fonte"])
-def test_max_tokens_vira_falha_sem_retry(gemini, grounding):
+def test_max_tokens_em_todos_os_modelos_vira_falha(gemini, grounding):
     """Resposta cortada no teto não é resposta. Sem fonte é o grupo D do doc de
-    loop: antes caía no ramo "sem fonte" com `success: True`."""
+    loop: antes caía no ramo "sem fonte" com `success: True`. Sem retry no mesmo
+    modelo; o próximo da lista é tentado."""
     result, models = gemini.run(
         [
             gemini_response(
@@ -388,7 +441,7 @@ def test_max_tokens_vira_falha_sem_retry(gemini, grounding):
         ]
     )
 
-    assert models.calls == 1
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL, MODELO_FALLBACK]
     assert gemini.slept == []
     assert result["success"] is False
     assert result["error"]["kind"] == "max_tokens"
@@ -399,15 +452,35 @@ def test_max_tokens_vira_falha_sem_retry(gemini, grounding):
     assert len(gemini.reported_errors) == 1
 
 
-def test_finish_reason_de_bloqueio_vira_falha_sem_retry(gemini):
+def test_finish_reason_de_bloqueio_em_todos_os_modelos_vira_falha(gemini):
     """RECITATION e afins vêm com texto vazio: não é "sem fonte"."""
     result, models = gemini.run(
         [gemini_response(FinishReason.RECITATION, grounding=False)]
     )
 
-    assert models.calls == 1
+    assert models.calls == 2
     assert result["success"] is False
     assert result["error"]["kind"] == "finish_reason:RECITATION"
+    # Sem exceção no RECITATION: o alerta levava "Último erro: None".
+    [reportado] = gemini.reported_errors
+    assert "None" not in reportado["error_message"]
+    assert reportado["error_message"].endswith("Último erro: finish_reason:RECITATION")
+
+
+def test_recitation_e_salvo_pelo_proximo_modelo(gemini):
+    """O RECITATION é quase sempre do modelo da vez (CHATR-298)."""
+    result, models = gemini.run(
+        [gemini_response(FinishReason.RECITATION, grounding=False), success_response()]
+    )
+
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL, MODELO_FALLBACK]
+    assert result["success"] is True
+    assert result["model"] == MODELO_FALLBACK
+    assert result["models_tried"][0] == {
+        "model": MODELO_PRINCIPAL,
+        "error_kind": "finish_reason:RECITATION",
+    }
+    assert gemini.reported_errors == []
 
 
 def test_sem_fonte_preserva_contadores_de_token(gemini):
@@ -438,10 +511,10 @@ def test_raciocinio_normal_nao_e_marcado(gemini):
     assert result["reasoning_budget_hit"] is False
 
 
-def test_resposta_vazia_esgota_e_falha(gemini):
+def test_resposta_vazia_em_todos_os_modelos_falha(gemini):
     result, models = gemini.run([empty_response()])
 
-    assert models.calls == 4
+    assert models.calls == 2
     assert result["success"] is False
     assert result["error"]["kind"] == "empty_response"
     assert result["text"] == gemini.module.SEARCH_FAILED_MESSAGE
@@ -452,7 +525,7 @@ def test_prazo_corta_o_gemini_lento(gemini, env_stub, monkeypatch):
     """O `asyncio.timeout(180)` por tentativa deixava o loop correr 160 s."""
     monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.0)
     monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
-    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.2
+    usar_modelos(env_stub, modelo(MODELO_PRINCIPAL, timeout_s=0.2))
 
     result, models = gemini.run([HANG])
 
@@ -463,8 +536,13 @@ def test_prazo_corta_o_gemini_lento(gemini, env_stub, monkeypatch):
 
 
 def test_prazo_abaixo_do_piso_falha_sem_chamar_o_gemini(gemini, env_stub):
-    """É o que faz `GEMINI_SEARCH_DEADLINE_SECONDS=1` forçar a falha em staging."""
-    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 1.0
+    """Defensivo: a validação do env não aceita prazo abaixo do piso, mas uma lista
+    passada direto ao serviço não passa por ela."""
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, timeout_s=1.0),
+        modelo(MODELO_FALLBACK, timeout_s=1.0),
+    )
 
     result, models = gemini.run([success_response()])
 
@@ -472,13 +550,19 @@ def test_prazo_abaixo_do_piso_falha_sem_chamar_o_gemini(gemini, env_stub):
     assert result["success"] is False
     assert result["error"]["kind"] == "deadline"
     assert result["error"]["attempts"] == 0
+    # Nenhum modelo foi chamado: nenhum aparece como tentado.
+    assert result["models_tried"] == []
 
 
 def test_resolucao_de_urls_lenta_usa_uri_do_grounding(gemini, env_stub, monkeypatch):
     """Estourar o prazo nas URLs não descarta a resposta nem retenta o Gemini."""
     monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.1)
     monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
-    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.3
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, timeout_s=0.1),
+        modelo(MODELO_FALLBACK, timeout_s=0.1),
+    )
 
     async def hanging_resolve_urls(**_kwargs):
         await asyncio.Event().wait()
@@ -535,12 +619,27 @@ def test_cada_tentativa_tem_o_proprio_span(gemini, span_exporter):
     assert not falha.events
 
 
+def test_span_da_chamada_leva_os_parametros_do_modelo(gemini, span_exporter):
+    gemini.run([client_error(400), success_response()])
+
+    principal, fallback = _spans(span_exporter, "gemini.generate_content")
+    assert principal.attributes["gemini.model"] == MODELO_PRINCIPAL
+    assert principal.attributes["gemini.model_deadline_s"] == 45.0
+    assert principal.attributes["gemini.reasoning_budget_tokens"] == 8192
+    assert principal.attributes["gemini.max_output_tokens"] == 12288
+    assert "gemini.thinking_level" not in principal.attributes
+    assert fallback.attributes["gemini.model"] == MODELO_FALLBACK
+    assert fallback.attributes["gemini.model_deadline_s"] == 20.0
+    assert fallback.attributes["gemini.thinking_level"] == "MINIMAL"
+    assert "gemini.reasoning_budget_tokens" not in fallback.attributes
+
+
 def test_prazo_estourado_marca_o_span_do_gemini(
     gemini, env_stub, monkeypatch, span_exporter
 ):
     monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.0)
     monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
-    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.2
+    usar_modelos(env_stub, modelo(MODELO_PRINCIPAL, timeout_s=0.2))
 
     gemini.run([HANG])
 
@@ -555,7 +654,11 @@ def test_urls_no_prazo_marcam_o_span_e_seguem_com_fallback(
 ):
     monkeypatch.setattr(gemini.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.1)
     monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
-    env_stub.GEMINI_SEARCH_DEADLINE_SECONDS = 0.3
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, timeout_s=0.1),
+        modelo(MODELO_FALLBACK, timeout_s=0.1),
+    )
 
     async def hanging_resolve_urls(**_kwargs):
         await asyncio.Event().wait()
@@ -570,11 +673,132 @@ def test_urls_no_prazo_marcam_o_span_e_seguem_com_fallback(
     assert urls.attributes["error.type"] == "TimeoutError"
 
 
-def test_retry_attempts_explicito_tem_precedencia_sobre_o_env(gemini):
-    result, models = gemini.run([server_error()], retry_attempts=2)
+def test_modelos_explicitos_tem_precedencia_sobre_o_env(gemini):
+    result, models = gemini.run([server_error()], models=[modelo("gemini-x")])
 
-    assert models.calls == 2
+    assert [k["model"] for k in models.kwargs] == ["gemini-x", "gemini-x"]
     assert result["error"]["attempts"] == 2
+
+
+def test_prazo_do_modelo_passa_para_o_proximo(gemini, env_stub, monkeypatch):
+    """O modelo que trava até o próprio prazo não consome a busca inteira: o
+    próximo da lista ainda tem tempo."""
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, timeout_s=0.2),
+        modelo(MODELO_FALLBACK, timeout_s=0.2),
+    )
+    monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
+
+    result, models = gemini.run([HANG, success_response()])
+
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL, MODELO_FALLBACK]
+    assert result["success"] is True
+    assert result["models_tried"][0] == {
+        "model": MODELO_PRINCIPAL,
+        "error_kind": "deadline",
+    }
+
+
+def test_prazo_estourado_em_todos_os_modelos_alerta_sem_mensagem_vazia(
+    gemini, env_stub, monkeypatch
+):
+    """O `TimeoutError` tem `str()` vazio: o alerta chegava "Último erro: "."""
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, timeout_s=0.1),
+        modelo(MODELO_FALLBACK, timeout_s=0.1),
+    )
+    monkeypatch.setattr(gemini.module, "MIN_ATTEMPT_SECONDS", 0.01)
+
+    result, _ = gemini.run([HANG])
+
+    assert result["success"] is False
+    assert result["error"]["kind"] == "deadline"
+    assert result["text"] == gemini.module.SEARCH_UNAVAILABLE_MESSAGE
+    [reportado] = gemini.reported_errors
+    assert reportado["error_message"].endswith("Último erro: TimeoutError")
+    assert "em 2 modelo(s)" in reportado["error_message"]
+
+
+def test_raciocinio_por_geracao_de_modelo(gemini):
+    """Os 2.x usam budget de tokens; os 3.x usam nível (CHATR-298)."""
+    _, models = gemini.run([server_error(), server_error(), success_response()])
+
+    principal, _, fallback = (k["config"].thinking_config for k in models.kwargs)
+    assert principal.thinking_budget == 8192
+    assert principal.thinking_level is None
+    assert fallback.thinking_budget is None
+    assert fallback.thinking_level.value == "MINIMAL"
+
+
+def test_parametros_de_cada_modelo_vao_para_o_gemini(gemini, env_stub):
+    """Cada modelo da lista é chamado com os próprios parâmetros (CHATR-298)."""
+    usar_modelos(
+        env_stub,
+        modelo(
+            MODELO_PRINCIPAL,
+            thinking_budget=4096,
+            max_output_tokens=10240,
+            temperature=0.3,
+        ),
+        modelo(
+            MODELO_FALLBACK,
+            thinking_level="LOW",
+            max_output_tokens=2048,
+            temperature=0.7,
+        ),
+    )
+
+    result, models = gemini.run([client_error(400), success_response()])
+
+    principal, fallback = (k["config"] for k in models.kwargs)
+    assert principal.thinking_config.thinking_budget == 4096
+    assert (principal.max_output_tokens, principal.temperature) == (10240, 0.3)
+    assert fallback.thinking_config.thinking_level.value == "LOW"
+    assert (fallback.max_output_tokens, fallback.temperature) == (2048, 0.7)
+    # O BigQuery registra a temperatura de quem respondeu.
+    assert result["temperature"] == 0.7
+
+
+def test_tentativas_sao_por_modelo(gemini, env_stub):
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, attempts=1),
+        modelo(MODELO_FALLBACK, attempts=3),
+    )
+
+    result, models = gemini.run([server_error()])
+
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL] + [
+        MODELO_FALLBACK
+    ] * 3
+    assert len(gemini.slept) == 2
+    assert result["error"]["attempts"] == 4
+
+
+def test_falha_registra_a_temperatura_do_ultimo_modelo(gemini, env_stub):
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL, temperature=0.1),
+        modelo(MODELO_FALLBACK, temperature=0.9),
+    )
+
+    result, _ = gemini.run([client_error(400)])
+
+    assert result["success"] is False
+    assert result["model"] == MODELO_FALLBACK
+    assert result["temperature"] == 0.9
+
+
+def test_falha_registra_os_modelos_tentados(gemini):
+    result, _ = gemini.run([server_error()])
+
+    assert result["models_tried"] == [
+        {"model": MODELO_PRINCIPAL, "error_kind": "gemini_unavailable"},
+        {"model": MODELO_FALLBACK, "error_kind": "gemini_unavailable"},
+    ]
+    assert result["fallback_used"] is False
 
 
 def test_classificacao_de_erros(gemini):
