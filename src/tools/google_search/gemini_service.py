@@ -367,7 +367,7 @@ class GeminiService:
                         else classify_search_error(e)
                     )
                     if not model_error["retryable"]:
-                        logger.error(
+                        logger.warning(
                             f"Erro não recuperável na API Google | model={model} "
                             f"({model_error['kind']}, code={model_error['code']}): "
                             f"{_descrever_excecao(e)}. Sem nova tentativa neste modelo."

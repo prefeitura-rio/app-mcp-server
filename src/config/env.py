@@ -36,24 +36,31 @@ WORKFLOWS_GCP_SERVICE_ACCOUNT = getenv_or_action("WORKFLOWS_GCP_SERVICE_ACCOUNT"
 WORKFLOWS_GCS_BUCKET = getenv_or_action("WORKFLOWS_GCS_BUCKET")
 
 GEMINI_API_KEY = getenv_or_action("GEMINI_API_KEY", action="ignore")
-GEMINI_MODEL = getenv_or_action(
-    "GEMINI_MODEL", default="gemini-2.5-flash", action="ignore"
-)
 
 # Modelos da busca, em ordem de prioridade (CHATR-298). Quando o 503 "high demand"
 # derruba um modelo, ele derruba o modelo inteiro: insistir nele não adianta, e o
 # próximo da lista tem outra capacidade. O 2.5 vem primeiro por custo — o grounding
 # dele é cobrado por prompt, com franquia diária; o do 3.x, por query de busca.
-# O `GEMINI_MODEL` não vale para a busca.
-GEMINI_SEARCH_MODELS = [
-    modelo.strip()
-    for modelo in getenv_or_action(
-        "GEMINI_SEARCH_MODELS",
-        default="gemini-2.5-flash-lite,gemini-3.5-flash-lite",
-        action="ignore",
-    ).split(",")
-    if modelo.strip()
-]
+GEMINI_SEARCH_MODELS_DEFAULT = "gemini-2.5-flash-lite,gemini-3.5-flash-lite"
+
+
+def _models_or_default(env_name: str, *, default: str) -> list[str]:
+    """Lê a lista de modelos; vazia (ou só vírgulas e espaços) vira o default.
+
+    A chave existir vazia no Infisical devolve "", não `None`. Sem este piso, a
+    lista sairia `[]` e toda busca falharia sem chamar modelo nenhum.
+    """
+    raw = getenv_or_action(env_name, default=default, action="ignore")
+    models = [modelo.strip() for modelo in str(raw or "").split(",") if modelo.strip()]
+    if not models:
+        logger.warning(f"{env_name}={raw!r} sem nenhum modelo; usando {default}.")
+        models = [modelo.strip() for modelo in default.split(",") if modelo.strip()]
+    return models
+
+
+GEMINI_SEARCH_MODELS = _models_or_default(
+    "GEMINI_SEARCH_MODELS", default=GEMINI_SEARCH_MODELS_DEFAULT
+)
 # Raciocínio dos modelos 3.x, que usam nível em vez de budget de tokens.
 GEMINI_SEARCH_THINKING_LEVEL = getenv_or_action(
     "GEMINI_SEARCH_THINKING_LEVEL", default="MINIMAL", action="ignore"

@@ -21,7 +21,7 @@ Definidas em [`src/config/env.py`](../../src/config/env.py). Quando ausentes no 
 
 | Variável | Default | O que controla |
 | --- | --- | --- |
-| `GEMINI_SEARCH_MODELS` | `gemini-2.5-flash-lite,gemini-3.5-flash-lite` | Modelos da busca, em ordem de prioridade, separados por vírgula |
+| `GEMINI_SEARCH_MODELS` | `gemini-2.5-flash-lite,gemini-3.5-flash-lite` | Modelos da busca, em ordem de prioridade, separados por vírgula. Vazia (ou só vírgulas e espaços) vale o default, com warning no log |
 | `GEMINI_SEARCH_MODEL_DEADLINE_SECONDS` | `45` | Prazo de cada modelo (todas as tentativas nele). Cobre o p99 das chamadas bem-sucedidas (27,6s em out/2026) |
 | `GEMINI_SEARCH_DEADLINE_SECONDS` | `100` (era `45`) | Prazo total da busca: todos os modelos, o backoff e a resolução de URLs |
 | `GEMINI_SEARCH_ATTEMPTS_PER_MODEL` | `2` | Tentativas por modelo em erro transitório (1 chamada + 1 retry) |
@@ -35,7 +35,7 @@ Variáveis que **deixaram de valer para a busca**:
 
 | Variável | Situação |
 | --- | --- |
-| `GEMINI_MODEL` | Continua lida pelo `env.py`, mas a busca usa `GEMINI_SEARCH_MODELS`. Definir o modelo da busca por ela não tem mais efeito |
+| `GEMINI_MODEL` | Removida do código. A chave ainda existe no Infisical de staging e prod e é ignorada; pode ser apagada depois |
 | `GEMINI_SEARCH_RETRY_ATTEMPTS` | Removida, substituída por `GEMINI_SEARCH_ATTEMPTS_PER_MODEL`. Se existir no Infisical, é ignorada |
 
 A geração do modelo é deduzida pelo nome: `gemini-2.*` usa `thinking_budget`; qualquer outro usa `thinking_level`.
@@ -57,7 +57,7 @@ Levantado em 22/10/2026 nas chaves do secret `mcp-secrets` (namespace `mcp`), qu
 | Variável | Staging | Prod | Ação |
 | --- | --- | --- | --- |
 | `GEMINI_SEARCH_DEADLINE_SECONDS` | `45` | não definida (vale `100`) | **Staging: remover a chave ou pôr `100` antes de validar o PR.** Com `45`, o segundo modelo só ganha tempo quando o primeiro falha rápido. Prod: nada |
-| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | `gemini-2.5-flash-lite` | Nenhuma. Ficou sem efeito na busca; pode ser removida depois, numa limpeza |
+| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | `gemini-2.5-flash-lite` | Nenhuma. Removida do código; a chave é ignorada e pode ser apagada depois |
 | Demais variáveis da tabela acima | não definidas | não definidas | Nenhuma: valem os defaults |
 
 **Este PR não exige mudança de variável em prod.**

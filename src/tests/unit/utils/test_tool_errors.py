@@ -136,6 +136,38 @@ def test_max_output_nao_aceita_zero(monkeypatch):
     assert env._tokens_or_default(nome, default=12288, minimum=1) == 12288
 
 
+# --------------------------------------------------------------------------------
+# Lista de modelos da busca: vazia nunca vira `[]` (CHATR-298)
+# --------------------------------------------------------------------------------
+
+MODELOS_DEFAULT = ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite"]
+
+
+@pytest.mark.parametrize(
+    ("valor", "esperado"),
+    [
+        pytest.param(None, MODELOS_DEFAULT, id="ausente"),
+        pytest.param("", MODELOS_DEFAULT, id="vazia"),
+        pytest.param(" , ", MODELOS_DEFAULT, id="so_virgulas_e_espacos"),
+        pytest.param(
+            " gemini-x , ,gemini-y ", ["gemini-x", "gemini-y"], id="com_espacos"
+        ),
+        pytest.param("gemini-x", ["gemini-x"], id="um_modelo"),
+    ],
+)
+def test_lista_de_modelos_da_busca(monkeypatch, valor, esperado):
+    nome = "TESTE_CHATR298_MODELS"
+    if valor is None:
+        monkeypatch.delenv(nome, raising=False)
+    else:
+        monkeypatch.setenv(nome, valor)
+
+    assert (
+        env._models_or_default(nome, default=env.GEMINI_SEARCH_MODELS_DEFAULT)
+        == esperado
+    )
+
+
 def test_defaults_da_busca():
     """Sem env no ambiente de teste, valem os defaults calibrados no CHATR-234 e
     revistos no CHATR-298 (fallback entre modelos)."""
@@ -151,3 +183,4 @@ def test_defaults_da_busca():
     assert env.GEMINI_SEARCH_THINKING_LEVEL == "MINIMAL"
     assert not hasattr(env, "GEMINI_SEARCH_RETRY_BUDGET_SECONDS")
     assert not hasattr(env, "GEMINI_SEARCH_RETRY_ATTEMPTS")
+    assert not hasattr(env, "GEMINI_MODEL")

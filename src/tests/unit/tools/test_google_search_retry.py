@@ -150,7 +150,6 @@ class FakeModels:
 def env_stub():
     return types.SimpleNamespace(
         GEMINI_API_KEY="test-gemini-key",
-        GEMINI_MODEL="gemini-test",
         GEMINI_SEARCH_MODELS=[MODELO_PRINCIPAL, MODELO_FALLBACK],
         GEMINI_SEARCH_THINKING_LEVEL="MINIMAL",
         GEMINI_SEARCH_ATTEMPTS_PER_MODEL=2,
