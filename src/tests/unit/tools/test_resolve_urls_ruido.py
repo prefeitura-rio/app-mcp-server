@@ -73,7 +73,7 @@ def resolve(monkeypatch):
         "test_resolve_urls_module", GEMINI_MODULE_PATH
     )
     module = importlib.util.module_from_spec(spec)
-    sys.modules["test_resolve_urls_module"] = module
+    monkeypatch.setitem(sys.modules, "test_resolve_urls_module", module)
     spec.loader.exec_module(module)
 
     async def sem_espera(_seconds):
