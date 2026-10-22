@@ -640,6 +640,17 @@ class GeminiService:
 gemini_service = GeminiService()
 
 
+def _descrever_excecao(exc: BaseException) -> str:
+    """Tipo e mensagem da exceção, nunca vazio.
+
+    Os timeouts do httpx (`ConnectTimeout`, `ReadTimeout`) têm `str()` vazio: sem o
+    tipo, o alerta chegava como "Erro no HEAD: " sem nenhuma pista da causa.
+    """
+    mensagem = str(exc)
+    nome = type(exc).__name__
+    return f"{nome}: {mensagem}" if mensagem else nome
+
+
 async def process_link(session, link: dict):
     uri = link.get("uri")
 
@@ -659,16 +670,29 @@ async def process_link(session, link: dict):
             error_message=error_message,
         )
 
-    def should_report_resolution_error(status_code: int, error_message: str) -> bool:
+    def should_report_resolution_error(
+        status_code: int, error_message: str, exc: BaseException | None = None
+    ) -> bool:
         """
         Vertex grounding redirect URLs frequently reject HEAD/GET requests with
         anti-bot responses or TLS issues. Those failures are noisy but usually do
         not indicate an application regression, so they should not hit the
         interceptor.
+
+        O 429 é o rate limit do Google no endpoint de redirect para o nosso IP de
+        saída, e o timeout é o redirect lento: os dois são esperados e a fonte sai
+        com a URL de redirect, que funciona. Não há impacto para o cidadão
+        (CHATR-299).
         """
         normalized_error = (error_message or "").lower()
 
-        if status_code in (401, 403, 405):
+        if status_code in (401, 403, 405, 429):
+            return False
+
+        # Timeout é decidido pelo tipo, não pelo texto: o `str()` dos timeouts do
+        # httpx é vazio, e procurar "timeout" na mensagem pegaria também o
+        # "HTTP 504: Gateway Timeout", que é reportado de propósito.
+        if isinstance(exc, httpx.TimeoutException):
             return False
 
         expected_transport_errors = (
@@ -699,6 +723,20 @@ async def process_link(session, link: dict):
         link["url"] = uri
         link["error"] = f"Erro ao resolver URL: {error_msg}"
 
+    async def registrar_falha(
+        status_code: int, error_message: str, exc: BaseException | None = None
+    ):
+        """Reporta ao interceptor só a falha inesperada; a esperada fica no log,
+        para o volume continuar mensurável."""
+        if should_report_resolution_error(status_code, error_message, exc):
+            await report_final_error(status_code, error_message)
+        else:
+            logger.warning(
+                f"Falha esperada ao resolver URL do grounding, sem alerta | "
+                f"status={status_code} erro={error_message}"
+            )
+        set_fallback_error(error_message)
+
     for attempt in range(max_retries):
         is_last_attempt = attempt == max_retries - 1
         try:
@@ -724,18 +762,12 @@ async def process_link(session, link: dict):
                         f"HTTP {e.response.status_code}: "
                         f"{e.response.reason_phrase or 'Empty Reason Phrase'}"
                     )
-                    if should_report_resolution_error(
-                        e.response.status_code, clean_message
-                    ):
-                        await report_final_error(e.response.status_code, clean_message)
-                    set_fallback_error(clean_message)
+                    await registrar_falha(e.response.status_code, clean_message)
                     return link
         except Exception as e:
             if is_last_attempt:
-                error_msg = f"Erro no HEAD: {str(e)}"
-                if should_report_resolution_error(0, error_msg):
-                    await report_final_error(0, error_msg)
-                set_fallback_error(error_msg)
+                error_msg = f"Erro no HEAD: {_descrever_excecao(e)}"
+                await registrar_falha(0, error_msg, e)
                 return link
 
         try:
@@ -762,21 +794,17 @@ async def process_link(session, link: dict):
                 await asyncio.sleep(wait_time)
                 continue
 
-            if should_report_resolution_error(status_code, clean_message):
-                await report_final_error(status_code, clean_message)
-            set_fallback_error(clean_message)
+            await registrar_falha(status_code, clean_message)
             return link
         except Exception as e2:
-            error_msg = str(e2)
+            error_msg = _descrever_excecao(e2)
 
             if not is_last_attempt:
                 wait_time = base_backoff_seconds * (2**attempt)
                 await asyncio.sleep(wait_time)
                 continue
 
-            if should_report_resolution_error(0, error_msg):
-                await report_final_error(0, error_msg)
-            set_fallback_error(error_msg)
+            await registrar_falha(0, error_msg, e2)
             return link
 
     # Fallback defensivo (não deve ser alcançado)
