@@ -868,11 +868,11 @@ async def process_link(session, link: dict):
                     )
                     await registrar_falha(e.response.status_code, clean_message)
                     return link
-        except Exception as e:
-            if is_last_attempt:
-                error_msg = f"Erro no HEAD: {_descrever_excecao(e)}"
-                await registrar_falha(0, error_msg, e)
-                return link
+        except Exception:
+            # Exceção no HEAD (conexão, TLS, timeout) segue para o GET, inclusive
+            # na última tentativa: antes, ela desistia ali e o alerta culpava o
+            # HEAD mesmo quando o GET também tinha falhado (CHATR-299).
+            pass
 
         try:
             # Se HEAD falhar, tenta GET request
