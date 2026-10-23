@@ -5,7 +5,8 @@ para o cidadão: a fonte sai com a URL de redirect, que funciona. Dois desses ca
 chegavam ao interceptor como erro de produção: o timeout do httpx, cuja mensagem
 é vazia ("Erro no HEAD: "), e o 429 do endpoint de redirect. Estes testes fixam
 que os dois ficam só no log, que o 504 e o erro inesperado continuam reportados e
-que nenhuma mensagem sai vazia.
+que nenhuma mensagem sai vazia. E que exceção no HEAD sempre segue para o GET, até
+na última tentativa.
 """
 
 import asyncio
@@ -118,8 +119,9 @@ def test_timeout_nao_alerta_e_fica_no_log(resolve):
 
     assert resolve.reported == []
     assert link["url"] == URI
-    assert "ReadTimeout" in link["error"]
-    assert any("ReadTimeout" in w for w in resolve.warnings)
+    # A falha final é a do GET, a última chamada feita.
+    assert link["error"] == "Erro ao resolver URL: ConnectTimeout"
+    assert any("ConnectTimeout" in w for w in resolve.warnings)
 
 
 def test_timeout_no_get_tambem_nao_alerta(resolve):
@@ -158,8 +160,33 @@ def test_erro_inesperado_alerta_com_mensagem_nao_vazia(resolve):
 
     assert len(resolve.reported) == 1
     assert resolve.reported[0]["status_code"] == 0
-    assert resolve.reported[0]["error_message"] == "Erro no HEAD: RuntimeError"
-    assert link["error"] == "Erro ao resolver URL: Erro no HEAD: RuntimeError"
+    assert resolve.reported[0]["error_message"] == "RuntimeError"
+    assert link["error"] == "Erro ao resolver URL: RuntimeError"
+
+
+def test_excecao_no_head_tenta_o_get_ate_na_ultima_tentativa(resolve):
+    """Antes, a última tentativa desistia no HEAD sem tentar o GET."""
+    erro = httpx.ConnectError("conexão recusada")
+    link, session = resolve.run(head=[erro], get=[erro, erro, 200])
+
+    assert session.chamadas == {"HEAD": 3, "GET": 3}
+    assert resolve.reported == []
+    assert link == {"uri": URI, "url": URL_FINAL, "error": None}
+
+
+def test_falha_final_traz_o_erro_do_get_e_nao_do_head(resolve):
+    """O HEAD lança exceção e o servidor responde 503 ao GET: o alerta é o 503, que
+    é o erro real, e não "Erro no HEAD"."""
+    link, session = resolve.run(
+        head=[httpx.ConnectError("conexão recusada")], get=[503]
+    )
+
+    assert session.chamadas == {"HEAD": 3, "GET": 3}
+    assert len(resolve.reported) == 1
+    assert resolve.reported[0]["status_code"] == 503
+    assert resolve.reported[0]["error_message"] == "HTTP 503: Service Unavailable"
+    assert link["url"] == URI
+    assert "Erro no HEAD" not in link["error"]
 
 
 def test_redirect_resolvido_nao_alerta(resolve):
