@@ -32,6 +32,7 @@ from google.genai import errors as genai_errors
 from opentelemetry import trace
 
 from src.observability.tracing import traced_stage
+from urllib.parse import urljoin, urlparse
 
 
 # Códigos 4xx que, apesar de "erro do cliente", são transitórios: 429 é saturação de
@@ -755,14 +756,42 @@ def _descrever_excecao(exc: BaseException) -> str:
     return f"{nome}: {mensagem}" if mensagem else nome
 
 
-async def process_link(session, link: dict):
-    uri = link.get("uri")
+# Host dos links de redirecionamento que o grounding do Gemini devolve como fonte.
+GROUNDING_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+# O salto no Google levou de 0,08 a 0,3 s nas medições de 26/10/2026. O pior caso
+# (as duas tentativas estourando o timeout, mais a espera entre elas) fica em
+# 6,25 s, dentro da reserva de 10 s da resolução (`URL_RESOLUTION_RESERVE_SECONDS`).
+GROUNDING_REDIRECT_TIMEOUT_SECONDS = 3.0
+GROUNDING_REDIRECT_ATTEMPTS = 2
+GROUNDING_REDIRECT_BACKOFF_SECONDS = 0.25
 
-    # Timeout específico por requisição (menor que o timeout geral)
-    link_timeout = 5
-    max_retries = 3
-    retryable_status_codes = {500, 502, 503, 504}
-    base_backoff_seconds = 0.5
+
+def _eh_link_do_grounding(uri: str | None) -> bool:
+    try:
+        return urlparse(uri or "").hostname == GROUNDING_REDIRECT_HOST
+    except ValueError:
+        return False
+
+
+async def process_link(session, link: dict):
+    """Resolve o link de redirecionamento do grounding pelo `Location` (CHATR-314).
+
+    Faz uma requisição ao Google, sem seguir o redirecionamento: o destino já vem
+    no `Location` da resposta 3xx, e `Location` relativo é resolvido contra o link
+    do Google. O site de destino nunca é contatado. Antes, seguir até ele (HEAD e
+    depois GET) custava p95 de ~10 s, e todo o ruído de alerta vinha de lá: TLS
+    antigo, anti-robô, 404 de HEAD mal implementado.
+
+    Link que não é do Google fica como está, sem requisição. Falha no salto do
+    Google mantém o link do Google, que leva à mesma página; só 5xx e erro de
+    transporte ganham uma nova tentativa curta.
+    """
+    uri = link.get("uri")
+    link["url"] = uri
+    link["error"] = None
+
+    if not _eh_link_do_grounding(uri):
+        return link
 
     async def report_final_error(status_code: int, error_message: str):
         await send_api_error(
@@ -778,15 +807,13 @@ async def process_link(session, link: dict):
         status_code: int, error_message: str, exc: BaseException | None = None
     ) -> bool:
         """
-        Vertex grounding redirect URLs frequently reject HEAD/GET requests with
-        anti-bot responses or TLS issues. Those failures are noisy but usually do
-        not indicate an application regression, so they should not hit the
-        interceptor.
+        Classifica a falha do salto no Google. Desde o CHATR-314 o destino não é
+        mais contatado, então nenhum alerta nasce do site de destino.
 
         O 429 é o rate limit do Google no endpoint de redirect para o nosso IP de
         saída, e o timeout é o redirect lento: os dois são esperados e a fonte sai
         com a URL de redirect, que funciona. Não há impacto para o cidadão
-        (CHATR-299).
+        (CHATR-299). 401/403/405 (bloqueio de robô) e erro de TLS seguem sem alerta.
         """
         normalized_error = (error_message or "").lower()
 
@@ -809,29 +836,12 @@ async def process_link(session, link: dict):
         )
         return not any(token in normalized_error for token in expected_transport_errors)
 
-    def set_fallback_error(error_msg: str):
-        # Trata erro específico do Mozilla
-        mozilla_suffix = "For more information check: https://developer.mozilla.org/"
-        if mozilla_suffix in error_msg:
-            try:
-                msg = error_msg.replace(mozilla_suffix, "")
-                msg = msg.split("http")[1]
-                msg = msg.split("'\n")[0]
-                msg = "http" + msg
-                link["url"] = msg
-                link["error"] = None
-                return
-            except Exception:
-                pass
-
-        link["url"] = uri
-        link["error"] = f"Erro ao resolver URL: {error_msg}"
-
     async def registrar_falha(
         status_code: int, error_message: str, exc: BaseException | None = None
     ):
         """Reporta ao interceptor só a falha inesperada; a esperada fica no log,
-        para o volume continuar mensurável."""
+        para o volume continuar mensurável. Nos dois casos a fonte fica com o link
+        do Google."""
         if should_report_resolution_error(status_code, error_message, exc):
             await report_final_error(status_code, error_message)
         else:
@@ -839,81 +849,56 @@ async def process_link(session, link: dict):
                 f"Falha esperada ao resolver URL do grounding, sem alerta | "
                 f"status={status_code} erro={error_message}"
             )
-        set_fallback_error(error_message)
+        link["url"] = uri
+        link["error"] = f"Erro ao resolver URL: {error_message}"
 
-    for attempt in range(max_retries):
-        is_last_attempt = attempt == max_retries - 1
+    for attempt in range(GROUNDING_REDIRECT_ATTEMPTS):
+        is_last_attempt = attempt == GROUNDING_REDIRECT_ATTEMPTS - 1
         try:
-            # Primeiro tenta HEAD request (mais rápido)
-            response = await session.head(
-                uri,
-                follow_redirects=True,
-                timeout=link_timeout,
-                intercept_errors=False,
-            )
-            response.raise_for_status()
-            link["url"] = str(response.url)
-            link["error"] = None
-            return link
-        except httpx.HTTPStatusError as e:
-            # 403/405 indicam que HEAD não é suportado - tentar GET abaixo
-            if e.response.status_code not in (403, 405):
-                if (
-                    e.response.status_code not in retryable_status_codes
-                    or is_last_attempt
-                ):
-                    clean_message = (
-                        f"HTTP {e.response.status_code}: "
-                        f"{e.response.reason_phrase or 'Empty Reason Phrase'}"
-                    )
-                    await registrar_falha(e.response.status_code, clean_message)
-                    return link
-        except Exception:
-            # Exceção no HEAD (conexão, TLS, timeout) segue para o GET, inclusive
-            # na última tentativa: antes, ela desistia ali e o alerta culpava o
-            # HEAD mesmo quando o GET também tinha falhado (CHATR-299).
-            pass
-
-        try:
-            # Se HEAD falhar, tenta GET request
             response = await session.get(
                 uri,
-                follow_redirects=True,
-                timeout=link_timeout,
+                follow_redirects=False,
+                timeout=GROUNDING_REDIRECT_TIMEOUT_SECONDS,
                 intercept_errors=False,
             )
-            response.raise_for_status()
-            link["url"] = str(response.url)
-            link["error"] = None
-            return link
-        except httpx.HTTPStatusError as e2:
-            status_code = e2.response.status_code
-            clean_message = (
-                f"HTTP {status_code}: "
-                f"{e2.response.reason_phrase or 'Empty Reason Phrase'}"
-            )
-
-            if status_code in retryable_status_codes and not is_last_attempt:
-                wait_time = base_backoff_seconds * (2**attempt)
-                await asyncio.sleep(wait_time)
-                continue
-
-            await registrar_falha(status_code, clean_message)
-            return link
-        except Exception as e2:
-            error_msg = _descrever_excecao(e2)
-
+        except httpx.TransportError as e:
+            # Conexão, TLS e timeout no Google: transitórios, uma nova tentativa.
             if not is_last_attempt:
-                wait_time = base_backoff_seconds * (2**attempt)
-                await asyncio.sleep(wait_time)
+                await asyncio.sleep(GROUNDING_REDIRECT_BACKOFF_SECONDS)
                 continue
-
-            await registrar_falha(0, error_msg, e2)
+            await registrar_falha(0, _descrever_excecao(e), e)
+            return link
+        except Exception as e:
+            await registrar_falha(0, _descrever_excecao(e), e)
             return link
 
-    # Fallback defensivo (não deve ser alcançado)
-    link["url"] = uri
-    link["error"] = "Erro ao resolver URL: retries esgotados"
+        status_code = response.status_code
+        location = response.headers.get("location", "").strip()
+        if response.has_redirect_location and location:
+            destino = urljoin(uri, location)
+            if urlparse(destino).scheme in ("http", "https"):
+                link["url"] = destino
+                link["error"] = None
+                return link
+            await registrar_falha(status_code, f"HTTP {status_code}: Location inválido")
+            return link
+
+        if status_code >= 500 and not is_last_attempt:
+            await asyncio.sleep(GROUNDING_REDIRECT_BACKOFF_SECONDS)
+            continue
+
+        if 300 <= status_code < 400:
+            error_message = f"HTTP {status_code}: sem Location"
+        elif status_code < 300:
+            error_message = f"HTTP {status_code}: sem redirecionamento"
+        else:
+            error_message = (
+                f"HTTP {status_code}: {response.reason_phrase or 'Empty Reason Phrase'}"
+            )
+        await registrar_falha(status_code, error_message)
+        return link
+
+    # Não alcançado: a última tentativa sempre retorna acima.
     return link
 
 
@@ -922,6 +907,9 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     """
     Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
     Ensures each original URL gets a consistent shortened form while maintaining uniqueness.
+
+    Desde o CHATR-314 cada link custa um salto no Google, sem seguir o
+    redirecionamento: o destino sai do `Location` (ver `process_link`).
     """
     unique_urls = list(set([uri.web.uri for uri in urls_to_resolve]))
     urls = [{"uri": uri} for uri in unique_urls]
@@ -935,8 +923,8 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     async with InterceptedHTTPClient(
         user_id="unknown",
         source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
-        timeout=30.0,
-        follow_redirects=True,
+        timeout=GROUNDING_REDIRECT_TIMEOUT_SECONDS,
+        follow_redirects=False,
         headers=headers,
     ) as session:
         # Limita concorrência para evitar sobrecarga
