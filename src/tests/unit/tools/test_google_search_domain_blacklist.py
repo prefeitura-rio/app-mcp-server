@@ -322,6 +322,42 @@ def test_fonte_do_grounding_que_passa(db, web):
 
 
 # --------------------------------------------------------------------------------
+# Regra fixa: página de resultados do Google
+# --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.google.com/search?q=iptu+2026",
+        "https://google.com/search?q=iptu",
+        "https://GOOGLE.COM./search/",
+        "https://news.google.com/search?q=rio",
+        "http://www.google.com:80/search",
+    ],
+)
+def test_pagina_de_busca_do_google_nunca_e_fonte(db, url):
+    """Vale com a lista vazia: a regra não depende do YAML."""
+    assert db.DomainBlacklist([]).url_bloqueada(url) == "google.com/search"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc",
+        "https://www.google.com/maps/place/Rio",
+        "https://www.google.com/",
+        "https://www.google.com/searchconsole",
+        "https://notgoogle.com/search?q=x",
+        "https://prefeitura.rio/search?q=iptu",
+        "https://[invalido/search",
+    ],
+)
+def test_outras_paginas_do_google_e_buscas_de_outros_sites_passam(db, url):
+    assert db.DomainBlacklist([]).url_bloqueada(url) is None
+
+
+# --------------------------------------------------------------------------------
 # Leitura do YAML
 # --------------------------------------------------------------------------------
 

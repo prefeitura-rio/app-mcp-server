@@ -16,6 +16,9 @@
 # - sem diferença de caixa, de ponto final ou de `www.` no início;
 # - escreva só o domínio: sem `https://`, sem caminho.
 #
+# Fora desta lista, fixa no código: a página de resultados do Google
+# (`google.com/search`) nunca é fonte.
+#
 # As seções existem só para organizar a revisão; todas valem igual.
 #
 # Substitui a variável de ambiente LINK_BLACKLIST, que comparava por trecho de

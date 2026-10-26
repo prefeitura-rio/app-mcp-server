@@ -440,3 +440,32 @@ def test_prazo_esgotado_nao_devolve_a_fonte_bloqueada(resolve, monkeypatch):
     )
 
     assert resolved == {_uri(1): {"url": _uri(1), "error": "prazo esgotado"}}
+
+
+def test_pagina_de_busca_do_google_vinda_pelo_location_some(resolve, monkeypatch):
+    response = _resposta(("google.com", None), ("IPTU", "prefeitura.rio"))
+    destinos = {
+        _uri(0): "https://www.google.com/search?q=iptu+rio",
+        _uri(1): "https://prefeitura.rio/iptu",
+    }
+
+    resolved, _ = _resolver(resolve.module, monkeypatch, response, destinos)
+    texto, fontes = _montar_resposta(resolve.module, response, resolved)
+
+    assert [f["url"] for f in fontes] == ["https://prefeitura.rio/iptu"]
+    assert "google.com/search" not in texto
+    assert "vertexaisearch" not in texto
+
+
+def test_pagina_de_busca_do_google_some_das_citacoes(resolve):
+    """Também quando já chega resolvida ao pós-processamento."""
+    response = _resposta(("google.com", None), ("IPTU", "prefeitura.rio"))
+    resolved = {
+        _uri(0): {"url": "https://google.com/search?q=x", "error": None},
+        _uri(1): {"url": "https://prefeitura.rio/iptu", "error": None},
+    }
+
+    texto, fontes = _montar_resposta(resolve.module, response, resolved)
+
+    assert [f["url"] for f in fontes] == ["https://prefeitura.rio/iptu"]
+    assert "google.com/search" not in texto

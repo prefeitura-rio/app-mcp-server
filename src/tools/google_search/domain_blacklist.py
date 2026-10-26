@@ -11,6 +11,9 @@ subdomínios dele (`facebook.com` pega `m.facebook.com`, mas não
 `notfacebook.com`). A lista mora em `domain_blacklist.yaml`, versionado no
 repositório, e é lida uma única vez no import, como o `query_filter.yaml` do
 CHATR-294. Na requisição a checagem é só comparação em memória.
+
+Fora da lista, fixa no código: a página de resultados do Google
+(`google.com/search`) nunca é fonte.
 """
 
 import re
@@ -28,6 +31,12 @@ CONFIG_PATH = Path(__file__).with_name("domain_blacklist.yaml")
 # ponto, com pelo menos um ponto. Entrada fora disso (com esquema, caminho ou
 # espaço) nunca casaria com nada e indica erro de digitação no YAML.
 _HOST_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
+
+# Regra fixa, fora do YAML: a página de resultados do Google nunca é fonte. Foi
+# 7,1% das fontes citadas em produção de 19 a 26/10/2026, e a `LINK_BLACKLIST`
+# não tinha como pegá-la sem barrar o próprio link de redirect do grounding, que
+# também é do google.com.
+MOTIVO_BUSCA_DO_GOOGLE = "google.com/search"
 
 
 def normalizar_dominio(valor: str | None) -> str:
@@ -50,6 +59,18 @@ def host_da_url(url: str | None) -> str:
         return normalizar_dominio(urlparse(url or "").hostname)
     except ValueError:
         return ""
+
+
+def eh_pagina_de_busca_do_google(url: str | None) -> bool:
+    """URL da página de resultados do Google: `google.com/search`, com ou sem
+    `www.` e em qualquer subdomínio do google.com."""
+    try:
+        parsed = urlparse(url or "")
+        host = normalizar_dominio(parsed.hostname)
+    except ValueError:
+        return False
+    eh_google = host == "google.com" or host.endswith(".google.com")
+    return eh_google and parsed.path.rstrip("/") == "/search"
 
 
 class DomainBlacklist:
@@ -85,7 +106,10 @@ class DomainBlacklist:
         return None
 
     def url_bloqueada(self, url: str | None) -> str | None:
-        """Motivo do bloqueio da URL (a entrada da lista que casou), ou `None`."""
+        """Motivo do bloqueio da URL (a entrada da lista que casou, ou a regra fixa
+        da busca do Google), ou `None`."""
+        if eh_pagina_de_busca_do_google(url):
+            return MOTIVO_BUSCA_DO_GOOGLE
         return self.dominio_bloqueado(host_da_url(url))
 
     def fonte_bloqueada(self, web) -> str | None:
