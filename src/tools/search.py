@@ -28,13 +28,25 @@ QUERY_BLOCKED_MESSAGE = (
     "serviços municipais. Não refaça a busca com outras palavras."
 )
 
+# Resposta a uma query sem assunto (CHATR-314): "Sim", "Ok", "2027". Ao contrário
+# da eleitoral, pede para refazer a busca: o assunto existe, só ficou na conversa.
+QUERY_SEM_ASSUNTO_MESSAGE = (
+    "Busca não realizada: a mensagem sozinha não tem um assunto para pesquisar. "
+    "Refaça a busca incluindo o assunto da conversa ou pergunte ao cidadão qual é "
+    "a dúvida."
+)
+
+# Texto por motivo do bloqueio. Motivo fora do mapa recebe o texto eleitoral, o
+# único que proíbe refazer a busca: na dúvida, o lado que não abre brecha.
+_MENSAGEM_POR_MOTIVO = {filtro.REASON_SEM_ASSUNTO: QUERY_SEM_ASSUNTO_MESSAGE}
+
 
 @interceptor(source={"source": "mcp", "tool": "search"})
 async def get_google_search(query: str):
     """
     Obtém resultados de busca via Typesense (se ativo) ou Google Search como fallback.
     """
-    # 0. Filtro de query antes de qualquer buscador (CHATR-294)
+    # 0. Filtro de query antes de qualquer buscador (CHATR-294 e CHATR-314)
     decisao = filtro.query_filter.check(query)
     _marcar_filtro_no_span(decisao)
     if not decisao.allowed:
@@ -142,7 +154,8 @@ def _resposta_bloqueada(query: str, decisao: filtro.FilterDecision) -> dict:
 
     Sai como sucesso, no mesmo formato da busca normal: é recusa de tema, não falha
     técnica, então não pode virar `isError` (o Salesforce a contaria como falha). O
-    motivo e o termo que casou ficam no log e no BigQuery, não na resposta ao agente.
+    texto depende só do motivo; o termo ou a regra que casou ficam no log e no
+    BigQuery, não na resposta ao agente.
     """
     request_id = str(uuid4())
     logger.info(
@@ -150,7 +163,7 @@ def _resposta_bloqueada(query: str, decisao: filtro.FilterDecision) -> dict:
         f"motivo={decisao.reason} termo={decisao.matched}"
     )
     resposta = {
-        "text": QUERY_BLOCKED_MESSAGE,
+        "text": _MENSAGEM_POR_MOTIVO.get(decisao.reason, QUERY_BLOCKED_MESSAGE),
         "sources": [],
         "web_search_queries": [],
         "id": request_id,

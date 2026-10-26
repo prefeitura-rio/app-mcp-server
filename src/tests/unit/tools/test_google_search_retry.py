@@ -1106,3 +1106,83 @@ def test_decisao_do_filtro_vai_para_o_span(search, monkeypatch):
     assert spans["tool.barrada"]["search.filter.matched"] == "lula"
     assert spans["tool.permitida"]["search.filter.blocked"] is False
     assert "search.filter.reason" not in spans["tool.permitida"]
+
+
+# --------------------------------------------------------------------------------
+# get_google_search: mensagem sem assunto (CHATR-314)
+# --------------------------------------------------------------------------------
+
+
+def _buscadores_que_nao_podem_rodar(search, monkeypatch):
+    async def hub_search_nao_pode_rodar(request):
+        raise AssertionError("Typesense chamado com query sem assunto")
+
+    async def google_nao_pode_rodar(**_kwargs):
+        raise AssertionError("Gemini chamado com query sem assunto")
+
+    monkeypatch.setattr(search.module, "hub_search", hub_search_nao_pode_rodar)
+    monkeypatch.setattr(
+        search.module.gemini_service, "google_search", google_nao_pode_rodar
+    )
+
+
+@pytest.mark.parametrize("query", ["Sim", "2027", "[ATTACHMENTS]", "Por favor"])
+def test_query_sem_assunto_nao_chega_a_nenhum_buscador(search, monkeypatch, query):
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = search.run(query)
+
+    assert result["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    assert result["success"] is True
+    assert result["sources"] == [] and result["web_search_queries"] == []
+    assert "filter_reason" not in result
+
+
+def test_texto_do_sem_assunto_e_o_da_especificacao(search):
+    assert search.module.QUERY_SEM_ASSUNTO_MESSAGE == (
+        "Busca não realizada: a mensagem sozinha não tem um assunto para "
+        "pesquisar. Refaça a busca incluindo o assunto da conversa ou pergunte ao "
+        "cidadão qual é a dúvida."
+    )
+
+
+def test_texto_do_eleitoral_nao_mudou(search, monkeypatch):
+    _filtro_que_barra(search, monkeypatch)
+
+    result = search.run("vou votar no lula")
+
+    assert result["text"] == (
+        "Busca não realizada: o tema está fora do catálogo de serviços da "
+        "Prefeitura do Rio. Responda ao cidadão que não é possível ajudar com esse "
+        "assunto por aqui, sem citar candidatos, partidos, números ou resultados, e "
+        "ofereça ajuda com os serviços municipais. Não refaça a busca com outras "
+        "palavras."
+    )
+
+
+def test_query_sem_assunto_vai_para_o_bigquery_com_motivo_e_regra(search, monkeypatch):
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search("Sim!"))
+
+    [coro] = search.created_tasks
+    asyncio.run(coro)
+    [chamada] = search.bq_calls
+    assert chamada["data"]["source"] == "query_filter"
+    registro = chamada["data"]["response"]
+    assert registro["blocked"] is True
+    assert registro["filter_reason"] == "sem_assunto"
+    assert registro["filter_matched"] == "expressao"
+    assert registro["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    assert registro["id"] == result["id"]
+
+
+def test_query_com_assunto_segue_o_fluxo_normal(search, monkeypatch):
+    async def empty_hub_search(request):
+        return {"results": [], "results_clean": []}
+
+    monkeypatch.setattr(search.module, "hub_search", empty_hub_search)
+
+    result = search.run("Sim, quero saber da matrícula 2027")
+
+    assert result["text"] == "resposta do google"
