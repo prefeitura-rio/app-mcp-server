@@ -45,7 +45,7 @@ def resolve(monkeypatch):
         warnings.append(msg)
 
     noop = lambda *_a, **_k: None  # noqa: E731
-    env = types.SimpleNamespace(GEMINI_API_KEY="test-gemini-key", LINK_BLACKLIST=[])
+    env = types.SimpleNamespace(GEMINI_API_KEY="test-gemini-key")
     monkeypatch.setitem(sys.modules, "src.config", types.SimpleNamespace(env=env))
     monkeypatch.setitem(sys.modules, "src.config.env", env)
     monkeypatch.setitem(
@@ -276,3 +276,63 @@ def test_pior_caso_cabe_na_reserva_da_resolucao(resolve):
         + (m.GROUNDING_REDIRECT_ATTEMPTS - 1) * m.GROUNDING_REDIRECT_BACKOFF_SECONDS
     )
     assert pior_caso < m.URL_RESOLUTION_RESERVE_SECONDS
+
+
+# --------------------------------------------------------------------------------
+# Blacklist de domínios nas citações e na lista de fontes (CHATR-314)
+# --------------------------------------------------------------------------------
+
+TEXTO = "Primeiro fato. Segundo fato."
+
+
+def _uri(n: int) -> str:
+    return f"https://vertexaisearch.cloud.google.com/grounding-api-redirect/{n}"
+
+
+def _resposta(*fontes):
+    """Resposta do Gemini com uma fonte por frase de `TEXTO`. Cada fonte é um par
+    (título, domínio), como o grounding entrega em `chunk.web`."""
+    chunks, supports = [], []
+    fim = 0
+    for i, (titulo, dominio) in enumerate(fontes):
+        chunks.append(
+            types.SimpleNamespace(
+                web=types.SimpleNamespace(uri=_uri(i), title=titulo, domain=dominio)
+            )
+        )
+        fim = TEXTO.index(".", fim) + 1
+        supports.append(
+            types.SimpleNamespace(
+                segment=types.SimpleNamespace(start_index=0, end_index=fim),
+                grounding_chunk_indices=[i],
+            )
+        )
+    metadata = types.SimpleNamespace(
+        grounding_chunks=chunks, grounding_supports=supports
+    )
+    return types.SimpleNamespace(
+        candidates=[types.SimpleNamespace(grounding_metadata=metadata)], text=TEXTO
+    )
+
+
+def _montar_resposta(module, response, resolved_map):
+    """O pós-processamento do `google_search`: citações, texto e fontes."""
+    citations = module.get_citations(response=response, resolved_urls_map=resolved_map)
+    texto = module.format_text_with_citations(response.text, citations)
+    return texto, module.get_sources_list(citations, texto)
+
+
+def test_citacoes_e_fontes_comparam_por_dominio_e_nao_por_trecho(resolve):
+    """`x.com` bloqueia o `mobile.x.com`, mas não o `netflix.com`, que a
+    `LINK_BLACKLIST` barrava por conter o trecho."""
+    response = _resposta(("x.com", None), ("netflix.com", None))
+    resolved = {
+        _uri(0): {"url": "https://mobile.x.com/post/1", "error": None},
+        _uri(1): {"url": "https://www.netflix.com/br/", "error": None},
+    }
+
+    texto, fontes = _montar_resposta(resolve.module, response, resolved)
+
+    assert [f["url"] for f in fontes] == ["https://www.netflix.com/br/"]
+    assert "x.com/post" not in texto
+    assert "https://www.netflix.com/br/" in texto

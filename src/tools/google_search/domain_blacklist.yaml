@@ -1,0 +1,172 @@
+# Blacklist de domínios das fontes da tool `google_search` (CHATR-314).
+#
+# Fonte de um domínio listado aqui não chega ao cidadão: sai das citações e da
+# lista de fontes da resposta. O texto que o Gemini escreveu a partir dela fica
+# (não há `exclude_domains` no Gemini API); só o link é cortado.
+#
+# Onde é aplicada (src/tools/google_search/gemini_service.py):
+# - no domínio de cada fonte do grounding, antes da resolução: a fonte
+#   bloqueada nem é resolvida;
+# - no host do `Location` devolvido pelo Google, depois da resolução;
+# - nas citações e na lista de fontes da resposta.
+#
+# Como os domínios são comparados:
+# - por domínio ou subdomínio: `facebook.com` pega `facebook.com` e
+#   `m.facebook.com`, mas não `notfacebook.com`; `x.com` não pega `netflix.com`;
+# - sem diferença de caixa, de ponto final ou de `www.` no início;
+# - escreva só o domínio: sem `https://`, sem caminho.
+#
+# As seções existem só para organizar a revisão; todas valem igual.
+#
+# Substitui a variável de ambiente LINK_BLACKLIST, que comparava por trecho de
+# texto e ficava no Infisical, fora de revisão. As 135 entradas de produção
+# (26/10/2026) entraram como estavam, menos 7 que a comparação por subdomínio
+# tornou redundantes: g1.globo.com, oglobo.globo.com e extra.globo.com (cobertos
+# por globo.com), band.uol.com.br, bandnewstv.uol.com.br e redetv.uol.com.br
+# (por uol.com.br) e record.r7.com (por r7.com).
+#
+# Toda mudança aqui passa por revisão em PR e vale igual em staging e produção.
+# A lista é lida só na subida do pod: mudar exige uma nova versão da aplicação.
+
+blacklist:
+  # Prefeituras de outros municípios do Estado do Rio.
+  prefeituras_de_outros_municipios:
+    - angra.rj.gov.br
+    - aperibe.rj.gov.br
+    - araruama.rj.gov.br
+    - areal.rj.gov.br
+    - buzios.rj.gov.br
+    - arraial.rj.gov.br
+    - barradopirai.rj.gov.br
+    - barramansa.rj.gov.br
+    - belfordroxo.rj.gov.br
+    - bomjardim.rj.gov.br
+    - bomjesus.rj.gov.br
+    - cabofrio.rj.gov.br
+    - cachoeirasdemacacu.rj.gov.br
+    - cambuci.rj.gov.br
+    - campos.rj.gov.br
+    - cantagalo.rj.gov.br
+    - carapebus.rj.gov.br
+    - cardosomoreira.rj.gov.br
+    - carmo.rj.gov.br
+    - casimirodeabreu.rj.gov.br
+    - levygasparian.rj.gov.br
+    - conceicaodemacabu.rj.gov.br
+    - cordeiro.rj.gov.br
+    - duasbarras.rj.gov.br
+    - duquedecaxias.rj.gov.br
+    - paulodefrontin.rj.gov.br
+    - guapimirim.rj.gov.br
+    - iguaba.rj.gov.br
+    - itaborai.rj.gov.br
+    - itaguai.rj.gov.br
+    - italva.rj.gov.br
+    - itaocara.rj.gov.br
+    - itaperuna.rj.gov.br
+    - itatiaia.rj.gov.br
+    - japeri.rj.gov.br
+    - lajedomuriae.rj.gov.br
+    - macae.rj.gov.br
+    - macuco.rj.gov.br
+    - mage.rj.gov.br
+    - mangaratiba.rj.gov.br
+    - marica.rj.gov.br
+    - mendes.rj.gov.br
+    - mesquita.rj.gov.br
+    - miguelpereira.rj.gov.br
+    - miracema.rj.gov.br
+    - natividade.rj.gov.br
+    - nilopolis.rj.gov.br
+    - niteroi.rj.gov.br
+    - pmnf.rj.gov.br
+    - novaiguacu.rj.gov.br
+    - paracambi.rj.gov.br
+    - paraibadosul.rj.gov.br
+    - paraty.rj.gov.br
+    - patydoalferes.rj.gov.br
+    - petropolis.rj.gov.br
+    - pinheiral.rj.gov.br
+    - pirai.rj.gov.br
+    - porciuncula.rj.gov.br
+    - portoreal.rj.gov.br
+    - quatis.rj.gov.br
+    - queimados.rj.gov.br
+    - quissama.rj.gov.br
+    - resende.rj.gov.br
+    - riobonito.rj.gov.br
+    - rioclaro.rj.gov.br
+    - riodasflores.rj.gov.br
+    - riodasostras.rj.gov.br
+    - santamariamadalena.rj.gov.br
+    - santoantoniodepadua.rj.gov.br
+    - saofidelis.rj.gov.br
+    - pmsfi.rj.gov.br
+    - saogoncalo.rj.gov.br
+    - sjb.rj.gov.br
+    - meriti.rj.gov.br
+    - saojosedeuba.rj.gov.br
+    - sjvriopreto.rj.gov.br
+    - pmspa.rj.gov.br
+    - pmsaojoaodabarra.rj.gov.br
+    - sapucaia.rj.gov.br
+    - saquarema.rj.gov.br
+    - seropedica.rj.gov.br
+    - silvajardim.rj.gov.br
+    - sumidouro.rj.gov.br
+    - tangua.rj.gov.br
+    - teresopolis.rj.gov.br
+    - trajanodemoraes.rj.gov.br
+    - tresrios.rj.gov.br
+    - valenca.rj.gov.br
+    - varresai.rj.gov.br
+    - vassouras.rj.gov.br
+    - voltaredonda.rj.gov.br
+
+  # Imprensa. globo.com, uol.com.br e r7.com já cobrem os subdomínios (g1,
+  # oglobo, extra, band, bandnewstv, redetv, record).
+  imprensa:
+    - globo.com
+    - uol.com.br
+    - terra.com.br
+    - r7.com
+    - jb.com.br
+    - cnnbrasil.com.br
+    - metropoles.com
+    - estadao.com.br
+    - correiobraziliense.com.br
+    - abril.com.br
+    - odia.ig.com.br
+    - meiahora.com.br
+    - diariodorio.com
+    - rj4news.com.br
+    - rionoticias.com.br
+    - jornaldoriodejaneiro.com.br
+    - revistafatorbrasil.com.br
+    - radio93.com.br
+    - sbt.com.br
+
+  # Redes sociais e sites de vídeo.
+  redes_sociais_e_video:
+    - reddit.com
+    - youtube.com
+    - youtu.be
+    - dailymotion.com
+    - vimeo.com
+    - twitch.tv
+    - rumble.com
+    - instagram.com
+    - facebook.com
+    - linkedin.com
+    - tiktok.com
+    - x.com
+
+  # Demais entradas da lista antiga: finanças, o RJPet (extinto) e sites que se
+  # passam pela Prefeitura do Rio.
+  outros:
+    - rio.rj.gov.br
+    - wikipedia.org
+    - bnldata.com.br
+    - infomoney.com.br
+    - rjpet.com.br
+    - prefeiturarj.org

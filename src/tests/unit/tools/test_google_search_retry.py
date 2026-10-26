@@ -172,7 +172,6 @@ def env_stub():
         GEMINI_SEARCH_RETRY_BASE_SECONDS=2.0,
         GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS=16.0,
         IS_LOCAL=False,
-        LINK_BLACKLIST=[],
         TYPESENSE_ACTIVE="false",
         TYPESENSE_HUB_SEARCH_URL="",
         TYPESENSE_PARAMETERS="none",

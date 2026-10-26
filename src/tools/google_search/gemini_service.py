@@ -34,6 +34,8 @@ from opentelemetry import trace
 from src.observability.tracing import traced_stage
 from urllib.parse import urljoin, urlparse
 
+from src.tools.google_search import domain_blacklist as blacklist_de_dominios
+
 
 # Códigos 4xx que, apesar de "erro do cliente", são transitórios: 429 é saturação de
 # cota/capacidade e 408 é timeout do lado do servidor. Os demais 4xx não melhoram com
@@ -959,6 +961,15 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     return resolved_map
 
 
+def _url_bloqueada(url: str | None) -> str | None:
+    """Entrada da `domain_blacklist.yaml` que bloqueia a URL, ou `None` (CHATR-314).
+
+    Substitui a `LINK_BLACKLIST`, que comparava por trecho de texto: `x.com`
+    barrava `netflix.com`. Agora é domínio igual ou subdomínio.
+    """
+    return blacklist_de_dominios.domain_blacklist.url_bloqueada(url)
+
+
 def get_citations(response, resolved_urls_map):
     """
     Extracts and formats citation information from a Gemini model's response.
@@ -1018,44 +1029,19 @@ def get_citations(response, resolved_urls_map):
                     if not resolved_url or "url" not in resolved_url:
                         continue
 
-                    # Check if the URL's domain is blacklisted
-                    from urllib.parse import urlparse
+                    # Fonte de domínio bloqueado não vira citação (CHATR-314).
+                    if _url_bloqueada(resolved_url["url"]):
+                        continue
 
-                    try:
-                        parsed_url = urlparse(resolved_url["url"])
-                        domain = parsed_url.netloc.lower()
-
-                        # Get blacklisted domains from environment
-                        blacklisted_domains = env.LINK_BLACKLIST
-                        is_blacklisted = any(
-                            blacklisted_domain.strip().lower() in domain
-                            for blacklisted_domain in blacklisted_domains
-                            if blacklisted_domain.strip()
-                        )
-
-                        # Only add to citations if not blacklisted
-                        if not is_blacklisted:
-                            citation["segments"].append(
-                                {
-                                    "label": chunk.web.title,
-                                    "uri": chunk.web.uri,
-                                    "url": resolved_url["url"],
-                                    # "text": support.segment.text,
-                                    # "error": resolved_url["error"],
-                                }
-                            )
-                    except Exception:
-                        # If there's any error with URL parsing or blacklist checking,
-                        # fall back to the original behavior (include the citation)
-                        citation["segments"].append(
-                            {
-                                "label": chunk.web.title,
-                                "uri": chunk.web.uri,
-                                "url": resolved_url["url"],
-                                # "text": support.segment.text,
-                                # "error": resolved_url["error"],
-                            }
-                        )
+                    citation["segments"].append(
+                        {
+                            "label": chunk.web.title,
+                            "uri": chunk.web.uri,
+                            "url": resolved_url["url"],
+                            # "text": support.segment.text,
+                            # "error": resolved_url["error"],
+                        }
+                    )
                 except (IndexError, AttributeError, NameError):
                     # Handle cases where chunk, web, uri, or resolved_map might be problematic
                     # For simplicity, we'll just skip adding this particular segment link
@@ -1162,31 +1148,10 @@ def get_sources_list(citations_data, modified_text):
     seen_uris = set()
     sources_gathered = []
 
-    # Get blacklisted domains from environment
-    blacklisted_domains = env.LINK_BLACKLIST
-
     for source in all_segments:
         if source["uri"] not in seen_uris and source["url"] in modified_text:
-            try:
-                # Check if the URL's domain is in the blacklist
-                from urllib.parse import urlparse
-
-                parsed_url = urlparse(source["url"])
-                domain = parsed_url.netloc.lower()
-
-                # Check if any blacklisted domain matches the source domain
-                is_blacklisted = any(
-                    blacklisted_domain.strip().lower() in domain
-                    for blacklisted_domain in blacklisted_domains
-                    if blacklisted_domain.strip()
-                )
-
-                if not is_blacklisted:
-                    seen_uris.add(source["uri"])
-                    sources_gathered.append(source)
-            except Exception:
-                # If there's any error with URL parsing or blacklist checking,
-                # fall back to the original behavior (include the source)
+            # Fonte de domínio bloqueado não entra na lista (CHATR-314).
+            if not _url_bloqueada(source["url"]):
                 seen_uris.add(source["uri"])
                 sources_gathered.append(source)
 
