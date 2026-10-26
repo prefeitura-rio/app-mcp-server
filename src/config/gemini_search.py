@@ -3,8 +3,9 @@
 Uma variável só, `GEMINI_SEARCH_MODELS`, com uma lista JSON de modelos em ordem de
 prioridade. Cada item traz os parâmetros de invocação daquele modelo:
 
-    [{"model": "gemini-2.5-flash-lite", "timeout_s": 45},
-     {"model": "gemini-3.5-flash-lite", "timeout_s": 20, "thinking_level": "MINIMAL"}]
+    [{"model": "gemini-2.5-flash-lite", "timeout_s": 45, "thinking_budget": 1024},
+     {"model": "gemini-3.5-flash-lite", "timeout_s": 20, "thinking_level": "MINIMAL",
+      "max_search_queries": 1}]
 
 - Variável ausente ou vazia: vale `DEFAULT_CONFIG`, a configuração de produção.
 - Variável preenchida: cada campo omitido de um item vale o default do campo.
@@ -45,9 +46,11 @@ MIN_ATTEMPT_SECONDS = 5.0
 # dispara: os pings SSE a cada 15 s zeram o timeout de leitura.
 MAX_SEARCH_DEADLINE_SECONDS = 105.0
 
-# Raciocínio dos 2.x (CHATR-234). 8192 cobre o p99,9 das chamadas normais do
-# flash-lite (6.686) e corta o loop em ~30 s; `0` desliga.
-DEFAULT_THINKING_BUDGET = 8192
+# Raciocínio dos 2.x (CHATR-234), em tokens; `0` desliga. Era 8192 (p99,9 das
+# chamadas normais do flash-lite, 6.686). Na bateria de 26/10/2026 (CHATR-314),
+# 1024 levou o p95 do 2.5 de 23,5 s para 12,9 s com qualidade dentro do ruído; 0
+# perde qualidade (10 de 60 respostas insuficientes, contra 2).
+DEFAULT_THINKING_BUDGET = 1024
 # Os 3.x usam nível em vez de budget; no `MINIMAL` quase não gastam raciocínio.
 DEFAULT_THINKING_LEVEL = "MINIMAL"
 # Nos 2.5 o teto de saída limita raciocínio + resposta em cada etapa de geração:
@@ -195,10 +198,20 @@ def search_deadline_seconds(
 # Configuração de produção. O 2.5 vem primeiro por custo: o grounding dele é
 # cobrado por prompt, com franquia diária; o do 3.x, por query de busca. O 3.5 fica
 # com 20 s: na bateria do CHATR-298, p95 de 6,4 s e máximo de 9,3 s.
+# Bateria de 26/10/2026 (CHATR-314; 60 perguntas, referência = produção com
+# raciocínio de 8192 e ≥ 5 consultas: p50 12,3 s, p95 23,5 s, 9 sem fonte):
+# - 2.5 com raciocínio de 1024: p50 9,8 s, p95 12,9 s, qualidade dentro do ruído;
+# - 3.5 com 1 consulta: p50 4,6 s, p95 6,7 s, 3 sem fonte, qualidade dentro do
+#   ruído, ~US$ 217/mês se respondesse todas (livre: ~US$ 848/mês).
 DEFAULT_CONFIG = GeminiSearchConfig.model_validate(
     [
-        {"model": "gemini-2.5-flash-lite", "timeout_s": 45},
-        {"model": "gemini-3.5-flash-lite", "timeout_s": 20},
+        {"model": "gemini-2.5-flash-lite", "timeout_s": 45, "thinking_budget": 1024},
+        {
+            "model": "gemini-3.5-flash-lite",
+            "timeout_s": 20,
+            "thinking_level": "MINIMAL",
+            "max_search_queries": 1,
+        },
     ]
 )
 

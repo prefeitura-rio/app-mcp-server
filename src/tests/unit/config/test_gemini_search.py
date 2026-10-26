@@ -32,14 +32,14 @@ def test_sem_valor_vale_a_configuracao_de_producao(raw):
 
 
 def test_configuracao_de_producao():
-    """Os valores que valiam antes do JSON, com o 3.5 em 20 s."""
+    """2.5 com raciocínio de 1024 e 3.5 com 1 consulta (bateria de 26/10/2026)."""
     principal, fallback = gs.DEFAULT_CONFIG.models
 
     assert principal.model_dump() == {
         "model": "gemini-2.5-flash-lite",
         "timeout_s": 45.0,
         "attempts": 2,
-        "thinking_budget": 8192,
+        "thinking_budget": 1024,
         "thinking_level": None,
         "max_output_tokens": 12288,
         "temperature": 0.0,
@@ -53,7 +53,7 @@ def test_configuracao_de_producao():
         "thinking_level": "MINIMAL",
         "max_output_tokens": 12288,
         "temperature": 0.0,
-        "max_search_queries": None,
+        "max_search_queries": 1,
     }
     # 45 + 20 + 10 de resolução de URLs.
     assert gs.DEFAULT_CONFIG.deadline_s == 75.0
@@ -75,8 +75,10 @@ def test_raciocinio_default_segue_a_geracao():
     config, _ = parse([{"model": "gemini-2.5-flash"}, {"model": "gemini-3.1-flash"}])
 
     dois, tres = config.models
-    assert (dois.thinking_budget, dois.thinking_level) == (8192, None)
+    assert (dois.thinking_budget, dois.thinking_level) == (1024, None)
     assert (tres.thinking_budget, tres.thinking_level) == (None, "MINIMAL")
+    # O teto de saída padrão comporta o budget padrão: 12288 ≥ 1024 + 2048.
+    assert dois.max_output_tokens == 12288
 
 
 def test_todos_os_campos_preenchidos():
@@ -256,7 +258,8 @@ def test_configuracao_e_imutavel():
             id="budget_no_3x",
         ),
         pytest.param(
-            '[{"model": "gemini-2.5-flash-lite", "max_output_tokens": 9000}]',
+            '[{"model": "gemini-2.5-flash-lite", "thinking_budget": 8192, '
+            '"max_output_tokens": 9000}]',
             "GEMINI_SEARCH_MODELS[0] (gemini-2.5-flash-lite): max_output_tokens "
             "(9000) precisa ser ao menos thinking_budget + 2048 (10240)",
             id="saida_nao_cabe_o_raciocinio",
@@ -311,7 +314,7 @@ def test_mensagem_do_erro_lista_os_problemas():
 
 def test_resumo_para_o_log_do_boot():
     assert gs.DEFAULT_CONFIG.resumo() == (
-        "gemini-2.5-flash-lite(45s, 2x, budget=8192, max_output=12288, temp=0) → "
-        "gemini-3.5-flash-lite(20s, 2x, level=MINIMAL, max_output=12288, temp=0); "
-        "prazo total 75s"
+        "gemini-2.5-flash-lite(45s, 2x, budget=1024, max_output=12288, temp=0) → "
+        "gemini-3.5-flash-lite(20s, 2x, level=MINIMAL, max_output=12288, temp=0, "
+        "queries=1); prazo total 75s"
     )

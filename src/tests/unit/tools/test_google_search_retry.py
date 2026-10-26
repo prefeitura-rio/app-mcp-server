@@ -168,7 +168,7 @@ class FakeModels:
 def env_stub():
     return types.SimpleNamespace(
         GEMINI_API_KEY="test-gemini-key",
-        # 2.5 (45 s, budget 8192) → 3.5 (20 s, MINIMAL): a de produção.
+        # 2.5 (45 s, budget 1024) → 3.5 (20 s, MINIMAL, 1 consulta): a de produção.
         GEMINI_SEARCH_CONFIG=gemini_search.DEFAULT_CONFIG,
         GEMINI_SEARCH_RETRY_BASE_SECONDS=2.0,
         GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS=16.0,
@@ -414,7 +414,7 @@ def test_tetos_de_token_vao_para_o_gemini(gemini):
     _, models = gemini.run([success_response()])
 
     config = models.kwargs[0]["config"]
-    assert config.thinking_config.thinking_budget == 8192
+    assert config.thinking_config.thinking_budget == 1024
     assert config.max_output_tokens == 12288
     assert config.temperature == 0.0
 
@@ -499,7 +499,7 @@ def test_sem_fonte_preserva_contadores_de_token(gemini):
 
 def test_raciocinio_no_teto_so_e_marcado(gemini):
     """Loop cortado pelo budget termina com STOP: devolve a resposta e marca."""
-    result, models = gemini.run([gemini_response(thoughts=8190, candidates=107)])
+    result, models = gemini.run([gemini_response(thoughts=1022, candidates=107)])
 
     assert models.calls == 1
     assert result["success"] is True
@@ -507,7 +507,7 @@ def test_raciocinio_no_teto_so_e_marcado(gemini):
 
 
 def test_raciocinio_normal_nao_e_marcado(gemini):
-    result, _ = gemini.run([gemini_response(thoughts=1800, candidates=700)])
+    result, _ = gemini.run([gemini_response(thoughts=600, candidates=700)])
 
     assert result["reasoning_budget_hit"] is False
 
@@ -626,13 +626,15 @@ def test_span_da_chamada_leva_os_parametros_do_modelo(gemini, span_exporter):
     principal, fallback = _spans(span_exporter, "gemini.generate_content")
     assert principal.attributes["gemini.model"] == MODELO_PRINCIPAL
     assert principal.attributes["gemini.model_deadline_s"] == 45.0
-    assert principal.attributes["gemini.reasoning_budget_tokens"] == 8192
+    assert principal.attributes["gemini.reasoning_budget_tokens"] == 1024
     assert principal.attributes["gemini.max_output_tokens"] == 12288
     assert "gemini.thinking_level" not in principal.attributes
     assert fallback.attributes["gemini.model"] == MODELO_FALLBACK
     assert fallback.attributes["gemini.model_deadline_s"] == 20.0
     assert fallback.attributes["gemini.thinking_level"] == "MINIMAL"
     assert "gemini.reasoning_budget_tokens" not in fallback.attributes
+    assert "gemini.search.max_queries" not in principal.attributes
+    assert fallback.attributes["gemini.search.max_queries"] == 1
 
 
 def test_prazo_estourado_marca_o_span_do_gemini(
@@ -727,7 +729,7 @@ def test_raciocinio_por_geracao_de_modelo(gemini):
     _, models = gemini.run([server_error(), server_error(), success_response()])
 
     principal, _, fallback = (k["config"].thinking_config for k in models.kwargs)
-    assert principal.thinking_budget == 8192
+    assert principal.thinking_budget == 1024
     assert principal.thinking_level is None
     assert fallback.thinking_budget is None
     assert fallback.thinking_level.value == "MINIMAL"
@@ -909,6 +911,17 @@ def test_pergunta_entra_no_prompt_sem_interpretar_chaves(gemini):
     )
 
     assert prompt.endswith("horário {sábado} {current_date}\n")
+
+
+def test_fallback_da_configuracao_de_producao_usa_1_consulta(gemini):
+    """2.5 com "ao menos 5" consultas; o 3.5, com uma só (bateria de 26/10/2026)."""
+    _, models = gemini.run([client_error(400), success_response()])
+
+    principal, fallback = (k["contents"][0].parts[0].text for k in models.kwargs)
+    assert [k["model"] for k in models.kwargs] == [MODELO_PRINCIPAL, MODELO_FALLBACK]
+    assert FRASE_PADRAO in principal
+    assert "using exactly 1 query." in fallback
+    assert FRASE_PADRAO not in fallback
 
 
 def test_cada_modelo_do_fallback_usa_o_proprio_prompt(gemini, env_stub):
