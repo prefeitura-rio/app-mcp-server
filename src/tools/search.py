@@ -10,6 +10,7 @@ from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_response_in_bq_background
 from src.utils.typesense_api import HubSearchRequest, hub_search
 from src.utils.error_interceptor import interceptor
+from src.utils.pii import redigir_query
 from src.utils.tool_errors import falha_tecnica
 
 from src.config import env
@@ -46,11 +47,22 @@ async def get_google_search(query: str):
     """
     Obtém resultados de busca via Typesense (se ativo) ou Google Search como fallback.
     """
-    # 0. Filtro de query antes de qualquer buscador (CHATR-294 e CHATR-314)
+    # 0. Filtro de query antes de qualquer buscador (CHATR-294 e CHATR-314). Olha o
+    # texto cru: a regra "sem letra" precisa ver o CPF solto antes da redação.
     decisao = filtro.query_filter.check(query)
     _marcar_filtro_no_span(decisao)
+
+    # 0.1. Redação de dado pessoal (CHATR-314). Daqui em diante, buscadores e
+    # BigQuery só recebem o texto redigido, inclusive no caminho de bloqueio.
+    query_redigida, tipos_redigidos = redigir_query(query)
+    _marcar_redacao_no_span(tipos_redigidos)
+    registro_da_query = {
+        "query": query_redigida,
+        "pii_redigida": list(tipos_redigidos),
+    }
+
     if not decisao.allowed:
-        return _resposta_bloqueada(query, decisao)
+        return _resposta_bloqueada(registro_da_query, decisao)
 
     # 1. Configurações iniciais e Logs
     is_typesense_active = (
@@ -72,7 +84,7 @@ async def get_google_search(query: str):
         )
 
         hub_request = HubSearchRequest(
-            q=query,
+            q=query_redigida,
             type=params.get("type", "semantic"),
             threshold_semantic=params.get("threshold_semantic", 0.7),
             threshold_hybrid=params.get("threshold_hybrid", 0.7),
@@ -108,7 +120,7 @@ async def get_google_search(query: str):
         logger.info("Executing Google Search via Gemini Service")
         source = "google"
         # Modelos e parâmetros de cada um vêm de GEMINI_SEARCH_MODELS (CHATR-298).
-        response_google = await gemini_service.google_search(query=query)
+        response_google = await gemini_service.google_search(query=query_redigida)
         response_data = response_google
         final_response = {
             "text": response_google.get("text"),
@@ -118,10 +130,14 @@ async def get_google_search(query: str):
             "success": response_google.get("success", True),
         }
 
-    # 4. Log em Background (BigQuery)
+    # 4. Log em Background (BigQuery). `query` é a redigida: na resposta do Gemini
+    # ela já vem assim, e na do Typesense não vinha.
     disparar_em_background(
         save_response_in_bq_background(
-            data={"source": source, "response": response_data},
+            data={
+                "source": source,
+                "response": {**response_data, **registro_da_query},
+            },
             endpoint="/tools/google_search",
             dataset_id="brutos_eai_logs",
             table_id="mcp",
@@ -149,7 +165,17 @@ def _marcar_filtro_no_span(decisao: filtro.FilterDecision) -> None:
         span.set_attribute("search.filter.matched", decisao.matched)
 
 
-def _resposta_bloqueada(query: str, decisao: filtro.FilterDecision) -> dict:
+def _marcar_redacao_no_span(tipos: tuple[str, ...]) -> None:
+    """Publica os tipos de dado pessoal redigidos da query, nunca o valor."""
+    span = trace.get_current_span()
+    span.set_attribute("search.query.pii_redacted", bool(tipos))
+    if tipos:
+        span.set_attribute("search.query.pii_types", list(tipos))
+
+
+def _resposta_bloqueada(
+    registro_da_query: dict, decisao: filtro.FilterDecision
+) -> dict:
     """Resposta a uma query barrada pelo filtro, já registrada no BigQuery.
 
     Sai como sucesso, no mesmo formato da busca normal: é recusa de tema, não falha
@@ -175,7 +201,7 @@ def _resposta_bloqueada(query: str, decisao: filtro.FilterDecision) -> dict:
                 "source": "query_filter",
                 "response": {
                     **resposta,
-                    "query": query,
+                    **registro_da_query,
                     "blocked": True,
                     "filter_reason": decisao.reason,
                     "filter_matched": decisao.matched,

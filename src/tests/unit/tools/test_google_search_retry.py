@@ -1186,3 +1186,125 @@ def test_query_com_assunto_segue_o_fluxo_normal(search, monkeypatch):
     result = search.run("Sim, quero saber da matrícula 2027")
 
     assert result["text"] == "resposta do google"
+
+
+# --------------------------------------------------------------------------------
+# get_google_search: redação de dado pessoal antes da busca (CHATR-314)
+# --------------------------------------------------------------------------------
+
+QUERY_COM_PII = "meu cpf é 529.982.247-25, moro na Rua Barata Ribeiro, 200, Copacabana"
+QUERY_REDIGIDA = "meu cpf é [cpf], moro na [endereço], Copacabana"
+
+
+def _capturar_buscadores(search, monkeypatch, *, typesense_resultados=()):
+    chamadas = types.SimpleNamespace(typesense=[], gemini=[])
+
+    async def hub_search_capturado(request):
+        chamadas.typesense.append(request.q)
+        return {
+            "results": list(typesense_resultados),
+            "results_clean": list(typesense_resultados),
+        }
+
+    async def google_capturado(**kwargs):
+        chamadas.gemini.append(kwargs["query"])
+        return {**search.google_response, "query": kwargs["query"]}
+
+    monkeypatch.setattr(search.module, "hub_search", hub_search_capturado)
+    monkeypatch.setattr(search.module.gemini_service, "google_search", google_capturado)
+    return chamadas
+
+
+def _registro_no_bigquery(search):
+    [coro] = search.created_tasks
+    asyncio.run(coro)
+    search.created_tasks.clear()
+    [chamada] = search.bq_calls
+    return chamada["data"]
+
+
+def test_buscadores_e_bigquery_recebem_a_query_redigida(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(search.module.get_google_search(QUERY_COM_PII))
+
+    assert chamadas.typesense == [QUERY_REDIGIDA]
+    assert chamadas.gemini == [QUERY_REDIGIDA]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["query"] == QUERY_REDIGIDA
+    assert registro["pii_redigida"] == ["cpf", "endereco"]
+    assert "529.982.247-25" not in json.dumps(registro, ensure_ascii=False)
+    assert "Barata Ribeiro" not in json.dumps(registro, ensure_ascii=False)
+
+
+def test_resultado_do_typesense_tambem_grava_a_query_redigida(search, monkeypatch):
+    _capturar_buscadores(search, monkeypatch, typesense_resultados=[{"id": 1}])
+
+    result = asyncio.run(search.module.get_google_search(QUERY_COM_PII))
+
+    assert result == {"response": [{"id": 1}]}
+    dados = _registro_no_bigquery(search)
+    assert dados["source"] == "typesense"
+    assert dados["response"]["query"] == QUERY_REDIGIDA
+    assert dados["response"]["pii_redigida"] == ["cpf", "endereco"]
+
+
+def test_query_sem_pii_grava_lista_vazia(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(search.module.get_google_search("segunda via do iptu"))
+
+    assert chamadas.gemini == ["segunda via do iptu"]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["query"] == "segunda via do iptu"
+    assert registro["pii_redigida"] == []
+
+
+def test_query_barrada_grava_a_versao_redigida(search, monkeypatch):
+    _filtro_que_barra(search, monkeypatch)
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search("vou votar no lula, cpf 529.982.247-25")
+    )
+
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["blocked"] is True
+    assert registro["query"] == "vou votar no lula, cpf [cpf]"
+    assert registro["pii_redigida"] == ["cpf"]
+
+
+def test_cpf_solto_e_barrado_pelo_sem_assunto_antes_da_redacao(search, monkeypatch):
+    """O filtro olha o texto cru: redigido, o CPF solto viraria "[cpf]", que tem
+    letra. No BigQuery, só a versão redigida."""
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search("529.982.247-25"))
+
+    assert result["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["filter_matched"] == "sem_letra"
+    assert registro["query"] == "[cpf]"
+
+
+def test_tipos_redigidos_vao_para_o_span_sem_o_valor(search, monkeypatch):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    _capturar_buscadores(search, monkeypatch)
+
+    with tracer.start_as_current_span("tool.com_pii"):
+        search.run(QUERY_COM_PII)
+    with tracer.start_as_current_span("tool.sem_pii"):
+        search.run("segunda via do iptu")
+
+    spans = {s.name: s.attributes for s in exporter.get_finished_spans()}
+    assert spans["tool.com_pii"]["search.query.pii_redacted"] is True
+    assert tuple(spans["tool.com_pii"]["search.query.pii_types"]) == (
+        "cpf",
+        "endereco",
+    )
+    assert spans["tool.sem_pii"]["search.query.pii_redacted"] is False
+    assert "search.query.pii_types" not in spans["tool.sem_pii"]
+    assert "529" not in str(dict(spans["tool.com_pii"]))

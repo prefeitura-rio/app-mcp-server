@@ -25,6 +25,13 @@ O que escapa aos três: dado sem formato e sem rótulo, do tipo
 `f"Nome coletado: {nome}"` ou o texto livre que o cidadão escreveu. Esse é
 corrigido apagando a linha de log, não redigindo-a.
 
+## Query de busca (CHATR-314)
+
+`redigir_query` é um quarto caminho, para o texto livre que sai do projeto na
+`google_search`. O princípio é outro: tirar quem é a pessoa e manter do que ela
+está falando, porque o texto redigido ainda precisa render uma busca. Detalhes
+na seção "Redação da query de busca", mais abaixo.
+
 ## O que deliberadamente NÃO é redigido
 
 Inscrição imobiliária, protocolo, timestamp, `trace_id` e bairro. Nenhum
@@ -35,8 +42,9 @@ ms), `1790000000` (epoch em s) e `12345678` (inscrição) atravessam intactos.
 """
 
 import re
+import unicodedata
 from functools import lru_cache
-from typing import Any, FrozenSet, Optional, Set
+from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +705,259 @@ def redigir_estrutura(obj: Any, *, marcador: str = MARCADOR_GENERICO) -> Any:
         # byte cru já não era legível no log.
         return redigir_texto(bytes(obj).decode("utf-8", errors="replace"))
     return obj
+
+
+# ---------------------------------------------------------------------------
+# Redação da query de busca (CHATR-314)
+# ---------------------------------------------------------------------------
+#
+# A query da `google_search` sai do projeto: vai para o Typesense, para o
+# Gemini e, pela ferramenta de busca dele, para o Google. Em outubro de 2026, 2%
+# delas levavam dado pessoal que `redigir_padroes_pii` não pega: endereço com
+# número, data de nascimento, CEP, nome declarado, placa.
+#
+# O princípio é diferente do log: tirar **quem** é a pessoa e manter **do que**
+# ela está falando, porque o texto redigido ainda precisa render uma busca.
+# Daí as escolhas:
+#
+# - CPF só com dígito verificador válido: protocolo e inscrição com 11 dígitos
+#   são o assunto da busca;
+# - data só ao lado de "nasceu"/"nascimento": "inscrições até 30/10" é prazo;
+# - nome só depois de um gatilho ("meu nome é", "meu filho"): sem gatilho, não
+#   há como separar nome de assunto sem um modelo de linguagem;
+# - endereço perde logradouro e número, mas o bairro fica, porque localiza a
+#   resposta;
+# - dado de saúde (TEA, gravidez, deficiência) **não** é redigido: costuma ser
+#   o próprio assunto ("transferência de escola para aluno com TEA").
+#
+# Os marcadores são curtos, em português e sem dígito nem gatilho, para o
+# modelo de busca entender o que havia ali e para a função ser idempotente.
+
+MARCADORES_QUERY: Dict[str, str] = {
+    "email": "[e-mail]",
+    "cpf": "[cpf]",
+    "cep": "[cep]",
+    "telefone": "[telefone]",
+    "placa": "[placa]",
+    "endereco": "[endereço]",
+    "data_nascimento": "[data]",
+    "nome": "[nome]",
+}
+
+# CEP: com hífen (`22290-140`, `22.290-140`) em qualquer lugar; sem hífen, só
+# ao lado da palavra "CEP" -- oito dígitos soltos podem ser inscrição.
+_CEP = re.compile(r"(?<![\d.])\d{2}\.?\d{3}-\d{3}(?![\d-])")
+_CEP_COM_GATILHO = re.compile(r"(?i)\b(cep)(\W{0,3})(\d{8})(?!\d)")
+
+# Placa antiga (`ABC-1234`, `ABC1234`) e Mercosul (`ABC1D23`). A antiga sem
+# hífen só em maiúsculas: em minúsculas, `rio2016` viraria placa.
+_PLACA = re.compile(
+    r"(?<![\w-])"
+    r"(?:[A-Za-z]{3}-\d{4}|[A-Z]{3}\d{4}|[A-Za-z]{3}\d[A-Za-z]\d{2})"
+    r"(?![\w-])"
+)
+
+# Endereço com número: tipo de logradouro, até seis palavras de nome e o
+# número, com complemento opcional. Ficaram de fora tipos que também são nome
+# de bairro ou palavra comum ("Vila Isabel", "segunda via", "caminho"). O nome
+# não atravessa vírgula: em "Rua X, Copacabana, 12" não há número colado à rua.
+_ENDERECO = re.compile(
+    r"(?i)(?<!\w)"
+    r"(?:rua|r\.|avenida|av\.?|estrada|estr\.|travessa|trav\.|tv\.|pra[çc]a|"
+    r"largo|alameda|rodovia|ladeira|beco|servid[ãa]o)"
+    r"(?P<nome>(?:\s+[^\W\d_][\w'.ºª-]*){1,6}?)"
+    r"\s*,?\s*(?:(?:n[º°o.]|n\.º|nº|n°|n[uú]mero|nr\.?)\s*)?"
+    r"\d{1,5}[a-z]?(?![\w/])"
+    r"(?:\s*[,/-]?\s*(?:apartamento|apto|apt|ap|casa|bloco|bl|lote|lt|quadra|qd|sala)"
+    r"\.?\s*(?:\d{1,5}[a-z]?|[a-z])(?!\w))*"
+)
+
+# Palavras que denunciam frase, não nome de rua: "a rua da minha casa tem 3
+# buracos" não é endereço. Comparadas sem acento e em minúsculas.
+_NAO_E_NOME_DE_RUA: FrozenSet[str] = frozenset(
+    {
+        "tem", "ta", "esta", "estao", "foi", "sao", "e", "ha", "fica", "ficou",
+        "minha", "meu", "sua", "seu", "nossa", "nosso", "com", "sem", "que",
+        "para", "pra", "faz", "desde", "mais", "menos", "cerca", "quase",
+    }
+)  # fmt: skip
+
+# Data de nascimento: a data a até 25 caracteres sem dígito depois de
+# "nasceu", "nascido", "nasci" ou "nascimento".
+_MESES = (
+    "janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|"
+    "outubro|novembro|dezembro"
+)
+_DATA_DE_NASCIMENTO = re.compile(
+    r"(?i)\b(nasc\w*)([^\d\n]{0,25}?)"
+    r"(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}"
+    rf"|\d{{1,2}}\s+de\s+(?:{_MESES})\s+de\s+\d{{4}}"
+    r"|\d{8})"
+    r"(?![\d/.-]?\d)"
+)
+
+# Nome declarado: depois do gatilho, qualquer palavra até um limite.
+_GATILHO_NOME_DECLARADO = re.compile(
+    r"(?i)\b(?:meu\s+nome\s+(?:é|e|eh)|me\s+chamo)\b[ \t]*[:,-]?[ \t]*"
+)
+# Nome de familiar ou apresentação ("sou a Maria"): só palavra capitalizada,
+# porque "meu filho tem TEA" e "sou a responsável" não têm nome nenhum.
+_GATILHO_NOME_DE_PESSOA = re.compile(
+    r"(?i)\b(?:sou\s+(?:a|o)"
+    r"|(?:meu|minha)\s+(?:filh[oa]|marido|espos[oa]|mulher|m[ãa]e|pai|net[oa]|"
+    r"irm[ãa]o?|sobrinh[oa]|av[óôo]|enteado|enteada|companheir[oa]|"
+    r"namorad[oa]|ti[oa]|prim[oa]))\b[ \t]*[:,-]?[ \t]*"
+)
+_PALAVRA = re.compile(r"[^\W\d_]+(?:['-][^\W\d_]+)*")
+_PALAVRA_CAPITALIZADA = re.compile(r"[A-ZÀ-Ý][a-zà-ÿ]+(?:['-][A-Za-zÀ-ÿ]+)*")
+_CONECTORES_DE_NOME: FrozenSet[str] = frozenset({"da", "de", "do", "das", "dos"})
+_ESPACO = re.compile(r"[ \t]+")
+_MAX_PALAVRAS_DO_NOME = 4
+
+# Palavras que encerram o nome declarado ("meu nome é Ana e quero...") e
+# palavras capitalizadas que não são nome ("Sou a Mãe do aluno").
+_NAO_E_NOME: FrozenSet[str] = frozenset(
+    {
+        "e", "quero", "queria", "gostaria", "preciso", "tenho", "moro", "sou",
+        "estou", "estava", "minha", "meu", "para", "pra", "com", "sem", "que",
+        "mas", "porque", "pois", "nao", "sim", "ok", "aqui", "ja", "tambem",
+        "mae", "pai", "responsavel", "aluno", "aluna", "servidor", "servidora",
+        "morador", "moradora", "professor", "professora", "cidadao", "cidada",
+        "dono", "dona", "titular", "tutor", "tutora", "autista", "gestante",
+    }
+)  # fmt: skip
+
+
+def _sem_acento(texto: str) -> str:
+    decomposto = unicodedata.normalize("NFKD", texto)
+    return "".join(c for c in decomposto if not unicodedata.combining(c)).casefold()
+
+
+def _cpf_valido(digitos: str) -> bool:
+    """Confere os dois dígitos verificadores. Sequência repetida (`111...`) tem
+    dígito "válido" pela conta, mas não é CPF."""
+    if len(digitos) != 11 or len(set(digitos)) == 1:
+        return False
+    for posicao in (9, 10):
+        soma = sum(
+            int(digito) * (posicao + 1 - i)
+            for i, digito in enumerate(digitos[:posicao])
+        )
+        if (soma * 10) % 11 % 10 != int(digitos[posicao]):
+            return False
+    return True
+
+
+def _fim_do_nome(texto: str, inicio: int, *, capitalizado: bool) -> int:
+    """Índice em que termina o nome que começa em `inicio`; `inicio` se não há nome.
+
+    Conectores ("da", "dos") só entram entre duas palavras do nome, nunca nas
+    pontas: em "minha filha Ana do 3º ano", o nome é só "Ana".
+    """
+    padrao = _PALAVRA_CAPITALIZADA if capitalizado else _PALAVRA
+    fim = pos = inicio
+    palavras = 0
+    while palavras < _MAX_PALAVRAS_DO_NOME:
+        match = _PALAVRA.match(texto, pos)
+        if not match:
+            break
+        palavra = _sem_acento(match.group(0))
+        if palavra in _CONECTORES_DE_NOME:
+            espaco = _ESPACO.match(texto, match.end())
+            if not palavras or not espaco:
+                break
+            pos = espaco.end()
+            continue
+        if palavra in _NAO_E_NOME or not padrao.fullmatch(match.group(0)):
+            break
+        palavras += 1
+        fim = match.end()
+        espaco = _ESPACO.match(texto, fim)
+        if not espaco:
+            break
+        pos = espaco.end()
+    return fim
+
+
+def _redigir_nomes(texto: str) -> Tuple[str, bool]:
+    trechos = []
+    for gatilho, capitalizado in (
+        (_GATILHO_NOME_DECLARADO, False),
+        (_GATILHO_NOME_DE_PESSOA, True),
+    ):
+        for match in gatilho.finditer(texto):
+            fim = _fim_do_nome(texto, match.end(), capitalizado=capitalizado)
+            if fim > match.end():
+                trechos.append((match.end(), fim))
+    if not trechos:
+        return texto, False
+    partes, pos = [], 0
+    for inicio, fim in sorted(trechos):
+        if inicio < pos:
+            continue
+        partes.append(texto[pos:inicio])
+        partes.append(MARCADORES_QUERY["nome"])
+        pos = fim
+    partes.append(texto[pos:])
+    return "".join(partes), True
+
+
+def _redigir_endereco(match: "re.Match") -> str:
+    palavras = {_sem_acento(p.strip(".,")) for p in match.group("nome").split()}
+    if palavras & _NAO_E_NOME_DE_RUA:
+        return match.group(0)
+    return MARCADORES_QUERY["endereco"]
+
+
+def _redigir_cpf(match: "re.Match") -> str:
+    digitos = "".join(c for c in match.group(0) if c.isdigit())
+    return MARCADORES_QUERY["cpf"] if _cpf_valido(digitos) else match.group(0)
+
+
+def redigir_query(texto: Optional[str]) -> Tuple[Optional[str], Tuple[str, ...]]:
+    """
+    Redige o dado pessoal da query de busca e diz quais tipos foram redigidos.
+
+    Devolve `(texto_redigido, tipos)`, com `tipos` na ordem de `MARCADORES_QUERY`
+    e sem repetição -- é o que vai para o span e para o BigQuery, nunca o valor.
+    Idempotente: nenhum marcador casa com nenhum padrão, então redigir de novo
+    não muda nada.
+
+    A ordem importa: e-mail e documentos antes de telefone e endereço, para um
+    número não ser consumido pelo padrão errado; nome por último, porque o
+    gatilho dele olha a palavra seguinte e ela não pode ser um dado já redigido.
+    """
+    if not texto:
+        return texto, ()
+
+    tipos = []
+
+    def aplicar(tipo: str, padrao: "re.Pattern", substituto) -> None:
+        nonlocal texto
+        novo = padrao.sub(substituto, texto)
+        if novo != texto:
+            tipos.append(tipo)
+            texto = novo
+
+    marcador = MARCADORES_QUERY
+    aplicar("email", _EMAIL, marcador["email"])
+    aplicar("cpf", _CPF, _redigir_cpf)
+    aplicar("cep", _CEP, marcador["cep"])
+    aplicar("cep", _CEP_COM_GATILHO, rf"\1\2{marcador['cep']}")
+    aplicar("telefone", _TELEFONE_BR, marcador["telefone"])
+    aplicar("telefone", _TELEFONE_COM_GATILHO, rf"\1\2{marcador['telefone']}")
+    aplicar("placa", _PLACA, marcador["placa"])
+    aplicar("endereco", _ENDERECO, _redigir_endereco)
+    aplicar(
+        "data_nascimento",
+        _DATA_DE_NASCIMENTO,
+        rf"\1\2{marcador['data_nascimento']}",
+    )
+    texto, redigiu_nome = _redigir_nomes(texto)
+    if redigiu_nome:
+        tipos.append("nome")
+
+    return texto, tuple(dict.fromkeys(tipos))
 
 
 # ---------------------------------------------------------------------------

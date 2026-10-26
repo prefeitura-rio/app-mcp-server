@@ -20,6 +20,7 @@ import pytest
 
 from src.utils.pii import (
     CHAVES_CREDENCIAL,
+    MARCADORES_QUERY,
     CHAVES_EXATAS_SENSIVEIS,
     TOKENS_NAO_SENSIVEIS,
     TOKENS_SENSIVEIS,
@@ -33,6 +34,7 @@ from src.utils.pii import (
     redigir_credenciais,
     redigir_estrutura,
     redigir_padroes_pii,
+    redigir_query,
     redigir_texto,
     truncar,
 )
@@ -791,3 +793,174 @@ def test_short_circuit_nao_muda_o_resultado():
     )
     assert redigir_texto("cpf 12345678901") == "cpf [REDACTED-CPF]"
     assert redigir_texto("nome: Fulano") == "nome: [REDACTED]"
+
+
+# ---------------------------------------------------------------------------
+# Redação da query de busca (CHATR-314)
+# ---------------------------------------------------------------------------
+#
+# Exemplos reais de outubro de 2026, com os dados trocados. Cada um precisa
+# perder o identificador e manter o assunto da busca.
+
+
+@pytest.mark.parametrize(
+    ("query", "esperado", "tipo"),
+    [
+        (
+            "meu cpf é 529.982.247-25 e quero a segunda via do iptu",
+            "meu cpf é [cpf] e quero a segunda via do iptu",
+            "cpf",
+        ),
+        ("cpf 52998224725 bolsa família", "cpf [cpf] bolsa família", "cpf"),
+        (
+            "buraco na Rua Barata Ribeiro, 200, Copacabana",
+            "buraco na [endereço], Copacabana",
+            "endereco",
+        ),
+        (
+            "moro na rua joão silva 45 em Campo Grande, coleta de lixo",
+            "moro na [endereço] em Campo Grande, coleta de lixo",
+            "endereco",
+        ),
+        (
+            "Av. Brasil 500 apto 302 - Deodoro poda de árvore",
+            "[endereço] - Deodoro poda de árvore",
+            "endereco",
+        ),
+        (
+            "Rua Senador Dantas nº 100 Centro, clínica da família",
+            "[endereço] Centro, clínica da família",
+            "endereco",
+        ),
+        (
+            "meu filho nasceu em 31/01/2016, qual a escola",
+            "meu filho nasceu em [data], qual a escola",
+            "data_nascimento",
+        ),
+        (
+            "data de nascimento: 05 de março de 2015 vacina",
+            "data de nascimento: [data] vacina",
+            "data_nascimento",
+        ),
+        (
+            "CEP 22290-140 coleta seletiva",
+            "CEP [cep] coleta seletiva",
+            "cep",
+        ),
+        ("cep 22290140 coleta seletiva", "cep [cep] coleta seletiva", "cep"),
+        (
+            "meu nome é Maria da Silva e quero saber do cadúnico",
+            "meu nome é [nome] e quero saber do cadúnico",
+            "nome",
+        ),
+        (
+            "me chamo joao pedro, preciso de ajuda com o iptu",
+            "me chamo [nome], preciso de ajuda com o iptu",
+            "nome",
+        ),
+        (
+            "minha filha Ana Clara do 3º ano precisa de transferência",
+            "minha filha [nome] do 3º ano precisa de transferência",
+            "nome",
+        ),
+        (
+            "Sou a Joana, gestante, onde faço pré-natal",
+            "Sou a [nome], gestante, onde faço pré-natal",
+            "nome",
+        ),
+        (
+            "fulano.tal@gmail.com não recebeu o boleto",
+            "[e-mail] não recebeu o boleto",
+            "email",
+        ),
+        ("multa da placa ABC-1234", "multa da placa [placa]", "placa"),
+        ("recurso de multa placa RIO1A23", "recurso de multa placa [placa]", "placa"),
+        (
+            "meu telefone 21 99999-8888 não recebe o sms",
+            "meu telefone [telefone] não recebe o sms",
+            "telefone",
+        ),
+    ],
+)
+def test_redigir_query_redige_identificador_e_mantem_o_assunto(query, esperado, tipo):
+    assert redigir_query(query) == (esperado, (tipo,))
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # Protocolo do 1746 e inscrição imobiliária são o assunto da busca
+        "consultar protocolo 1746 202612345",
+        "inscrição imobiliária 1234567-8 segunda via do iptu",
+        "inscrição imobiliária 01234567 certidão",
+        # CPF com dígito verificador inválido não é CPF
+        "cpf 123.456.789-00 não encontrado",
+        "11111111111",
+        # Data de prazo é assunto
+        "inscrições até 30/10 para a creche",
+        "matrícula 2027 começa em 03/11/2026",
+        # Bairro localiza a resposta
+        "clínica da família em Campo Grande",
+        "ônibus da Ilha do Governador",
+        # Dado de saúde é o assunto (LGPD: sensível, mas sem ele a busca perde o
+        # sentido)
+        "transferência de escola para aluno com TEA",
+        "meu filho tem TEA e precisa de mediador",
+        "MEU FILHO TEM AUTISMO",
+        "gravidez de risco onde fazer pré-natal",
+        "Sou a Mãe do aluno com deficiência",
+        "sou a responsável pela criança",
+        # Frase com "rua" e número que não é endereço
+        "a rua da minha casa tem 3 buracos",
+        "segunda via do IPTU 2026",
+        "ligar para 1746",
+        # Sem PII
+        "como tirar a segunda via do iptu",
+    ],
+)
+def test_redigir_query_nao_redige_o_que_e_assunto(query):
+    assert redigir_query(query) == (query, ())
+
+
+def test_redigir_query_junta_os_tipos_sem_repetir():
+    texto, tipos = redigir_query(
+        "meu nome é Ana, cpf 529.982.247-25, moro na Rua das Flores, 10, "
+        "nasceu em 01/02/1990, tel 21 99999-8888 e 21 98888-7777"
+    )
+
+    assert texto == (
+        "meu nome é [nome], cpf [cpf], moro na [endereço], "
+        "nasceu em [data], tel [telefone] e [telefone]"
+    )
+    assert tipos == ("cpf", "telefone", "endereco", "data_nascimento", "nome")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "meu nome é Maria da Silva, cpf 529.982.247-25",
+        "buraco na Rua Barata Ribeiro, 200, Copacabana",
+        "meu filho nasceu em 31/01/2016",
+        "CEP 22290-140 placa ABC-1234 fulano@gmail.com",
+        "minha filha Ana precisa de vaga",
+    ],
+)
+def test_redigir_query_e_idempotente(query):
+    uma_vez, tipos = redigir_query(query)
+    duas_vezes, tipos_de_novo = redigir_query(uma_vez)
+
+    assert tipos
+    assert duas_vezes == uma_vez
+    assert tipos_de_novo == ()
+
+
+@pytest.mark.parametrize("vazio", [None, ""])
+def test_redigir_query_vazio(vazio):
+    assert redigir_query(vazio) == (vazio, ())
+
+
+def test_redigir_query_tem_um_marcador_por_tipo():
+    """Os tipos vão para o BigQuery; um tipo sem marcador quebraria a redação."""
+    texto, tipos = redigir_query("cpf 529.982.247-25")
+    assert set(tipos) <= set(MARCADORES_QUERY)
+    assert MARCADORES_QUERY["cpf"] in texto
