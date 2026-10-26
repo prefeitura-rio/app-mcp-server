@@ -239,6 +239,20 @@ def _registrar_geracao(
     return budget_hit
 
 
+def _fontes_permitidas(chunks: List[Any]) -> List[Any]:
+    """Tira as fontes cujo domínio do grounding está na `domain_blacklist.yaml`
+    (CHATR-314). Fonte sem `web` passa: quem decide é o pós-processamento."""
+    permitidas = []
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        motivo = web and blacklist_de_dominios.domain_blacklist.fonte_bloqueada(web)
+        if motivo:
+            logger.info(f"Fonte bloqueada antes da resolução | dominio={motivo}")
+        else:
+            permitidas.append(chunk)
+    return permitidas
+
+
 async def _resolver_urls_no_prazo(chunks: List[Any], deadline_at: float) -> dict:
     """Resolve as URLs das fontes em até `URL_RESOLUTION_RESERVE_SECONDS`.
 
@@ -251,11 +265,16 @@ async def _resolver_urls_no_prazo(chunks: List[Any], deadline_at: float) -> dict
     restante = min(
         URL_RESOLUTION_RESERVE_SECONDS, max(deadline_at - time.monotonic(), 0.0)
     )
+    # Fonte de domínio bloqueado nem é resolvida (CHATR-314): sem entrada no mapa,
+    # ela não vira citação, nem mesmo como link do Google quando o salto falha.
+    total = len(chunks)
+    chunks = _fontes_permitidas(chunks)
     try:
         # O span fica dentro do `try`: o estouro passa por ele (marcado como erro)
         # antes de virar o fallback abaixo.
         with traced_stage("gemini.resolve_urls") as stage:
             stage.set_attribute("gemini.search.url_count", len(chunks))
+            stage.set_attribute("gemini.search.blocked_count", total - len(chunks))
             async with asyncio.timeout(restante):
                 return await resolve_urls(urls_to_resolve=chunks)
     except TimeoutError:
@@ -954,6 +973,15 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     resolved_map = {
         link["uri"]: {"url": link["url"], "error": link["error"]} for link in urls
     }
+
+    # O domínio do grounding pode faltar ou divergir do destino: o host do
+    # `Location` é conferido de novo (CHATR-314). Sem entrada no mapa, a fonte não
+    # vira citação.
+    for uri, resolved in list(resolved_map.items()):
+        motivo = _url_bloqueada(resolved["url"])
+        if motivo:
+            logger.info(f"Fonte bloqueada depois da resolução | dominio={motivo}")
+            del resolved_map[uri]
 
     successful_resolutions = sum(1 for link in urls if link["error"] is None)
     logger.info(f"URLs resolvidas com sucesso: {successful_resolutions}/{len(urls)}")

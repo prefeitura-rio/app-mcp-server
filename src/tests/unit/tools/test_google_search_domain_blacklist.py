@@ -288,6 +288,39 @@ def test_entrada_invalida_falha(db, entrada):
         db.DomainBlacklist([entrada])
 
 
+def _web(domain=None, title=None):
+    return types.SimpleNamespace(domain=domain, title=title, uri="https://x")
+
+
+@pytest.mark.parametrize(
+    "web",
+    [
+        _web(domain="m.facebook.com"),
+        _web(domain="WWW.FACEBOOK.COM.", title="Página qualquer"),
+        # O Gemini API não preenche `domain`; o `title` traz o domínio do site.
+        _web(title="facebook.com"),
+        _web(domain="", title="www.facebook.com"),
+    ],
+)
+def test_fonte_do_grounding_bloqueada_pelo_dominio(db, web):
+    assert db.DomainBlacklist(["facebook.com"]).fonte_bloqueada(web) == "facebook.com"
+
+
+@pytest.mark.parametrize(
+    "web",
+    [
+        _web(domain="prefeitura.rio", title="facebook.com"),
+        _web(title="Perfil no facebook.com"),
+        _web(title="Facebook"),
+        _web(),
+        types.SimpleNamespace(uri="https://x"),
+    ],
+)
+def test_fonte_do_grounding_que_passa(db, web):
+    """`domain` preenchido manda; título que não tem forma de domínio é ignorado."""
+    assert db.DomainBlacklist(["facebook.com"]).fonte_bloqueada(web) is None
+
+
 # --------------------------------------------------------------------------------
 # Leitura do YAML
 # --------------------------------------------------------------------------------

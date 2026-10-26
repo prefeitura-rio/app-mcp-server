@@ -88,6 +88,23 @@ class DomainBlacklist:
         """Motivo do bloqueio da URL (a entrada da lista que casou), ou `None`."""
         return self.dominio_bloqueado(host_da_url(url))
 
+    def fonte_bloqueada(self, web) -> str | None:
+        """Entrada que bloqueia uma fonte do grounding (`chunk.web`) pelo domínio,
+        antes de resolver o link, ou `None`.
+
+        Usa `web.domain`. O Gemini API não preenche esse campo (o SDK avisa, e em
+        26/10/2026 ele veio `None` em todas as fontes de uma busca real); nesse
+        caso vale o `title`, que lá traz o domínio do site (`globo.com` para uma
+        página do g1), mas só quando tem forma de domínio: um título comum nunca
+        é comparado. O host do `Location` é conferido de novo depois da
+        resolução, porque os dois podem faltar ou divergir do destino.
+        """
+        dominio = getattr(web, "domain", None)
+        if not dominio:
+            titulo = getattr(web, "title", None)
+            dominio = titulo if parece_dominio(titulo) else None
+        return self.dominio_bloqueado(dominio) if dominio else None
+
     def __repr__(self) -> str:
         return f"DomainBlacklist(dominios={len(self._dominios)})"
 

@@ -12,6 +12,7 @@ continuam reportados, e nenhuma mensagem sai vazia.
 import asyncio
 import importlib.util
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -336,3 +337,106 @@ def test_citacoes_e_fontes_comparam_por_dominio_e_nao_por_trecho(resolve):
     assert [f["url"] for f in fontes] == ["https://www.netflix.com/br/"]
     assert "x.com/post" not in texto
     assert "https://www.netflix.com/br/" in texto
+
+
+class FakeClient:
+    """Substitui o `InterceptedHTTPClient` do `resolve_urls`: cada link do Google
+    redireciona para o destino dado em `destinos`."""
+
+    def __init__(self, destinos):
+        self.destinos = destinos
+        self.pedidos = []
+
+    def __call__(self, **_kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def get(self, url, **_kwargs):
+        self.pedidos.append(url)
+        return httpx.Response(
+            302,
+            headers={"location": self.destinos[url]},
+            request=httpx.Request("GET", url),
+        )
+
+
+def _resolver(module, monkeypatch, response, destinos):
+    """Roda a resolução de verdade (`_resolver_urls_no_prazo` → `resolve_urls` →
+    `process_link`) sobre as fontes da resposta, com o Google falso."""
+    client = FakeClient(destinos)
+    monkeypatch.setattr(module, "InterceptedHTTPClient", client)
+    chunks = response.candidates[0].grounding_metadata.grounding_chunks
+    resolved = asyncio.run(
+        module._resolver_urls_no_prazo(chunks, deadline_at=time.monotonic() + 10)
+    )
+    return resolved, client
+
+
+def test_fonte_bloqueada_pelo_dominio_do_grounding_nem_e_resolvida(
+    resolve, monkeypatch
+):
+    response = _resposta(("Perfil", "m.facebook.com"), ("IPTU", "prefeitura.rio"))
+    destinos = {
+        _uri(0): "https://m.facebook.com/perfil",
+        _uri(1): "https://prefeitura.rio/iptu",
+    }
+
+    resolved, client = _resolver(resolve.module, monkeypatch, response, destinos)
+
+    assert client.pedidos == [_uri(1)]
+    assert resolved == {_uri(1): {"url": "https://prefeitura.rio/iptu", "error": None}}
+
+
+def test_sem_dominio_vale_o_titulo_com_forma_de_dominio(resolve, monkeypatch):
+    """O Gemini API devolve `domain=None` e o domínio do site no `title`."""
+    response = _resposta(("facebook.com", None), ("Prefeitura do Rio", None))
+    destinos = {
+        _uri(0): "https://m.facebook.com/perfil",
+        _uri(1): "https://prefeitura.rio/iptu",
+    }
+
+    _, client = _resolver(resolve.module, monkeypatch, response, destinos)
+
+    assert client.pedidos == [_uri(1)]
+
+
+def test_dominio_bloqueado_vindo_pelo_location_some_da_resposta(resolve, monkeypatch):
+    """O domínio do grounding diverge do destino: quem bloqueia é o `Location`. A
+    fonte some das citações e da lista, e o link do Google também não aparece."""
+    response = _resposta(("Notícia", "noticia.com.br"), ("IPTU", "prefeitura.rio"))
+    destinos = {
+        _uri(0): "https://www.facebook.com/photo/?fbid=1",
+        _uri(1): "https://prefeitura.rio/iptu",
+    }
+
+    resolved, client = _resolver(resolve.module, monkeypatch, response, destinos)
+    texto, fontes = _montar_resposta(resolve.module, response, resolved)
+
+    assert sorted(client.pedidos) == [_uri(0), _uri(1)]
+    assert _uri(0) not in resolved
+    assert [f["url"] for f in fontes] == ["https://prefeitura.rio/iptu"]
+    assert "facebook" not in texto
+    assert "vertexaisearch" not in texto
+
+
+def test_prazo_esgotado_nao_devolve_a_fonte_bloqueada(resolve, monkeypatch):
+    """No estouro do prazo as fontes saem com o link do Google; a bloqueada não."""
+    monkeypatch.setattr(resolve.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.05)
+
+    async def resolve_urls_travado(**_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(resolve.module, "resolve_urls", resolve_urls_travado)
+    response = _resposta(("Perfil", "facebook.com"), ("IPTU", "prefeitura.rio"))
+    chunks = response.candidates[0].grounding_metadata.grounding_chunks
+
+    resolved = asyncio.run(
+        resolve.module._resolver_urls_no_prazo(chunks, time.monotonic() + 10)
+    )
+
+    assert resolved == {_uri(1): {"url": _uri(1), "error": "prazo esgotado"}}
