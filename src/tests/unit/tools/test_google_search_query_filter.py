@@ -442,3 +442,47 @@ def test_secao_vazia_desliga_o_sem_assunto(qf, tmp_path):
     filtro = qf.load_query_filter(_yaml(tmp_path, "sem_assunto:\n"))
 
     assert filtro.sem_assunto is None
+
+
+# --------------------------------------------------------------------------------
+# Com contexto (CHATR-314): eleitoral na query e no contexto; sem assunto desliga
+# --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def filtro_composto(qf):
+    return qf.SearchFilter(
+        eleitoral=qf.BlacklistFilter(["lula"]),
+        sem_assunto=qf.SemAssuntoFilter(expressoes=["sim"]),
+    )
+
+
+def test_com_contexto_eleitoral_no_contexto_barra(qf, filtro_composto):
+    """Senão o contexto viraria um jeito de contornar o filtro."""
+    assert filtro_composto.check("Qual o número?", "eleição do Lula") == (
+        qf.FilterDecision(False, "blacklist", "lula")
+    )
+
+
+def test_com_contexto_eleitoral_na_query_continua_barrando(qf, filtro_composto):
+    assert filtro_composto.check("número do lula", "matrícula 2027") == (
+        qf.FilterDecision(False, "blacklist", "lula")
+    )
+
+
+def test_com_contexto_o_sem_assunto_nao_roda(filtro_composto):
+    assert filtro_composto.check("Sim", "matrícula na rede municipal 2027").allowed
+
+
+@pytest.mark.parametrize("contexto", [None, "", "   "])
+def test_contexto_vazio_vale_ausente(filtro_composto, contexto):
+    assert filtro_composto.check("Sim", contexto).reason == "sem_assunto"
+
+
+def test_com_contexto_a_whitelist_precisa_aceitar_os_dois(qf):
+    filtro = qf.SearchFilter(eleitoral=qf.WhitelistFilter([r"\biptu\b"]))
+
+    assert filtro.check("segunda via do iptu", "iptu 2026").allowed is True
+    assert filtro.check("segunda via do iptu", "receita de bolo").reason == (
+        "whitelist"
+    )

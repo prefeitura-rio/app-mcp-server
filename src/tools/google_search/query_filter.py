@@ -256,6 +256,13 @@ class SearchFilter:
     """O filtro que a tool chama: sem assunto e eleitoral, nessa ordem.
 
     `sem_assunto` vazio (`None`) é o comportamento do CHATR-294: só o eleitoral.
+
+    Com `contexto` (o assunto da conversa, preenchido pelo agente), as regras
+    mudam:
+
+    - o eleitoral avalia a query e o contexto, e barra se qualquer um barrar.
+      Senão o contexto viraria um jeito de levar o tema proibido à busca;
+    - o sem assunto não roda: "Sim" com o contexto "matrícula 2027" tem assunto.
     """
 
     def __init__(self, eleitoral: QueryFilter, sem_assunto: QueryFilter | None = None):
@@ -264,8 +271,14 @@ class SearchFilter:
         filtros = [eleitoral] if sem_assunto is None else [sem_assunto, eleitoral]
         self._composto = CompositeFilter(filtros)
 
-    def check(self, query: str) -> FilterDecision:
-        return self._composto.check(query)
+    def check(self, query: str, contexto: str | None = None) -> FilterDecision:
+        if not contexto or not contexto.strip():
+            return self._composto.check(query)
+        for texto in (query, contexto):
+            decisao = self.eleitoral.check(texto)
+            if not decisao.allowed:
+                return decisao
+        return ALLOWED
 
     def __repr__(self) -> str:
         return f"SearchFilter(sem_assunto={self.sem_assunto!r}, eleitoral={self.eleitoral!r})"

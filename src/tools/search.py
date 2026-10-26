@@ -43,26 +43,38 @@ _MENSAGEM_POR_MOTIVO = {filtro.REASON_SEM_ASSUNTO: QUERY_SEM_ASSUNTO_MESSAGE}
 
 
 @interceptor(source={"source": "mcp", "tool": "search"})
-async def get_google_search(query: str):
+async def get_google_search(query: str, contexto: str | None = None):
     """
     Obtém resultados de busca via Typesense (se ativo) ou Google Search como fallback.
+
+    `contexto` é opcional (CHATR-314): o assunto da conversa, numa frase. Sem ele,
+    o tema da busca é a própria query, como antes.
     """
+    contexto = (contexto or "").strip() or None
+
     # 0. Filtro de query antes de qualquer buscador (CHATR-294 e CHATR-314). Olha o
     # texto cru: a regra "sem letra" precisa ver o CPF solto antes da redação.
-    decisao = filtro.query_filter.check(query)
+    decisao = filtro.query_filter.check(query, contexto)
     _marcar_filtro_no_span(decisao)
 
-    # 0.1. Redação de dado pessoal (CHATR-314). Daqui em diante, buscadores e
-    # BigQuery só recebem o texto redigido, inclusive no caminho de bloqueio.
-    query_redigida, tipos_redigidos = redigir_query(query)
-    _marcar_redacao_no_span(tipos_redigidos)
+    # 0.1. Redação de dado pessoal (CHATR-314), na query e no contexto. Daqui em
+    # diante, buscadores e BigQuery só recebem o texto redigido, inclusive no
+    # caminho de bloqueio.
+    query_redigida, tipos_query = redigir_query(query)
+    contexto_redigido, tipos_contexto = redigir_query(contexto)
+    tipos_redigidos = tuple(dict.fromkeys(tipos_query + tipos_contexto))
+    _marcar_query_no_span(tipos_redigidos, tem_contexto=contexto is not None)
     registro_da_query = {
         "query": query_redigida,
+        "contexto": contexto_redigido,
         "pii_redigida": list(tipos_redigidos),
     }
 
     if not decisao.allowed:
         return _resposta_bloqueada(registro_da_query, decisao)
+
+    # 0.2. Tema da pesquisa: o mesmo texto vai para o Typesense e para o Gemini.
+    tema = compor_tema(query_redigida, contexto_redigido)
 
     # 1. Configurações iniciais e Logs
     is_typesense_active = (
@@ -84,7 +96,7 @@ async def get_google_search(query: str):
         )
 
         hub_request = HubSearchRequest(
-            q=query_redigida,
+            q=tema,
             type=params.get("type", "semantic"),
             threshold_semantic=params.get("threshold_semantic", 0.7),
             threshold_hybrid=params.get("threshold_hybrid", 0.7),
@@ -120,7 +132,7 @@ async def get_google_search(query: str):
         logger.info("Executing Google Search via Gemini Service")
         source = "google"
         # Modelos e parâmetros de cada um vêm de GEMINI_SEARCH_MODELS (CHATR-298).
-        response_google = await gemini_service.google_search(query=query_redigida)
+        response_google = await gemini_service.google_search(query=tema)
         response_data = response_google
         final_response = {
             "text": response_google.get("text"),
@@ -130,8 +142,9 @@ async def get_google_search(query: str):
             "success": response_google.get("success", True),
         }
 
-    # 4. Log em Background (BigQuery). `query` é a redigida: na resposta do Gemini
-    # ela já vem assim, e na do Typesense não vinha.
+    # 4. Log em Background (BigQuery). `query` e `contexto` redigidos, separados,
+    # para a análise da query continuar comparável com a de antes do contexto. Na
+    # resposta do Gemini, `query` era o tema; ele sai de `compor_tema`.
     disparar_em_background(
         save_response_in_bq_background(
             data={
@@ -165,9 +178,25 @@ def _marcar_filtro_no_span(decisao: filtro.FilterDecision) -> None:
         span.set_attribute("search.filter.matched", decisao.matched)
 
 
-def _marcar_redacao_no_span(tipos: tuple[str, ...]) -> None:
-    """Publica os tipos de dado pessoal redigidos da query, nunca o valor."""
+def compor_tema(query: str, contexto: str | None) -> str:
+    """Tema da pesquisa: a query e, se houver, o assunto da conversa entre
+    parênteses, rotulado para o modelo de busca não tomá-lo pela pergunta.
+
+    `"Documentos"` com o contexto `"matrícula na rede municipal 2027"` vira
+    `"Documentos (contexto: matrícula na rede municipal 2027)"`.
+    """
+    if not contexto:
+        return query
+    if not query.strip():
+        return contexto
+    return f"{query} (contexto: {contexto})"
+
+
+def _marcar_query_no_span(tipos: tuple[str, ...], *, tem_contexto: bool) -> None:
+    """Publica a presença de contexto e os tipos de dado pessoal redigidos, nunca
+    o valor."""
     span = trace.get_current_span()
+    span.set_attribute("search.query.has_context", tem_contexto)
     span.set_attribute("search.query.pii_redacted", bool(tipos))
     if tipos:
         span.set_attribute("search.query.pii_types", list(tipos))

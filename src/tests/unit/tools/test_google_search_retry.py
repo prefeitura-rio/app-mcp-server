@@ -1028,7 +1028,14 @@ def test_resultado_do_typesense_nao_ganha_campo_de_erro(search, monkeypatch):
 
 def _filtro_que_barra(search, monkeypatch, termo="lula"):
     filtro = search.module.filtro
-    monkeypatch.setattr(filtro, "query_filter", filtro.BlacklistFilter([termo]))
+    monkeypatch.setattr(
+        filtro,
+        "query_filter",
+        filtro.SearchFilter(
+            eleitoral=filtro.BlacklistFilter([termo]),
+            sem_assunto=filtro.query_filter.sem_assunto,
+        ),
+    )
 
 
 def test_query_barrada_nao_chega_a_nenhum_buscador(search, monkeypatch):
@@ -1308,3 +1315,123 @@ def test_tipos_redigidos_vao_para_o_span_sem_o_valor(search, monkeypatch):
     assert spans["tool.sem_pii"]["search.query.pii_redacted"] is False
     assert "search.query.pii_types" not in spans["tool.sem_pii"]
     assert "529" not in str(dict(spans["tool.com_pii"]))
+
+
+# --------------------------------------------------------------------------------
+# get_google_search: campo opcional de contexto (CHATR-314)
+# --------------------------------------------------------------------------------
+
+
+def test_com_contexto_os_buscadores_recebem_o_tema_composto(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search(
+            "Documentos", "matrícula na rede municipal 2027"
+        )
+    )
+
+    tema = "Documentos (contexto: matrícula na rede municipal 2027)"
+    assert chamadas.typesense == [tema]
+    assert chamadas.gemini == [tema]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["query"] == "Documentos"
+    assert registro["contexto"] == "matrícula na rede municipal 2027"
+
+
+@pytest.mark.parametrize("contexto", [None, "", "   "])
+def test_sem_contexto_o_tema_e_a_propria_query(search, monkeypatch, contexto):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(search.module.get_google_search("segunda via do iptu", contexto))
+
+    assert chamadas.gemini == ["segunda via do iptu"]
+    assert _registro_no_bigquery(search)["response"]["contexto"] is None
+
+
+def test_mensagem_sem_assunto_com_contexto_e_pesquisada(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search("Sim", "matrícula 2027"))
+
+    assert result["text"] == "resposta do google"
+    assert chamadas.gemini == ["Sim (contexto: matrícula 2027)"]
+    for coro in search.created_tasks:
+        coro.close()
+    search.created_tasks.clear()
+
+
+def test_termo_eleitoral_no_contexto_bloqueia(search, monkeypatch):
+    _filtro_que_barra(search, monkeypatch)
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(
+        search.module.get_google_search("Qual o número?", "candidato Lula")
+    )
+
+    assert result["text"] == search.module.QUERY_BLOCKED_MESSAGE
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["filter_reason"] == "blacklist"
+    assert registro["contexto"] == "candidato Lula"
+
+
+def test_contexto_tambem_e_redigido(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search(
+            "coleta de lixo", "morador da Rua Barata Ribeiro, 200, Copacabana"
+        )
+    )
+
+    tema = "coleta de lixo (contexto: morador da [endereço], Copacabana)"
+    assert chamadas.typesense == [tema]
+    assert chamadas.gemini == [tema]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["contexto"] == "morador da [endereço], Copacabana"
+    assert registro["pii_redigida"] == ["endereco"]
+    assert "Barata Ribeiro" not in json.dumps(registro, ensure_ascii=False)
+
+
+def test_tipos_da_query_e_do_contexto_se_somam_sem_repetir(search, monkeypatch):
+    _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search(
+            "cpf 529.982.247-25 bolsa família", "meu nome é Ana, cpf 529.982.247-25"
+        )
+    )
+
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["pii_redigida"] == ["cpf", "nome"]
+
+
+def test_presenca_de_contexto_vai_para_o_span(search, monkeypatch):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    _capturar_buscadores(search, monkeypatch)
+
+    with tracer.start_as_current_span("tool.com_contexto"):
+        asyncio.run(search.module.get_google_search("Documentos", "matrícula 2027"))
+    with tracer.start_as_current_span("tool.sem_contexto"):
+        asyncio.run(search.module.get_google_search("segunda via do iptu"))
+    for coro in search.created_tasks:
+        coro.close()
+    search.created_tasks.clear()
+
+    spans = {s.name: s.attributes for s in exporter.get_finished_spans()}
+    assert spans["tool.com_contexto"]["search.query.has_context"] is True
+    assert spans["tool.sem_contexto"]["search.query.has_context"] is False
+    assert "matrícula" not in str(dict(spans["tool.com_contexto"]))
+
+
+def test_compor_tema(search):
+    compor = search.module.compor_tema
+
+    assert compor("iptu", None) == "iptu"
+    assert compor("Documentos", "matrícula 2027") == (
+        "Documentos (contexto: matrícula 2027)"
+    )
+    assert compor("  ", "matrícula 2027") == "matrícula 2027"
