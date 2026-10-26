@@ -14,6 +14,7 @@ import importlib.util
 import json
 import sys
 import types
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -812,6 +813,135 @@ def test_classificacao_de_erros(gemini):
     assert classify(client_error(403))["retryable"] is False
     assert classify(asyncio.TimeoutError())["kind"] == "timeout"
     assert classify(ValueError("boom"))["kind"] == "unexpected_error"
+
+
+# --------------------------------------------------------------------------------
+# Prompt por modelo (CHATR-314): só a frase das consultas muda entre os modelos
+# --------------------------------------------------------------------------------
+
+# Prompt da main antes do CHATR-314, com a data e a pergunta abaixo. Tem espaço no
+# fim de uma linha: o editor não pode limpar o arquivo.
+PROMPT_PADRAO = (
+    PROJECT_ROOT / "src/tests/fixtures/google_search/prompt_de_busca_padrao.txt"
+)
+FRASE_PADRAO = "using at least 5 different queries."
+
+
+def fixar_data(monkeypatch, module, dia):
+    class _Datetime:
+        @staticmethod
+        def now():
+            return datetime(2026, 10, dia, 9, 0)
+
+    monkeypatch.setattr(module, "datetime", _Datetime)
+
+
+def test_prompt_sem_limite_de_consultas_e_o_de_sempre(gemini, monkeypatch):
+    fixar_data(monkeypatch, gemini.module, 26)
+
+    prompt = gemini.module.web_searcher_instructions(research_topic="iptu 2026")
+
+    assert prompt == PROMPT_PADRAO.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("max_search_queries", "frase"),
+    [
+        (None, FRASE_PADRAO),
+        (1, "using exactly 1 query."),
+        (3, "using at most 3 different queries."),
+    ],
+)
+def test_frase_das_consultas_segue_o_limite_do_modelo(
+    gemini, monkeypatch, max_search_queries, frase
+):
+    """O resto do prompt fica igual ao de sempre."""
+    fixar_data(monkeypatch, gemini.module, 26)
+
+    prompt = gemini.module.web_searcher_instructions(
+        research_topic="iptu 2026", max_search_queries=max_search_queries
+    )
+
+    assert prompt.count(frase) == 1
+    padrao = PROMPT_PADRAO.read_text(encoding="utf-8")
+    assert prompt == padrao.replace(FRASE_PADRAO, frase)
+
+
+def test_modelo_de_prompt_nao_leva_data_nem_pergunta(gemini):
+    modelo_de_prompt = gemini.module.modelo_de_prompt(1)
+
+    assert "using exactly 1 query." in modelo_de_prompt
+    assert modelo_de_prompt.count("{current_date}") == 1
+    assert modelo_de_prompt.count("{research_topic}") == 1
+    assert "2026-" not in modelo_de_prompt
+
+
+def test_modelos_de_prompt_da_configuracao_sao_montados_no_boot(gemini, env_stub):
+    """O `GeminiService` monta o prompt de cada modelo ao carregar o módulo; a
+    busca só reaproveita."""
+    cache = gemini.module.modelo_de_prompt.cache_info
+
+    montados = cache().misses
+    for config in env_stub.GEMINI_SEARCH_CONFIG.models:
+        gemini.module.modelo_de_prompt(config.max_search_queries)
+
+    assert montados >= 1
+    assert cache().misses == montados
+
+
+def test_data_do_prompt_e_lida_a_cada_chamada(gemini, monkeypatch):
+    """Os pods ficam dias no ar: a data não pode ficar presa à do boot."""
+    instrucoes = gemini.module.web_searcher_instructions
+
+    fixar_data(monkeypatch, gemini.module, 26)
+    hoje = instrucoes(research_topic="iptu", max_search_queries=1)
+    fixar_data(monkeypatch, gemini.module, 27)
+    amanha = instrucoes(research_topic="iptu", max_search_queries=1)
+
+    assert "**2026-10-26**" in hoje
+    assert "**2026-10-27**" in amanha
+    assert hoje.replace("2026-10-26", "2026-10-27") == amanha
+
+
+def test_pergunta_entra_no_prompt_sem_interpretar_chaves(gemini):
+    prompt = gemini.module.web_searcher_instructions(
+        research_topic="horário {sábado} {current_date}"
+    )
+
+    assert prompt.endswith("horário {sábado} {current_date}\n")
+
+
+def test_cada_modelo_do_fallback_usa_o_proprio_prompt(gemini, env_stub):
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL),
+        modelo(MODELO_FALLBACK, max_search_queries=1),
+    )
+
+    result, models = gemini.run([client_error(400), success_response()])
+
+    assert result["success"] is True
+    principal, fallback = (k["contents"][0].parts[0].text for k in models.kwargs)
+    assert FRASE_PADRAO in principal
+    assert "using exactly 1 query." not in principal
+    assert "using exactly 1 query." in fallback
+    assert FRASE_PADRAO not in fallback
+    assert principal.endswith("iptu 2026\n")
+    assert fallback.endswith("iptu 2026\n")
+
+
+def test_span_da_chamada_leva_o_limite_de_consultas(gemini, env_stub, span_exporter):
+    usar_modelos(
+        env_stub,
+        modelo(MODELO_PRINCIPAL),
+        modelo(MODELO_FALLBACK, max_search_queries=1),
+    )
+
+    gemini.run([client_error(400), success_response()])
+
+    principal, fallback = _spans(span_exporter, "gemini.generate_content")
+    assert "gemini.search.max_queries" not in principal.attributes
+    assert fallback.attributes["gemini.search.max_queries"] == 1
 
 
 # --------------------------------------------------------------------------------

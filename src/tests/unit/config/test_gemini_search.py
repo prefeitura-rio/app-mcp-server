@@ -43,6 +43,7 @@ def test_configuracao_de_producao():
         "thinking_level": None,
         "max_output_tokens": 12288,
         "temperature": 0.0,
+        "max_search_queries": None,
     }
     assert fallback.model_dump() == {
         "model": "gemini-3.5-flash-lite",
@@ -52,6 +53,7 @@ def test_configuracao_de_producao():
         "thinking_level": "MINIMAL",
         "max_output_tokens": 12288,
         "temperature": 0.0,
+        "max_search_queries": None,
     }
     # 45 + 20 + 10 de resolução de URLs.
     assert gs.DEFAULT_CONFIG.deadline_s == 75.0
@@ -104,6 +106,57 @@ def test_todos_os_campos_preenchidos():
     assert (dois.max_output_tokens, dois.temperature) == (4096, 0.2)
     assert (tres.timeout_s, tres.attempts, tres.thinking_level) == (15.5, 1, "LOW")
     assert config.deadline_s == 55.5
+
+
+@pytest.mark.parametrize("valor", [1, 3])
+def test_limite_de_consultas_aceita_inteiro_positivo(valor):
+    config, _ = parse([{"model": "gemini-3.5-flash-lite", "max_search_queries": valor}])
+
+    assert config.models[0].max_search_queries == valor
+
+
+def test_limite_de_consultas_ausente_e_sem_limite():
+    config, _ = parse([{"model": "gemini-3.5-flash-lite"}])
+
+    assert config.models[0].max_search_queries is None
+
+
+@pytest.mark.parametrize(
+    ("valor", "esperado"),
+    [
+        pytest.param(0, "precisa ser ≥ 1 (recebido: 0)", id="zero"),
+        pytest.param(-2, "precisa ser ≥ 1 (recebido: -2)", id="negativo"),
+        pytest.param(
+            '"um"', 'precisa ser um número inteiro (recebido: "um")', id="texto"
+        ),
+        pytest.param(1.5, "precisa ser um número inteiro (recebido: 1.5)", id="frac"),
+    ],
+)
+def test_limite_de_consultas_invalido(valor, esperado):
+    [erro] = erros(
+        f'[{{"model": "gemini-3.5-flash-lite", "max_search_queries": {valor}}}]'
+    )
+
+    assert erro == (
+        "GEMINI_SEARCH_MODELS[0] (gemini-3.5-flash-lite).max_search_queries: "
+        + esperado
+    )
+
+
+def test_resumo_mostra_o_limite_de_consultas_so_quando_existe():
+    config, _ = parse(
+        [
+            {"model": "gemini-2.5-flash-lite", "timeout_s": 35},
+            {"model": "gemini-3.5-flash-lite", "max_search_queries": 1},
+        ]
+    )
+
+    dois, tres = config.models
+    assert "queries" not in dois.resumo()
+    assert tres.resumo() == (
+        "gemini-3.5-flash-lite(45s, 2x, level=MINIMAL, max_output=12288, temp=0, "
+        "queries=1)"
+    )
 
 
 def test_configuracao_e_imutavel():

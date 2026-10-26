@@ -84,6 +84,10 @@ class SearchModelConfig(BaseModel):
     thinking_level: Optional[ThinkingLevel] = None
     max_output_tokens: int = Field(default=12288, ge=1)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    # Consultas de grounding pedidas no prompt (CHATR-314). Ausente, o prompt pede
+    # "ao menos 5"; nos 3.x o grounding é cobrado por consulta, e com 1 a qualidade
+    # ficou dentro do ruído da produção na bateria de 26/10/2026.
+    max_search_queries: Optional[int] = Field(default=None, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -129,9 +133,15 @@ class SearchModelConfig(BaseModel):
             if self.thinking_budget is not None
             else f"level={self.thinking_level}"
         )
+        consultas = (
+            f", queries={self.max_search_queries}"
+            if self.max_search_queries is not None
+            else ""
+        )
         return (
             f"{self.model}({self.timeout_s:g}s, {self.attempts}x, {raciocinio}, "
-            f"max_output={self.max_output_tokens}, temp={self.temperature:g})"
+            f"max_output={self.max_output_tokens}, temp={self.temperature:g}"
+            f"{consultas})"
         )
 
 
