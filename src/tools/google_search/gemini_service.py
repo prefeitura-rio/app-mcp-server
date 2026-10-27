@@ -277,17 +277,68 @@ async def _resolver_urls_no_prazo(chunks: List[Any], deadline_at: float) -> dict
             stage.set_attribute("gemini.search.url_count", len(chunks))
             stage.set_attribute("gemini.search.blocked_count", total - len(chunks))
             async with asyncio.timeout(restante):
-                return await resolve_urls(urls_to_resolve=chunks)
+                resolved_map = await resolve_urls(urls_to_resolve=chunks)
     except TimeoutError:
         logger.warning(
             f"Resolução de URLs estourou o prazo ({restante:.1f}s). "
             f"Seguindo com as URIs do grounding."
         )
         _marcar_span(**{"gemini.search.urls_degraded": True})
-        return {
+        resolved_map = {
             chunk.web.uri: {"url": chunk.web.uri, "error": "prazo esgotado"}
             for chunk in chunks
         }
+    # Nos dois caminhos: a blacklist só é conferida de novo aqui.
+    return _fontes_resolvidas(chunks, resolved_map)
+
+
+def _fontes_resolvidas(chunks: List[Any], resolved_map: dict) -> dict:
+    """Ponto único da blacklist depois da resolução (CHATR-314). Fonte fora do
+    mapa devolvido não vira citação: `get_citations` não confere de novo.
+
+    O domínio do grounding pode faltar ou divergir do destino, então o host do
+    `Location` é conferido. Quando o salto no Google falha (429, timeout, 5xx,
+    prazo esgotado), a fonte ficou com o link do Google, cujo destino não dá para
+    conferir: ela só segue se o grounding declarou um domínio (já aprovado antes
+    da resolução); sem domínio conhecido, é descartada enquanto a blacklist tiver
+    alguma entrada. Era por esse caminho que o link do Google levava a um site
+    bloqueado. A fonte não resolvida que segue ainda pode divergir do destino:
+    `gemini.search.unresolved_count` mede esse resíduo.
+    """
+    web_por_uri: Dict[str, Any] = {}
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        uri = getattr(web, "uri", None)
+        if uri:
+            web_por_uri.setdefault(uri, web)
+
+    blacklist = blacklist_de_dominios.domain_blacklist
+    permitidas: dict = {}
+    nao_resolvidas = descartadas = 0
+    for uri, resolved in resolved_map.items():
+        motivo = _url_bloqueada(resolved["url"])
+        if motivo:
+            logger.info(f"Fonte bloqueada depois da resolução | dominio={motivo}")
+            continue
+        if resolved.get("error") is not None:
+            dominio = blacklist_de_dominios.dominio_da_fonte(web_por_uri.get(uri))
+            if len(blacklist) and not dominio:
+                descartadas += 1
+                logger.info(
+                    "Fonte não resolvida e sem domínio conhecido descartada | "
+                    f"erro={resolved['error']}"
+                )
+                continue
+            nao_resolvidas += 1
+        permitidas[uri] = resolved
+
+    _marcar_span(
+        **{
+            "gemini.search.unresolved_count": nao_resolvidas,
+            "gemini.search.unresolved_discarded_count": descartadas,
+        }
+    )
+    return permitidas
 
 
 class GeminiService:
@@ -944,7 +995,9 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     Ensures each original URL gets a consistent shortened form while maintaining uniqueness.
 
     Desde o CHATR-314 cada link custa um salto no Google, sem seguir o
-    redirecionamento: o destino sai do `Location` (ver `process_link`).
+    redirecionamento: o destino sai do `Location` (ver `process_link`). A
+    blacklist não é conferida aqui: é em `_fontes_resolvidas`, que também cobre o
+    fallback do prazo esgotado.
     """
     unique_urls = list(set([uri.web.uri for uri in urls_to_resolve]))
     urls = [{"uri": uri} for uri in unique_urls]
@@ -987,15 +1040,6 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     resolved_map = {
         link["uri"]: {"url": link["url"], "error": link["error"]} for link in urls
     }
-
-    # O domínio do grounding pode faltar ou divergir do destino: o host do
-    # `Location` é conferido de novo (CHATR-314). Sem entrada no mapa, a fonte não
-    # vira citação.
-    for uri, resolved in list(resolved_map.items()):
-        motivo = _url_bloqueada(resolved["url"])
-        if motivo:
-            logger.info(f"Fonte bloqueada depois da resolução | dominio={motivo}")
-            del resolved_map[uri]
 
     successful_resolutions = sum(1 for link in urls if link["error"] is None)
     logger.info(f"URLs resolvidas com sucesso: {successful_resolutions}/{len(urls)}")
@@ -1069,10 +1113,6 @@ def get_citations(response, resolved_urls_map):
 
                     # Skip if resolved_url is None or doesn't have the expected structure
                     if not resolved_url or "url" not in resolved_url:
-                        continue
-
-                    # Fonte de domínio bloqueado não vira citação (CHATR-314).
-                    if _url_bloqueada(resolved_url["url"]):
                         continue
 
                     citation["segments"].append(
@@ -1192,10 +1232,8 @@ def get_sources_list(citations_data, modified_text):
 
     for source in all_segments:
         if source["uri"] not in seen_uris and source["url"] in modified_text:
-            # Fonte de domínio bloqueado não entra na lista (CHATR-314).
-            if not _url_bloqueada(source["url"]):
-                seen_uris.add(source["uri"])
-                sources_gathered.append(source)
+            seen_uris.add(source["uri"])
+            sources_gathered.append(source)
 
     for index, source in enumerate(sources_gathered):
         source["index"] = index + 1

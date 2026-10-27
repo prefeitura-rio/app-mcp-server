@@ -321,6 +321,27 @@ def test_fonte_do_grounding_que_passa(db, web):
     assert db.DomainBlacklist(["facebook.com"]).fonte_bloqueada(web) is None
 
 
+@pytest.mark.parametrize(
+    ("web", "dominio"),
+    [
+        (_web(domain="M.Facebook.com.", title="Página"), "m.facebook.com"),
+        (_web(domain="prefeitura.rio", title="facebook.com"), "prefeitura.rio"),
+        (_web(title="WWW.globo.com"), "globo.com"),
+        (_web(domain="", title="niteroi.rj.gov.br"), "niteroi.rj.gov.br"),
+        # Título de página não diz de onde a fonte vem.
+        (_web(title="Prefeitura de Niterói - Matrícula 2027"), None),
+        (_web(title="Perfil no facebook.com"), None),
+        (_web(), None),
+        (types.SimpleNamespace(uri="https://x"), None),
+        (None, None),
+    ],
+)
+def test_dominio_da_fonte(db, web, dominio):
+    """O que o grounding declara, normalizado; `None` quando é desconhecido. É o
+    que decide se a fonte não resolvida pode seguir com o link do Google."""
+    assert db.dominio_da_fonte(web) == dominio
+
+
 # --------------------------------------------------------------------------------
 # Regra fixa: página de resultados do Google
 # --------------------------------------------------------------------------------

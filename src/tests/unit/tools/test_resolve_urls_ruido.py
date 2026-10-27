@@ -289,7 +289,7 @@ def test_pior_caso_cabe_na_reserva_da_resolucao(resolve):
 # Blacklist de domínios nas citações e na lista de fontes (CHATR-314)
 # --------------------------------------------------------------------------------
 
-TEXTO = "Primeiro fato. Segundo fato."
+TEXTO = "Primeiro fato. Segundo fato. Terceiro fato."
 
 
 def _uri(n: int) -> str:
@@ -329,25 +329,10 @@ def _montar_resposta(module, response, resolved_map):
     return texto, module.get_sources_list(citations, texto)
 
 
-def test_citacoes_e_fontes_comparam_por_dominio_e_nao_por_trecho(resolve):
-    """`x.com` bloqueia o `mobile.x.com`, mas não o `netflix.com`, que a
-    `LINK_BLACKLIST` barrava por conter o trecho."""
-    response = _resposta(("x.com", None), ("netflix.com", None))
-    resolved = {
-        _uri(0): {"url": "https://mobile.x.com/post/1", "error": None},
-        _uri(1): {"url": "https://www.netflix.com/br/", "error": None},
-    }
-
-    texto, fontes = _montar_resposta(resolve.module, response, resolved)
-
-    assert [f["url"] for f in fontes] == ["https://www.netflix.com/br/"]
-    assert "x.com/post" not in texto
-    assert "https://www.netflix.com/br/" in texto
-
-
 class FakeClient:
-    """Substitui o `InterceptedHTTPClient` do `resolve_urls`: cada link do Google
-    redireciona para o destino dado em `destinos`."""
+    """Substitui o `InterceptedHTTPClient` do `resolve_urls`. Cada link do Google
+    tem um desfecho em `destinos`: a URL de destino (redirect 302) ou um status
+    HTTP sem `Location` (o salto falhou)."""
 
     def __init__(self, destinos):
         self.destinos = destinos
@@ -364,23 +349,73 @@ class FakeClient:
 
     async def get(self, url, **_kwargs):
         self.pedidos.append(url)
+        desfecho = self.destinos[url]
+        if isinstance(desfecho, int):
+            return httpx.Response(desfecho, request=httpx.Request("GET", url))
         return httpx.Response(
-            302,
-            headers={"location": self.destinos[url]},
-            request=httpx.Request("GET", url),
+            302, headers={"location": desfecho}, request=httpx.Request("GET", url)
         )
 
 
 def _resolver(module, monkeypatch, response, destinos):
     """Roda a resolução de verdade (`_resolver_urls_no_prazo` → `resolve_urls` →
-    `process_link`) sobre as fontes da resposta, com o Google falso."""
+    `process_link`) sobre as fontes da resposta, com o Google falso. Devolve
+    também os atributos gravados no span."""
     client = FakeClient(destinos)
     monkeypatch.setattr(module, "InterceptedHTTPClient", client)
+    span = _gravar_span(module, monkeypatch)
     chunks = response.candidates[0].grounding_metadata.grounding_chunks
     resolved = asyncio.run(
         module._resolver_urls_no_prazo(chunks, deadline_at=time.monotonic() + 10)
     )
+    client.span = span
     return resolved, client
+
+
+def _gravar_span(module, monkeypatch):
+    """Troca `_marcar_span` por um dicionário com os atributos gravados."""
+    atributos = {}
+    monkeypatch.setattr(
+        module, "_marcar_span", lambda **kwargs: atributos.update(kwargs)
+    )
+    return atributos
+
+
+def test_blacklist_compara_por_dominio_e_nao_por_trecho(resolve, monkeypatch):
+    """`x.com` bloqueia o `mobile.x.com`, mas não o `netflix.com`, que a
+    `LINK_BLACKLIST` barrava por conter o trecho. A comparação acontece uma vez,
+    depois da resolução; `get_citations` e `get_sources_list` só usam o mapa."""
+    response = _resposta(("Post", None), ("Filmes", None))
+    destinos = {
+        _uri(0): "https://mobile.x.com/post/1",
+        _uri(1): "https://www.netflix.com/br/",
+    }
+
+    resolved, _ = _resolver(resolve.module, monkeypatch, response, destinos)
+    texto, fontes = _montar_resposta(resolve.module, response, resolved)
+
+    assert list(resolved) == [_uri(1)]
+    assert [f["url"] for f in fontes] == ["https://www.netflix.com/br/"]
+    assert "x.com/post" not in texto
+    assert "https://www.netflix.com/br/" in texto
+
+
+@pytest.mark.parametrize(
+    "destino",
+    [
+        "https://facebook.com/perfil",
+        "https://www.facebook.com/perfil",
+        "https://m.facebook.com/perfil",
+        "https://a.b.facebook.com/perfil",
+    ],
+)
+def test_dominio_e_subdominio_do_location_sao_bloqueados(resolve, monkeypatch, destino):
+    response = _resposta(("Perfil", None), ("IPTU", "prefeitura.rio"))
+    destinos = {_uri(0): destino, _uri(1): "https://prefeitura.rio/iptu"}
+
+    resolved, _ = _resolver(resolve.module, monkeypatch, response, destinos)
+
+    assert list(resolved) == [_uri(1)]
 
 
 def test_fonte_bloqueada_pelo_dominio_do_grounding_nem_e_resolvida(
@@ -431,14 +466,19 @@ def test_dominio_bloqueado_vindo_pelo_location_some_da_resposta(resolve, monkeyp
 
 
 def test_prazo_esgotado_nao_devolve_a_fonte_bloqueada(resolve, monkeypatch):
-    """No estouro do prazo as fontes saem com o link do Google; a bloqueada não."""
+    """No estouro do prazo a fonte de domínio conhecido sai com o link do Google;
+    a bloqueada não, e a sem domínio conhecido também não (o destino do link do
+    Google não foi conferido)."""
     monkeypatch.setattr(resolve.module, "URL_RESOLUTION_RESERVE_SECONDS", 0.05)
 
     async def resolve_urls_travado(**_kwargs):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(resolve.module, "resolve_urls", resolve_urls_travado)
-    response = _resposta(("Perfil", "facebook.com"), ("IPTU", "prefeitura.rio"))
+    span = _gravar_span(resolve.module, monkeypatch)
+    response = _resposta(
+        ("Perfil", "facebook.com"), ("IPTU", "prefeitura.rio"), ("Matrícula", None)
+    )
     chunks = response.candidates[0].grounding_metadata.grounding_chunks
 
     resolved = asyncio.run(
@@ -446,6 +486,81 @@ def test_prazo_esgotado_nao_devolve_a_fonte_bloqueada(resolve, monkeypatch):
     )
 
     assert resolved == {_uri(1): {"url": _uri(1), "error": "prazo esgotado"}}
+    assert span["gemini.search.urls_degraded"] is True
+    assert span["gemini.search.unresolved_count"] == 1
+    assert span["gemini.search.unresolved_discarded_count"] == 1
+
+
+# --------------------------------------------------------------------------------
+# Fonte que não resolveu: o link do Google só segue com domínio conhecido
+# --------------------------------------------------------------------------------
+
+TITULO_DE_PAGINA = "Prefeitura de Niterói - Matrícula 2027"
+
+
+def test_fonte_sem_dominio_conhecido_que_nao_resolve_e_descartada(resolve, monkeypatch):
+    """O Gemini API devolve `domain=None` e um título de página no `title`; o 429
+    no salto deixaria a fonte com o link do Google, que pode levar a um site
+    bloqueado. Era por aí que os links do Facebook chegavam ao cidadão."""
+    response = _resposta((TITULO_DE_PAGINA, None), ("IPTU", "prefeitura.rio"))
+    destinos = {_uri(0): 429, _uri(1): "https://prefeitura.rio/iptu"}
+
+    resolved, client = _resolver(resolve.module, monkeypatch, response, destinos)
+    texto, fontes = _montar_resposta(resolve.module, response, resolved)
+
+    assert resolved == {_uri(1): {"url": "https://prefeitura.rio/iptu", "error": None}}
+    assert [f["url"] for f in fontes] == ["https://prefeitura.rio/iptu"]
+    assert "vertexaisearch" not in texto
+    assert client.span["gemini.search.unresolved_count"] == 0
+    assert client.span["gemini.search.unresolved_discarded_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "fonte",
+    [
+        (TITULO_DE_PAGINA, "carioca.rio"),
+        # Sem `domain`, o título com forma de domínio conta como conhecido.
+        ("carioca.rio", None),
+    ],
+)
+def test_fonte_com_dominio_conhecido_que_nao_resolve_segue_com_o_link_do_google(
+    resolve, monkeypatch, fonte
+):
+    """O domínio já foi aprovado antes da resolução; o resíduo (divergência entre
+    o domínio do grounding e o destino) fica mensurável no span."""
+    response = _resposta(fonte, ("IPTU", "prefeitura.rio"))
+    destinos = {_uri(0): 429, _uri(1): "https://prefeitura.rio/iptu"}
+
+    resolved, client = _resolver(resolve.module, monkeypatch, response, destinos)
+    texto, fontes = _montar_resposta(resolve.module, response, resolved)
+
+    assert resolved[_uri(0)]["url"] == _uri(0)
+    assert resolved[_uri(0)]["error"] is not None
+    assert [f["url"] for f in fontes] == [_uri(0), "https://prefeitura.rio/iptu"]
+    assert client.span["gemini.search.unresolved_count"] == 1
+    assert client.span["gemini.search.unresolved_discarded_count"] == 0
+
+
+def test_blacklist_vazia_nao_descarta_a_fonte_que_nao_resolve(resolve, monkeypatch):
+    """Sem entrada na blacklist não há o que o link do Google possa vazar."""
+    monkeypatch.setattr(
+        resolve.module.blacklist_de_dominios,
+        "domain_blacklist",
+        resolve.module.blacklist_de_dominios.DomainBlacklist([]),
+    )
+    response = _resposta((TITULO_DE_PAGINA, None))
+    destinos = {_uri(0): 429}
+
+    resolved, client = _resolver(resolve.module, monkeypatch, response, destinos)
+
+    assert resolved == {
+        _uri(0): {
+            "url": _uri(0),
+            "error": "Erro ao resolver URL: HTTP 429: Too Many Requests",
+        }
+    }
+    assert client.span["gemini.search.unresolved_count"] == 1
+    assert client.span["gemini.search.unresolved_discarded_count"] == 0
 
 
 def test_pagina_de_busca_do_google_vinda_pelo_location_some(resolve, monkeypatch):
@@ -461,17 +576,3 @@ def test_pagina_de_busca_do_google_vinda_pelo_location_some(resolve, monkeypatch
     assert [f["url"] for f in fontes] == ["https://prefeitura.rio/iptu"]
     assert "google.com/search" not in texto
     assert "vertexaisearch" not in texto
-
-
-def test_pagina_de_busca_do_google_some_das_citacoes(resolve):
-    """Também quando já chega resolvida ao pós-processamento."""
-    response = _resposta(("google.com", None), ("IPTU", "prefeitura.rio"))
-    resolved = {
-        _uri(0): {"url": "https://google.com/search?q=x", "error": None},
-        _uri(1): {"url": "https://prefeitura.rio/iptu", "error": None},
-    }
-
-    texto, fontes = _montar_resposta(resolve.module, response, resolved)
-
-    assert [f["url"] for f in fontes] == ["https://prefeitura.rio/iptu"]
-    assert "google.com/search" not in texto

@@ -74,6 +74,23 @@ def eh_pagina_de_busca_do_google(url: str | None) -> bool:
     return eh_google and parsed.path.rstrip("/") == "/search"
 
 
+def dominio_da_fonte(web) -> str | None:
+    """Domínio que o grounding declara para a fonte (`chunk.web`), ou `None`
+    quando ele é desconhecido.
+
+    Usa `web.domain`. O Gemini API não preenche esse campo (o SDK avisa, e em
+    26/10/2026 ele veio `None` em todas as fontes de uma busca real); nesse caso
+    vale o `title`, que lá costuma trazer o domínio do site (`globo.com` para
+    uma página do g1), mas só quando tem forma de domínio: um título comum
+    (`Prefeitura de Niterói - Matrícula 2027`) não diz de onde a fonte vem.
+    """
+    dominio = getattr(web, "domain", None)
+    if dominio:
+        return normalizar_dominio(dominio)
+    titulo = getattr(web, "title", None)
+    return normalizar_dominio(titulo) if parece_dominio(titulo) else None
+
+
 class DomainBlacklist:
     """Conjunto de domínios bloqueados, comparados por domínio ou subdomínio.
 
@@ -117,17 +134,11 @@ class DomainBlacklist:
         """Entrada que bloqueia uma fonte do grounding (`chunk.web`) pelo domínio,
         antes de resolver o link, ou `None`.
 
-        Usa `web.domain`. O Gemini API não preenche esse campo (o SDK avisa, e em
-        26/10/2026 ele veio `None` em todas as fontes de uma busca real); nesse
-        caso vale o `title`, que lá traz o domínio do site (`globo.com` para uma
-        página do g1), mas só quando tem forma de domínio: um título comum nunca
-        é comparado. O host do `Location` é conferido de novo depois da
-        resolução, porque os dois podem faltar ou divergir do destino.
+        Compara o `dominio_da_fonte`; fonte sem domínio conhecido passa por aqui.
+        O host do `Location` é conferido de novo depois da resolução, porque o
+        domínio do grounding pode faltar ou divergir do destino.
         """
-        dominio = getattr(web, "domain", None)
-        if not dominio:
-            titulo = getattr(web, "title", None)
-            dominio = titulo if parece_dominio(titulo) else None
+        dominio = dominio_da_fonte(web)
         return self.dominio_bloqueado(dominio) if dominio else None
 
     def __repr__(self) -> str:
