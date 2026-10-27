@@ -11,7 +11,9 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from typing import Optional, List, Union
+from typing import Annotated, Optional, List, Union
+
+from pydantic import Field
 
 from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
@@ -326,9 +328,45 @@ def create_app() -> FastMCP:
         return format_greeting()
 
     @conditional_mcp_tool("google_search")
-    async def google_search(query: str) -> dict:
-        """Obtém os resultados da busca no Google"""
-        response = await get_google_search(query)
+    async def google_search(
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    "Pergunta independente a pesquisar, com o assunto da conversa. "
+                    "Sem cumprimento, narrativa nem dado pessoal; em português, "
+                    "com até ~15 palavras."
+                )
+            ),
+        ],
+        contexto: Annotated[
+            Optional[str],
+            Field(
+                description=(
+                    "Opcional. O assunto da conversa em uma frase, sem dado "
+                    "pessoal (ex.: 'matrícula na rede municipal 2027'). Use "
+                    "quando a query sozinha depender da conversa."
+                )
+            ),
+        ] = None,
+    ) -> dict:
+        """Obtém os resultados da busca no Google.
+
+        A `query` é uma pergunta independente, que faz sentido sem a conversa:
+        - inclua o assunto da conversa. Depois de falar de matrícula,
+          "Documentos" vira "documentos para matrícula na rede municipal do Rio
+          2027";
+        - sem cumprimento, sem narrativa e sem dado pessoal (nome, CPF,
+          endereço, telefone, data de nascimento);
+        - em português, curta (até ~15 palavras).
+
+        `contexto` (opcional) é o assunto da conversa em uma frase. A busca usa
+        a `query` junto dele; sem `contexto`, usa só a `query`.
+
+        Mensagem sem assunto ("Sim", "Ok", "2027") não é pesquisada: a resposta
+        pede para refazer a busca com o assunto da conversa.
+        """
+        response = await get_google_search(query, contexto)
         return response
 
     @conditional_mcp_tool("web_search_surkai")

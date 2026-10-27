@@ -1,8 +1,9 @@
-"""Testes do filtro de query da tool `google_search` (CHATR-294).
+"""Testes do filtro de query da tool `google_search` (CHATR-294 e CHATR-314).
 
-Cobrem a normalização, cada estratégia (blacklist, whitelist, composto, nenhuma),
-a leitura do YAML e o arquivo versionado de verdade: as queries do incidente de
-09/10/2026 precisam ser barradas e serviços municipais comuns não.
+Cobrem a normalização, cada estratégia (blacklist, whitelist, composto, nenhuma,
+sem assunto), a leitura do YAML e o arquivo versionado de verdade: as queries do
+incidente de 09/10/2026 precisam ser barradas, as mensagens sem assunto também, e
+serviços municipais comuns não.
 """
 
 import importlib.util
@@ -178,7 +179,9 @@ def test_com_as_duas_a_blacklist_veta_o_que_a_whitelist_deixou_passar(qf):
 def test_yaml_vazio_opera_normalmente(qf, tmp_path, conteudo):
     filtro = qf.load_query_filter(_yaml(tmp_path, conteudo))
 
-    assert isinstance(filtro, qf.AllowAllFilter)
+    assert isinstance(filtro.eleitoral, qf.AllowAllFilter)
+    assert filtro.sem_assunto is None
+    assert filtro.check("Sim").allowed is True
 
 
 def test_yaml_junta_as_secoes_da_blacklist(qf, tmp_path):
@@ -201,6 +204,12 @@ def test_yaml_junta_as_secoes_da_blacklist(qf, tmp_path):
         "blacklist: [lula]\n",
         "blacklist:\n  termos: lula\n",
         "blacklist:\n  termos: [1, 2]\n",
+        "sem_assunto: [sim]\n",
+        "sem_assunto:\n  expressoes: sim\n",
+        "sem_assunto:\n  placeholder: '(['\n",
+        "sem_assunto:\n  placeholder: [x]\n",
+        "sem_assunto:\n  max_palavras: 0\n",
+        "sem_assunto:\n  max_palavras: true\n",
     ],
 )
 def test_yaml_malformado_falha_no_boot(qf, tmp_path, conteudo):
@@ -220,7 +229,8 @@ def filtro_real(qf):
 
 def test_arquivo_versionado_carrega_e_filtra(qf, filtro_real):
     """Uma whitelist entrando no arquivo muda o tipo: este teste avisa."""
-    assert isinstance(filtro_real, qf.BlacklistFilter)
+    assert isinstance(filtro_real.eleitoral, qf.BlacklistFilter)
+    assert isinstance(filtro_real.sem_assunto, qf.SemAssuntoFilter)
 
 
 @pytest.mark.parametrize(
@@ -274,3 +284,312 @@ def test_pronome_sem_contexto_passa(filtro_real):
     """Limitação conhecida: o turno 2 do incidente não tem termo nenhum. Esse caso
     fica com o agente, que tem o contexto da conversa."""
     assert filtro_real.check("Qual o número dele?").allowed is True
+
+
+# --------------------------------------------------------------------------------
+# Sem assunto (CHATR-314): exemplos reais da semana de 19 a 26/10/2026
+# --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "regra"),
+    [
+        # A. Placeholder ou vazio
+        ("[ATTACHMENTS]", "placeholder"),
+        ("", "placeholder"),
+        ("   ", "placeholder"),
+        # B. Sem nenhuma letra
+        ("1", "sem_letra"),
+        ("2027", "sem_letra"),
+        ("?", "sem_letra"),
+        ("2025?", "sem_letra"),
+        ("20%", "sem_letra"),
+        ("529.982.247-25", "sem_letra"),
+        ("52998224725", "sem_letra"),
+        ("31012016", "sem_letra"),
+        ("😀🙏", "sem_letra"),
+        # C. Cumprimento ou confirmação, com variação de caixa, acento e pontuação
+        ("Sim", "expressao"),
+        ("sim.", "expressao"),
+        ("SIM!", "expressao"),
+        ("Ok obrigado", "expressao"),
+        ("Boa tarde", "expressao"),
+        ("Me ajuda", "expressao"),
+        ("Entendi", "expressao"),
+        ("Olá!!", "expressao"),
+        # D. Só palavras do vocabulário sem assunto, até 8
+        ("Sim quero saber", "vocabulario"),
+        ("Saber mais", "vocabulario"),
+        ("Por favor", "vocabulario"),
+        ("Tá bom obrigada", "vocabulario"),
+        ("Não é isso", "vocabulario"),
+        ("Eu queria uma informação", "vocabulario"),
+    ],
+)
+def test_arquivo_versionado_barra_mensagem_sem_assunto(qf, filtro_real, query, regra):
+    assert filtro_real.check(query) == qf.FilterDecision(False, "sem_assunto", regra)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # B: exceção explícita
+        "1746",
+        # Curtas, mas com assunto
+        "Bolsa família",
+        "Creche",
+        "Contracheque",
+        "IPTU",
+        "Carioca digital",
+        # Fragmentos que dependem da conversa: têm assunto, não se barram
+        "Documentos",
+        "Prazos",
+        "Para 2027",
+        "Quero remarcar",
+        "Sim, quero saber da matrícula 2027",
+        # Placeholder junto de texto com assunto
+        "[ATTACHMENTS] segunda via do IPTU",
+    ],
+)
+def test_arquivo_versionado_deixa_passar_mensagem_com_assunto(filtro_real, query):
+    assert filtro_real.check(query).allowed is True
+
+
+def test_vocabulario_acima_do_teto_de_palavras_passa(qf, filtro_real):
+    """A regra D vale até 8 palavras; com 9 ou mais, a mensagem passa."""
+    nove = "sim eu quero saber mais por favor obrigada tá"
+    assert len(qf.normalizar(nove).split()) == 9
+    assert filtro_real.check(nove).allowed is True
+    assert filtro_real.check(nove.rsplit(" ", 1)[0]).reason == "sem_assunto"
+
+
+def test_sem_assunto_isolado(qf):
+    filtro = qf.SemAssuntoFilter(
+        placeholder=r"\[[^\[\]]{1,40}\]",
+        numeros_permitidos=["1746"],
+        expressoes=["Sim"],
+        vocabulario=["quero", "saber"],
+        max_palavras=2,
+    )
+
+    assert filtro.check("[IMAGE] [AUDIO]").matched == "placeholder"
+    assert filtro.check("1746").allowed is True
+    assert filtro.check("1746 2027").allowed is True
+    assert filtro.check("2027").matched == "sem_letra"
+    assert filtro.check("SÍM").matched == "expressao"
+    assert filtro.check("quero saber").matched == "vocabulario"
+    assert filtro.check("quero saber saber").allowed is True
+    assert filtro.check("quero o iptu").allowed is True
+
+
+def test_sem_placeholder_configurado_so_o_vazio_cai_na_regra_a(qf):
+    filtro = qf.SemAssuntoFilter()
+
+    assert filtro.check("  ").matched == "placeholder"
+    # Sem a expressão, o token vira texto: "attachments" tem letra e passa.
+    assert filtro.check("[ATTACHMENTS]").allowed is True
+
+
+# Regra E (CHATR-314): a query redigida que virou só marcador e rótulo
+
+
+def test_regra_e_so_marcador_e_rotulo_e_sem_assunto(qf):
+    filtro = qf.SemAssuntoFilter(
+        vocabulario=["meu", "é"],
+        marcadores=["[cpf]", "[nome]"],
+        rotulos_de_dado_pessoal=["cpf", "nome"],
+        max_palavras=3,
+    )
+
+    assert filtro.check("CPF [cpf]").matched == "dado_pessoal"
+    assert filtro.check("meu nome é [nome]").matched == "dado_pessoal"
+    # Só o marcador: regra A, como o placeholder do canal.
+    assert filtro.check("[cpf]").matched == "placeholder"
+    # Com assunto, passa.
+    assert filtro.check("CPF [cpf] segunda via").allowed is True
+    # Sem marcador, o rótulo não barra: "cpf" sozinho tem assunto.
+    assert filtro.check("cpf").allowed is True
+    assert filtro.check("meu nome é").allowed is True
+    # Acima do teto de palavras, passa como a regra D.
+    assert filtro.check("meu nome é cpf [nome]").allowed is True
+
+
+def test_regra_e_desligada_sem_marcadores_ou_sem_rotulos(qf):
+    sem_marcadores = qf.SemAssuntoFilter(rotulos_de_dado_pessoal=["cpf"])
+    sem_rotulos = qf.SemAssuntoFilter(marcadores=["[cpf]"])
+
+    assert sem_marcadores.check("CPF [cpf]").allowed is True
+    assert sem_rotulos.check("CPF [cpf]").allowed is True
+
+
+def test_arquivo_versionado_usa_os_marcadores_do_redator(qf, filtro_real):
+    """Os marcadores vêm de `MARCADORES_QUERY`: um marcador novo no `pii.py`
+    entra aqui sem mexer no YAML."""
+    from src.utils.pii import MARCADORES_QUERY, redigir_query
+
+    assert filtro_real.sem_assunto._marcadores == tuple(MARCADORES_QUERY.values())
+    for query in ("CPF 529.982.247-25", "meu nome é João", "moro na Rua X 10"):
+        assert filtro_real.check(query).allowed is True
+        redigida, _ = redigir_query(query)
+        assert filtro_real.check(redigida) == qf.FilterDecision(
+            False, "sem_assunto", "dado_pessoal"
+        ), redigida
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "CPF [cpf] segunda via do iptu",
+        "multa da placa [placa]",
+        "cpf",
+        "meu nome é",
+        "nasci em 1990",
+    ],
+)
+def test_arquivo_versionado_rotulo_com_assunto_ou_sem_marcador_passa(
+    filtro_real, query
+):
+    assert filtro_real.check(query).allowed is True
+
+
+# --------------------------------------------------------------------------------
+# Composição: sem assunto antes do eleitoral
+# --------------------------------------------------------------------------------
+
+
+def test_composicao_eleitoral_continua_barrado_com_o_motivo_dele(qf):
+    filtro = qf.SearchFilter(
+        eleitoral=qf.BlacklistFilter(["lula"]),
+        sem_assunto=qf.SemAssuntoFilter(expressoes=["sim"]),
+    )
+
+    assert filtro.check("vou votar no lula") == qf.FilterDecision(
+        False, "blacklist", "lula"
+    )
+    assert filtro.check("Sim") == qf.FilterDecision(False, "sem_assunto", "expressao")
+    assert filtro.check("segunda via do iptu").allowed is True
+
+
+def test_composicao_sem_a_secao_nada_muda(qf, tmp_path):
+    filtro = qf.load_query_filter(_yaml(tmp_path, "blacklist:\n  termos: [eleição]\n"))
+
+    assert filtro.sem_assunto is None
+    assert filtro.check("Sim").allowed is True
+    assert filtro.check("2027").allowed is True
+    assert filtro.check("").allowed is True
+    assert filtro.check("eleição").reason == "blacklist"
+
+
+def test_yaml_com_a_secao_liga_o_sem_assunto(qf, tmp_path):
+    filtro = qf.load_query_filter(
+        _yaml(
+            tmp_path,
+            "sem_assunto:\n"
+            "  placeholder: '\\[[^\\]]+\\]'\n"
+            "  numeros_permitidos: ['1746']\n"
+            "  expressoes: [sim]\n"
+            "  vocabulario: [por, favor]\n"
+            "  max_palavras: 3\n",
+        )
+    )
+
+    assert isinstance(filtro.eleitoral, qf.AllowAllFilter)
+    assert filtro.check("[ATTACHMENTS]").matched == "placeholder"
+    assert filtro.check("1746").allowed is True
+    assert filtro.check("Sim!").matched == "expressao"
+    assert filtro.check("por favor").matched == "vocabulario"
+
+
+def test_secao_vazia_desliga_o_sem_assunto(qf, tmp_path):
+    filtro = qf.load_query_filter(_yaml(tmp_path, "sem_assunto:\n"))
+
+    assert filtro.sem_assunto is None
+
+
+# --------------------------------------------------------------------------------
+# Com contexto (CHATR-314): eleitoral no tema composto; sem assunto na query e,
+# se ela falha, no contexto
+# --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def filtro_composto(qf):
+    return qf.SearchFilter(
+        eleitoral=qf.BlacklistFilter(["lula"]),
+        sem_assunto=qf.SemAssuntoFilter(expressoes=["sim", "ok"]),
+    )
+
+
+def test_com_contexto_eleitoral_no_contexto_barra(qf, filtro_composto):
+    """Senão o contexto viraria um jeito de contornar o filtro."""
+    assert filtro_composto.check("Qual o número?", "eleição do Lula") == (
+        qf.FilterDecision(False, "blacklist", "lula")
+    )
+
+
+def test_com_contexto_eleitoral_na_query_continua_barrando(qf, filtro_composto):
+    assert filtro_composto.check("número do lula", "matrícula 2027") == (
+        qf.FilterDecision(False, "blacklist", "lula")
+    )
+
+
+def test_com_contexto_com_assunto_a_query_sem_assunto_passa(filtro_composto):
+    assert filtro_composto.check("Sim", "matrícula na rede municipal 2027").allowed
+
+
+def test_com_contexto_tambem_sem_assunto_barra(qf, filtro_composto):
+    """Contexto não desliga o filtro: "Sim (contexto: ok)" custaria uma chamada
+    ao Gemini por nada. O motivo registrado é o da query."""
+    assert filtro_composto.check("Sim", "ok") == qf.FilterDecision(
+        False, "sem_assunto", "expressao"
+    )
+    assert filtro_composto.check("2027", "Sim") == qf.FilterDecision(
+        False, "sem_assunto", "sem_letra"
+    )
+    assert filtro_composto.check("", "ok").matched == "placeholder"
+
+
+def test_com_contexto_a_query_com_assunto_passa_mesmo_com_contexto_vazio_de_assunto(
+    filtro_composto,
+):
+    assert filtro_composto.check("segunda via do iptu", "ok").allowed is True
+
+
+def test_com_contexto_e_sem_a_secao_so_o_eleitoral_roda(qf):
+    filtro = qf.SearchFilter(eleitoral=qf.BlacklistFilter(["lula"]))
+
+    assert filtro.check("Sim", "ok").allowed is True
+
+
+@pytest.mark.parametrize("contexto", [None, "", "   "])
+def test_contexto_vazio_vale_ausente(filtro_composto, contexto):
+    assert filtro_composto.check("Sim", contexto).reason == "sem_assunto"
+
+
+def test_com_contexto_a_whitelist_casa_pelo_tema_composto(qf):
+    """A query-fragmento só tem sentido com o contexto: "Documentos" com
+    "matrícula na rede municipal 2027" precisa passar numa whitelist de
+    matrícula, senão toda chamada com query curta seria recusada."""
+    filtro = qf.SearchFilter(eleitoral=qf.WhitelistFilter(["matricula|iptu"]))
+
+    assert filtro.check("Documentos", "matrícula na rede municipal 2027").allowed
+    assert filtro.check("segunda via do iptu", "receita de bolo").allowed
+    assert filtro.check("Documentos", "receita de bolo").reason == "whitelist"
+
+
+def test_com_contexto_a_blacklist_veta_mesmo_com_a_whitelist_casando(qf):
+    filtro = qf.SearchFilter(
+        eleitoral=qf.build_query_filter(whitelist=["matricula"], blacklist=["lula"])
+    )
+
+    assert filtro.check("Documentos", "matrícula 2027").allowed is True
+    assert filtro.check("Documentos", "matrícula do lula").matched == "lula"
+    assert filtro.check("número do lula", "matrícula 2027").matched == "lula"
+
+
+def test_compor_tema(qf):
+    assert qf.compor_tema("iptu", None) == "iptu"
+    assert qf.compor_tema("Documentos", "matrícula 2027") == (
+        "Documentos (contexto: matrícula 2027)"
+    )
+    assert qf.compor_tema("  ", "matrícula 2027") == "matrícula 2027"

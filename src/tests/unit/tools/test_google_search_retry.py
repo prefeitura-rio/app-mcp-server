@@ -1174,7 +1174,14 @@ def test_resultado_do_typesense_nao_ganha_campo_de_erro(search, monkeypatch):
 
 def _filtro_que_barra(search, monkeypatch, termo="lula"):
     filtro = search.module.filtro
-    monkeypatch.setattr(filtro, "query_filter", filtro.BlacklistFilter([termo]))
+    monkeypatch.setattr(
+        filtro,
+        "query_filter",
+        filtro.SearchFilter(
+            eleitoral=filtro.BlacklistFilter([termo]),
+            sem_assunto=filtro.query_filter.sem_assunto,
+        ),
+    )
 
 
 def test_query_barrada_nao_chega_a_nenhum_buscador(search, monkeypatch):
@@ -1252,3 +1259,398 @@ def test_decisao_do_filtro_vai_para_o_span(search, monkeypatch):
     assert spans["tool.barrada"]["search.filter.matched"] == "lula"
     assert spans["tool.permitida"]["search.filter.blocked"] is False
     assert "search.filter.reason" not in spans["tool.permitida"]
+
+
+# --------------------------------------------------------------------------------
+# get_google_search: mensagem sem assunto (CHATR-314)
+# --------------------------------------------------------------------------------
+
+
+def _buscadores_que_nao_podem_rodar(search, monkeypatch):
+    async def hub_search_nao_pode_rodar(request):
+        raise AssertionError("Typesense chamado com query sem assunto")
+
+    async def google_nao_pode_rodar(**_kwargs):
+        raise AssertionError("Gemini chamado com query sem assunto")
+
+    monkeypatch.setattr(search.module, "hub_search", hub_search_nao_pode_rodar)
+    monkeypatch.setattr(
+        search.module.gemini_service, "google_search", google_nao_pode_rodar
+    )
+
+
+@pytest.mark.parametrize("query", ["Sim", "2027", "[ATTACHMENTS]", "Por favor"])
+def test_query_sem_assunto_nao_chega_a_nenhum_buscador(search, monkeypatch, query):
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = search.run(query)
+
+    assert result["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    assert result["success"] is True
+    assert result["sources"] == [] and result["web_search_queries"] == []
+    assert "filter_reason" not in result
+
+
+def test_texto_do_sem_assunto_e_o_da_especificacao(search):
+    assert search.module.QUERY_SEM_ASSUNTO_MESSAGE == (
+        "Busca não realizada: a mensagem sozinha não tem um assunto para "
+        "pesquisar. Refaça a busca incluindo o assunto da conversa ou pergunte ao "
+        "cidadão qual é a dúvida."
+    )
+
+
+def test_texto_do_eleitoral_nao_mudou(search, monkeypatch):
+    _filtro_que_barra(search, monkeypatch)
+
+    result = search.run("vou votar no lula")
+
+    assert result["text"] == (
+        "Busca não realizada: o tema está fora do catálogo de serviços da "
+        "Prefeitura do Rio. Responda ao cidadão que não é possível ajudar com esse "
+        "assunto por aqui, sem citar candidatos, partidos, números ou resultados, e "
+        "ofereça ajuda com os serviços municipais. Não refaça a busca com outras "
+        "palavras."
+    )
+
+
+def test_query_sem_assunto_vai_para_o_bigquery_com_motivo_e_regra(search, monkeypatch):
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search("Sim!"))
+
+    [coro] = search.created_tasks
+    asyncio.run(coro)
+    [chamada] = search.bq_calls
+    assert chamada["data"]["source"] == "query_filter"
+    registro = chamada["data"]["response"]
+    assert registro["blocked"] is True
+    assert registro["filter_reason"] == "sem_assunto"
+    assert registro["filter_matched"] == "expressao"
+    assert registro["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    assert registro["id"] == result["id"]
+
+
+def test_query_com_assunto_segue_o_fluxo_normal(search, monkeypatch):
+    async def empty_hub_search(request):
+        return {"results": [], "results_clean": []}
+
+    monkeypatch.setattr(search.module, "hub_search", empty_hub_search)
+
+    result = search.run("Sim, quero saber da matrícula 2027")
+
+    assert result["text"] == "resposta do google"
+
+
+# --------------------------------------------------------------------------------
+# get_google_search: redação de dado pessoal antes da busca (CHATR-314)
+# --------------------------------------------------------------------------------
+
+QUERY_COM_PII = "meu cpf é 529.982.247-25, moro na Rua Barata Ribeiro, 200, Copacabana"
+QUERY_REDIGIDA = "meu cpf é [cpf], moro na [endereço], Copacabana"
+
+
+def _capturar_buscadores(search, monkeypatch, *, typesense_resultados=()):
+    chamadas = types.SimpleNamespace(typesense=[], gemini=[])
+
+    async def hub_search_capturado(request):
+        chamadas.typesense.append(request.q)
+        return {
+            "results": list(typesense_resultados),
+            "results_clean": list(typesense_resultados),
+        }
+
+    async def google_capturado(**kwargs):
+        chamadas.gemini.append(kwargs["query"])
+        return {**search.google_response, "query": kwargs["query"]}
+
+    monkeypatch.setattr(search.module, "hub_search", hub_search_capturado)
+    monkeypatch.setattr(search.module.gemini_service, "google_search", google_capturado)
+    return chamadas
+
+
+def _registro_no_bigquery(search):
+    [coro] = search.created_tasks
+    asyncio.run(coro)
+    search.created_tasks.clear()
+    [chamada] = search.bq_calls
+    return chamada["data"]
+
+
+def test_buscadores_e_bigquery_recebem_a_query_redigida(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(search.module.get_google_search(QUERY_COM_PII))
+
+    assert chamadas.typesense == [QUERY_REDIGIDA]
+    assert chamadas.gemini == [QUERY_REDIGIDA]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["query"] == QUERY_REDIGIDA
+    assert registro["pii_redigida"] == ["cpf", "endereco"]
+    assert "529.982.247-25" not in json.dumps(registro, ensure_ascii=False)
+    assert "Barata Ribeiro" not in json.dumps(registro, ensure_ascii=False)
+
+
+def test_resultado_do_typesense_tambem_grava_a_query_redigida(search, monkeypatch):
+    _capturar_buscadores(search, monkeypatch, typesense_resultados=[{"id": 1}])
+
+    result = asyncio.run(search.module.get_google_search(QUERY_COM_PII))
+
+    assert result == {"response": [{"id": 1}]}
+    dados = _registro_no_bigquery(search)
+    assert dados["source"] == "typesense"
+    assert dados["response"]["query"] == QUERY_REDIGIDA
+    assert dados["response"]["pii_redigida"] == ["cpf", "endereco"]
+
+
+def test_query_sem_pii_grava_lista_vazia(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(search.module.get_google_search("segunda via do iptu"))
+
+    assert chamadas.gemini == ["segunda via do iptu"]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["query"] == "segunda via do iptu"
+    assert registro["pii_redigida"] == []
+
+
+def test_query_barrada_grava_a_versao_redigida(search, monkeypatch):
+    _filtro_que_barra(search, monkeypatch)
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search("vou votar no lula, cpf 529.982.247-25")
+    )
+
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["blocked"] is True
+    assert registro["query"] == "vou votar no lula, cpf [cpf]"
+    assert registro["pii_redigida"] == ["cpf"]
+
+
+def test_cpf_solto_e_barrado_pelo_sem_assunto_antes_da_redacao(search, monkeypatch):
+    """O filtro olha o texto cru primeiro: a regra B vê o CPF solto. No
+    BigQuery, só a versão redigida."""
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search("529.982.247-25"))
+
+    assert result["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["filter_matched"] == "sem_letra"
+    assert registro["query"] == "[cpf]"
+
+
+@pytest.mark.parametrize(
+    ("query", "redigida", "tipo"),
+    [
+        ("CPF 529.982.247-25", "CPF [cpf]", "cpf"),
+        ("meu nome é João", "meu nome é [nome]", "nome"),
+        ("moro na Rua Barata Ribeiro 10", "moro na [endereço]", "endereco"),
+    ],
+)
+def test_query_so_de_dado_pessoal_e_barrada_depois_da_redacao(
+    search, monkeypatch, query, redigida, tipo
+):
+    """Crua, a query tem letra e passa; redigida, é só rótulo e marcador, e iria
+    para o Typesense e o Gemini como marcador puro. O filtro roda de novo sobre
+    o texto redigido, e o bloqueio fica no BigQuery como os outros."""
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search(query))
+
+    assert result["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    assert result["success"] is True
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["blocked"] is True
+    assert registro["filter_reason"] == "sem_assunto"
+    assert registro["filter_matched"] == "dado_pessoal"
+    assert registro["query"] == redigida
+    assert registro["pii_redigida"] == [tipo]
+
+
+def test_dado_pessoal_com_assunto_segue_para_a_busca_redigido(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search("CPF 529.982.247-25 segunda via do iptu")
+    )
+
+    assert chamadas.gemini == ["CPF [cpf] segunda via do iptu"]
+    registro = _registro_no_bigquery(search)["response"]
+    assert "blocked" not in registro
+
+
+def test_so_dado_pessoal_na_query_com_contexto_com_assunto_e_pesquisado(
+    search, monkeypatch
+):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search("CPF 529.982.247-25", "segunda via do iptu")
+    )
+
+    assert chamadas.gemini == ["CPF [cpf] (contexto: segunda via do iptu)"]
+    for coro in search.created_tasks:
+        coro.close()
+    search.created_tasks.clear()
+
+
+def test_bloqueio_depois_da_redacao_vai_para_o_span_como_os_outros(search, monkeypatch):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    with tracer.start_as_current_span("tool.so_pii"):
+        search.run("CPF 529.982.247-25")
+
+    [atributos] = [s.attributes for s in exporter.get_finished_spans()]
+    assert atributos["search.filter.blocked"] is True
+    assert atributos["search.filter.reason"] == "sem_assunto"
+    assert atributos["search.filter.matched"] == "dado_pessoal"
+    assert atributos["search.query.pii_redacted"] is True
+    assert "529" not in str(dict(atributos))
+
+
+def test_tipos_redigidos_vao_para_o_span_sem_o_valor(search, monkeypatch):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    _capturar_buscadores(search, monkeypatch)
+
+    with tracer.start_as_current_span("tool.com_pii"):
+        search.run(QUERY_COM_PII)
+    with tracer.start_as_current_span("tool.sem_pii"):
+        search.run("segunda via do iptu")
+
+    spans = {s.name: s.attributes for s in exporter.get_finished_spans()}
+    assert spans["tool.com_pii"]["search.query.pii_redacted"] is True
+    assert tuple(spans["tool.com_pii"]["search.query.pii_types"]) == (
+        "cpf",
+        "endereco",
+    )
+    assert spans["tool.sem_pii"]["search.query.pii_redacted"] is False
+    assert "search.query.pii_types" not in spans["tool.sem_pii"]
+    assert "529" not in str(dict(spans["tool.com_pii"]))
+
+
+# --------------------------------------------------------------------------------
+# get_google_search: campo opcional de contexto (CHATR-314)
+# --------------------------------------------------------------------------------
+
+
+def test_com_contexto_os_buscadores_recebem_o_tema_composto(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search(
+            "Documentos", "matrícula na rede municipal 2027"
+        )
+    )
+
+    tema = "Documentos (contexto: matrícula na rede municipal 2027)"
+    assert chamadas.typesense == [tema]
+    assert chamadas.gemini == [tema]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["query"] == "Documentos"
+    assert registro["contexto"] == "matrícula na rede municipal 2027"
+
+
+@pytest.mark.parametrize("contexto", [None, "", "   "])
+def test_sem_contexto_o_tema_e_a_propria_query(search, monkeypatch, contexto):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(search.module.get_google_search("segunda via do iptu", contexto))
+
+    assert chamadas.gemini == ["segunda via do iptu"]
+    assert _registro_no_bigquery(search)["response"]["contexto"] is None
+
+
+def test_mensagem_sem_assunto_com_contexto_e_pesquisada(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search("Sim", "matrícula 2027"))
+
+    assert result["text"] == "resposta do google"
+    assert chamadas.gemini == ["Sim (contexto: matrícula 2027)"]
+    for coro in search.created_tasks:
+        coro.close()
+    search.created_tasks.clear()
+
+
+def test_termo_eleitoral_no_contexto_bloqueia(search, monkeypatch):
+    _filtro_que_barra(search, monkeypatch)
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(
+        search.module.get_google_search("Qual o número?", "candidato Lula")
+    )
+
+    assert result["text"] == search.module.QUERY_BLOCKED_MESSAGE
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["filter_reason"] == "blacklist"
+    assert registro["contexto"] == "candidato Lula"
+
+
+def test_contexto_tambem_e_redigido(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search(
+            "coleta de lixo", "morador da Rua Barata Ribeiro, 200, Copacabana"
+        )
+    )
+
+    tema = "coleta de lixo (contexto: morador da [endereço], Copacabana)"
+    assert chamadas.typesense == [tema]
+    assert chamadas.gemini == [tema]
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["contexto"] == "morador da [endereço], Copacabana"
+    assert registro["pii_redigida"] == ["endereco"]
+    assert "Barata Ribeiro" not in json.dumps(registro, ensure_ascii=False)
+
+
+def test_tipos_da_query_e_do_contexto_se_somam_sem_repetir(search, monkeypatch):
+    _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search(
+            "cpf 529.982.247-25 bolsa família", "meu nome é Ana, cpf 529.982.247-25"
+        )
+    )
+
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["pii_redigida"] == ["cpf", "nome"]
+
+
+def test_presenca_de_contexto_vai_para_o_span(search, monkeypatch):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    _capturar_buscadores(search, monkeypatch)
+
+    with tracer.start_as_current_span("tool.com_contexto"):
+        asyncio.run(search.module.get_google_search("Documentos", "matrícula 2027"))
+    with tracer.start_as_current_span("tool.sem_contexto"):
+        asyncio.run(search.module.get_google_search("segunda via do iptu"))
+    for coro in search.created_tasks:
+        coro.close()
+    search.created_tasks.clear()
+
+    spans = {s.name: s.attributes for s in exporter.get_finished_spans()}
+    assert spans["tool.com_contexto"]["search.query.has_context"] is True
+    assert spans["tool.sem_contexto"]["search.query.has_context"] is False
+    assert "matrícula" not in str(dict(spans["tool.com_contexto"]))
+
+
+def test_compor_tema(search):
+    compor = search.module.compor_tema
+
+    assert compor("iptu", None) == "iptu"
+    assert compor("Documentos", "matrícula 2027") == (
+        "Documentos (contexto: matrícula 2027)"
+    )
+    assert compor("  ", "matrícula 2027") == "matrícula 2027"

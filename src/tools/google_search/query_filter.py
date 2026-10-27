@@ -1,11 +1,19 @@
-"""Filtro de query da tool `google_search` (CHATR-294).
+"""Filtro de query da tool `google_search` (CHATR-294 e CHATR-314).
 
 Barreira determinística antes do Typesense e do Gemini. Nasceu de um incidente em
 que o bot informou o número eleitoral de um candidato e não o do outro: só prompt
 não basta, porque a assimetria vinha da variação do modelo e do buscador.
 
-Cada política é uma estratégia com a mesma interface (`check`), escolhida por
-`build_query_filter` a partir das listas configuradas:
+A tool chama um `SearchFilter`, que junta duas políticas; a primeira que barra
+decide:
+
+1. **sem assunto** (CHATR-314, `SemAssuntoFilter`): barra a mensagem que sozinha
+   não tem o que pesquisar (`[ATTACHMENTS]`, `2027`, `Sim`, `Por favor`). Sem a
+   seção `sem_assunto` no YAML, fica desligada;
+2. **eleitoral** (CHATR-294): whitelist e blacklist.
+
+Cada política é uma estratégia com a mesma interface (`check`). A eleitoral é
+escolhida por `build_query_filter` a partir das listas configuradas:
 
 - nada configurado → `AllowAllFilter` (a busca opera normalmente);
 - só blacklist → `BlacklistFilter`;
@@ -19,7 +27,6 @@ I/O no event loop.
 """
 
 import re
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence
@@ -27,6 +34,16 @@ from typing import Iterable, Protocol, Sequence
 import yaml
 
 from src.utils.log import logger
+
+# Os marcadores que `redigir_query` deixa no lugar do dado pessoal ("[cpf]",
+# "[nome]"...): o sem assunto precisa reconhecê-los para barrar a query que,
+# redigida, virou só marcador e rótulo (regra E).
+from src.utils.pii import MARCADORES_QUERY
+
+# `normalizar` mora em `src/utils/texto.py` e é a mesma que `src/utils/pii.py`
+# usa, para o filtro e o redator lerem o texto do mesmo jeito. Continua
+# acessível como `query_filter.normalizar`.
+from src.utils.texto import normalizar
 
 CONFIG_PATH = Path(__file__).with_name("query_filter.yaml")
 
@@ -38,27 +55,18 @@ WHITELIST_MAX_CHARS = 1000
 
 REASON_BLACKLIST = "blacklist"
 REASON_WHITELIST = "whitelist"
+REASON_SEM_ASSUNTO = "sem_assunto"
 
+# Ids das regras do `SemAssuntoFilter`, na ordem em que são avaliadas. Vão em
+# `FilterDecision.matched` no lugar do termo: dizem qual regra barrou sem repetir o
+# texto do cidadão no span.
+REGRA_PLACEHOLDER = "placeholder"  # A: vazio ou só token entre colchetes
+REGRA_SEM_LETRA = "sem_letra"  # B: nenhuma letra (número, pontuação, emoji)
+REGRA_EXPRESSAO = "expressao"  # C: cumprimento ou confirmação da lista fechada
+REGRA_VOCABULARIO = "vocabulario"  # D: só palavras do vocabulário sem assunto
+REGRA_DADO_PESSOAL = "dado_pessoal"  # E: só marcador de redação e o rótulo dele
 
-def normalizar(texto: str) -> str:
-    """Forma canônica para comparação: minúsculas, sem acento, só letras e dígitos
-    separados por um espaço.
-
-    `NFKD` decompõe acentos e também formas de compatibilidade ("ＬＵＬＡ" vira
-    "LULA", "1º" vira "1o"). Caracteres de formatação invisíveis (categoria `Cf`,
-    como o zero-width space) são removidos em vez de virar espaço: senão "lu<ZWSP>la"
-    viraria "lu la" e escaparia do termo "lula".
-
-    O sinal de grau ("°") é tratado como o ordinal ("º"): no teclado os dois são
-    trocados o tempo todo ("2° turno"), e o `NFKD` só decompõe o ordinal.
-    """
-    decomposto = unicodedata.normalize("NFKD", texto.replace("°", "º"))
-    limpo = "".join(
-        c
-        for c in decomposto
-        if not unicodedata.combining(c) and unicodedata.category(c) != "Cf"
-    ).casefold()
-    return " ".join("".join(c if c.isalnum() else " " for c in limpo).split())
+MAX_PALAVRAS_PADRAO = 8
 
 
 @dataclass(frozen=True)
@@ -153,12 +161,183 @@ class CompositeFilter:
         return f"CompositeFilter({', '.join(map(repr, self._filters))})"
 
 
-def _compilar(pattern: str) -> re.Pattern[str]:
+class SemAssuntoFilter:
+    """Barra a mensagem que, sozinha, não tem assunto para pesquisar (CHATR-314).
+
+    Na semana de 19 a 26/10/2026, 6,3% das buscas eram `Sim`, `Ok`, `2027`,
+    `[ATTACHMENTS]` ou `Por favor`: o agente repassou a última mensagem do cidadão
+    em vez da dúvida. A busca devolvia nada ou uma pesquisa pela palavra solta
+    ("what does sim mean"), e custava uma chamada ao Gemini.
+
+    Regras, avaliadas nesta ordem; a primeira que casa decide:
+
+    - A (`placeholder`): sem texto depois de tirar os tokens entre colchetes que o
+      canal injeta no lugar de anexo;
+    - B (`sem_letra`): nenhuma letra depois de normalizar. Pega número solto,
+      pontuação, CPF, data e emoji. `numeros_permitidos` são exceção (`1746` é o
+      próprio assunto);
+    - C (`expressao`): a mensagem inteira é uma expressão da lista fechada de
+      cumprimentos e confirmações;
+    - D (`vocabulario`): todas as palavras estão no vocabulário sem assunto, até
+      `max_palavras`. Mensagem mais longa passa: a chance de ter assunto cresce e
+      o custo de barrar por engano também;
+    - E (`dado_pessoal`): o texto tem um marcador de redação (`[cpf]`, `[nome]`,
+      `[endereço]`...) e, tirado o marcador, só sobram palavras do vocabulário
+      e `rotulos_de_dado_pessoal` ("cpf", "meu nome é", "moro na"), até
+      `max_palavras`. É o que a query só de dado pessoal vira depois de
+      `redigir_query`: "CPF 529.982.247-25" tem letra e passa crua, mas "CPF
+      [cpf]" iria para o Typesense e o Gemini como marcador puro. Sem marcador
+      a regra não roda: "CPF" sozinho tem assunto.
+
+    C, D e E comparam o texto normalizado, então caixa, acento e pontuação não
+    contam. Tudo o que tem uma palavra de fora das listas passa: `Creche`,
+    `Documentos` e `Para 2027` dependem da conversa, mas têm assunto.
+    """
+
+    def __init__(
+        self,
+        *,
+        placeholder: str | None = None,
+        numeros_permitidos: Iterable[str] = (),
+        expressoes: Iterable[str] = (),
+        vocabulario: Iterable[str] = (),
+        max_palavras: int = MAX_PALAVRAS_PADRAO,
+        marcadores: Iterable[str] = (),
+        rotulos_de_dado_pessoal: Iterable[str] = (),
+    ):
+        self._placeholder = (
+            _compilar(placeholder, "sem_assunto.placeholder")
+            if placeholder and placeholder.strip()
+            else None
+        )
+        self._numeros_permitidos = _normalizados(numeros_permitidos)
+        self._expressoes = _normalizados(expressoes)
+        self._vocabulario = _normalizados(vocabulario)
+        self._max_palavras = max_palavras
+        # Marcadores são comparados literalmente, antes de normalizar: "[cpf]"
+        # normalizado seria "cpf", indistinguível do rótulo.
+        self._marcadores = tuple(dict.fromkeys(m for m in marcadores if m))
+        self._rotulos = _normalizados(rotulos_de_dado_pessoal)
+
+    def _sem_marcadores(self, texto: str) -> tuple[str, bool]:
+        """Tira os marcadores de redação e diz se havia algum."""
+        tem_marcador = False
+        for marcador in self._marcadores:
+            if marcador in texto:
+                tem_marcador = True
+                texto = texto.replace(marcador, " ")
+        return texto, tem_marcador
+
+    def check(self, query: str) -> FilterDecision:
+        texto, tem_marcador = self._sem_marcadores(query or "")
+        if self._placeholder is not None:
+            texto = self._placeholder.sub(" ", texto)
+        if not texto.strip():
+            return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_PLACEHOLDER)
+
+        normalizado = normalizar(texto)
+        if not any(c.isalpha() for c in normalizado):
+            palavras = set(normalizado.split())
+            if palavras & self._numeros_permitidos:
+                return ALLOWED
+            return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_SEM_LETRA)
+
+        if normalizado in self._expressoes:
+            return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_EXPRESSAO)
+
+        palavras = normalizado.split()
+        if len(palavras) > self._max_palavras:
+            return ALLOWED
+        if self._vocabulario and all(p in self._vocabulario for p in palavras):
+            return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_VOCABULARIO)
+        if (
+            tem_marcador
+            and self._rotulos
+            and all(p in self._vocabulario or p in self._rotulos for p in palavras)
+        ):
+            return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_DADO_PESSOAL)
+
+        return ALLOWED
+
+    def __repr__(self) -> str:
+        return (
+            f"SemAssuntoFilter(expressoes={len(self._expressoes)}, "
+            f"vocabulario={len(self._vocabulario)}, "
+            f"rotulos={len(self._rotulos)}, "
+            f"max_palavras={self._max_palavras})"
+        )
+
+
+def compor_tema(query: str, contexto: str | None) -> str:
+    """Tema da pesquisa: a query e, se houver, o assunto da conversa entre
+    parênteses, rotulado para o modelo de busca não tomá-lo pela pergunta.
+
+    `"Documentos"` com o contexto `"matrícula na rede municipal 2027"` vira
+    `"Documentos (contexto: matrícula na rede municipal 2027)"`. É o texto que
+    vai para o Typesense e para o Gemini, e também o que o filtro eleitoral
+    avalia quando há contexto.
+    """
+    if not contexto:
+        return query
+    if not query.strip():
+        return contexto
+    return f"{query} (contexto: {contexto})"
+
+
+class SearchFilter:
+    """O filtro que a tool chama: sem assunto e eleitoral, nessa ordem.
+
+    `sem_assunto` vazio (`None`) é o comportamento do CHATR-294: só o eleitoral.
+
+    Com `contexto` (o assunto da conversa, preenchido pelo agente), as regras
+    mudam:
+
+    - o sem assunto roda na query e, se ela não tem assunto, no contexto, que é
+      a chance de salvá-la: "Sim" com "matrícula 2027" passa; "Sim" com "ok"
+      não, senão custaria uma chamada ao Gemini por "Sim (contexto: ok)". Pular
+      o filtro por haver contexto zeraria o ganho assim que o Salesforce
+      passasse a enviá-lo sempre;
+    - o eleitoral avalia o tema composto (`compor_tema`), o mesmo texto que vai
+      para a busca. A blacklist veta um termo em qualquer um dos dois, então o
+      contexto não vira um jeito de levar o tema proibido à busca; a whitelist
+      casa se o composto casar, porque a query-fragmento ("Documentos") só tem
+      sentido com o contexto, e exigir que ela case sozinha recusaria toda
+      chamada com query curta assim que a whitelist fosse preenchida.
+    """
+
+    def __init__(self, eleitoral: QueryFilter, sem_assunto: QueryFilter | None = None):
+        self.eleitoral = eleitoral
+        self.sem_assunto = sem_assunto
+        filtros = [eleitoral] if sem_assunto is None else [sem_assunto, eleitoral]
+        self._composto = CompositeFilter(filtros)
+
+    def check(self, query: str, contexto: str | None = None) -> FilterDecision:
+        contexto = (contexto or "").strip()
+        if not contexto:
+            return self._composto.check(query)
+        if self.sem_assunto is not None:
+            decisao = self.sem_assunto.check(query)
+            if not decisao.allowed and not self.sem_assunto.check(contexto).allowed:
+                # O motivo registrado é o da query, comparável com o histórico
+                # de antes do contexto.
+                return decisao
+        return self.eleitoral.check(compor_tema(query, contexto))
+
+    def __repr__(self) -> str:
+        return f"SearchFilter(sem_assunto={self.sem_assunto!r}, eleitoral={self.eleitoral!r})"
+
+
+def _normalizados(textos: Iterable[str]) -> frozenset[str]:
+    # Como na blacklist, o que normaliza para vazio é descartado.
+    return frozenset(t for t in (normalizar(texto) for texto in textos) if t)
+
+
+def _compilar(pattern: str, campo: str = "whitelist") -> re.Pattern[str]:
     try:
         return re.compile(pattern)
     except re.error as erro:
         raise ValueError(
-            f"Expressão inválida na whitelist: {pattern!r} ({erro})"
+            f"Expressão inválida em `{campo}`: {pattern!r} ({erro})"
         ) from erro
 
 
@@ -193,7 +372,50 @@ def lista_de_textos(valor: object, campo: str) -> list[str]:
     return valor
 
 
-def load_query_filter(path: Path = CONFIG_PATH) -> QueryFilter:
+def build_sem_assunto_filter(secao: object) -> SemAssuntoFilter | None:
+    """Monta o `SemAssuntoFilter` a partir da seção `sem_assunto` do YAML.
+
+    Seção ausente ou vazia devolve `None`: a busca fica como no CHATR-294.
+    """
+    if secao is None:
+        return None
+    if not isinstance(secao, dict):
+        raise ValueError("`sem_assunto` deve ser um mapa.")
+    if not secao:
+        return None
+
+    placeholder = secao.get("placeholder")
+    if placeholder is not None and not isinstance(placeholder, str):
+        raise ValueError("`sem_assunto.placeholder` deve ser um texto.")
+
+    max_palavras = secao.get("max_palavras", MAX_PALAVRAS_PADRAO)
+    # `bool` é subclasse de `int`: `max_palavras: true` não pode valer 1.
+    if (
+        not isinstance(max_palavras, int)
+        or isinstance(max_palavras, bool)
+        or max_palavras < 1
+    ):
+        raise ValueError("`sem_assunto.max_palavras` deve ser um inteiro positivo.")
+
+    return SemAssuntoFilter(
+        placeholder=placeholder,
+        numeros_permitidos=lista_de_textos(
+            secao.get("numeros_permitidos"), "sem_assunto.numeros_permitidos"
+        ),
+        expressoes=lista_de_textos(secao.get("expressoes"), "sem_assunto.expressoes"),
+        vocabulario=lista_de_textos(
+            secao.get("vocabulario"), "sem_assunto.vocabulario"
+        ),
+        max_palavras=max_palavras,
+        marcadores=MARCADORES_QUERY.values(),
+        rotulos_de_dado_pessoal=lista_de_textos(
+            secao.get("rotulos_de_dado_pessoal"),
+            "sem_assunto.rotulos_de_dado_pessoal",
+        ),
+    )
+
+
+def load_query_filter(path: Path = CONFIG_PATH) -> SearchFilter:
     """Lê o YAML e monta o filtro. Arquivo malformado levanta `ValueError`.
 
     Falhar no boot é deliberado: o arquivo é versionado e coberto por teste, então
@@ -216,9 +438,12 @@ def load_query_filter(path: Path = CONFIG_PATH) -> QueryFilter:
         for termo in lista_de_textos(termos, f"blacklist.{secao}")
     ]
 
-    query_filter = build_query_filter(whitelist, blacklist)
+    query_filter = SearchFilter(
+        eleitoral=build_query_filter(whitelist, blacklist),
+        sem_assunto=build_sem_assunto_filter(dados.get("sem_assunto")),
+    )
     logger.info(f"Filtro de query do google_search: {query_filter!r}")
     return query_filter
 
 
-query_filter: QueryFilter = load_query_filter()
+query_filter: SearchFilter = load_query_filter()

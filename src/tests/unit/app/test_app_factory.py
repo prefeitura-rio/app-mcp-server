@@ -296,3 +296,18 @@ async def test_lifespan_nao_bate_no_site_com_a_tool_excluida(
         await asyncio.sleep(0)
 
     assert chamadas == []
+
+
+def test_google_search_publica_contexto_opcional(app_module):
+    """CHATR-314: `contexto` é opcional. Sem ele, o Salesforce chama a tool como
+    antes; se virasse obrigatório, toda chamada atual falharia na validação."""
+    if "google_search" in EXCLUDED_TOOLS:
+        pytest.skip("google_search excluída neste ambiente")
+
+    tool = app_module.create_app()._tool_manager._tools["google_search"]
+    schema = tool.parameters
+
+    assert schema.get("required") == ["query"]
+    assert set(schema["properties"]) == {"query", "contexto"}
+    assert schema["properties"]["contexto"]["description"]
+    assert "contexto" in tool.description

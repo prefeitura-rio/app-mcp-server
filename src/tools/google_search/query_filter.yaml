@@ -1,9 +1,13 @@
-# Filtro de query da tool `google_search` (CHATR-294).
+# Filtro de query da tool `google_search` (CHATR-294 e CHATR-314).
 #
 # Roda antes do Typesense e do Gemini. Uma query barrada não chega a nenhum
-# buscador e recebe um texto fixo, igual para qualquer tema bloqueado.
+# buscador e recebe um texto fixo por motivo: um para o tema eleitoral, igual
+# para qualquer tema bloqueado, e outro para a mensagem sem assunto.
 #
-# Regras:
+# A seção `sem_assunto`, no fim do arquivo, é avaliada antes das listas
+# eleitorais. Sem ela, o filtro é só o eleitoral.
+#
+# Regras do filtro eleitoral:
 # - `whitelist`: expressões regulares do que PODE ser buscado. Vazia = tudo
 #   pode, salvo o que a blacklist vetar. Preenchida = só passa a query que
 #   casar com pelo menos uma expressão.
@@ -196,3 +200,195 @@ blacklist:
     - election
     - elections
     - voting
+
+# Mensagem sem assunto (CHATR-314). Barra a query que, sozinha, não tem o que
+# pesquisar: o agente repassou "Sim", "Ok" ou "2027" em vez da dúvida. Avaliada
+# antes das listas eleitorais; a resposta ao agente pede para refazer a busca
+# com o assunto da conversa. Sem esta seção, o filtro é só o eleitoral.
+#
+# Regras, nesta ordem (a primeira que casa decide):
+# A. `placeholder`: tirados os tokens que casam com esta expressão (o canal
+#    troca anexo por `[ATTACHMENTS]`), não sobra texto. Texto vazio também cai
+#    aqui. A expressão roda sobre o texto cru, antes de normalizar.
+# B. Nenhuma letra depois de normalizar (número, pontuação, CPF, data, emoji),
+#    salvo os `numeros_permitidos`.
+# C. A mensagem inteira é uma das `expressoes`.
+# D. Todas as palavras estão no `vocabulario`, com até `max_palavras` palavras.
+# E. A mensagem tem um marcador de redação ("[cpf]", "[nome]", "[endereço]"...,
+#    os de `redigir_query`) e, tirado o marcador, só sobram palavras do
+#    `vocabulario` e de `rotulos_de_dado_pessoal`, com até `max_palavras`. É a
+#    query que era só dado pessoal: "CPF 529.982.247-25" tem letra e passa
+#    crua, mas redigida vira "CPF [cpf]" e iria para a busca como marcador
+#    puro. A tool roda o filtro de novo sobre o texto redigido. Sem marcador a
+#    regra não roda: "CPF" sozinho tem assunto.
+#
+# `expressoes`, `vocabulario` e `rotulos_de_dado_pessoal` são normalizados como
+# as listas eleitorais (minúsculas, sem acento, pontuação vira espaço). Uma
+# palavra de fora das listas basta para a mensagem passar: "Creche",
+# "Documentos" e "Para 2027" passam. Por isso nada aqui pode ter assunto:
+# incluir "matrícula" no vocabulário barraria "matrícula sim".
+#
+# Decisões e exemplos medidos: docs/decisions/CHATR-314-preparacao-da-query.md.
+sem_assunto:
+  placeholder: '\[[^\[\]]{1,40}\]'
+
+  # O número da Central de Atendimento é o próprio assunto.
+  numeros_permitidos:
+    - "1746"
+
+  # Regra C: cumprimentos, agradecimentos e confirmações soltos.
+  expressoes:
+    - sim
+    - s
+    - ss
+    - sim sim
+    - não
+    - ok
+    - okay
+    - certo
+    - beleza
+    - blz
+    - tá
+    - tá bom
+    - tá certo
+    - entendi
+    - entendido
+    - ok entendi
+    - obrigado
+    - obrigada
+    - obg
+    - muito obrigado
+    - muito obrigada
+    - ok obrigado
+    - ok obrigada
+    - valeu
+    - me ajuda
+    - me ajude
+    - ajuda
+    - oi
+    - olá
+    - bom dia
+    - boa tarde
+    - boa noite
+    - perfeito
+    - ótimo
+
+  # Regra D: palavras sem assunto. Só a mensagem feita inteiramente delas, com
+  # até `max_palavras` palavras, é barrada.
+  vocabulario:
+    - sim
+    - não
+    - ok
+    - tá
+    - bom
+    - boa
+    - bem
+    - certo
+    - entendi
+    - obrigado
+    - obrigada
+    - muito
+    - mais
+    - por
+    - favor
+    - oi
+    - olá
+    - dia
+    - tarde
+    - noite
+    - tudo
+    - eu
+    - me
+    - você
+    - vc
+    - quero
+    - queria
+    - gostaria
+    - preciso
+    - saber
+    - ajuda
+    - ajudar
+    - pode
+    - poderia
+    - uma
+    - um
+    - o
+    - a
+    - é
+    - e
+    - de
+    - isso
+    - mesmo
+    - informação
+    - informações
+    - dúvida
+  max_palavras: 8
+
+  # Regra E: o rótulo que fica ao lado do marcador quando a query era só o dado
+  # pessoal ("CPF [cpf]", "meu nome é [nome]", "moro na [endereço]", "nasci em
+  # [data]"). Só vale junto de um marcador: "cpf" sozinho continua passando.
+  rotulos_de_dado_pessoal:
+    # Documento
+    - cpf
+    - rg
+    - cnh
+    - cnpj
+    - nis
+    - documento
+    - número
+    - numero
+    # Nome
+    - nome
+    - sobrenome
+    - chamo
+    - sou
+    # Endereço
+    - endereço
+    - endereco
+    - rua
+    - moro
+    - resido
+    - casa
+    - cep
+    # Contato
+    - telefone
+    - celular
+    - tel
+    - fone
+    - whatsapp
+    - zap
+    - contato
+    - email
+    - mail
+    # Placa e data de nascimento
+    - placa
+    - carro
+    - data
+    - nascimento
+    - nasci
+    - nasceu
+    - nascido
+    - nascida
+    # Possessivo, verbo e preposição do rótulo
+    - meu
+    - minha
+    - é
+    - e
+    - em
+    - "no"
+    - na
+    - do
+    - da
+    - de
+    - dos
+    - das
+    - com
+    # Familiar depois de "meu"/"minha"
+    - filho
+    - filha
+    - mãe
+    - pai
+    - marido
+    - esposa
+    - esposo
+    - mulher
