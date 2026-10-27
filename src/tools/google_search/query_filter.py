@@ -27,7 +27,6 @@ I/O no event loop.
 """
 
 import re
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence
@@ -35,6 +34,11 @@ from typing import Iterable, Protocol, Sequence
 import yaml
 
 from src.utils.log import logger
+
+# `normalizar` mora em `src/utils/texto.py` e é a mesma que `src/utils/pii.py`
+# usa, para o filtro e o redator lerem o texto do mesmo jeito. Continua
+# acessível como `query_filter.normalizar`.
+from src.utils.texto import normalizar
 
 CONFIG_PATH = Path(__file__).with_name("query_filter.yaml")
 
@@ -57,27 +61,6 @@ REGRA_EXPRESSAO = "expressao"  # C: cumprimento ou confirmação da lista fechad
 REGRA_VOCABULARIO = "vocabulario"  # D: só palavras do vocabulário sem assunto
 
 MAX_PALAVRAS_PADRAO = 8
-
-
-def normalizar(texto: str) -> str:
-    """Forma canônica para comparação: minúsculas, sem acento, só letras e dígitos
-    separados por um espaço.
-
-    `NFKD` decompõe acentos e também formas de compatibilidade ("ＬＵＬＡ" vira
-    "LULA", "1º" vira "1o"). Caracteres de formatação invisíveis (categoria `Cf`,
-    como o zero-width space) são removidos em vez de virar espaço: senão "lu<ZWSP>la"
-    viraria "lu la" e escaparia do termo "lula".
-
-    O sinal de grau ("°") é tratado como o ordinal ("º"): no teclado os dois são
-    trocados o tempo todo ("2° turno"), e o `NFKD` só decompõe o ordinal.
-    """
-    decomposto = unicodedata.normalize("NFKD", texto.replace("°", "º"))
-    limpo = "".join(
-        c
-        for c in decomposto
-        if not unicodedata.combining(c) and unicodedata.category(c) != "Cf"
-    ).casefold()
-    return " ".join("".join(c if c.isalnum() else " " for c in limpo).split())
 
 
 @dataclass(frozen=True)

@@ -142,20 +142,21 @@ Não redige:
 
 Todos decididos por Claude, sem revisão humana:
 
-- **Nome declarado** ("meu nome é", "me chamo"): até 4 palavras em qualquer caixa. Para em pontuação, número ou palavra de frase ("e", "quero", "moro"...).
-- **Nome de familiar e apresentação** ("meu filho", "minha filha", "sou a"...): só palavras capitalizadas (`Ana`, não `ANA` nem `ana`).
+- **Nome declarado** ("meu nome é", "me chamo"): a sequência inteira de palavras depois do gatilho, em qualquer caixa. Para em pontuação, número ou palavra de frase ("e", "quero", "moro", "onde"...), nunca por contagem: um limite de 4 palavras deixava o sobrenome em claro ("Ana Clara dos Santos Oliveira **Pereira Lima**"), apontado na revisão.
+- **Nome de familiar e apresentação** ("meu filho", "minha filha", "sou a"...): só palavras capitalizadas (`Ana`) ou em caixa alta (`ANA`); `ana` não conta.
   - Motivo: "meu filho tem TEA" e "sou a responsável" não têm nome, e sem a exigência "tem TEA" seria apagado.
-  - Palavras comuns capitalizadas ("Mãe", "Responsável", "Aluno") não contam como nome.
+  - Palavras comuns capitalizadas ("Mãe", "Responsável", "Aluno") e siglas em caixa alta ("TEA", "PCD", "IPTU", "CPF"...) estão na lista de exclusão e não contam como nome. A caixa alta entrou na revisão: "Sou a MARIA, meu filho PEDRO tem TEA" saía inteira.
 - **Endereço:** os tipos de logradouro são rua, R., avenida, av, estrada, travessa, praça, largo, alameda, rodovia, ladeira, beco e servidão.
   - Ficaram de fora "vila", que também é bairro ("Vila Isabel"), "via", de "segunda via do IPTU 2026", e "caminho".
   - Nome com palavra de frase ("tem", "minha", "para"...) não é endereço: "a rua da minha casa tem 3 buracos" passa intacta.
+  - O dígito depois do nome só é número de casa com marcador (vírgula, "nº", "n.", "número", "nr") ou quando não parece outra coisa. Sem marcador, ano (19xx/20xx) e o que segue "km" ou "linha" não são número: "Avenida Brasil 2026", "Rua das Laranjeiras 2026 iptu", "Estrada do Galeão km 5" e "Largo do Machado linha 1" ficam intactos, porque sem número de casa não há dado pessoal e o lugar é o assunto da busca (apontado na revisão). Com marcador, "Rua X, 2026" continua endereço.
 - **Placa antiga sem hífen só em maiúsculas:** em minúsculas, "rio2016" viraria placa.
 - **CEP sem hífen** só com a palavra "CEP" ao lado: oito dígitos soltos podem ser inscrição.
 - **CNPJ não é redigido.** Não está na lista do card. Identifica empresa e pode ser o assunto ("alvará do CNPJ"). Ver pendências.
 
 ### D9. Estender o `pii.py`, sem biblioteca nova
 
-**Decisão:** padrões novos no `pii.py`, só stdlib.
+**Decisão:** padrões novos no `pii.py`, só stdlib. As listas de palavras do redator (`_NAO_E_NOME`, `_NAO_E_NOME_DE_RUA`) são casadas pela mesma `normalizar` do filtro de query, extraída para [`src/utils/texto.py`](../../src/utils/texto.py) (módulo folha, só stdlib): o `pii.py` tinha uma cópia com regras diferentes (não tirava o zero-width space nem tratava "°" como "º"), e o mesmo texto podia ser lido de um jeito pelo filtro e de outro pelo redator.
 **Alternativa descartada:** [Presidio](https://presidio.dataprivacystack.org/supported_entities/). Não tem reconhecedor brasileiro (CPF, CNPJ, RG, telefone BR). Para nome e lugar, exige um modelo grande do spaCy em português dentro do container.
 **Motivo:** para 2% das buscas, com padrões conhecidos, estender a fonte única de padrões do projeto dá o mesmo resultado com menos peso. Reavaliar se a detecção de nome sem gatilho virar requisito.
 **Decidido por:** Mauro (26/10/2026).

@@ -914,6 +914,16 @@ def test_redigir_query_redige_identificador_e_mantem_o_assunto(query, esperado, 
         "a rua da minha casa tem 3 buracos",
         "segunda via do IPTU 2026",
         "ligar para 1746",
+        # Logradouro seguido de ano, km ou linha: sem número de casa não há dado
+        # pessoal, e o lugar é o assunto da busca
+        "Avenida Brasil 2026",
+        "Rua das Laranjeiras 2026 iptu",
+        "Estrada do Galeão km 5",
+        "metrô Largo do Machado linha 1",
+        "Praça Seca 2026 feira",
+        # Sigla em caixa alta depois do gatilho não é nome
+        "sou a PCD e preciso do passe livre",
+        "minha mãe IPTU",
         # Sem PII
         "como tirar a segunda via do iptu",
     ],
@@ -964,3 +974,75 @@ def test_redigir_query_tem_um_marcador_por_tipo():
     texto, tipos = redigir_query("cpf 529.982.247-25")
     assert set(tipos) <= set(MARCADORES_QUERY)
     assert MARCADORES_QUERY["cpf"] in texto
+
+
+# Endereço: o dígito só é número de casa com marcador ou fora de ano/km/linha
+
+
+@pytest.mark.parametrize(
+    ("query", "esperado"),
+    [
+        # Com marcador, até um ano é número de casa
+        ("Rua Barata Ribeiro, 2026, Copacabana", "[endereço], Copacabana"),
+        ("Rua das Laranjeiras nº 2026", "[endereço]"),
+        ("Avenida Brasil n. 1950 Deodoro", "[endereço] Deodoro"),
+        # Sem marcador, número que não parece ano continua número de casa
+        ("rua joão silva 45 em Campo Grande", "[endereço] em Campo Grande"),
+        ("Estrada do Galeão 1500", "[endereço]"),
+    ],
+)
+def test_endereco_com_numero_de_casa_continua_redigido(query, esperado):
+    assert redigir_query(query) == (esperado, ("endereco",))
+
+
+# Nome: a sequência inteira depois do gatilho, em qualquer caixa
+
+
+@pytest.mark.parametrize(
+    ("query", "esperado"),
+    [
+        # Sem limite de palavras: o sobrenome não fica em claro
+        (
+            "me chamo Ana Clara dos Santos Oliveira Pereira Lima",
+            "me chamo [nome]",
+        ),
+        (
+            "meu nome é Ana Clara dos Santos Oliveira Pereira Lima e quero o iptu",
+            "meu nome é [nome] e quero o iptu",
+        ),
+        # Caixa alta depois de "sou a" ou "meu filho" é nome
+        (
+            "Sou a MARIA, meu filho PEDRO tem TEA",
+            "Sou a [nome], meu filho [nome] tem TEA",
+        ),
+        (
+            "meu filho JOÃO PEDRO DA SILVA estuda na escola",
+            "meu filho [nome] estuda na escola",
+        ),
+        # Nome curto continua redigido; a sigla depois dele não é engolida
+        ("sou a Maria e tenho TEA", "sou a [nome] e tenho TEA"),
+        ("meu filho Pedro tem TEA", "meu filho [nome] tem TEA"),
+        ("meu nome é Ana Clara, cpf 529.982.247-25", "meu nome é [nome], cpf [cpf]"),
+        # Palavra de frase encerra o nome em qualquer caixa
+        (
+            "meu nome é ana silva onde fica a clinica",
+            "meu nome é [nome] onde fica a clinica",
+        ),
+    ],
+)
+def test_nome_e_redigido_inteiro_em_qualquer_caixa(query, esperado):
+    texto, tipos = redigir_query(query)
+    assert texto == esperado
+    assert "nome" in tipos
+
+
+def test_pii_e_filtro_normalizam_do_mesmo_jeito():
+    """`_NAO_E_NOME` e `_NAO_E_NOME_DE_RUA` são casadas pela mesma `normalizar`
+    que o filtro de query usa nas listas dele (zero-width space some, "°" vale
+    "º"), e não por uma cópia com regras diferentes."""
+    from src.tools.google_search import query_filter
+    from src.utils import pii, texto
+
+    assert pii.normalizar is texto.normalizar
+    assert query_filter.normalizar is texto.normalizar
+    assert not hasattr(pii, "_sem_acento")

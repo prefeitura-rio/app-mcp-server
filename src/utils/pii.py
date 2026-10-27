@@ -7,9 +7,9 @@ duas ilhas isoladas -- `src/utils/error_interceptor.py` (CHATR-113) e
 enviado ao interceptor de erros. Nenhuma das duas tocava a saída de `logger.*`,
 que é o que a barreira de `src/utils/log.py` passa a fazer com o que está aqui.
 
-Só stdlib e nenhum import de `src/`: este módulo precisa ficar embaixo de
-`error_interceptor` e `http_client` na ordem de import, e é carregado antes do
-preflight.
+Só stdlib e, de `src/`, apenas `src/utils/texto.py` (que também é só stdlib):
+este módulo precisa ficar embaixo de `error_interceptor` e `http_client` na
+ordem de import, e é carregado antes do preflight.
 
 ## Três caminhos de cobertura, porque um só não dá conta
 
@@ -42,9 +42,10 @@ ms), `1790000000` (epoch em s) e `12345678` (inscrição) atravessam intactos.
 """
 
 import re
-import unicodedata
 from functools import lru_cache
 from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
+
+from src.utils.texto import normalizar
 
 
 # ---------------------------------------------------------------------------
@@ -761,19 +762,26 @@ _PLACA = re.compile(
 # número, com complemento opcional. Ficaram de fora tipos que também são nome
 # de bairro ou palavra comum ("Vila Isabel", "segunda via", "caminho"). O nome
 # não atravessa vírgula: em "Rua X, Copacabana, 12" não há número colado à rua.
+#
+# O `marcador` (vírgula, "nº", "n.", "número", "nr") diz que o dígito é número
+# de casa. Sem ele, o dígito pode ser outra coisa, e `_redigir_endereco` deixa
+# passar o ano ("Avenida Brasil 2026") e o que vem depois de "km" ou "linha"
+# ("Estrada do Galeão km 5", "Largo do Machado linha 1"): sem número de casa
+# não há dado pessoal, e o lugar é o assunto da busca.
+_MARCA_DE_NUMERO = r"n[º°o.]|n\.º|nº|n°|n[uú]mero|nr\.?"
 _ENDERECO = re.compile(
     r"(?i)(?<!\w)"
     r"(?:rua|r\.|avenida|av\.?|estrada|estr\.|travessa|trav\.|tv\.|pra[çc]a|"
     r"largo|alameda|rodovia|ladeira|beco|servid[ãa]o)"
     r"(?P<nome>(?:\s+[^\W\d_][\w'.ºª-]*){1,6}?)"
-    r"\s*,?\s*(?:(?:n[º°o.]|n\.º|nº|n°|n[uú]mero|nr\.?)\s*)?"
-    r"\d{1,5}[a-z]?(?![\w/])"
+    rf"\s*(?P<marcador>,\s*(?:(?:{_MARCA_DE_NUMERO})\s*)?|(?:{_MARCA_DE_NUMERO})\s*)?"
+    r"(?P<numero>\d{1,5})[a-z]?(?![\w/])"
     r"(?:\s*[,/-]?\s*(?:apartamento|apto|apt|ap|casa|bloco|bl|lote|lt|quadra|qd|sala)"
     r"\.?\s*(?:\d{1,5}[a-z]?|[a-z])(?!\w))*"
 )
 
 # Palavras que denunciam frase, não nome de rua: "a rua da minha casa tem 3
-# buracos" não é endereço. Comparadas sem acento e em minúsculas.
+# buracos" não é endereço. Comparadas pela forma de `normalizar`.
 _NAO_E_NOME_DE_RUA: FrozenSet[str] = frozenset(
     {
         "tem", "ta", "esta", "estao", "foi", "sao", "e", "ha", "fica", "ficou",
@@ -781,6 +789,11 @@ _NAO_E_NOME_DE_RUA: FrozenSet[str] = frozenset(
         "para", "pra", "faz", "desde", "mais", "menos", "cerca", "quase",
     }
 )  # fmt: skip
+
+# Última palavra do nome que diz que o dígito seguinte não é número de casa.
+_NAO_PRECEDE_NUMERO_DE_CASA: FrozenSet[str] = frozenset({"km", "linha", "ano"})
+# Sem marcador, quatro dígitos de 19xx ou 20xx são ano, não número de casa.
+_ANO = re.compile(r"(?:19|20)\d{2}")
 
 # Data de nascimento: a data a até 25 caracteres sem dígito depois de
 # "nasceu", "nascido", "nasci" ou "nascimento".
@@ -796,12 +809,13 @@ _DATA_DE_NASCIMENTO = re.compile(
     r"(?![\d/.-]?\d)"
 )
 
-# Nome declarado: depois do gatilho, qualquer palavra até um limite.
+# Nome declarado: depois do gatilho, qualquer palavra, em qualquer caixa.
 _GATILHO_NOME_DECLARADO = re.compile(
     r"(?i)\b(?:meu\s+nome\s+(?:é|e|eh)|me\s+chamo)\b[ \t]*[:,-]?[ \t]*"
 )
-# Nome de familiar ou apresentação ("sou a Maria"): só palavra capitalizada,
-# porque "meu filho tem TEA" e "sou a responsável" não têm nome nenhum.
+# Nome de familiar ou apresentação ("sou a Maria"): só palavra capitalizada ou
+# em caixa alta ("MARIA"), porque "meu filho tem TEA" e "sou a responsável"
+# não têm nome nenhum.
 _GATILHO_NOME_DE_PESSOA = re.compile(
     r"(?i)\b(?:sou\s+(?:a|o)"
     r"|(?:meu|minha)\s+(?:filh[oa]|marido|espos[oa]|mulher|m[ãa]e|pai|net[oa]|"
@@ -812,25 +826,41 @@ _PALAVRA = re.compile(r"[^\W\d_]+(?:['-][^\W\d_]+)*")
 _PALAVRA_CAPITALIZADA = re.compile(r"[A-ZÀ-Ý][a-zà-ÿ]+(?:['-][A-Za-zÀ-ÿ]+)*")
 _CONECTORES_DE_NOME: FrozenSet[str] = frozenset({"da", "de", "do", "das", "dos"})
 _ESPACO = re.compile(r"[ \t]+")
-_MAX_PALAVRAS_DO_NOME = 4
 
-# Palavras que encerram o nome declarado ("meu nome é Ana e quero...") e
-# palavras capitalizadas que não são nome ("Sou a Mãe do aluno").
+# O nome começa logo depois do gatilho e vai até a pontuação, o dígito ou a
+# primeira palavra daqui -- não há limite de palavras, para o sobrenome não
+# ficar em claro ("Ana Clara dos Santos Oliveira Pereira Lima"). A lista junta:
+# palavras que encerram a frase ("meu nome é Ana e quero..."), palavras
+# capitalizadas que não são nome ("Sou a Mãe do aluno") e siglas que aparecem
+# em caixa alta depois do gatilho ("meu filho tem TEA", "sou a PCD"), para a
+# caixa alta não ser tomada por nome. Comparadas pela forma de `normalizar`.
 _NAO_E_NOME: FrozenSet[str] = frozenset(
     {
-        "e", "quero", "queria", "gostaria", "preciso", "tenho", "moro", "sou",
-        "estou", "estava", "minha", "meu", "para", "pra", "com", "sem", "que",
-        "mas", "porque", "pois", "nao", "sim", "ok", "aqui", "ja", "tambem",
+        # Conjunção, pronome e artigo
+        "e", "eh", "ou", "eu", "ele", "ela", "eles", "elas", "nos", "voce", "vc",
+        "voces", "a", "o", "as", "os", "um", "uma", "uns", "umas", "em", "no",
+        "na", "nas", "ao", "aos", "por", "pelo", "pela", "para", "pra", "com",
+        "sem", "sobre", "que", "mas", "porque", "pois", "se", "minha", "meu",
+        "minhas", "meus",
+        # Verbo e advérbio de frase
+        "quero", "queria", "gostaria", "preciso", "precisa", "precisava",
+        "tenho", "tem", "tinha", "teve", "moro", "mora", "sou", "estou", "esta",
+        "estao", "estava", "era", "foi", "fui", "sera", "vai", "vou", "faz",
+        "fez", "fiz", "quer", "pode", "posso", "sei", "nasceu", "nasci",
+        "estuda", "frequenta", "trabalho", "trabalha", "recebe", "recebeu",
+        "perdeu", "ficou", "fica", "usa", "toma", "sofre", "nao", "sim", "ok",
+        "aqui", "ja", "tambem", "ainda", "so", "hoje", "ontem", "onde", "como",
+        "qual", "quais", "quando", "quanto", "quantos",
+        # Papel ou condição, não nome
         "mae", "pai", "responsavel", "aluno", "aluna", "servidor", "servidora",
         "morador", "moradora", "professor", "professora", "cidadao", "cidada",
         "dono", "dona", "titular", "tutor", "tutora", "autista", "gestante",
+        # Sigla
+        "tea", "tdah", "pcd", "iptu", "ipva", "itbi", "cpf", "rg", "cnh", "cep",
+        "cnpj", "nis", "sus", "bpc", "inss", "fgts", "pis", "mei", "cras",
+        "creas", "brt", "vlt",
     }
 )  # fmt: skip
-
-
-def _sem_acento(texto: str) -> str:
-    decomposto = unicodedata.normalize("NFKD", texto)
-    return "".join(c for c in decomposto if not unicodedata.combining(c)).casefold()
 
 
 def _cpf_valido(digitos: str) -> bool:
@@ -848,27 +878,37 @@ def _cpf_valido(digitos: str) -> bool:
     return True
 
 
+def _parece_nome_proprio(palavra: str) -> bool:
+    """Capitalizada ("Maria", "Ana-Clara") ou em caixa alta ("MARIA")."""
+    return bool(_PALAVRA_CAPITALIZADA.fullmatch(palavra)) or (
+        len(palavra) > 1 and palavra.isupper()
+    )
+
+
 def _fim_do_nome(texto: str, inicio: int, *, capitalizado: bool) -> int:
     """Índice em que termina o nome que começa em `inicio`; `inicio` se não há nome.
 
+    Consome a sequência inteira de palavras com cara de nome: para na pontuação,
+    no dígito ou na primeira palavra de `_NAO_E_NOME`, nunca por contagem.
     Conectores ("da", "dos") só entram entre duas palavras do nome, nunca nas
     pontas: em "minha filha Ana do 3º ano", o nome é só "Ana".
     """
-    padrao = _PALAVRA_CAPITALIZADA if capitalizado else _PALAVRA
     fim = pos = inicio
     palavras = 0
-    while palavras < _MAX_PALAVRAS_DO_NOME:
+    while True:
         match = _PALAVRA.match(texto, pos)
         if not match:
             break
-        palavra = _sem_acento(match.group(0))
+        palavra = normalizar(match.group(0))
         if palavra in _CONECTORES_DE_NOME:
             espaco = _ESPACO.match(texto, match.end())
             if not palavras or not espaco:
                 break
             pos = espaco.end()
             continue
-        if palavra in _NAO_E_NOME or not padrao.fullmatch(match.group(0)):
+        if palavra in _NAO_E_NOME or (
+            capitalizado and not _parece_nome_proprio(match.group(0))
+        ):
             break
         palavras += 1
         fim = match.end()
@@ -903,8 +943,15 @@ def _redigir_nomes(texto: str) -> Tuple[str, bool]:
 
 
 def _redigir_endereco(match: "re.Match") -> str:
-    palavras = {_sem_acento(p.strip(".,")) for p in match.group("nome").split()}
-    if palavras & _NAO_E_NOME_DE_RUA:
+    palavras = normalizar(match.group("nome")).split()
+    if set(palavras) & _NAO_E_NOME_DE_RUA:
+        return match.group(0)
+    if not match.group("marcador") and (
+        palavras[-1] in _NAO_PRECEDE_NUMERO_DE_CASA
+        or _ANO.fullmatch(match.group("numero"))
+    ):
+        # "Avenida Brasil 2026", "Estrada do Galeão km 5": o dígito não é número
+        # de casa, e sem número o lugar é assunto, não dado pessoal.
         return match.group(0)
     return MARCADORES_QUERY["endereco"]
 
