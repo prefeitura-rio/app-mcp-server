@@ -445,7 +445,8 @@ def test_secao_vazia_desliga_o_sem_assunto(qf, tmp_path):
 
 
 # --------------------------------------------------------------------------------
-# Com contexto (CHATR-314): eleitoral na query e no contexto; sem assunto desliga
+# Com contexto (CHATR-314): eleitoral no tema composto; sem assunto na query e,
+# se ela falha, no contexto
 # --------------------------------------------------------------------------------
 
 
@@ -453,7 +454,7 @@ def test_secao_vazia_desliga_o_sem_assunto(qf, tmp_path):
 def filtro_composto(qf):
     return qf.SearchFilter(
         eleitoral=qf.BlacklistFilter(["lula"]),
-        sem_assunto=qf.SemAssuntoFilter(expressoes=["sim"]),
+        sem_assunto=qf.SemAssuntoFilter(expressoes=["sim", "ok"]),
     )
 
 
@@ -470,8 +471,32 @@ def test_com_contexto_eleitoral_na_query_continua_barrando(qf, filtro_composto):
     )
 
 
-def test_com_contexto_o_sem_assunto_nao_roda(filtro_composto):
+def test_com_contexto_com_assunto_a_query_sem_assunto_passa(filtro_composto):
     assert filtro_composto.check("Sim", "matrícula na rede municipal 2027").allowed
+
+
+def test_com_contexto_tambem_sem_assunto_barra(qf, filtro_composto):
+    """Contexto não desliga o filtro: "Sim (contexto: ok)" custaria uma chamada
+    ao Gemini por nada. O motivo registrado é o da query."""
+    assert filtro_composto.check("Sim", "ok") == qf.FilterDecision(
+        False, "sem_assunto", "expressao"
+    )
+    assert filtro_composto.check("2027", "Sim") == qf.FilterDecision(
+        False, "sem_assunto", "sem_letra"
+    )
+    assert filtro_composto.check("", "ok").matched == "placeholder"
+
+
+def test_com_contexto_a_query_com_assunto_passa_mesmo_com_contexto_vazio_de_assunto(
+    filtro_composto,
+):
+    assert filtro_composto.check("segunda via do iptu", "ok").allowed is True
+
+
+def test_com_contexto_e_sem_a_secao_so_o_eleitoral_roda(qf):
+    filtro = qf.SearchFilter(eleitoral=qf.BlacklistFilter(["lula"]))
+
+    assert filtro.check("Sim", "ok").allowed is True
 
 
 @pytest.mark.parametrize("contexto", [None, "", "   "])
@@ -479,10 +504,30 @@ def test_contexto_vazio_vale_ausente(filtro_composto, contexto):
     assert filtro_composto.check("Sim", contexto).reason == "sem_assunto"
 
 
-def test_com_contexto_a_whitelist_precisa_aceitar_os_dois(qf):
-    filtro = qf.SearchFilter(eleitoral=qf.WhitelistFilter([r"\biptu\b"]))
+def test_com_contexto_a_whitelist_casa_pelo_tema_composto(qf):
+    """A query-fragmento só tem sentido com o contexto: "Documentos" com
+    "matrícula na rede municipal 2027" precisa passar numa whitelist de
+    matrícula, senão toda chamada com query curta seria recusada."""
+    filtro = qf.SearchFilter(eleitoral=qf.WhitelistFilter(["matricula|iptu"]))
 
-    assert filtro.check("segunda via do iptu", "iptu 2026").allowed is True
-    assert filtro.check("segunda via do iptu", "receita de bolo").reason == (
-        "whitelist"
+    assert filtro.check("Documentos", "matrícula na rede municipal 2027").allowed
+    assert filtro.check("segunda via do iptu", "receita de bolo").allowed
+    assert filtro.check("Documentos", "receita de bolo").reason == "whitelist"
+
+
+def test_com_contexto_a_blacklist_veta_mesmo_com_a_whitelist_casando(qf):
+    filtro = qf.SearchFilter(
+        eleitoral=qf.build_query_filter(whitelist=["matricula"], blacklist=["lula"])
     )
+
+    assert filtro.check("Documentos", "matrícula 2027").allowed is True
+    assert filtro.check("Documentos", "matrícula do lula").matched == "lula"
+    assert filtro.check("número do lula", "matrícula 2027").matched == "lula"
+
+
+def test_compor_tema(qf):
+    assert qf.compor_tema("iptu", None) == "iptu"
+    assert qf.compor_tema("Documentos", "matrícula 2027") == (
+        "Documentos (contexto: matrícula 2027)"
+    )
+    assert qf.compor_tema("  ", "matrícula 2027") == "matrícula 2027"

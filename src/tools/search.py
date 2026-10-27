@@ -6,6 +6,7 @@ from opentelemetry import trace
 
 from src.tools.google_search import query_filter as filtro
 from src.tools.google_search.gemini_service import gemini_service
+from src.tools.google_search.query_filter import compor_tema
 from src.utils.background import disparar_em_background
 from src.utils.bigquery import save_response_in_bq_background
 from src.utils.typesense_api import HubSearchRequest, hub_search
@@ -176,20 +177,6 @@ def _marcar_filtro_no_span(decisao: filtro.FilterDecision) -> None:
         span.set_attribute("search.filter.reason", decisao.reason)
     if decisao.matched:
         span.set_attribute("search.filter.matched", decisao.matched)
-
-
-def compor_tema(query: str, contexto: str | None) -> str:
-    """Tema da pesquisa: a query e, se houver, o assunto da conversa entre
-    parênteses, rotulado para o modelo de busca não tomá-lo pela pergunta.
-
-    `"Documentos"` com o contexto `"matrícula na rede municipal 2027"` vira
-    `"Documentos (contexto: matrícula na rede municipal 2027)"`.
-    """
-    if not contexto:
-        return query
-    if not query.strip():
-        return contexto
-    return f"{query} (contexto: {contexto})"
 
 
 def _marcar_query_no_span(tipos: tuple[str, ...], *, tem_contexto: bool) -> None:

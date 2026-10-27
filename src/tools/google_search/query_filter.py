@@ -235,6 +235,22 @@ class SemAssuntoFilter:
         )
 
 
+def compor_tema(query: str, contexto: str | None) -> str:
+    """Tema da pesquisa: a query e, se houver, o assunto da conversa entre
+    parênteses, rotulado para o modelo de busca não tomá-lo pela pergunta.
+
+    `"Documentos"` com o contexto `"matrícula na rede municipal 2027"` vira
+    `"Documentos (contexto: matrícula na rede municipal 2027)"`. É o texto que
+    vai para o Typesense e para o Gemini, e também o que o filtro eleitoral
+    avalia quando há contexto.
+    """
+    if not contexto:
+        return query
+    if not query.strip():
+        return contexto
+    return f"{query} (contexto: {contexto})"
+
+
 class SearchFilter:
     """O filtro que a tool chama: sem assunto e eleitoral, nessa ordem.
 
@@ -243,9 +259,17 @@ class SearchFilter:
     Com `contexto` (o assunto da conversa, preenchido pelo agente), as regras
     mudam:
 
-    - o eleitoral avalia a query e o contexto, e barra se qualquer um barrar.
-      Senão o contexto viraria um jeito de levar o tema proibido à busca;
-    - o sem assunto não roda: "Sim" com o contexto "matrícula 2027" tem assunto.
+    - o sem assunto roda na query e, se ela não tem assunto, no contexto, que é
+      a chance de salvá-la: "Sim" com "matrícula 2027" passa; "Sim" com "ok"
+      não, senão custaria uma chamada ao Gemini por "Sim (contexto: ok)". Pular
+      o filtro por haver contexto zeraria o ganho assim que o Salesforce
+      passasse a enviá-lo sempre;
+    - o eleitoral avalia o tema composto (`compor_tema`), o mesmo texto que vai
+      para a busca. A blacklist veta um termo em qualquer um dos dois, então o
+      contexto não vira um jeito de levar o tema proibido à busca; a whitelist
+      casa se o composto casar, porque a query-fragmento ("Documentos") só tem
+      sentido com o contexto, e exigir que ela case sozinha recusaria toda
+      chamada com query curta assim que a whitelist fosse preenchida.
     """
 
     def __init__(self, eleitoral: QueryFilter, sem_assunto: QueryFilter | None = None):
@@ -255,13 +279,16 @@ class SearchFilter:
         self._composto = CompositeFilter(filtros)
 
     def check(self, query: str, contexto: str | None = None) -> FilterDecision:
-        if not contexto or not contexto.strip():
+        contexto = (contexto or "").strip()
+        if not contexto:
             return self._composto.check(query)
-        for texto in (query, contexto):
-            decisao = self.eleitoral.check(texto)
-            if not decisao.allowed:
+        if self.sem_assunto is not None:
+            decisao = self.sem_assunto.check(query)
+            if not decisao.allowed and not self.sem_assunto.check(contexto).allowed:
+                # O motivo registrado é o da query, comparável com o histórico
+                # de antes do contexto.
                 return decisao
-        return ALLOWED
+        return self.eleitoral.check(compor_tema(query, contexto))
 
     def __repr__(self) -> str:
         return f"SearchFilter(sem_assunto={self.sem_assunto!r}, eleitoral={self.eleitoral!r})"

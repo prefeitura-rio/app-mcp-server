@@ -192,10 +192,12 @@ Exemplo: `Documentos (contexto: matrícula na rede municipal 2027)`.
 ### D12. Filtro com contexto
 
 **Decisão:**
-- **Eleitoral:** avalia a query e o contexto, e bloqueia se qualquer um for barrado. Senão o contexto viraria um jeito de contornar o filtro. Com whitelist, os dois precisam casar.
-- **Sem assunto:** não roda com contexto. "Sim" com o contexto "matrícula 2027" tem assunto.
+- **Eleitoral:** avalia o tema composto (D11), o mesmo texto que vai para a busca. A blacklist veta um termo na query ou no contexto, então o contexto não vira um jeito de contornar o filtro. A whitelist casa se o composto casar: "Documentos" com "matrícula na rede municipal 2027" passa numa whitelist de matrícula.
+  - Antes, a whitelist exigia que a query casasse sozinha. A revisão apontou que isso recusaria toda chamada com query curta + contexto (o caso F4-B) assim que a whitelist do CHATR-294 fosse preenchida.
+- **Sem assunto:** roda na query e, se ela não tem assunto, no contexto. Barra só se os dois não têm: "Sim" com "matrícula 2027" passa; "Sim" com "ok" é barrado, com o motivo da query. 
+  - Antes, qualquer contexto desligava o filtro, e "Sim (contexto: ok)" custava uma chamada ao Gemini. Com o Salesforce enviando contexto sempre, os 6,3% de bloqueio voltariam a zero (apontado na revisão).
 
-**Decidido por:** especificação do card.
+**Decidido por:** especificação do card (eleitoral nos dois textos); revisão de código (composição e sem assunto no contexto).
 
 ### D13. Assinatura e docstring da tool
 
