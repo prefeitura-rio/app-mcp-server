@@ -163,6 +163,29 @@ def test_lista_de_modelos_da_busca_valida_passa(full_env, monkeypatch):
     assert preflight.check_gemini_search_config() == []
 
 
+def test_lista_de_modelos_da_busca_com_limite_de_consultas_passa(full_env, monkeypatch):
+    """O valor de produção depois do CHATR-314."""
+    monkeypatch.setenv(
+        "GEMINI_SEARCH_MODELS",
+        '[{"model": "gemini-2.5-flash-lite", "timeout_s": 35, "thinking_budget": 1024}, '
+        '{"model": "gemini-3.5-flash-lite", "timeout_s": 20, '
+        '"thinking_level": "MINIMAL", "max_search_queries": 1}]',
+    )
+    assert preflight.check_gemini_search_config() == []
+
+
+def test_limite_de_consultas_invalido_aborta_o_boot(full_env, monkeypatch):
+    monkeypatch.setenv(
+        "GEMINI_SEARCH_MODELS",
+        '[{"model": "gemini-3.5-flash-lite", "max_search_queries": 0}]',
+    )
+
+    assert preflight.check_gemini_search_config() == [
+        "GEMINI_SEARCH_MODELS[0] (gemini-3.5-flash-lite).max_search_queries: "
+        "precisa ser ≥ 1 (recebido: 0)"
+    ]
+
+
 def test_lista_de_modelos_da_busca_invalida_aborta_o_boot(full_env, monkeypatch):
     """Cada problema da lista vira um erro, junto com os demais do preflight."""
     monkeypatch.setenv(
