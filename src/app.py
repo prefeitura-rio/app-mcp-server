@@ -5,6 +5,7 @@ Aplicação principal do servidor FastMCP para o Rio de Janeiro.
 # comment to trigger build
 
 import asyncio
+import inspect
 import json
 
 from contextlib import asynccontextmanager, suppress
@@ -278,6 +279,12 @@ def create_app() -> FastMCP:
         def decorator(func):
             if tool_name not in EXCLUDED_TOOLS:
                 registered_tool_names.append(tool_name)
+                # O fastmcp 3 parseia a docstring (Google/NumPy/Sphinx) e
+                # publica só o sumário como `description`, cortando as seções
+                # Args/Returns e os exemplos. O Agentforce registra a tool com
+                # esse texto e o planner depende dele. Passar a docstring
+                # inteira mantém o wire igual ao do fastmcp 2.
+                kwargs.setdefault("description", inspect.getdoc(func))
                 return mcp.tool(**kwargs)(func)
             else:
                 logger.info(f"Tool '{tool_name}' excluded from registration")
