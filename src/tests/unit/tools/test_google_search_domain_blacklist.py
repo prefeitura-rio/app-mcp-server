@@ -404,6 +404,13 @@ def lista_real(db):
     return db.load_domain_blacklist(db.CONFIG_PATH)
 
 
+def test_validacao_das_listas_do_yaml_e_a_do_query_filter(db):
+    """O helper é um só, compartilhado com o `query_filter.yaml`."""
+    from src.tools.google_search import query_filter
+
+    assert db.lista_de_textos is query_filter.lista_de_textos
+
+
 def test_arquivo_versionado_carrega(db, lista_real):
     assert len(LINK_BLACKLIST_DE_PRODUCAO) == 135
     assert len(lista_real) == 135 - len(REDUNDANTES)

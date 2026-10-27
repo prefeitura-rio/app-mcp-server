@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from src.tools.google_search.query_filter import lista_de_textos
 from src.utils.log import logger
 
 CONFIG_PATH = Path(__file__).with_name("domain_blacklist.yaml")
@@ -133,15 +134,6 @@ class DomainBlacklist:
         return f"DomainBlacklist(dominios={len(self._dominios)})"
 
 
-def _lista_de_textos(valor: object, campo: str) -> list[str]:
-    # Seção vazia no YAML (`imprensa:`) chega como `None` e vale lista vazia.
-    if valor is None:
-        return []
-    if not isinstance(valor, list) or not all(isinstance(v, str) for v in valor):
-        raise ValueError(f"`{campo}` deve ser uma lista de textos.")
-    return valor
-
-
 def load_domain_blacklist(path: Path = CONFIG_PATH) -> DomainBlacklist:
     """Lê o YAML e monta a blacklist. Arquivo malformado levanta `ValueError`.
 
@@ -159,7 +151,7 @@ def load_domain_blacklist(path: Path = CONFIG_PATH) -> DomainBlacklist:
     dominios = [
         dominio
         for secao, valores in secoes.items()
-        for dominio in _lista_de_textos(valores, f"blacklist.{secao}")
+        for dominio in lista_de_textos(valores, f"blacklist.{secao}")
     ]
 
     blacklist = DomainBlacklist(dominios)
