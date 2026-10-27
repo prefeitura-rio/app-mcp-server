@@ -155,7 +155,10 @@ KEYCLOAK_TRUSTED_CLIENTS = list(
         if client_id.strip()
     )
 )
-LINK_BLACKLIST = getenv_or_action("LINK_BLACKLIST", default="").split(",")
+
+# `LINK_BLACKLIST` deixou de ser lida (CHATR-314): a blacklist de domínios das
+# fontes do google_search mora em src/tools/google_search/domain_blacklist.yaml.
+# Se a variável ainda existir no ambiente, é ignorada.
 
 # Configuração para temas válidos da ferramenta de equipamentos
 EQUIPMENTS_VALID_THEMES = getenv_or_action(

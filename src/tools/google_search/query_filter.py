@@ -317,8 +317,11 @@ def build_query_filter(
     return AllowAllFilter()
 
 
-def _lista_de_textos(valor: object, campo: str) -> list[str]:
-    # Chave vazia no YAML (`whitelist:`) chega como `None` e vale lista vazia.
+def lista_de_textos(valor: object, campo: str) -> list[str]:
+    """Valida uma lista de textos lida do YAML; `domain_blacklist` usa também.
+
+    Chave vazia no YAML (`whitelist:`) chega como `None` e vale lista vazia.
+    """
     if valor is None:
         return []
     if not isinstance(valor, list) or not all(isinstance(v, str) for v in valor):
@@ -353,11 +356,11 @@ def build_sem_assunto_filter(secao: object) -> SemAssuntoFilter | None:
 
     return SemAssuntoFilter(
         placeholder=placeholder,
-        numeros_permitidos=_lista_de_textos(
+        numeros_permitidos=lista_de_textos(
             secao.get("numeros_permitidos"), "sem_assunto.numeros_permitidos"
         ),
-        expressoes=_lista_de_textos(secao.get("expressoes"), "sem_assunto.expressoes"),
-        vocabulario=_lista_de_textos(
+        expressoes=lista_de_textos(secao.get("expressoes"), "sem_assunto.expressoes"),
+        vocabulario=lista_de_textos(
             secao.get("vocabulario"), "sem_assunto.vocabulario"
         ),
         max_palavras=max_palavras,
@@ -376,7 +379,7 @@ def load_query_filter(path: Path = CONFIG_PATH) -> SearchFilter:
     if not isinstance(dados, dict):
         raise ValueError(f"{path.name}: o conteúdo deve ser um mapa.")
 
-    whitelist = _lista_de_textos(dados.get("whitelist"), "whitelist")
+    whitelist = lista_de_textos(dados.get("whitelist"), "whitelist")
 
     secoes = dados.get("blacklist") or {}
     if not isinstance(secoes, dict):
@@ -384,7 +387,7 @@ def load_query_filter(path: Path = CONFIG_PATH) -> SearchFilter:
     blacklist = [
         termo
         for secao, termos in secoes.items()
-        for termo in _lista_de_textos(termos, f"blacklist.{secao}")
+        for termo in lista_de_textos(termos, f"blacklist.{secao}")
     ]
 
     query_filter = SearchFilter(
