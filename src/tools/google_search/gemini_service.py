@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Sequence
+from typing import Dict, Any, List, Optional, Sequence
 import asyncio
 from google import genai
 from google.genai.types import (
@@ -21,6 +21,7 @@ from src.config.gemini_search import (
 from uuid import uuid4
 
 from datetime import datetime
+from functools import lru_cache
 import httpx
 import random
 import time
@@ -272,6 +273,10 @@ class GeminiService:
         """Inicializa o cliente Gemini com as configurações do ambiente."""
         self.api_key = env.GEMINI_API_KEY
         self.client = genai.Client(api_key=self.api_key)
+        # Modelo de prompt de cada modelo configurado, montado já no boot
+        # (CHATR-314): erro no texto aparece aqui, não na primeira busca.
+        for config in env.GEMINI_SEARCH_CONFIG.models:
+            modelo_de_prompt(config.max_search_queries)
 
     def get_client(self):
         """Retorna a instância do cliente Gemini."""
@@ -308,7 +313,6 @@ class GeminiService:
         deadline_s = search_deadline_seconds(models, URL_RESOLUTION_RESERVE_SECONDS)
         deadline_at = started_at + deadline_s
         backoff_cap = env.GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS
-        formatted_prompt = web_searcher_instructions(research_topic=query)
         _marcar_span(
             **{
                 "gemini.search.deadline_s": deadline_s,
@@ -335,6 +339,11 @@ class GeminiService:
                 last_error = last_error or _deadline_error()
                 break
             model_error = None
+            # Cada modelo com o seu prompt (CHATR-314): muda a frase das consultas.
+            formatted_prompt = web_searcher_instructions(
+                research_topic=query,
+                max_search_queries=model_config.max_search_queries,
+            )
 
             for attempt in range(attempts_per_model):
                 model_seconds = model_deadline_at - time.monotonic()
@@ -346,7 +355,9 @@ class GeminiService:
                     model_error = model_error or _deadline_error()
                     break
                 try:
-                    logger.info(f"Prompt Length: {len(formatted_prompt)}")
+                    logger.info(
+                        f"Prompt Length: {len(formatted_prompt)} | model={model}"
+                    )
                     calls_made += 1
                     # Span por fora do `timeout`: o estouro do prazo chega a ele como
                     # `TimeoutError` e fica marcado como erro da tentativa.
@@ -368,6 +379,12 @@ class GeminiService:
                         else:
                             stage.set_attribute(
                                 "gemini.thinking_level", model_config.thinking_level
+                            )
+                        # Ausente quando o prompt pede "ao menos 5" (sem limite).
+                        if model_config.max_search_queries is not None:
+                            stage.set_attribute(
+                                "gemini.search.max_queries",
+                                model_config.max_search_queries,
                             )
                         async with asyncio.timeout(model_seconds):
                             response = await self.client.aio.models.generate_content(
@@ -739,9 +756,6 @@ class GeminiService:
             tokens_metadata["total_token_count"] = usage_metadata.total_token_count
 
         return tokens_metadata
-
-
-gemini_service = GeminiService()
 
 
 def _descrever_excecao(exc: BaseException) -> str:
@@ -1208,11 +1222,29 @@ def get_sources_list(citations_data, modified_text):
     return sources_gathered
 
 
-def web_searcher_instructions(research_topic: str):
-    current_date = datetime.now().strftime("%Y-%m-%d")
+def _frase_de_consultas(max_search_queries: Optional[int]) -> str:
+    """Frase do prompt sobre quantas consultas fazer, com o texto da bateria de
+    26/10/2026 (CHATR-314). Sem limite, o texto de sempre."""
+    if max_search_queries is None:
+        return "using at least 5 different queries."
+    if max_search_queries < 1:
+        raise ValueError(f"max_search_queries precisa ser ≥ 1: {max_search_queries}")
+    if max_search_queries == 1:
+        return "using exactly 1 query."
+    return f"using at most {max_search_queries} different queries."
 
+
+@lru_cache(maxsize=None)
+def modelo_de_prompt(max_search_queries: Optional[int] = None) -> str:
+    """Parte fixa do prompt de busca de um modelo: tudo menos a data e a pergunta,
+    que ficam como `{current_date}` e `{research_topic}` (CHATR-314).
+
+    Montado uma vez por valor de `max_search_queries`; `GeminiService` monta os da
+    configuração no boot. A data não entra aqui: os pods ficam dias no ar.
+    """
+    consultas = _frase_de_consultas(max_search_queries)
     return f"""### Persona
-You are a diligent and meticulous Investigative Research Analyst specializing in Rio de Janeiro municipal government services. Your superpower is sifting through web search results to find the ground truth. You are skeptical, fact-driven, and obsessed with source integrity. You always use the `google_search` tool to find the ground truth using at least 5 different queries.
+You are a diligent and meticulous Investigative Research Analyst specializing in Rio de Janeiro municipal government services. Your superpower is sifting through web search results to find the ground truth. You are skeptical, fact-driven, and obsessed with source integrity. You always use the `google_search` tool to find the ground truth {consultas}
 
 ### Objective
 Your mission is to execute a web search query, critically evaluate the top results, and synthesize the findings into a clear, factual, and perfectly cited text artifact. The quality of your work is the foundation for all subsequent analysis.
@@ -1236,7 +1268,7 @@ You must follow this precise four-step process for every query:
         Avoid unofficial blogs, forums, opinion pieces, or generalist portals. \
         When login via Gov.br is available, inform the user about it, as it is the official government authentication system. \
 
-    *   **Recency:** Check the publication date. For the given query, is older information still relevant, or is it critical to find the most recent data? The current date is **{current_date}**.
+    *   **Recency:** Check the publication date. For the given query, is older information still relevant, or is it critical to find the most recent data? The current date is **{{current_date}}**.
     *   **Objectivity:** Differentiate between factual reporting and biased commentary. Your synthesis must be based on facts.
 
 3.  **Synthesize & Extract:** Consolidate the verified facts from the most reliable sources into an extensive and detailed summary.
@@ -1258,5 +1290,20 @@ A long, detailed markdown "Research Artifact" with all the information from the 
 ### Your Turn
 
 **Research Topic:**
-{research_topic}
+{{research_topic}}
 """
+
+
+def web_searcher_instructions(
+    research_topic: str, max_search_queries: Optional[int] = None
+) -> str:
+    """Prompt de busca de um modelo: o modelo de prompt dele com a data do dia e a
+    pergunta. A data é lida a cada chamada."""
+    return modelo_de_prompt(max_search_queries).format(
+        current_date=datetime.now().strftime("%Y-%m-%d"),
+        research_topic=research_topic,
+    )
+
+
+# No fim do módulo: o `__init__` monta os modelos de prompt, definidos acima.
+gemini_service = GeminiService()

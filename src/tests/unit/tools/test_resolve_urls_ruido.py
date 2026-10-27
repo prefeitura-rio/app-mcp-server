@@ -22,6 +22,9 @@ import pytest
 # fixture instala (ver test_google_search_retry.py).
 from src.observability import tracing  # noqa: F401
 
+# Idem: o `GeminiService` monta no boot o prompt de cada modelo da configuração.
+from src.config import gemini_search
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 GEMINI_MODULE_PATH = (
@@ -44,7 +47,11 @@ def resolve(monkeypatch):
         warnings.append(msg)
 
     noop = lambda *_a, **_k: None  # noqa: E731
-    env = types.SimpleNamespace(GEMINI_API_KEY="test-gemini-key", LINK_BLACKLIST=[])
+    env = types.SimpleNamespace(
+        GEMINI_API_KEY="test-gemini-key",
+        GEMINI_SEARCH_CONFIG=gemini_search.DEFAULT_CONFIG,
+        LINK_BLACKLIST=[],
+    )
     monkeypatch.setitem(sys.modules, "src.config", types.SimpleNamespace(env=env))
     monkeypatch.setitem(sys.modules, "src.config.env", env)
     monkeypatch.setitem(
