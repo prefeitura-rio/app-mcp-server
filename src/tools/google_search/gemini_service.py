@@ -33,6 +33,9 @@ from google.genai import errors as genai_errors
 from opentelemetry import trace
 
 from src.observability.tracing import traced_stage
+from urllib.parse import urljoin, urlparse
+
+from src.tools.google_search import domain_blacklist as blacklist_de_dominios
 
 
 # Códigos 4xx que, apesar de "erro do cliente", são transitórios: 429 é saturação de
@@ -237,6 +240,20 @@ def _registrar_geracao(
     return budget_hit
 
 
+def _fontes_permitidas(chunks: List[Any]) -> List[Any]:
+    """Tira as fontes cujo domínio do grounding está na `domain_blacklist.yaml`
+    (CHATR-314). Fonte sem `web` passa: quem decide é o pós-processamento."""
+    permitidas = []
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        motivo = web and blacklist_de_dominios.domain_blacklist.fonte_bloqueada(web)
+        if motivo:
+            logger.info(f"Fonte bloqueada antes da resolução | dominio={motivo}")
+        else:
+            permitidas.append(chunk)
+    return permitidas
+
+
 async def _resolver_urls_no_prazo(chunks: List[Any], deadline_at: float) -> dict:
     """Resolve as URLs das fontes em até `URL_RESOLUTION_RESERVE_SECONDS`.
 
@@ -249,23 +266,79 @@ async def _resolver_urls_no_prazo(chunks: List[Any], deadline_at: float) -> dict
     restante = min(
         URL_RESOLUTION_RESERVE_SECONDS, max(deadline_at - time.monotonic(), 0.0)
     )
+    # Fonte de domínio bloqueado nem é resolvida (CHATR-314): sem entrada no mapa,
+    # ela não vira citação, nem mesmo como link do Google quando o salto falha.
+    total = len(chunks)
+    chunks = _fontes_permitidas(chunks)
     try:
         # O span fica dentro do `try`: o estouro passa por ele (marcado como erro)
         # antes de virar o fallback abaixo.
         with traced_stage("gemini.resolve_urls") as stage:
             stage.set_attribute("gemini.search.url_count", len(chunks))
+            stage.set_attribute("gemini.search.blocked_count", total - len(chunks))
             async with asyncio.timeout(restante):
-                return await resolve_urls(urls_to_resolve=chunks)
+                resolved_map = await resolve_urls(urls_to_resolve=chunks)
     except TimeoutError:
         logger.warning(
             f"Resolução de URLs estourou o prazo ({restante:.1f}s). "
             f"Seguindo com as URIs do grounding."
         )
         _marcar_span(**{"gemini.search.urls_degraded": True})
-        return {
+        resolved_map = {
             chunk.web.uri: {"url": chunk.web.uri, "error": "prazo esgotado"}
             for chunk in chunks
         }
+    # Nos dois caminhos: a blacklist só é conferida de novo aqui.
+    return _fontes_resolvidas(chunks, resolved_map)
+
+
+def _fontes_resolvidas(chunks: List[Any], resolved_map: dict) -> dict:
+    """Ponto único da blacklist depois da resolução (CHATR-314). Fonte fora do
+    mapa devolvido não vira citação: `get_citations` não confere de novo.
+
+    O domínio do grounding pode faltar ou divergir do destino, então o host do
+    `Location` é conferido. Quando o salto no Google falha (429, timeout, 5xx,
+    prazo esgotado), a fonte ficou com o link do Google, cujo destino não dá para
+    conferir: ela só segue se o grounding declarou um domínio (já aprovado antes
+    da resolução); sem domínio conhecido, é descartada enquanto a blacklist tiver
+    alguma entrada. Era por esse caminho que o link do Google levava a um site
+    bloqueado. A fonte não resolvida que segue ainda pode divergir do destino:
+    `gemini.search.unresolved_count` mede esse resíduo.
+    """
+    web_por_uri: Dict[str, Any] = {}
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        uri = getattr(web, "uri", None)
+        if uri:
+            web_por_uri.setdefault(uri, web)
+
+    blacklist = blacklist_de_dominios.domain_blacklist
+    permitidas: dict = {}
+    nao_resolvidas = descartadas = 0
+    for uri, resolved in resolved_map.items():
+        motivo = _url_bloqueada(resolved["url"])
+        if motivo:
+            logger.info(f"Fonte bloqueada depois da resolução | dominio={motivo}")
+            continue
+        if resolved.get("error") is not None:
+            dominio = blacklist_de_dominios.dominio_da_fonte(web_por_uri.get(uri))
+            if len(blacklist) and not dominio:
+                descartadas += 1
+                logger.info(
+                    "Fonte não resolvida e sem domínio conhecido descartada | "
+                    f"erro={resolved['error']}"
+                )
+                continue
+            nao_resolvidas += 1
+        permitidas[uri] = resolved
+
+    _marcar_span(
+        **{
+            "gemini.search.unresolved_count": nao_resolvidas,
+            "gemini.search.unresolved_discarded_count": descartadas,
+        }
+    )
+    return permitidas
 
 
 class GeminiService:
@@ -769,14 +842,42 @@ def _descrever_excecao(exc: BaseException) -> str:
     return f"{nome}: {mensagem}" if mensagem else nome
 
 
-async def process_link(session, link: dict):
-    uri = link.get("uri")
+# Host dos links de redirecionamento que o grounding do Gemini devolve como fonte.
+GROUNDING_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+# O salto no Google levou de 0,08 a 0,3 s nas medições de 26/10/2026. O pior caso
+# (as duas tentativas estourando o timeout, mais a espera entre elas) fica em
+# 6,25 s, dentro da reserva de 10 s da resolução (`URL_RESOLUTION_RESERVE_SECONDS`).
+GROUNDING_REDIRECT_TIMEOUT_SECONDS = 3.0
+GROUNDING_REDIRECT_ATTEMPTS = 2
+GROUNDING_REDIRECT_BACKOFF_SECONDS = 0.25
 
-    # Timeout específico por requisição (menor que o timeout geral)
-    link_timeout = 5
-    max_retries = 3
-    retryable_status_codes = {500, 502, 503, 504}
-    base_backoff_seconds = 0.5
+
+def _eh_link_do_grounding(uri: str | None) -> bool:
+    try:
+        return urlparse(uri or "").hostname == GROUNDING_REDIRECT_HOST
+    except ValueError:
+        return False
+
+
+async def process_link(session, link: dict):
+    """Resolve o link de redirecionamento do grounding pelo `Location` (CHATR-314).
+
+    Faz uma requisição ao Google, sem seguir o redirecionamento: o destino já vem
+    no `Location` da resposta 3xx, e `Location` relativo é resolvido contra o link
+    do Google. O site de destino nunca é contatado. Antes, seguir até ele (HEAD e
+    depois GET) custava p95 de ~10 s, e todo o ruído de alerta vinha de lá: TLS
+    antigo, anti-robô, 404 de HEAD mal implementado.
+
+    Link que não é do Google fica como está, sem requisição. Falha no salto do
+    Google mantém o link do Google, que leva à mesma página; só 5xx e erro de
+    transporte ganham uma nova tentativa curta.
+    """
+    uri = link.get("uri")
+    link["url"] = uri
+    link["error"] = None
+
+    if not _eh_link_do_grounding(uri):
+        return link
 
     async def report_final_error(status_code: int, error_message: str):
         await send_api_error(
@@ -792,15 +893,13 @@ async def process_link(session, link: dict):
         status_code: int, error_message: str, exc: BaseException | None = None
     ) -> bool:
         """
-        Vertex grounding redirect URLs frequently reject HEAD/GET requests with
-        anti-bot responses or TLS issues. Those failures are noisy but usually do
-        not indicate an application regression, so they should not hit the
-        interceptor.
+        Classifica a falha do salto no Google. Desde o CHATR-314 o destino não é
+        mais contatado, então nenhum alerta nasce do site de destino.
 
         O 429 é o rate limit do Google no endpoint de redirect para o nosso IP de
         saída, e o timeout é o redirect lento: os dois são esperados e a fonte sai
         com a URL de redirect, que funciona. Não há impacto para o cidadão
-        (CHATR-299).
+        (CHATR-299). 401/403/405 (bloqueio de robô) e erro de TLS seguem sem alerta.
         """
         normalized_error = (error_message or "").lower()
 
@@ -823,29 +922,12 @@ async def process_link(session, link: dict):
         )
         return not any(token in normalized_error for token in expected_transport_errors)
 
-    def set_fallback_error(error_msg: str):
-        # Trata erro específico do Mozilla
-        mozilla_suffix = "For more information check: https://developer.mozilla.org/"
-        if mozilla_suffix in error_msg:
-            try:
-                msg = error_msg.replace(mozilla_suffix, "")
-                msg = msg.split("http")[1]
-                msg = msg.split("'\n")[0]
-                msg = "http" + msg
-                link["url"] = msg
-                link["error"] = None
-                return
-            except Exception:
-                pass
-
-        link["url"] = uri
-        link["error"] = f"Erro ao resolver URL: {error_msg}"
-
     async def registrar_falha(
         status_code: int, error_message: str, exc: BaseException | None = None
     ):
         """Reporta ao interceptor só a falha inesperada; a esperada fica no log,
-        para o volume continuar mensurável."""
+        para o volume continuar mensurável. Nos dois casos a fonte fica com o link
+        do Google."""
         if should_report_resolution_error(status_code, error_message, exc):
             await report_final_error(status_code, error_message)
         else:
@@ -853,81 +935,56 @@ async def process_link(session, link: dict):
                 f"Falha esperada ao resolver URL do grounding, sem alerta | "
                 f"status={status_code} erro={error_message}"
             )
-        set_fallback_error(error_message)
+        link["url"] = uri
+        link["error"] = f"Erro ao resolver URL: {error_message}"
 
-    for attempt in range(max_retries):
-        is_last_attempt = attempt == max_retries - 1
+    for attempt in range(GROUNDING_REDIRECT_ATTEMPTS):
+        is_last_attempt = attempt == GROUNDING_REDIRECT_ATTEMPTS - 1
         try:
-            # Primeiro tenta HEAD request (mais rápido)
-            response = await session.head(
-                uri,
-                follow_redirects=True,
-                timeout=link_timeout,
-                intercept_errors=False,
-            )
-            response.raise_for_status()
-            link["url"] = str(response.url)
-            link["error"] = None
-            return link
-        except httpx.HTTPStatusError as e:
-            # 403/405 indicam que HEAD não é suportado - tentar GET abaixo
-            if e.response.status_code not in (403, 405):
-                if (
-                    e.response.status_code not in retryable_status_codes
-                    or is_last_attempt
-                ):
-                    clean_message = (
-                        f"HTTP {e.response.status_code}: "
-                        f"{e.response.reason_phrase or 'Empty Reason Phrase'}"
-                    )
-                    await registrar_falha(e.response.status_code, clean_message)
-                    return link
-        except Exception:
-            # Exceção no HEAD (conexão, TLS, timeout) segue para o GET, inclusive
-            # na última tentativa: antes, ela desistia ali e o alerta culpava o
-            # HEAD mesmo quando o GET também tinha falhado (CHATR-299).
-            pass
-
-        try:
-            # Se HEAD falhar, tenta GET request
             response = await session.get(
                 uri,
-                follow_redirects=True,
-                timeout=link_timeout,
+                follow_redirects=False,
+                timeout=GROUNDING_REDIRECT_TIMEOUT_SECONDS,
                 intercept_errors=False,
             )
-            response.raise_for_status()
-            link["url"] = str(response.url)
-            link["error"] = None
-            return link
-        except httpx.HTTPStatusError as e2:
-            status_code = e2.response.status_code
-            clean_message = (
-                f"HTTP {status_code}: "
-                f"{e2.response.reason_phrase or 'Empty Reason Phrase'}"
-            )
-
-            if status_code in retryable_status_codes and not is_last_attempt:
-                wait_time = base_backoff_seconds * (2**attempt)
-                await asyncio.sleep(wait_time)
-                continue
-
-            await registrar_falha(status_code, clean_message)
-            return link
-        except Exception as e2:
-            error_msg = _descrever_excecao(e2)
-
+        except httpx.TransportError as e:
+            # Conexão, TLS e timeout no Google: transitórios, uma nova tentativa.
             if not is_last_attempt:
-                wait_time = base_backoff_seconds * (2**attempt)
-                await asyncio.sleep(wait_time)
+                await asyncio.sleep(GROUNDING_REDIRECT_BACKOFF_SECONDS)
                 continue
-
-            await registrar_falha(0, error_msg, e2)
+            await registrar_falha(0, _descrever_excecao(e), e)
+            return link
+        except Exception as e:
+            await registrar_falha(0, _descrever_excecao(e), e)
             return link
 
-    # Fallback defensivo (não deve ser alcançado)
-    link["url"] = uri
-    link["error"] = "Erro ao resolver URL: retries esgotados"
+        status_code = response.status_code
+        location = response.headers.get("location", "").strip()
+        if response.has_redirect_location and location:
+            destino = urljoin(uri, location)
+            if urlparse(destino).scheme in ("http", "https"):
+                link["url"] = destino
+                link["error"] = None
+                return link
+            await registrar_falha(status_code, f"HTTP {status_code}: Location inválido")
+            return link
+
+        if status_code >= 500 and not is_last_attempt:
+            await asyncio.sleep(GROUNDING_REDIRECT_BACKOFF_SECONDS)
+            continue
+
+        if 300 <= status_code < 400:
+            error_message = f"HTTP {status_code}: sem Location"
+        elif status_code < 300:
+            error_message = f"HTTP {status_code}: sem redirecionamento"
+        else:
+            error_message = (
+                f"HTTP {status_code}: {response.reason_phrase or 'Empty Reason Phrase'}"
+            )
+        await registrar_falha(status_code, error_message)
+        return link
+
+    # Não alcançado: a última tentativa sempre retorna acima.
     return link
 
 
@@ -936,6 +993,11 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     """
     Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
     Ensures each original URL gets a consistent shortened form while maintaining uniqueness.
+
+    Desde o CHATR-314 cada link custa um salto no Google, sem seguir o
+    redirecionamento: o destino sai do `Location` (ver `process_link`). A
+    blacklist não é conferida aqui: é em `_fontes_resolvidas`, que também cobre o
+    fallback do prazo esgotado.
     """
     unique_urls = list(set([uri.web.uri for uri in urls_to_resolve]))
     urls = [{"uri": uri} for uri in unique_urls]
@@ -949,8 +1011,8 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     async with InterceptedHTTPClient(
         user_id="unknown",
         source={"source": "mcp", "tool": "gemini", "function": "resolve_urls"},
-        timeout=30.0,
-        follow_redirects=True,
+        timeout=GROUNDING_REDIRECT_TIMEOUT_SECONDS,
+        follow_redirects=False,
         headers=headers,
     ) as session:
         # Limita concorrência para evitar sobrecarga
@@ -983,6 +1045,15 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     logger.info(f"URLs resolvidas com sucesso: {successful_resolutions}/{len(urls)}")
 
     return resolved_map
+
+
+def _url_bloqueada(url: str | None) -> str | None:
+    """Entrada da `domain_blacklist.yaml` que bloqueia a URL, ou `None` (CHATR-314).
+
+    Substitui a `LINK_BLACKLIST`, que comparava por trecho de texto: `x.com`
+    barrava `netflix.com`. Agora é domínio igual ou subdomínio.
+    """
+    return blacklist_de_dominios.domain_blacklist.url_bloqueada(url)
 
 
 def get_citations(response, resolved_urls_map):
@@ -1044,44 +1115,15 @@ def get_citations(response, resolved_urls_map):
                     if not resolved_url or "url" not in resolved_url:
                         continue
 
-                    # Check if the URL's domain is blacklisted
-                    from urllib.parse import urlparse
-
-                    try:
-                        parsed_url = urlparse(resolved_url["url"])
-                        domain = parsed_url.netloc.lower()
-
-                        # Get blacklisted domains from environment
-                        blacklisted_domains = env.LINK_BLACKLIST
-                        is_blacklisted = any(
-                            blacklisted_domain.strip().lower() in domain
-                            for blacklisted_domain in blacklisted_domains
-                            if blacklisted_domain.strip()
-                        )
-
-                        # Only add to citations if not blacklisted
-                        if not is_blacklisted:
-                            citation["segments"].append(
-                                {
-                                    "label": chunk.web.title,
-                                    "uri": chunk.web.uri,
-                                    "url": resolved_url["url"],
-                                    # "text": support.segment.text,
-                                    # "error": resolved_url["error"],
-                                }
-                            )
-                    except Exception:
-                        # If there's any error with URL parsing or blacklist checking,
-                        # fall back to the original behavior (include the citation)
-                        citation["segments"].append(
-                            {
-                                "label": chunk.web.title,
-                                "uri": chunk.web.uri,
-                                "url": resolved_url["url"],
-                                # "text": support.segment.text,
-                                # "error": resolved_url["error"],
-                            }
-                        )
+                    citation["segments"].append(
+                        {
+                            "label": chunk.web.title,
+                            "uri": chunk.web.uri,
+                            "url": resolved_url["url"],
+                            # "text": support.segment.text,
+                            # "error": resolved_url["error"],
+                        }
+                    )
                 except (IndexError, AttributeError, NameError):
                     # Handle cases where chunk, web, uri, or resolved_map might be problematic
                     # For simplicity, we'll just skip adding this particular segment link
@@ -1188,33 +1230,10 @@ def get_sources_list(citations_data, modified_text):
     seen_uris = set()
     sources_gathered = []
 
-    # Get blacklisted domains from environment
-    blacklisted_domains = env.LINK_BLACKLIST
-
     for source in all_segments:
         if source["uri"] not in seen_uris and source["url"] in modified_text:
-            try:
-                # Check if the URL's domain is in the blacklist
-                from urllib.parse import urlparse
-
-                parsed_url = urlparse(source["url"])
-                domain = parsed_url.netloc.lower()
-
-                # Check if any blacklisted domain matches the source domain
-                is_blacklisted = any(
-                    blacklisted_domain.strip().lower() in domain
-                    for blacklisted_domain in blacklisted_domains
-                    if blacklisted_domain.strip()
-                )
-
-                if not is_blacklisted:
-                    seen_uris.add(source["uri"])
-                    sources_gathered.append(source)
-            except Exception:
-                # If there's any error with URL parsing or blacklist checking,
-                # fall back to the original behavior (include the source)
-                seen_uris.add(source["uri"])
-                sources_gathered.append(source)
+            seen_uris.add(source["uri"])
+            sources_gathered.append(source)
 
     for index, source in enumerate(sources_gathered):
         source["index"] = index + 1

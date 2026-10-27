@@ -110,8 +110,12 @@ def gemini_response(
     if grounding:
         grounding_metadata = types.SimpleNamespace(
             grounding_chunks=[
+                # Com domínio: no estouro do prazo a fonte segue com o link do
+                # Google; sem domínio conhecido ela seria descartada (CHATR-314).
                 types.SimpleNamespace(
-                    web=types.SimpleNamespace(uri=GROUNDING_URI, title="X")
+                    web=types.SimpleNamespace(
+                        uri=GROUNDING_URI, title="X", domain="prefeitura.rio"
+                    )
                 )
             ],
             grounding_supports=[],
@@ -173,7 +177,6 @@ def env_stub():
         GEMINI_SEARCH_RETRY_BASE_SECONDS=2.0,
         GEMINI_SEARCH_RETRY_MAX_BACKOFF_SECONDS=16.0,
         IS_LOCAL=False,
-        LINK_BLACKLIST=[],
         TYPESENSE_ACTIVE="false",
         TYPESENSE_HUB_SEARCH_URL="",
         TYPESENSE_PARAMETERS="none",
