@@ -56,7 +56,6 @@ async def get_google_search(query: str, contexto: str | None = None):
     # 0. Filtro de query antes de qualquer buscador (CHATR-294 e CHATR-314). Olha o
     # texto cru: a regra "sem letra" precisa ver o CPF solto antes da redação.
     decisao = filtro.query_filter.check(query, contexto)
-    _marcar_filtro_no_span(decisao)
 
     # 0.1. Redação de dado pessoal (CHATR-314), na query e no contexto. Daqui em
     # diante, buscadores e BigQuery só recebem o texto redigido, inclusive no
@@ -64,6 +63,15 @@ async def get_google_search(query: str, contexto: str | None = None):
     query_redigida, tipos_query = redigir_query(query)
     contexto_redigido, tipos_contexto = redigir_query(contexto)
     tipos_redigidos = tuple(dict.fromkeys(tipos_query + tipos_contexto))
+
+    # 0.2. O texto redigido passa pelo filtro de novo, porque é ele que os
+    # buscadores veem: "CPF 529.982.247-25" tem letra e passa cru, mas vira "CPF
+    # [cpf]", só rótulo e marcador, e iria para o Typesense e o Gemini como
+    # marcador puro (um grounding cobrado). Quem decide aqui é a regra E do sem
+    # assunto; o eleitoral não muda de decisão, a redação só tira dado pessoal.
+    if decisao.allowed and tipos_redigidos:
+        decisao = filtro.query_filter.check(query_redigida, contexto_redigido)
+    _marcar_filtro_no_span(decisao)
     _marcar_query_no_span(tipos_redigidos, tem_contexto=contexto is not None)
     registro_da_query = {
         "query": query_redigida,

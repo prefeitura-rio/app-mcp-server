@@ -15,7 +15,7 @@ A tool `google_search` passa a preparar a query antes de qualquer buscador:
 2. **F4-C, dado pessoal:** CPF, endereço, nome, data de nascimento, CEP, placa, e-mail e telefone saem da query antes de ela ir para o Typesense e o Gemini. O BigQuery passa a guardar só a versão redigida.
 3. **F4-B, contexto:** a tool aceita `contexto` (opcional), o assunto da conversa em uma frase. A busca usa a query junto dele.
 
-Ordem em `get_google_search`: filtro → redação de `query` e `contexto` → composição do tema → Typesense e Gemini → BigQuery.
+Ordem em `get_google_search`: filtro sobre o texto cru → redação de `query` e `contexto` → filtro de novo sobre o texto redigido (só se passou e houve redação) → composição do tema → Typesense e Gemini → BigQuery.
 
 Este documento registra as decisões, as alternativas descartadas e os limites conhecidos. Complementa o [CHATR-294](CHATR-294-filtro-eleitoral.md), que criou o filtro de query.
 
@@ -51,7 +51,8 @@ Artefatos:
 | B. Sem nenhuma letra | `sem_letra` | `1`, `2027`, `?`, CPF, data, emoji. Exceção: `1746` | 62 (1,0%) | 79,0% |
 | C. Só uma expressão da lista fechada | `expressao` | `Sim` (184×), `Ok`, `Entendi`, `Obrigada`, `Me ajuda`, `Boa tarde` | 220 (3,6%) | 30,0%* |
 | D. Só palavras do vocabulário sem assunto, até 8 | `vocabulario` | `Sim quero saber`, `Saber mais`, `Por favor`, `Não é isso` | 52 (0,8%) | 92,3% |
-| **Total** | | | **386 (6,3%)** | |
+| E. Só marcador de redação e o rótulo dele, até 8 | `dado_pessoal` | `CPF [cpf]`, `meu nome é [nome]`, `moro na [endereço]` (ver D10) | não medida | |
+| **Total (A a D)** | | | **386 (6,3%)** | |
 
 \* As "respostas" a `Sim` são pesquisas pela palavra solta (ex.: "what does sim mean in brazilian"). Contam como respondidas, mas não servem ao cidadão.
 
@@ -161,11 +162,11 @@ Todos decididos por Claude, sem revisão humana:
 **Motivo:** para 2% das buscas, com padrões conhecidos, estender a fonte única de padrões do projeto dá o mesmo resultado com menos peso. Reavaliar se a detecção de nome sem gatilho virar requisito.
 **Decidido por:** Mauro (26/10/2026).
 
-### D10. O filtro olha o texto cru; o resto, só o redigido
+### D10. O filtro olha o texto cru e, se passou e houve redação, o redigido; o resto, só o redigido
 
-**Decisão:** o filtro roda antes da redação. Buscadores, BigQuery (inclusive no caminho de bloqueio) e span só recebem a versão redigida.
-**Motivo:** a regra B precisa ver o CPF solto. Redigido, `529.982.247-25` viraria `[cpf]`, que tem letra e passaria. Gravar a versão redigida também no bloqueio é o lado conservador: a linha do BigQuery não precisa do texto cru para diagnosticar o filtro, porque o motivo e a regra estão nela.
-**Decidido por:** Claude, sem revisão humana (o card deixou o bloqueio em aberto).
+**Decisão:** o filtro roda antes da redação e, quando a query passou e algum dado foi redigido, roda de novo sobre o texto redigido. Buscadores, BigQuery (inclusive no caminho de bloqueio) e span só recebem a versão redigida.
+**Motivo:** a regra B precisa ver o CPF solto: redigido, `529.982.247-25` viraria `[cpf]`, que tem letra e passaria. Mas o inverso também acontece: `CPF 529.982.247-25` tem letra e passa cru, e redigido vira `CPF [cpf]`, que iria para o Typesense e o Gemini como marcador puro (um grounding cobrado no fallback). Daí a regra E do sem assunto (`dado_pessoal`): texto com marcador de redação em que, tirado o marcador, só sobram palavras do vocabulário e dos `rotulos_de_dado_pessoal` do YAML ("cpf", "meu nome é", "moro na"). Os marcadores vêm de `MARCADORES_QUERY`; sem marcador a regra não roda, então "CPF" sozinho continua com assunto. O segundo bloqueio vai para o span e o BigQuery como os outros. Gravar a versão redigida também no bloqueio é o lado conservador: a linha do BigQuery não precisa do texto cru para diagnosticar o filtro, porque o motivo e a regra estão nela.
+**Decidido por:** Claude, sem revisão humana (o card deixou o bloqueio em aberto); regra E apontada na revisão de código.
 
 ---
 

@@ -1428,8 +1428,8 @@ def test_query_barrada_grava_a_versao_redigida(search, monkeypatch):
 
 
 def test_cpf_solto_e_barrado_pelo_sem_assunto_antes_da_redacao(search, monkeypatch):
-    """O filtro olha o texto cru: redigido, o CPF solto viraria "[cpf]", que tem
-    letra. No BigQuery, só a versão redigida."""
+    """O filtro olha o texto cru primeiro: a regra B vê o CPF solto. No
+    BigQuery, só a versão redigida."""
     _buscadores_que_nao_podem_rodar(search, monkeypatch)
 
     result = asyncio.run(search.module.get_google_search("529.982.247-25"))
@@ -1438,6 +1438,79 @@ def test_cpf_solto_e_barrado_pelo_sem_assunto_antes_da_redacao(search, monkeypat
     registro = _registro_no_bigquery(search)["response"]
     assert registro["filter_matched"] == "sem_letra"
     assert registro["query"] == "[cpf]"
+
+
+@pytest.mark.parametrize(
+    ("query", "redigida", "tipo"),
+    [
+        ("CPF 529.982.247-25", "CPF [cpf]", "cpf"),
+        ("meu nome é João", "meu nome é [nome]", "nome"),
+        ("moro na Rua Barata Ribeiro 10", "moro na [endereço]", "endereco"),
+    ],
+)
+def test_query_so_de_dado_pessoal_e_barrada_depois_da_redacao(
+    search, monkeypatch, query, redigida, tipo
+):
+    """Crua, a query tem letra e passa; redigida, é só rótulo e marcador, e iria
+    para o Typesense e o Gemini como marcador puro. O filtro roda de novo sobre
+    o texto redigido, e o bloqueio fica no BigQuery como os outros."""
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    result = asyncio.run(search.module.get_google_search(query))
+
+    assert result["text"] == search.module.QUERY_SEM_ASSUNTO_MESSAGE
+    assert result["success"] is True
+    registro = _registro_no_bigquery(search)["response"]
+    assert registro["blocked"] is True
+    assert registro["filter_reason"] == "sem_assunto"
+    assert registro["filter_matched"] == "dado_pessoal"
+    assert registro["query"] == redigida
+    assert registro["pii_redigida"] == [tipo]
+
+
+def test_dado_pessoal_com_assunto_segue_para_a_busca_redigido(search, monkeypatch):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search("CPF 529.982.247-25 segunda via do iptu")
+    )
+
+    assert chamadas.gemini == ["CPF [cpf] segunda via do iptu"]
+    registro = _registro_no_bigquery(search)["response"]
+    assert "blocked" not in registro
+
+
+def test_so_dado_pessoal_na_query_com_contexto_com_assunto_e_pesquisado(
+    search, monkeypatch
+):
+    chamadas = _capturar_buscadores(search, monkeypatch)
+
+    asyncio.run(
+        search.module.get_google_search("CPF 529.982.247-25", "segunda via do iptu")
+    )
+
+    assert chamadas.gemini == ["CPF [cpf] (contexto: segunda via do iptu)"]
+    for coro in search.created_tasks:
+        coro.close()
+    search.created_tasks.clear()
+
+
+def test_bloqueio_depois_da_redacao_vai_para_o_span_como_os_outros(search, monkeypatch):
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    _buscadores_que_nao_podem_rodar(search, monkeypatch)
+
+    with tracer.start_as_current_span("tool.so_pii"):
+        search.run("CPF 529.982.247-25")
+
+    [atributos] = [s.attributes for s in exporter.get_finished_spans()]
+    assert atributos["search.filter.blocked"] is True
+    assert atributos["search.filter.reason"] == "sem_assunto"
+    assert atributos["search.filter.matched"] == "dado_pessoal"
+    assert atributos["search.query.pii_redacted"] is True
+    assert "529" not in str(dict(atributos))
 
 
 def test_tipos_redigidos_vao_para_o_span_sem_o_valor(search, monkeypatch):

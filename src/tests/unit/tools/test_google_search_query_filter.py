@@ -390,6 +390,68 @@ def test_sem_placeholder_configurado_so_o_vazio_cai_na_regra_a(qf):
     assert filtro.check("[ATTACHMENTS]").allowed is True
 
 
+# Regra E (CHATR-314): a query redigida que virou só marcador e rótulo
+
+
+def test_regra_e_so_marcador_e_rotulo_e_sem_assunto(qf):
+    filtro = qf.SemAssuntoFilter(
+        vocabulario=["meu", "é"],
+        marcadores=["[cpf]", "[nome]"],
+        rotulos_de_dado_pessoal=["cpf", "nome"],
+        max_palavras=3,
+    )
+
+    assert filtro.check("CPF [cpf]").matched == "dado_pessoal"
+    assert filtro.check("meu nome é [nome]").matched == "dado_pessoal"
+    # Só o marcador: regra A, como o placeholder do canal.
+    assert filtro.check("[cpf]").matched == "placeholder"
+    # Com assunto, passa.
+    assert filtro.check("CPF [cpf] segunda via").allowed is True
+    # Sem marcador, o rótulo não barra: "cpf" sozinho tem assunto.
+    assert filtro.check("cpf").allowed is True
+    assert filtro.check("meu nome é").allowed is True
+    # Acima do teto de palavras, passa como a regra D.
+    assert filtro.check("meu nome é cpf [nome]").allowed is True
+
+
+def test_regra_e_desligada_sem_marcadores_ou_sem_rotulos(qf):
+    sem_marcadores = qf.SemAssuntoFilter(rotulos_de_dado_pessoal=["cpf"])
+    sem_rotulos = qf.SemAssuntoFilter(marcadores=["[cpf]"])
+
+    assert sem_marcadores.check("CPF [cpf]").allowed is True
+    assert sem_rotulos.check("CPF [cpf]").allowed is True
+
+
+def test_arquivo_versionado_usa_os_marcadores_do_redator(qf, filtro_real):
+    """Os marcadores vêm de `MARCADORES_QUERY`: um marcador novo no `pii.py`
+    entra aqui sem mexer no YAML."""
+    from src.utils.pii import MARCADORES_QUERY, redigir_query
+
+    assert filtro_real.sem_assunto._marcadores == tuple(MARCADORES_QUERY.values())
+    for query in ("CPF 529.982.247-25", "meu nome é João", "moro na Rua X 10"):
+        assert filtro_real.check(query).allowed is True
+        redigida, _ = redigir_query(query)
+        assert filtro_real.check(redigida) == qf.FilterDecision(
+            False, "sem_assunto", "dado_pessoal"
+        ), redigida
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "CPF [cpf] segunda via do iptu",
+        "multa da placa [placa]",
+        "cpf",
+        "meu nome é",
+        "nasci em 1990",
+    ],
+)
+def test_arquivo_versionado_rotulo_com_assunto_ou_sem_marcador_passa(
+    filtro_real, query
+):
+    assert filtro_real.check(query).allowed is True
+
+
 # --------------------------------------------------------------------------------
 # Composição: sem assunto antes do eleitoral
 # --------------------------------------------------------------------------------

@@ -35,6 +35,11 @@ import yaml
 
 from src.utils.log import logger
 
+# Os marcadores que `redigir_query` deixa no lugar do dado pessoal ("[cpf]",
+# "[nome]"...): o sem assunto precisa reconhecê-los para barrar a query que,
+# redigida, virou só marcador e rótulo (regra E).
+from src.utils.pii import MARCADORES_QUERY
+
 # `normalizar` mora em `src/utils/texto.py` e é a mesma que `src/utils/pii.py`
 # usa, para o filtro e o redator lerem o texto do mesmo jeito. Continua
 # acessível como `query_filter.normalizar`.
@@ -59,6 +64,7 @@ REGRA_PLACEHOLDER = "placeholder"  # A: vazio ou só token entre colchetes
 REGRA_SEM_LETRA = "sem_letra"  # B: nenhuma letra (número, pontuação, emoji)
 REGRA_EXPRESSAO = "expressao"  # C: cumprimento ou confirmação da lista fechada
 REGRA_VOCABULARIO = "vocabulario"  # D: só palavras do vocabulário sem assunto
+REGRA_DADO_PESSOAL = "dado_pessoal"  # E: só marcador de redação e o rótulo dele
 
 MAX_PALAVRAS_PADRAO = 8
 
@@ -174,9 +180,16 @@ class SemAssuntoFilter:
       cumprimentos e confirmações;
     - D (`vocabulario`): todas as palavras estão no vocabulário sem assunto, até
       `max_palavras`. Mensagem mais longa passa: a chance de ter assunto cresce e
-      o custo de barrar por engano também.
+      o custo de barrar por engano também;
+    - E (`dado_pessoal`): o texto tem um marcador de redação (`[cpf]`, `[nome]`,
+      `[endereço]`...) e, tirado o marcador, só sobram palavras do vocabulário
+      e `rotulos_de_dado_pessoal` ("cpf", "meu nome é", "moro na"), até
+      `max_palavras`. É o que a query só de dado pessoal vira depois de
+      `redigir_query`: "CPF 529.982.247-25" tem letra e passa crua, mas "CPF
+      [cpf]" iria para o Typesense e o Gemini como marcador puro. Sem marcador
+      a regra não roda: "CPF" sozinho tem assunto.
 
-    C e D comparam o texto normalizado, então caixa, acento e pontuação não
+    C, D e E comparam o texto normalizado, então caixa, acento e pontuação não
     contam. Tudo o que tem uma palavra de fora das listas passa: `Creche`,
     `Documentos` e `Para 2027` dependem da conversa, mas têm assunto.
     """
@@ -189,6 +202,8 @@ class SemAssuntoFilter:
         expressoes: Iterable[str] = (),
         vocabulario: Iterable[str] = (),
         max_palavras: int = MAX_PALAVRAS_PADRAO,
+        marcadores: Iterable[str] = (),
+        rotulos_de_dado_pessoal: Iterable[str] = (),
     ):
         self._placeholder = (
             _compilar(placeholder, "sem_assunto.placeholder")
@@ -199,9 +214,22 @@ class SemAssuntoFilter:
         self._expressoes = _normalizados(expressoes)
         self._vocabulario = _normalizados(vocabulario)
         self._max_palavras = max_palavras
+        # Marcadores são comparados literalmente, antes de normalizar: "[cpf]"
+        # normalizado seria "cpf", indistinguível do rótulo.
+        self._marcadores = tuple(dict.fromkeys(m for m in marcadores if m))
+        self._rotulos = _normalizados(rotulos_de_dado_pessoal)
+
+    def _sem_marcadores(self, texto: str) -> tuple[str, bool]:
+        """Tira os marcadores de redação e diz se havia algum."""
+        tem_marcador = False
+        for marcador in self._marcadores:
+            if marcador in texto:
+                tem_marcador = True
+                texto = texto.replace(marcador, " ")
+        return texto, tem_marcador
 
     def check(self, query: str) -> FilterDecision:
-        texto = query or ""
+        texto, tem_marcador = self._sem_marcadores(query or "")
         if self._placeholder is not None:
             texto = self._placeholder.sub(" ", texto)
         if not texto.strip():
@@ -218,12 +246,16 @@ class SemAssuntoFilter:
             return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_EXPRESSAO)
 
         palavras = normalizado.split()
-        if (
-            self._vocabulario
-            and len(palavras) <= self._max_palavras
-            and all(palavra in self._vocabulario for palavra in palavras)
-        ):
+        if len(palavras) > self._max_palavras:
+            return ALLOWED
+        if self._vocabulario and all(p in self._vocabulario for p in palavras):
             return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_VOCABULARIO)
+        if (
+            tem_marcador
+            and self._rotulos
+            and all(p in self._vocabulario or p in self._rotulos for p in palavras)
+        ):
+            return FilterDecision(False, REASON_SEM_ASSUNTO, REGRA_DADO_PESSOAL)
 
         return ALLOWED
 
@@ -231,6 +263,7 @@ class SemAssuntoFilter:
         return (
             f"SemAssuntoFilter(expressoes={len(self._expressoes)}, "
             f"vocabulario={len(self._vocabulario)}, "
+            f"rotulos={len(self._rotulos)}, "
             f"max_palavras={self._max_palavras})"
         )
 
@@ -374,6 +407,11 @@ def build_sem_assunto_filter(secao: object) -> SemAssuntoFilter | None:
             secao.get("vocabulario"), "sem_assunto.vocabulario"
         ),
         max_palavras=max_palavras,
+        marcadores=MARCADORES_QUERY.values(),
+        rotulos_de_dado_pessoal=lista_de_textos(
+            secao.get("rotulos_de_dado_pessoal"),
+            "sem_assunto.rotulos_de_dado_pessoal",
+        ),
     )
 
 

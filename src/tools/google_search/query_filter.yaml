@@ -214,12 +214,19 @@ blacklist:
 #    salvo os `numeros_permitidos`.
 # C. A mensagem inteira é uma das `expressoes`.
 # D. Todas as palavras estão no `vocabulario`, com até `max_palavras` palavras.
+# E. A mensagem tem um marcador de redação ("[cpf]", "[nome]", "[endereço]"...,
+#    os de `redigir_query`) e, tirado o marcador, só sobram palavras do
+#    `vocabulario` e de `rotulos_de_dado_pessoal`, com até `max_palavras`. É a
+#    query que era só dado pessoal: "CPF 529.982.247-25" tem letra e passa
+#    crua, mas redigida vira "CPF [cpf]" e iria para a busca como marcador
+#    puro. A tool roda o filtro de novo sobre o texto redigido. Sem marcador a
+#    regra não roda: "CPF" sozinho tem assunto.
 #
-# `expressoes` e `vocabulario` são normalizados como as listas eleitorais
-# (minúsculas, sem acento, pontuação vira espaço). Uma palavra de fora das
-# listas basta para a mensagem passar: "Creche", "Documentos" e "Para 2027"
-# passam. Por isso nada aqui pode ter assunto: incluir "matrícula" no
-# vocabulário barraria "matrícula sim".
+# `expressoes`, `vocabulario` e `rotulos_de_dado_pessoal` são normalizados como
+# as listas eleitorais (minúsculas, sem acento, pontuação vira espaço). Uma
+# palavra de fora das listas basta para a mensagem passar: "Creche",
+# "Documentos" e "Para 2027" passam. Por isso nada aqui pode ter assunto:
+# incluir "matrícula" no vocabulário barraria "matrícula sim".
 #
 # Decisões e exemplos medidos: docs/decisions/CHATR-314-preparacao-da-query.md.
 sem_assunto:
@@ -316,3 +323,72 @@ sem_assunto:
     - informações
     - dúvida
   max_palavras: 8
+
+  # Regra E: o rótulo que fica ao lado do marcador quando a query era só o dado
+  # pessoal ("CPF [cpf]", "meu nome é [nome]", "moro na [endereço]", "nasci em
+  # [data]"). Só vale junto de um marcador: "cpf" sozinho continua passando.
+  rotulos_de_dado_pessoal:
+    # Documento
+    - cpf
+    - rg
+    - cnh
+    - cnpj
+    - nis
+    - documento
+    - número
+    - numero
+    # Nome
+    - nome
+    - sobrenome
+    - chamo
+    - sou
+    # Endereço
+    - endereço
+    - endereco
+    - rua
+    - moro
+    - resido
+    - casa
+    - cep
+    # Contato
+    - telefone
+    - celular
+    - tel
+    - fone
+    - whatsapp
+    - zap
+    - contato
+    - email
+    - mail
+    # Placa e data de nascimento
+    - placa
+    - carro
+    - data
+    - nascimento
+    - nasci
+    - nasceu
+    - nascido
+    - nascida
+    # Possessivo, verbo e preposição do rótulo
+    - meu
+    - minha
+    - é
+    - e
+    - em
+    - "no"
+    - na
+    - do
+    - da
+    - de
+    - dos
+    - das
+    - com
+    # Familiar depois de "meu"/"minha"
+    - filho
+    - filha
+    - mãe
+    - pai
+    - marido
+    - esposa
+    - esposo
+    - mulher
