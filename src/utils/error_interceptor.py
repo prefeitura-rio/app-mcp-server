@@ -15,6 +15,7 @@ import traceback as tb
 from typing import Any, Callable, Dict, Optional, Set
 
 import httpx
+from google.cloud import bigquery
 from loguru import logger
 from opentelemetry import trace
 
@@ -95,6 +96,113 @@ def _redact_pii_in_text(text: str) -> str:
     return redigir_padroes_pii(text)
 
 
+_QUERY_PARAMETER_TYPES = (
+    bigquery.ScalarQueryParameter,
+    bigquery.ArrayQueryParameter,
+    bigquery.StructQueryParameter,
+)
+
+
+def _describe_query_parameter(param: Any) -> Dict[str, Any]:
+    """
+    Nome e tipo de um parâmetro de query do BigQuery, nunca o valor.
+
+    O valor pode ser um nome, endereço ou data de nascimento que a redação por
+    regex não reconhece; o nome e o tipo bastam para localizar a query.
+    """
+    try:
+        parameter_type = param.to_api_repr().get("parameterType") or {}
+    except Exception:
+        parameter_type = {}
+    return {
+        "name": getattr(param, "name", None),
+        "type": parameter_type.get("type", type(param).__name__),
+    }
+
+
+class _InterceptorJSONEncoder(CustomJSONEncoder):
+    """
+    `CustomJSONEncoder` que nunca levanta `TypeError` (CHATR-322).
+
+    O `input_body` carrega os argumentos crus da função que falhou -- por
+    exemplo, a lista de `ScalarQueryParameter` de `get_bigquery_result`. Um
+    `TypeError` aqui derrubava o report e, sem o `try` no `async_wrapper`,
+    tomava o lugar da exceção original. O fallback fica restrito ao
+    interceptor: os demais usos do `CustomJSONEncoder` (DLQ, gravação no
+    BigQuery) continuam falhando alto.
+
+    Parâmetros de query do BigQuery viram `{"name", "type"}`, sem o valor.
+    Qualquer outro tipo vira só o nome da classe, como `_handle_error` já faz
+    com os argumentos de topo -- nenhum valor cru de objeto desconhecido sai
+    do processo por aqui.
+    """
+
+    def default(self, obj):
+        try:
+            return super().default(obj)
+        except TypeError:
+            pass
+        if isinstance(obj, _QUERY_PARAMETER_TYPES):
+            return _describe_query_parameter(obj)
+        return type(obj).__name__
+
+
+def _build_interceptor_payload(
+    customer_whatsapp_number: str,
+    flowname: str,
+    api_endpoint: str,
+    input_body: Any,
+    http_status_code: int,
+    error_message: str,
+    traceback: Optional[str],
+    source: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Monta o payload enviado ao interceptor. Pode levantar; quem chama trata."""
+    # Serializa input_body para string JSON se necessário
+    if isinstance(input_body, (dict, list)):
+        input_body_str = json.dumps(
+            input_body, ensure_ascii=False, cls=_InterceptorJSONEncoder
+        )
+    elif input_body is None:
+        input_body_str = "None"
+    else:
+        input_body_str = str(input_body)
+
+    # Redação básica de PII antes do envio (CHATR-113): mascara o número de
+    # telefone e redige possíveis CPFs/telefones embutidos em input_body.
+    masked_whatsapp_number = _mask_last_four_digits(str(customer_whatsapp_number))
+    input_body_str = _redact_pii_in_text(input_body_str)
+
+    # Prepara error_response como JSON string contendo error_message e traceback
+    error_response_data = {"error_message": error_message}
+    if traceback:
+        error_response_data["traceback"] = traceback
+    error_response_str = json.dumps(error_response_data, ensure_ascii=False)
+
+    # Serializa source como JSON string se for dicionário. Um `extract_source`
+    # pode injetar datetime/Enum/objeto aqui; usa o mesmo encoder do input_body.
+    if source is not None:
+        source_str = json.dumps(
+            source, indent=2, ensure_ascii=False, cls=_InterceptorJSONEncoder
+        )
+    else:
+        source_str = "mcp"
+
+    payload = {
+        "customer_whatsapp_number": masked_whatsapp_number,
+        "source": source_str,
+        "flowname": flowname,
+        "api_endpoint": api_endpoint,
+        "input_body": input_body_str,
+        "http_status_code": http_status_code,
+        "error_response": error_response_str,
+    }
+    # Correlação com trace/span do OTel (CHATR-110/CHATR-113): presente
+    # apenas quando há um trace ativo, ausente do payload caso contrário.
+    payload.update(_get_current_trace_context())
+    return payload
+
+
 async def send_error_to_interceptor(
     customer_whatsapp_number: str,
     flowname: str,
@@ -121,6 +229,12 @@ async def send_error_to_interceptor(
     Returns:
         True se o erro foi enviado com sucesso, False caso contrário
 
+    Nunca levanta exceção (CHATR-322): falha na montagem do payload ou no
+    envio vira `warning` com traceback e retorno `False`. Vários chamadores
+    (`http_client`, `divida_ativa_v2`, `external_tables`, `rock_in_rio`)
+    chamam esta função dentro de um `except ...: ...; raise` e contam com isso
+    para não trocar a exceção original.
+
     Example:
         >>> await send_error_to_interceptor(
         ...     customer_whatsapp_number="5521999999999",
@@ -142,46 +256,23 @@ async def send_error_to_interceptor(
         )
         return False
 
-    # Serializa input_body para string JSON se necessário
-    if isinstance(input_body, (dict, list)):
-        input_body_str = json.dumps(
-            input_body, ensure_ascii=False, cls=CustomJSONEncoder
+    try:
+        payload = _build_interceptor_payload(
+            customer_whatsapp_number=customer_whatsapp_number,
+            flowname=flowname,
+            api_endpoint=api_endpoint,
+            input_body=input_body,
+            http_status_code=http_status_code,
+            error_message=error_message,
+            traceback=traceback,
+            source=source,
         )
-    elif input_body is None:
-        input_body_str = "None"
-    else:
-        input_body_str = str(input_body)
-
-    # Redação básica de PII antes do envio (CHATR-113): mascara o número de
-    # telefone e redige possíveis CPFs/telefones embutidos em input_body.
-    masked_whatsapp_number = _mask_last_four_digits(str(customer_whatsapp_number))
-    input_body_str = _redact_pii_in_text(input_body_str)
-
-    # Prepara error_response como JSON string contendo error_message e traceback
-    error_response_data = {"error_message": error_message}
-    if traceback:
-        error_response_data["traceback"] = traceback
-    error_response_str = json.dumps(error_response_data, ensure_ascii=False)
-
-    # Serializa source como JSON string se for dicionário
-    if source is not None:
-        source_str = json.dumps(source, indent=2, ensure_ascii=False)
-    else:
-        source_str = "mcp"
-
-    # Prepara o payload
-    payload = {
-        "customer_whatsapp_number": masked_whatsapp_number,
-        "source": source_str,
-        "flowname": flowname,
-        "api_endpoint": api_endpoint,
-        "input_body": input_body_str,
-        "http_status_code": http_status_code,
-        "error_response": error_response_str,
-    }
-    # Correlação com trace/span do OTel (CHATR-110/CHATR-113): presente
-    # apenas quando há um trace ativo, ausente do payload caso contrário.
-    payload.update(_get_current_trace_context())
+    except Exception:
+        logger.opt(exception=True).warning(
+            f"⚠️ Falha ao montar o payload para o interceptor: {flowname}. "
+            "Continuando execução normal."
+        )
+        return False
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -213,10 +304,9 @@ async def send_error_to_interceptor(
             "⚠️ Timeout ao enviar erro para o interceptor. Continuando execução normal."
         )
         return False
-    except Exception as e:
-        logger.warning(
-            f"⚠️ Erro ao enviar erro para o interceptor: {str(e)}. "
-            "Continuando execução normal."
+    except Exception:
+        logger.opt(exception=True).warning(
+            "⚠️ Erro ao enviar erro para o interceptor. Continuando execução normal."
         )
         return False
 
@@ -421,7 +511,9 @@ def _track_interceptor_task(task: asyncio.Task) -> None:
             return
         exc = finished_task.exception()
         if exc is not None:
-            logger.warning(f"Task de report ao error interceptor falhou: {exc}")
+            logger.opt(exception=exc).warning(
+                "Task de report ao error interceptor falhou."
+            )
 
     task.add_done_callback(_on_done)
 
@@ -488,7 +580,15 @@ def interceptor(
                 return await func(*args, **kwargs)
             except error_types as e:
                 if not _ja_reportada(e):
-                    await _handle_error(func, args, kwargs, e)
+                    # O report nunca pode trocar a exceção original (CHATR-322).
+                    # `send_error_to_interceptor` já é total; este `try` cobre
+                    # o que vem antes dela em `_handle_error`.
+                    try:
+                        await _handle_error(func, args, kwargs, e)
+                    except Exception as report_error:
+                        logger.opt(exception=report_error).warning(
+                            "Falha ao reportar ao interceptor."
+                        )
                 raise
 
         @wraps(func)
@@ -509,8 +609,8 @@ def interceptor(
                         asyncio.run(_handle_error(func, args, kwargs, e))
                     except Exception as send_error:
                         # Log silencioso se falhar ao enviar erro
-                        logger.warning(
-                            f"Falha ao enviar erro para interceptor: {send_error}"
+                        logger.opt(exception=send_error).warning(
+                            "Falha ao enviar erro para interceptor."
                         )
                 raise
 
