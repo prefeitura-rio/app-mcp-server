@@ -95,6 +95,28 @@ def _redact_pii_in_text(text: str) -> str:
     return redigir_padroes_pii(text)
 
 
+class _InterceptorJSONEncoder(CustomJSONEncoder):
+    """
+    `CustomJSONEncoder` com fallback para `repr()` em tipo desconhecido (CHATR-322).
+
+    O `input_body` carrega os argumentos crus da função que falhou -- por
+    exemplo, a lista de `ScalarQueryParameter` de `get_bigquery_result`. Um
+    `TypeError` aqui derrubava o report e, sem o `try` no `async_wrapper`,
+    tomava o lugar da exceção original. O fallback fica restrito ao
+    interceptor: os demais usos do `CustomJSONEncoder` (DLQ, gravação no
+    BigQuery) continuam falhando alto em vez de gravar um `repr`.
+
+    O `repr` carrega o valor do parâmetro; a redação de PII roda depois, sobre
+    o texto serializado.
+    """
+
+    def default(self, obj):
+        try:
+            return super().default(obj)
+        except TypeError:
+            return repr(obj)
+
+
 async def send_error_to_interceptor(
     customer_whatsapp_number: str,
     flowname: str,
@@ -145,7 +167,7 @@ async def send_error_to_interceptor(
     # Serializa input_body para string JSON se necessário
     if isinstance(input_body, (dict, list)):
         input_body_str = json.dumps(
-            input_body, ensure_ascii=False, cls=CustomJSONEncoder
+            input_body, ensure_ascii=False, cls=_InterceptorJSONEncoder
         )
     elif input_body is None:
         input_body_str = "None"
@@ -488,7 +510,13 @@ def interceptor(
                 return await func(*args, **kwargs)
             except error_types as e:
                 if not _ja_reportada(e):
-                    await _handle_error(func, args, kwargs, e)
+                    # O report nunca pode trocar a exceção original (CHATR-322).
+                    try:
+                        await _handle_error(func, args, kwargs, e)
+                    except Exception as report_error:
+                        logger.warning(
+                            f"Falha ao reportar ao interceptor: {report_error!r}"
+                        )
                 raise
 
         @wraps(func)
