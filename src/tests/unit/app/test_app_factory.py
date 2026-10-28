@@ -11,8 +11,8 @@ O objetivo não é cobertura de linha e sim travar o contrato de inicialização
 Duas coisas aqui precisam ser independentes de ambiente, porque `src/app.py`
 se comporta de forma diferente conforme as variáveis de ambiente:
 
-- `EXCLUDED_TOOLS` vem do ambiente. Numa máquina de desenvolvimento costuma
-  excluir três tools; no CI, só `user_feedback`. Por isso o teste afirma
+- `EXCLUDED_TOOLS` vem do ambiente e muda de máquina para máquina; no CI,
+  vem vazia. Por isso o teste afirma
   `registradas == catálogo - excluídas`, não uma lista fixa.
 - `IS_LOCAL` decide entre **duas implementações distintas** de `FastMCP`:
   `mcp.server.fastmcp` (SDK) quando local, `fastmcp` (pacote) em produção. As
@@ -43,19 +43,15 @@ TOOL_CATALOG = {
     "calculator_multiply",
     "calculator_power",
     "calculator_subtract",
-    "dharma_search_tool",
     "equipments_by_address",
     "equipments_instructions",
     "get_user_memory",
     "google_search",
-    "greeting_format",
     "multi_step_service",
     "report_incident",
     "rock_in_rio_lineup",
     "time_current",
     "upsert_user_memory",
-    "user_feedback",
-    "web_search_surkai",
 }
 
 
@@ -282,9 +278,7 @@ def _lifespan_isolado(app_module, monkeypatch):
 async def test_lifespan_liga_o_line_up_quando_a_tool_esta_registrada(
     monkeypatch, importar_app_com_ambiente
 ):
-    app_module = importar_app_com_ambiente(
-        IS_LOCAL="false", EXCLUDED_TOOLS="user_feedback"
-    )
+    app_module = importar_app_com_ambiente(IS_LOCAL="false", EXCLUDED_TOOLS="")
     lifespan, chamadas = _lifespan_isolado(app_module, monkeypatch)
 
     async with lifespan(None):

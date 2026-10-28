@@ -17,25 +17,3 @@ def get_current_time() -> str:
 
     current_rio_time = get_current_rio_time()
     return json.dumps(current_rio_time, ensure_ascii=False, indent=2)
-
-
-def format_greeting() -> str:
-    """
-    Cria uma saudação personalizada baseada no horário atual.
-
-    Returns:
-        Mensagem de saudação apropriada para o horário
-    """
-    time_info = get_current_rio_time()
-    current_hour = int(time_info["time"].split(":")[0])
-    time_info["weekday_pt"]
-    time_info["date_br"]
-
-    if 5 <= current_hour < 12:
-        greeting = "Bom dia"
-    elif 12 <= current_hour < 18:
-        greeting = "Boa tarde"
-    else:
-        greeting = "Boa noite"
-
-    return f"Responda: `{greeting}!` e fale um pouco sobre você e sobre o que você sabe fazer. Reforce que você é um canal seguro e oficial que consegue entender textos e áudios."

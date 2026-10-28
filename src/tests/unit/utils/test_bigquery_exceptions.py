@@ -408,8 +408,8 @@ async def test_leitura_roda_no_pool_dedicado(monkeypatch):
     """Leitura travada não pode consumir vaga da gravação de log e alerta.
 
     Antes, o `run_in_executor(None, ...)` colocava as leituras no mesmo pool
-    default que `save_response_in_bq_background`,
-    `save_feedback_in_bq_background` e `save_cor_alert_in_bq_background` usam —
+    default que `save_response_in_bq_background` e
+    `save_cor_alert_in_bq_background` usam —
     e uma leitura que estourou o prazo mantém a thread ocupada até a query
     terminar sozinha.
     """

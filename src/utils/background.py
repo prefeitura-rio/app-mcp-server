@@ -5,7 +5,7 @@ referência **fraca** para ela. Uma task criada e não guardada em lugar nenhum
 pode ser coletada antes de terminar — e some sem erro, sem log e sem rastro.
 
 Isso importa aqui mais do que na média dos projetos: as tasks disparadas assim
-são justamente as escritas de log, feedback e alerta no BigQuery. Todo o
+são justamente as escritas de log e alerta no BigQuery. Todo o
 trabalho do CHATR-103 (agrupamento, retry, dead-letter, flush no encerramento)
 existe para que um registro não se perca em silêncio — e nada disso é acionado
 se a corrotina nunca chega a rodar. Seria a mesma perda, um passo antes.
@@ -54,7 +54,7 @@ def disparar_em_background(
     """Agenda `coro` na event loop mantendo a task viva até o fim.
 
     Use no lugar de `asyncio.create_task` sempre que o resultado não for
-    aguardado — que é o caso de toda escrita de log/feedback/alerta.
+    aguardado — que é o caso de toda escrita de log/alerta.
 
     Args:
         coro: corrotina a executar.

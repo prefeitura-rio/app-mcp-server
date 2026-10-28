@@ -246,62 +246,6 @@ async def test_internal_request_handles_json_empty_and_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dharma_search_builds_expected_request(monkeypatch):
-    module = build_wrapper_module(
-        monkeypatch,
-        "test_dharma_search_module",
-        "src/tools/dharma_search.py",
-        {"DHARMA_API_KEY": "dharma-token"},
-    )
-
-    client = FakeAsyncClientContext(FakeResponse({"message": "ok"}))
-    monkeypatch.setitem(
-        sys.modules,
-        "src.utils.http_client",
-        types.SimpleNamespace(InterceptedHTTPClient=lambda **kwargs: client),
-    )
-    module = load_module(
-        "test_dharma_search_module_reloaded", "src/tools/dharma_search.py"
-    )
-
-    result = await module.dharma_search("oi")
-
-    assert result == {"message": "ok"}
-    url, kwargs = client.calls[0]
-    assert url.endswith("/v1/chats")
-    assert kwargs["headers"]["Authorization"] == "Bearer dharma-token"
-    assert kwargs["json"] == {"message": "oi"}
-
-
-@pytest.mark.asyncio
-async def test_surkai_search_builds_expected_request(monkeypatch):
-    module = build_wrapper_module(
-        monkeypatch,
-        "test_surkai_module",
-        "src/tools/web_search_surkai.py",
-        {"SURKAI_API_KEY": "surkai-token"},
-    )
-
-    client = FakeAsyncClientContext(FakeResponse({"summary": "ok"}))
-    monkeypatch.setitem(
-        sys.modules,
-        "src.utils.http_client",
-        types.SimpleNamespace(InterceptedHTTPClient=lambda **kwargs: client),
-    )
-    module = load_module(
-        "test_surkai_module_reloaded", "src/tools/web_search_surkai.py"
-    )
-
-    result = await module.surkai_search("chuva", k=3, lang="en")
-
-    assert result == {"summary": "ok"}
-    url, kwargs = client.calls[0]
-    assert url.endswith("/web_search")
-    assert kwargs["headers"]["Authorization"] == "Bearer surkai-token"
-    assert kwargs["json"] == {"k": 3, "lang": "en", "query": "chuva"}
-
-
-@pytest.mark.asyncio
 async def test_search_uses_typesense_then_google_fallback(monkeypatch):
     ensure_package("src", PROJECT_ROOT / "src")
     ensure_package("src.tools", PROJECT_ROOT / "src" / "tools")
