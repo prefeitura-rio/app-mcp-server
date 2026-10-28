@@ -97,7 +97,23 @@ def app_module():
 
 
 def _registered_tool_names(mcp) -> set:
-    return set(mcp._tool_manager._tools.keys())
+    """Nomes das tools pela API pública.
+
+    `list_tools()` existe nas duas árvores (`fastmcp` e SDK `mcp`) e devolve
+    uma lista de objetos com `.name`. O fastmcp 3 removeu o `_tool_manager`.
+    """
+    return {tool.name for tool in asyncio.run(mcp.list_tools())}
+
+
+def _registered_tool(mcp, name: str):
+    """Objeto da tool: `get_tool` no `fastmcp` 3; `_tool_manager` no SDK `mcp`."""
+    getter = getattr(mcp, "get_tool", None)
+    if getter is not None:
+        tool = asyncio.run(getter(name))
+    else:
+        tool = mcp._tool_manager.get_tool(name)
+    assert tool is not None, f"tool {name!r} não registrada"
+    return tool
 
 
 def _served_route_paths(mcp) -> set:
@@ -304,7 +320,7 @@ def test_google_search_publica_contexto_opcional(app_module):
     if "google_search" in EXCLUDED_TOOLS:
         pytest.skip("google_search excluída neste ambiente")
 
-    tool = app_module.create_app()._tool_manager._tools["google_search"]
+    tool = _registered_tool(app_module.create_app(), "google_search")
     schema = tool.parameters
 
     assert schema.get("required") == ["query"]

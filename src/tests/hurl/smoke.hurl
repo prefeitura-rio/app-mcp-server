@@ -86,7 +86,10 @@ Accept: application/json, text/event-stream
 ```
 HTTP 401
 [Asserts]
-header "WWW-Authenticate" contains "invalid_token"
+# Sem `Authorization`, o fastmcp 3 segue a RFC 6750 §3.1: o desafio vem sem o
+# atributo `error` (só `Bearer`), para o cliente iniciar o fluxo OAuth. O
+# `error="invalid_token"` só aparece quando um token chega e é recusado.
+header "WWW-Authenticate" startsWith "Bearer"
 
 
 POST {{base_url}}/mcp
@@ -97,6 +100,8 @@ Accept: application/json, text/event-stream
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"hurl-smoke","version":"1"}}}
 ```
 HTTP 401
+[Asserts]
+header "WWW-Authenticate" contains "invalid_token"
 
 
 # ===== HANDSHAKE MCP SOBRE STREAMABLE HTTP =====
