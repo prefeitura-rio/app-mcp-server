@@ -16,8 +16,6 @@ from typing import Annotated, Optional, List, Union
 
 from pydantic import Field
 
-from src.tools.web_search_surkai import surkai_search
-from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
 from src.middleware.hybrid_verifier import HybridTokenVerifier
@@ -35,7 +33,7 @@ from src.tools.calculator import (
     divide,
     power,
 )
-from src.tools.datetime_tools import get_current_time, format_greeting
+from src.tools.datetime_tools import get_current_time
 
 from src.tools.equipments_tools import (
     get_equipments_categories,
@@ -47,7 +45,6 @@ from src.tools.cor_alert_tools import create_cor_alert
 
 from src.tools.search import get_google_search
 from src.tools.memory import get_memories, upsert_memory
-from src.tools.feedback_tools import store_user_feedback
 from src.tools.divida_ativa import (
     emitir_guia_a_vista,
     emitir_guia_regularizacao,
@@ -336,11 +333,6 @@ def create_app() -> FastMCP:
         """Obtém a hora atual no Rio de Janeiro"""
         return get_current_time()
 
-    @conditional_mcp_tool("greeting_format")
-    def greeting_format() -> str:
-        """Gera uma saudação personalizada baseada no horário"""
-        return format_greeting()
-
     @conditional_mcp_tool("google_search")
     async def google_search(
         query: Annotated[
@@ -381,34 +373,6 @@ def create_app() -> FastMCP:
         pede para refazer a busca com o assunto da conversa.
         """
         response = await get_google_search(query, contexto)
-        return response
-
-    @conditional_mcp_tool("web_search_surkai")
-    async def web_search_surkai(query: str) -> dict:
-        """
-        Calls the surkai api to retrieve a web search.
-
-        Parameters:
-            query (str): The query that will serve as a search on surkai.
-
-        Returns:
-            dict: The API response as JSON containing the results of the research.
-        """
-        response = await surkai_search(query)
-        return response
-
-    @conditional_mcp_tool("dharma_search_tool")
-    async def dharma_search_tool(query: str) -> dict:
-        """
-        Calls the Dharma API to get AI-powered responses about Rio de Janeiro municipal services.
-
-        Parameters:
-            query (str): The user's message/question to send to the AI assistant.
-
-        Returns:
-            dict: The API response containing the AI message, referenced documents, and metadata.
-        """
-        response = await dharma_search(query)
         return response
 
     @conditional_mcp_tool("equipments_by_address")
@@ -542,21 +506,6 @@ def create_app() -> FastMCP:
         ```
         """
         response = await upsert_memory(user_id, memory_bank)
-        return response
-
-    @conditional_mcp_tool("user_feedback")
-    async def user_feedback(user_id: str, feedback: str) -> dict:
-        """
-        Armazena feedback do usuário no BigQuery com timestamp automático.
-
-        Args:
-            user_id: ID único do usuário que está fornecendo o feedback
-            feedback: Texto do feedback fornecido pelo usuário
-
-        Returns:
-            Dict com confirmação de sucesso, timestamp e instruções para resposta
-        """
-        response = await store_user_feedback(user_id, feedback)
         return response
 
     @conditional_mcp_tool(

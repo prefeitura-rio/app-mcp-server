@@ -45,27 +45,6 @@ def test_datetime_tools_get_current_time_serializes_payload(monkeypatch):
     assert payload == fake_time
 
 
-@pytest.mark.parametrize(
-    ("hour", "expected"),
-    [("09:30:00", "Bom dia"), ("15:30:00", "Boa tarde"), ("21:30:00", "Boa noite")],
-)
-def test_datetime_tools_format_greeting_by_hour(monkeypatch, hour, expected):
-    monkeypatch.setattr(
-        datetime_tools,
-        "get_current_rio_time",
-        lambda: {
-            "time": hour,
-            "weekday_pt": "Segunda-feira",
-            "date_br": "01/01/2024",
-        },
-    )
-
-    result = datetime_tools.format_greeting()
-
-    assert expected in result
-    assert "canal seguro e oficial" in result
-
-
 def test_datetime_utils_translate_unknown_values():
     assert datetime_utils._get_weekday_pt(99) == "Desconhecido"
     assert datetime_utils._get_month_pt(99) == "Desconhecido"
