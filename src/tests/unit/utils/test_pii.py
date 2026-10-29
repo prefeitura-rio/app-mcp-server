@@ -294,6 +294,8 @@ def _razao_de_crescimento(molde: str, base: int = 16_000) -> float:
         pytest.param("k:v,", id="pares-sem-espaco"),
         pytest.param("a_", id="run-de-underscore"),
         pytest.param("a-", id="run-de-hifen"),
+        pytest.param("ção:", id="chave-acentuada-densa"),
+        pytest.param("ã_", id="run-acentuado"),
     ],
 )
 def test_redacao_cresce_linearmente(molde):
@@ -701,6 +703,70 @@ def test_flag_e_contador_nao_sao_redigidos():
     assert limpo["cpf_attempts"] == 2
     assert limpo["collect_email"] is False
     assert limpo["email"] is None
+
+
+# ---------------------------------------------------------------------------
+# Rótulo com acento
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "texto,esperado",
+    [
+        (
+            "✅ Dados do imóvel carregados - Proprietário: JOAO DA SILVA PEREIRA...",
+            "✅ Dados do imóvel carregados - Proprietário: [REDACTED]",
+        ),
+        ("Endereço: Rua Exemplo 123", "Endereço: [REDACTED]"),
+        ("ENDEREÇO: Rua Exemplo 123", "ENDEREÇO: [REDACTED]"),
+        ("nome_responsável: Fulano de Tal", "nome_responsável: [REDACTED]"),
+        ("nomeResponsável=Fulano de Tal", "nomeResponsável=[REDACTED]"),
+        ("Endereço_Ímóvel: Rua Exemplo 123", "Endereço_Ímóvel: [REDACTED]"),
+        ("{'Proprietário': 'Fulano de Tal'}", "{'Proprietário': [REDACTED]}"),
+    ],
+)
+def test_rotulo_com_acento_e_redigido(texto, esperado):
+    """
+    A forma da chave era só ASCII, e `Proprietário:` não casava inteira: o motor
+    via `rio`, que não é sensível, e o nome do proprietário saía em claro no log
+    de prod. O acento ou a cedilha pode estar em qualquer posição da chave.
+    """
+    assert redigir_texto(texto) == esperado
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Situação: ativa",
+        "Exercício: 2024",
+        "Situação: ativa, Exercício: 2024, Código: 7",
+    ],
+)
+def test_rotulo_com_acento_nao_sensivel_continua_legivel(texto):
+    assert redigir_texto(texto) == texto
+
+
+def test_valor_acentuado_para_no_proximo_par_acentuado():
+    """O par seguinte com acento também é reconhecido como começo de chave, e
+    não engolido pelo valor do anterior."""
+    assert (
+        redigir_texto("Proprietário: Fulano de Tal Situação: ativa")
+        == "Proprietário: [REDACTED] Situação: ativa"
+    )
+
+
+@pytest.mark.parametrize(
+    "chave",
+    ["Proprietário", "endereço", "Endereço", "nome_responsável", "nomeResponsável"],
+)
+def test_chave_acentuada_decide_como_a_forma_sem_acento(chave):
+    """Vale também para dict de pé, que decide pela chave sem passar pela regex."""
+    assert chave_e_sensivel(chave)
+    assert redigir_estrutura({chave: "Fulano de Tal"}) == {chave: "[REDACTED]"}
+
+
+def test_chave_acentuada_nao_sensivel_em_dict():
+    assert redigir_estrutura({"Situação": "ativa"}) == {"Situação": "ativa"}
 
 
 def test_chave_camelcase_em_dict_stringificado():
