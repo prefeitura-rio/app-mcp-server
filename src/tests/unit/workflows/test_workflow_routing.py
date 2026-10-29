@@ -1,3 +1,4 @@
+import importlib
 import importlib.util
 import sys
 import types
@@ -789,6 +790,69 @@ async def test_iptu_inscricao_ano_and_guias_branches(
     result = await workflow._consultar_guias_disponiveis(state)
     assert result.data["reset"] is True
     assert result.agent_response.payload_schema is not None
+
+
+@pytest.mark.asyncio
+async def test_iptu_divida_ativa_encontrada_nao_loga_contagens(
+    iptu_workflow_module, service_models, monkeypatch
+):
+    """
+    Junto da inscrição, as contagens de CDA, execução fiscal e parcelamento dizem
+    quanto o dono do imóvel deve. A inscrição fica para diagnóstico; as
+    contagens saem.
+    """
+    linhas = []
+    monkeypatch.setattr(
+        iptu_workflow_module,
+        "logger",
+        types.SimpleNamespace(
+            info=lambda m, *_a, **_k: linhas.append(str(m)),
+            warning=lambda m, *_a, **_k: linhas.append(str(m)),
+            error=lambda m, *_a, **_k: linhas.append(str(m)),
+            debug=lambda m, *_a, **_k: linhas.append(str(m)),
+        ),
+    )
+    monkeypatch.setattr(
+        iptu_workflow_module.state_helpers,
+        "reset_completo",
+        lambda state, manter_inscricao=False: None,
+    )
+
+    models = importlib.import_module(
+        "src.tools.multi_step_service.workflows.iptu_pagamento.core.models"
+    )
+
+    async def fake_divida(inscricao):
+        return models.DadosDividaAtiva(
+            tem_divida_ativa=True,
+            cdas=[models.CDA(), models.CDA()],
+            efs=[models.EF()],
+            parcelamentos=[models.Parcelamento() for _ in range(3)],
+        )
+
+    async def fake_guias(inscricao, exercicio):
+        return None
+
+    workflow = iptu_workflow_module.IPTUWorkflow(use_fake_api=True)
+    workflow._api_service = types.SimpleNamespace(
+        get_divida_ativa_info=fake_divida,
+        consultar_guias=fake_guias,
+    )
+    state = service_models.ServiceState(
+        user_id="u1",
+        service_name="iptu_pagamento",
+        data={"inscricao_imobiliaria": "12345678", "ano_exercicio": 2025},
+        payload={},
+    )
+    await workflow._consultar_guias_disponiveis(state)
+
+    encontradas = [
+        linha for linha in linhas if linha.startswith("Dívida ativa encontrada")
+    ]
+    assert encontradas == ["Dívida ativa encontrada para inscrição 12345678"]
+    for linha in linhas:
+        assert "CDAs" not in linha
+        assert "parcelamentos" not in linha
 
 
 @pytest.mark.asyncio

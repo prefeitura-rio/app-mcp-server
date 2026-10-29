@@ -13,6 +13,20 @@ from src.utils.error_interceptor import interceptor
 from src.config import env
 
 
+_NUMEROS = re.compile(r"\d+")
+
+
+def modelo_da_mensagem_pgm(mensagem: Any) -> str:
+    """
+    A mensagem de erro da PGM com cada sequência de dígitos trocada por `#`.
+
+    A mensagem traz o número da execução fiscal ou da CDA, e o número da
+    execução é um processo consultável no TJRJ, com o nome do executado. Sem os
+    números, a linha de log continua dizendo que tipo de erro foi.
+    """
+    return _NUMEROS.sub("#", str(mensagem))
+
+
 def log_execution_time(func):
     """Decorator to log function execution time."""
 
@@ -154,7 +168,15 @@ async def pgm_api(
             logger.info("A API retornou registros.")
             return response.get("data")
 
-        logger.info(f"Erro durante a solicitação: {response['data'][0]['value']}")
+        # Mesmo acesso de antes: resposta de erro sem mensagem continua levantando.
+        primeira_mensagem = response["data"][0]["value"]
+        logger.info(
+            {
+                "event": "pgm_api_erro",
+                "endpoint": endpoint,
+                "mensagem": modelo_da_mensagem_pgm(primeira_mensagem),
+            }
+        )
 
         mensagens_unicas = list(
             set(
