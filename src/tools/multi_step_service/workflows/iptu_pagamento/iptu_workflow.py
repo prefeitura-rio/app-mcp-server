@@ -252,9 +252,9 @@ class IPTUWorkflow(BaseWorkflow):
 
             # Se encontrou dívida ativa, informa ao usuário
             if divida_ativa_info and divida_ativa_info.tem_divida_ativa:
-                logger.info(
-                    f"Dívida ativa encontrada para inscrição {inscricao}: {len(divida_ativa_info.cdas)} CDAs, {len(divida_ativa_info.efs)} EFs, {len(divida_ativa_info.parcelamentos)} parcelamentos"
-                )
+                # Sem as contagens: junto da inscrição, elas dizem quanto o dono
+                # do imóvel deve à Prefeitura.
+                logger.info(f"Dívida ativa encontrada para inscrição {inscricao}")
                 # Salva dados da dívida ativa
                 state.data["divida_ativa_data"] = divida_ativa_info.model_dump()
 
