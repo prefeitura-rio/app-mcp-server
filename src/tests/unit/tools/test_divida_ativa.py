@@ -483,3 +483,250 @@ def test_itens_da_consulta_ignora_entrada_que_nao_e_item(divida_module):
         guias=[],
     )
     assert itens == []
+
+
+# ===== Log da PGM sem situação fiscal (R2 do card de PII nos logs de prod) =====
+#
+# `pgm_api` logava a requisição e a resposta inteiras. O redator tirava nome,
+# CPF e endereço, mas inscrição, bairro, CDA, número de execução fiscal, saldos e
+# protesto saíam em claro: a situação fiscal de uma pessoa identificável pelo
+# cadastro do imóvel. O log passa a ser uma lista positiva de forma e contagens.
+
+INSCRICAO = "12345678"
+CDA_ID = "01/999999/2024-00"
+EF = "0123456-78.2019.8.19.0001"
+GUIA_PARCELADA = "99/111111/2023-11"
+
+RESPOSTA_CONSULTA = {
+    "success": True,
+    "data": {
+        "nomeContribuinte": "FULANO DE TAL",
+        "enderecoImovel": "RUA EXEMPLO 123",
+        "bairroImovel": "TIJUCA",
+        "debitosNaoParceladosComSaldoTotal": {
+            "cdasNaoAjuizadasNaoParceladas": [
+                {
+                    "cdaId": CDA_ID,
+                    "codigoInscricaoImobiliaria": INSCRICAO,
+                    "valorSaldoTotal": "R$ 1.922,05",
+                    "ehCdaProtestada": "Sim",
+                }
+            ],
+            "efsNaoParceladas": [
+                {"numeroExecucaoFiscal": EF, "saldoTotalNaoParcelado": "R$ 7.001,10"}
+            ],
+        },
+        "guiasParceladasComSaldoTotal": {
+            "guiasParceladas": [
+                {
+                    "numero": GUIA_PARCELADA,
+                    "qtdPagas": 3,
+                    "dataUltimoPagamento": "01/02/2026",
+                }
+            ]
+        },
+    },
+}
+
+# Valores que não podem aparecer em nenhuma linha de log da PGM.
+VALORES_DE_NEGOCIO = (
+    INSCRICAO,
+    CDA_ID,
+    EF,
+    GUIA_PARCELADA,
+    "TIJUCA",
+    "1.922,05",
+    "7.001,10",
+    "01/02/2026",
+    "FULANO",
+    "RUA EXEMPLO",
+)
+
+
+@pytest.fixture
+def logs_pgm(divida_module, monkeypatch):
+    """Substitui o logger do módulo e guarda as mensagens por nível."""
+    registros = {"info": [], "error": []}
+    monkeypatch.setattr(
+        divida_module,
+        "logger",
+        types.SimpleNamespace(
+            info=lambda mensagem, *_a, **_k: registros["info"].append(mensagem),
+            error=lambda mensagem, *_a, **_k: registros["error"].append(mensagem),
+        ),
+    )
+    return registros
+
+
+def _resumos_pgm(registros):
+    return [
+        m
+        for m in registros["info"]
+        if isinstance(m, dict) and m.get("event") == "pgm_api_resposta"
+    ]
+
+
+def _token_falso(resposta):
+    async def fake_internal_request(url, method, request_kwargs):
+        if url.endswith("/security/token"):
+            return {"access_token": "token-123"}
+        return resposta
+
+    return fake_internal_request
+
+
+@pytest.mark.asyncio
+async def test_pgm_api_loga_so_forma_e_contagens(divida_module, monkeypatch, logs_pgm):
+    monkeypatch.setattr(
+        divida_module, "internal_request", _token_falso(RESPOSTA_CONSULTA)
+    )
+
+    await divida_module.pgm_api(
+        endpoint="v2/cdas/dividas-contribuinte",
+        consumidor="consultar-dividas-contribuinte",
+        data={
+            "origem_solicitação": 0,
+            "inscricaoImobiliaria": INSCRICAO,
+            "cdas": [CDA_ID],
+            "efs": [EF],
+        },
+    )
+
+    assert _resumos_pgm(logs_pgm) == [
+        {
+            "event": "pgm_api_resposta",
+            "endpoint": "v2/cdas/dividas-contribuinte",
+            "parametros": {
+                "campos": ["cdas", "efs", "inscricaoImobiliaria", "origem_solicitação"],
+                "qtd_cdas": 1,
+                "qtd_efs": 1,
+            },
+            "success": True,
+            "resposta": {
+                "tipo": "objeto",
+                "campos": [
+                    "bairroImovel",
+                    "debitosNaoParceladosComSaldoTotal",
+                    "enderecoImovel",
+                    "guiasParceladasComSaldoTotal",
+                    "nomeContribuinte",
+                ],
+                "qtd_cdas": 1,
+                "qtd_efs": 1,
+                "qtd_parcelamentos": 1,
+            },
+        }
+    ]
+    todas = " ".join(str(m) for m in logs_pgm["info"] + logs_pgm["error"])
+    for valor in VALORES_DE_NEGOCIO:
+        assert valor not in todas
+
+
+@pytest.mark.asyncio
+async def test_pgm_api_resumo_de_erro_e_de_resposta_vazia(
+    divida_module, monkeypatch, logs_pgm
+):
+    monkeypatch.setattr(
+        divida_module,
+        "internal_request",
+        _token_falso({"success": False, "data": [{"key": "ef", "value": "Erro A"}]}),
+    )
+    await divida_module.pgm_api(endpoint="v2/x", consumidor="x", data={"efs": [EF]})
+
+    monkeypatch.setattr(divida_module, "internal_request", _token_falso(None))
+    await divida_module.pgm_api(endpoint="v2/y", consumidor="x", data=None)
+
+    erro, vazio = _resumos_pgm(logs_pgm)
+    assert erro["success"] is False
+    assert erro["parametros"] == {"campos": ["efs"], "qtd_efs": 1}
+    assert erro["resposta"] == {
+        "tipo": "lista",
+        "qtd_registros": 1,
+        "campos": ["key", "value"],
+    }
+    assert vazio["parametros"] == {"campos": []}
+    assert vazio["resposta"] == {"tipo": "NoneType"}
+    assert "success" not in vazio
+    assert EF not in str(erro)
+
+
+@pytest.mark.asyncio
+async def test_processar_registros_sem_guia_loga_resumo_e_nao_a_resposta(
+    divida_module, monkeypatch, logs_pgm
+):
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [{"cdaId": CDA_ID, "valorSaldoTotal": "R$ 1.922,05"}]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    await divida_module.processar_registros(
+        endpoint="v2/guias", consumidor="emitir", parametros_entrada={"cdas": [CDA_ID]}
+    )
+
+    assert logs_pgm["error"] == [
+        {
+            "event": "processar_registros_sem_guia",
+            "endpoint": "v2/guias",
+            "resposta": {
+                "tipo": "lista",
+                "qtd_registros": 1,
+                "campos": ["cdaId", "valorSaldoTotal"],
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "parametros,esperado",
+    [
+        (None, {"tipo": "NoneType"}),
+        ("cpfCnpj=123", {"tipo": "str"}),
+        ([CDA_ID], {"tipo": "list"}),
+        ({"cdas": "nao-e-lista"}, {"campos": ["cdas"]}),
+        ({"guias": (GUIA_PARCELADA,)}, {"campos": ["guias"], "qtd_guias": 1}),
+        ({1: "x"}, {"campos": ["1"]}),
+    ],
+)
+def test_resumir_parametros_pgm_aceita_qualquer_forma(
+    divida_module, parametros, esperado
+):
+    assert divida_module.resumir_parametros_pgm(parametros) == esperado
+
+
+@pytest.mark.parametrize(
+    "dados,esperado",
+    [
+        (None, {"tipo": "NoneType"}),
+        ("texto", {"tipo": "str"}),
+        (42, {"tipo": "int"}),
+        ([], {"tipo": "lista", "qtd_registros": 0, "campos": []}),
+        (
+            ["solto", {"a": 1}, None, {"b": 2, "a": 3}],
+            {"tipo": "lista", "qtd_registros": 4, "campos": ["a", "b"]},
+        ),
+        (
+            {
+                "debitosNaoParceladosComSaldoTotal": "inesperado",
+                "guiasParceladasComSaldoTotal": {"guiasParceladas": None},
+            },
+            {
+                "tipo": "objeto",
+                "campos": [
+                    "debitosNaoParceladosComSaldoTotal",
+                    "guiasParceladasComSaldoTotal",
+                ],
+            },
+        ),
+        (
+            {"debitosNaoParceladosComSaldoTotal": {"efsNaoParceladas": []}},
+            {
+                "tipo": "objeto",
+                "campos": ["debitosNaoParceladosComSaldoTotal"],
+                "qtd_efs": 0,
+            },
+        ),
+    ],
+)
+def test_resumir_resposta_pgm_aceita_qualquer_forma(divida_module, dados, esperado):
+    """A PGM devolve objeto, lista ou nada; o resumo nunca pode levantar, senão
+    derruba a consulta do cidadão por causa de uma linha de log."""
+    assert divida_module.resumir_resposta_pgm(dados) == esperado

@@ -26,6 +26,8 @@ from src.tools.divida_ativa import (
     MENSAGEM_SEM_GUIA,
     log_execution_time,
     pgm_api,
+    resumir_parametros_pgm,
+    resumir_resposta_pgm,
 )
 from src.tools.divida_ativa_v2.models import (
     EmitirGuiaRequest,
@@ -234,7 +236,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
             {
                 "event": "emitir_guia_v2_selecao_vazia",
                 "tipo": tipo,
-                "parametros_entrada": parametros_entrada,
+                "parametros": resumir_parametros_pgm(parametros_entrada),
             }
         )
         await _reportar_falha_validacao(
@@ -246,7 +248,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
         {
             "event": "emitir_guia_v2_started",
             "tipo": tipo,
-            "parametros_entrada": parametros_entrada,
+            "parametros": resumir_parametros_pgm(parametros_entrada),
         }
     )
 
@@ -266,7 +268,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
             {
                 "event": "emitir_guia_v2_sem_guia",
                 "tipo": tipo,
-                "registros": registros,
+                "resposta": resumir_resposta_pgm(registros),
             }
         )
         return EmitirGuiaResponse.de_erro(MENSAGEM_SEM_GUIA)
