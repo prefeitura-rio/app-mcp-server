@@ -708,6 +708,78 @@ async def test_resposta_sem_registros_vira_erro(monkeypatch, logger_spy):
     )
 
 
+# ===== Log sem os identificadores enviados à PGM =====
+#
+# `parametros_entrada` levava CDAs, EFs e guias de toda emissão, e `registros`
+# levava a resposta inteira da PGM no caminho de erro. O log guarda só a forma.
+
+
+@pytest.mark.asyncio
+async def test_inicio_da_emissao_loga_so_a_forma_dos_parametros(pgm_mock, logger_spy):
+    await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
+
+    iniciados = [
+        r for r in logger_spy["info"] if r.get("event") == "emitir_guia_v2_started"
+    ]
+    assert iniciados == [
+        {
+            "event": "emitir_guia_v2_started",
+            "tipo": "a_vista",
+            "parametros": {
+                "campos": ["cdas", "efs", "origem_solicitação"],
+                "qtd_cdas": 1,
+                "qtd_efs": 0,
+            },
+        }
+    ]
+    assert CDA not in str(logger_spy)
+
+
+@pytest.mark.asyncio
+async def test_selecao_vazia_loga_a_forma_e_nao_os_parametros(pgm_mock, logger_spy):
+    """
+    Confere a forma, e não só a ausência da CDA: na seleção vazia as listas já
+    estão vazias, e "a CDA não aparece" passaria também com o log antigo.
+    """
+    await emitir_guia_regularizacao_v2(
+        {"dicionario_itens": {"1": GUIA}, "lista_guias": [], "apenas_um_item": "1"}
+    )
+
+    vazias = [
+        r
+        for r in logger_spy["error"]
+        if r.get("event") == "emitir_guia_v2_selecao_vazia"
+    ]
+    assert len(vazias) == 1
+    assert "parametros_entrada" not in vazias[0]
+    assert vazias[0]["parametros"]["qtd_guias"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sem_guia_loga_resumo_e_nao_a_resposta(monkeypatch, logger_spy):
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [{"cdaId": CDA, "valorSaldoTotal": "R$ 1.922,05"}]
+
+    monkeypatch.setattr(service_module, "pgm_api", fake_pgm_api)
+    await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
+
+    sem_guia = [
+        r for r in logger_spy["error"] if r.get("event") == "emitir_guia_v2_sem_guia"
+    ]
+    assert sem_guia == [
+        {
+            "event": "emitir_guia_v2_sem_guia",
+            "tipo": "a_vista",
+            "resposta": {
+                "tipo": "lista",
+                "qtd_registros": 1,
+                "campos": ["cdaId", "valorSaldoTotal"],
+            },
+        }
+    ]
+    assert "1.922,05" not in str(logger_spy)
+
+
 @pytest.mark.asyncio
 async def test_regularizacao_nao_devolve_campos_de_a_vista(pgm_mock):
     """Regressão: a resposta é montada campo a campo, não por **unpacking."""
