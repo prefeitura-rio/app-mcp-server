@@ -229,7 +229,11 @@ jobs:
 
   build:
     name: Build + Image Scan + Smoke HTTP
-    runs-on: ubuntu-latest
+    # Fixado no 24.04: no ubuntu-26.04 (o `ubuntu-latest` desde 29/10/2026) só
+    # existe a `libxml2-16`, e o .deb do Hurl 8.x exige `libxml2` (libxml2.so.2),
+    # então o `Install Hurl` falha. Voltar para `ubuntu-latest` quando o Hurl
+    # publicar um pacote 8.x para o 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       HURL_VERSION: "8.0.1"
