@@ -93,6 +93,22 @@ def formatar_erro_validacao(erro: ValidationError) -> str:
     return "Parâmetros inválidos. " + " | ".join(partes)
 
 
+def _resumir_erro_validacao(erro: ValidationError) -> Dict[str, List[str]]:
+    """
+    Resumo para log da falha de validação: campos e tipos de erro, nunca a mensagem.
+
+    A mensagem do Pydantic e a dos validadores repetem o valor recebido. Num
+    payload malformado, esse valor é o número da CDA ou da execução fiscal.
+    """
+    detalhes = erro.errors()
+    return {
+        "campos_invalidos": sorted(
+            {str(d["loc"][0]) if d["loc"] else "payload" for d in detalhes}
+        ),
+        "tipos_de_erro": sorted({d["type"] for d in detalhes}),
+    }
+
+
 def _resolver_sequencial(
     requisicao: EmitirGuiaRequest, sequencial: str, tipo: str
 ) -> Optional[Tuple[str, str]]:
@@ -146,7 +162,7 @@ def montar_parametros_entrada(
             {
                 "event": "emitir_guia_v2_sequenciais_descartados",
                 "tipo": tipo,
-                "sequenciais": descartados,
+                "qtd_sequenciais": len(descartados),
             }
         )
 
@@ -219,7 +235,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
             {
                 "event": "emitir_guia_v2_validation_error",
                 "tipo": tipo,
-                "erro": descricao,
+                **_resumir_erro_validacao(erro),
             }
         )
         await _reportar_falha_validacao("ValidationError", tipo, descricao, parameters)
@@ -316,7 +332,7 @@ async def emitir_guia_a_vista_v2(parameters: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(
             {
                 "event": "emitir_guia_a_vista_v2_error",
-                "error": str(e),
+                "error_type": type(e).__name__,
             }
         )
         resposta = EmitirGuiaResponse.de_erro(f"Erro ao emitir guia à vista: {str(e)}")
@@ -334,7 +350,7 @@ async def emitir_guia_regularizacao_v2(parameters: Dict[str, Any]) -> Dict[str, 
         logger.error(
             {
                 "event": "emitir_guia_regularizacao_v2_error",
-                "error": str(e),
+                "error_type": type(e).__name__,
             }
         )
         resposta = EmitirGuiaResponse.de_erro(

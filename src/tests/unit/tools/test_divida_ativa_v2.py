@@ -345,7 +345,7 @@ def test_sequencial_descartado_gera_warning(logger_spy):
 
     assert any(
         registro.get("event") == "emitir_guia_v2_sequenciais_descartados"
-        and registro.get("sequenciais") == ["9"]
+        and registro.get("qtd_sequenciais") == 1
         for registro in logger_spy["warning"]
     )
 
@@ -778,6 +778,77 @@ async def test_sem_guia_loga_resumo_e_nao_a_resposta(monkeypatch, logger_spy):
         }
     ]
     assert "1.922,05" not in str(logger_spy)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload,campo",
+    [
+        pytest.param(
+            {"dicionario_itens": f'{{"1": "{CDA}"'}, "dicionario_itens", id="json"
+        ),
+        pytest.param({"lista_cdas": f'["{CDA}"'}, "lista_cdas", id="lista"),
+        pytest.param({"lista_efs": f'["{CDA}"'}, "lista_efs", id="lista-efs"),
+    ],
+)
+async def test_falha_de_validacao_nao_loga_o_valor_recebido(
+    pgm_mock, logger_spy, payload, campo
+):
+    """
+    A mensagem de validação repete o valor recebido. Ela segue na resposta, que
+    volta a quem enviou o dado, e sai do log, que fica guardado no SigNoz.
+    """
+    resultado = await emitir_guia_a_vista_v2(payload)
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert CDA in resultado["api_descricao_erro"]
+    falhas = [
+        r
+        for r in logger_spy["error"]
+        if r.get("event") == "emitir_guia_v2_validation_error"
+    ]
+    assert len(falhas) == 1
+    assert "erro" not in falhas[0]
+    assert falhas[0]["campos_invalidos"] == [campo]
+    assert falhas[0]["tipos_de_erro"]
+    assert CDA not in str(logger_spy)
+
+
+@pytest.mark.asyncio
+async def test_sequencial_descartado_nao_loga_o_valor_recebido(pgm_mock, logger_spy):
+    """O sequencial deveria ser um número, mas é texto que vem de fora."""
+    await emitir_guia_a_vista_v2(
+        {"dicionario_itens": {"1": CDA}, "lista_cdas": [CDA], "itens_informados": [CDA]}
+    )
+
+    assert {
+        "event": "emitir_guia_v2_sequenciais_descartados",
+        "tipo": "a_vista",
+        "qtd_sequenciais": 1,
+    } in logger_spy["warning"]
+    assert CDA not in str(logger_spy)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "emitir,evento",
+    [
+        (emitir_guia_a_vista_v2, "emitir_guia_a_vista_v2_error"),
+        (emitir_guia_regularizacao_v2, "emitir_guia_regularizacao_v2_error"),
+    ],
+)
+async def test_excecao_na_emissao_loga_so_o_tipo(
+    monkeypatch, logger_spy, emitir, evento
+):
+    async def explode(parameters, tipo):
+        raise ValueError(f"valor inesperado: {CDA}")
+
+    monkeypatch.setattr(service_module, "_emitir", explode)
+    resultado = await emitir({})
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert {"event": evento, "error_type": "ValueError"} in logger_spy["error"]
+    assert CDA not in str(logger_spy)
 
 
 @pytest.mark.asyncio

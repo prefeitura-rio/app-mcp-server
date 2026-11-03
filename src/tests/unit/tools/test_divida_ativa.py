@@ -730,3 +730,146 @@ def test_resumir_resposta_pgm_aceita_qualquer_forma(divida_module, dados, espera
     """A PGM devolve objeto, lista ou nada; o resumo nunca pode levantar, senão
     derruba a consulta do cidadão por causa de uma linha de log."""
     assert divida_module.resumir_resposta_pgm(dados) == esperado
+
+
+# Os `parameters` da v1 levam `dicionario_itens` e `lista_cdas`/`lista_efs`, com
+# os números de CDA e de execução fiscal, e toda emissão pelo workflow do agente
+# passa por aqui. O log guarda só os nomes dos campos.
+
+PARAMETROS_EMISSAO = {
+    "dicionario_itens": f'{{"1": "{CDA_ID}", "2": "{EF}"}}',
+    "lista_cdas": f'["{CDA_ID}"]',
+    "lista_efs": f'["{EF}"]',
+    "lista_guias": "",
+    "apenas_um_item": "1",
+}
+CAMPOS_EMISSAO = sorted(PARAMETROS_EMISSAO)
+
+
+def _evento(registros, nome):
+    return next(
+        m
+        for m in registros["info"] + registros["error"]
+        if isinstance(m, dict) and m.get("event") == nome
+    )
+
+
+def _assert_sem_identificador(registros):
+    todas = " ".join(str(m) for m in registros["info"] + registros["error"])
+    for valor in (CDA_ID, EF, GUIA_PARCELADA, INSCRICAO):
+        assert valor not in todas
+
+
+@pytest.mark.asyncio
+async def test_inicio_da_emissao_v1_nao_loga_os_identificadores(
+    divida_module, monkeypatch, logs_pgm
+):
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [{"codigoDeBarras": "836", "pdf": "https://pgm.example/g.pdf"}]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    await divida_module.emitir_guia_a_vista(dict(PARAMETROS_EMISSAO))
+
+    assert _evento(logs_pgm, "da_emitir_guia_started") == {
+        "event": "da_emitir_guia_started",
+        "tipo": "a_vista",
+        "parametros": {"campos": CAMPOS_EMISSAO},
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_item_malformado_nao_loga_os_identificadores(divida_module, logs_pgm):
+    """
+    `itens_informados` cru é texto que veio de fora: fica só o tipo dele. A
+    exceção também sai do log, porque `float()` repete o valor na mensagem:
+    `could not convert string to float: '[01/999999/2024-00'`.
+    """
+    resultado = await divida_module.emitir_guia_a_vista(
+        {**PARAMETROS_EMISSAO, "itens_informados": f"[{CDA_ID}"}
+    )
+
+    assert resultado["api_resposta_sucesso"] is False
+    parse_error = _evento(logs_pgm, "da_emitir_guia_parse_error")
+    assert parse_error["itens_informados_tipo"] == "str"
+    assert "itens_informados_raw" not in parse_error
+    assert "parameters" not in parse_error
+    assert "itens_informados" in parse_error["parametros"]["campos"]
+    assert "parameters" not in _evento(logs_pgm, "emitir_guia_a_vista_error")
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_lista_malformada_nao_loga_os_identificadores(divida_module, logs_pgm):
+    resultado = await divida_module.da_emitir_guia(
+        {**PARAMETROS_EMISSAO, "lista_cdas": f'["{CDA_ID}"'}, "a_vista"
+    )
+
+    assert resultado == {"opcao_invalida": True}
+    assert _evento(logs_pgm, "da_emitir_guia_processing_error")["parametros"] == {
+        "campos": CAMPOS_EMISSAO
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "funcao,evento",
+    [
+        ("emitir_guia_regularizacao", "emitir_guia_regularizacao_error"),
+        ("emitir_guia_a_vista", "emitir_guia_a_vista_error"),
+    ],
+)
+async def test_falha_na_emissao_nao_loga_os_identificadores(
+    divida_module, monkeypatch, logs_pgm, funcao, evento
+):
+    async def explode(parameters, tipo):
+        raise RuntimeError("falha simulada")
+
+    monkeypatch.setattr(divida_module, "da_emitir_guia", explode)
+    resultado = await getattr(divida_module, funcao)(dict(PARAMETROS_EMISSAO))
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert _evento(logs_pgm, evento) == {
+        "event": evento,
+        "error_type": "RuntimeError",
+        "parametros": {"campos": CAMPOS_EMISSAO},
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_falha_na_consulta_nao_loga_a_inscricao(
+    divida_module, monkeypatch, logs_pgm
+):
+    async def explode(endpoint, consumidor, data):
+        raise RuntimeError("falha simulada")
+
+    monkeypatch.setattr(divida_module, "pgm_api", explode)
+    resultado = await divida_module.consultar_debitos(
+        {"consulta_debitos": "inscricaoImobiliaria", "inscricaoImobiliaria": INSCRICAO}
+    )
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert _evento(logs_pgm, "consultar_debitos_error")["parametros"] == {
+        "campos": ["consulta_debitos", "inscricaoImobiliaria"]
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_excecao_no_decorator_nao_loga_os_identificadores(
+    divida_module, logs_pgm
+):
+    @divida_module.log_execution_time
+    async def explode(parameters):
+        raise RuntimeError("falha simulada")
+
+    with pytest.raises(RuntimeError, match="falha simulada"):
+        await explode(dict(PARAMETROS_EMISSAO))
+
+    falha = _evento(logs_pgm, "request_failed")
+    assert "parameters" not in falha
+    assert falha["error_type"] == "RuntimeError"
+    assert falha["parametros"] == {"campos": CAMPOS_EMISSAO}
+    _assert_sem_identificador(logs_pgm)

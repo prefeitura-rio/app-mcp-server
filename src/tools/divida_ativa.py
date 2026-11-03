@@ -81,8 +81,10 @@ def log_execution_time(func):
                     "timestamp_epoch": end_time,
                     "duration_seconds": elapsed,
                     "status": "error",
-                    "error": str(e),
-                    "parameters": args[0] if args else kwargs.get("parameters", {}),
+                    "error_type": type(e).__name__,
+                    "parametros": resumir_parametros_pgm(
+                        args[0] if args else kwargs.get("parameters", {})
+                    ),
                 }
             )
 
@@ -301,7 +303,11 @@ async def da_emitir_guia(
         Parâmetros processados ou None se inválido
     """
     logger.info(
-        {"event": "da_emitir_guia_started", "tipo": tipo, "parameters": parameters}
+        {
+            "event": "da_emitir_guia_started",
+            "tipo": tipo,
+            "parametros": resumir_parametros_pgm(parameters),
+        }
     )
 
     itens_raw = parameters.get("itens_informados", [])
@@ -320,9 +326,9 @@ async def da_emitir_guia(
         logger.error(
             {
                 "event": "da_emitir_guia_parse_error",
-                "error": str(e),
-                "parameters": parameters,
-                "itens_informados_raw": itens_raw,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
+                "itens_informados_tipo": type(itens_raw).__name__,
             }
         )
         itens_informados = [str(int(float(parameters.get("itens_informados", 1))))]
@@ -366,8 +372,8 @@ async def da_emitir_guia(
         logger.error(
             {
                 "event": "da_emitir_guia_processing_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
         return {"opcao_invalida": True}
@@ -550,8 +556,8 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
         logger.error(
             {
                 "event": "emitir_guia_regularizacao_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
         return {
@@ -590,8 +596,8 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(
             {
                 "event": "emitir_guia_a_vista_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
 
@@ -828,8 +834,8 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(
             {
                 "event": "consultar_debitos_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
 
