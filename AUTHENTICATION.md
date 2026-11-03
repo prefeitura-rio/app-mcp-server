@@ -33,7 +33,7 @@ Fallback: compara contra VALID_TOKENS (comportamento de hoje, inalterado)
         ✗ não está ──────► 401
 ```
 
-Importante: essa validação roda apenas no pipeline de mensagens do protocolo MCP (`/mcp`), aplicado via `FastMCP(auth=...)` em `src/app.py`. As `custom_route`s Starlette (`/health`, `/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`) **não são cobertas automaticamente** por essa proteção — ver seção [Protegendo outros endpoints](#-protegendo-outros-endpoints-custom_route) abaixo.
+Importante: o `FastMCP(auth=...)` em `src/app.py` só exige o token no endpoint `/mcp`. As `custom_route`s Starlette **não são cobertas automaticamente**: as rotas de Dívida Ativa (`/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`, `/v2/emitir_guia`, `/v2/emitir_guia_regularizacao`) são protegidas explicitamente com `require_authenticated`, e as de saúde (`/health`, `/health/ready`, `/health/detail`) são públicas — ver seção [Protegendo outros endpoints](#-protegendo-outros-endpoints-custom_route) abaixo.
 
 ## 🔑 Variáveis de ambiente
 
@@ -112,46 +112,13 @@ Este servidor atua como **Resource Server** (só valida tokens; não emite nem g
 
 ## 🔒 Protegendo outros endpoints (`custom_route`)
 
-O servidor expõe algumas rotas HTTP "puras" fora do protocolo MCP, via `@mcp.custom_route(...)` em `src/app.py` (ex: `/health`, `/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`). **Essas rotas não são cobertas automaticamente** pelo `HybridTokenVerifier`/`auth=` do `FastMCP` — essa proteção só se aplica ao endpoint `/mcp` (pipeline de mensagens do protocolo MCP).
+O servidor expõe algumas rotas HTTP "puras" fora do protocolo MCP, via `@mcp.custom_route(...)` em `src/app.py`. **Essas rotas não são cobertas automaticamente** pelo `auth=` do `FastMCP`, que só exige o token no endpoint `/mcp`.
 
-> ⚠️ **Gap conhecido, ainda não corrigido**: hoje, `/consulta_debitos`, `/emitir_guia` e `/emitir_guia_regularizacao` não exigem nenhuma autenticação. Isso é anterior a este trabalho e está fora do escopo desta mudança — documentado aqui para visibilidade, com a receita abaixo pronta para quando for priorizado.
+As rotas de Dívida Ativa (`/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`, `/v2/emitir_guia`, `/v2/emitir_guia_regularizacao`) exigem `Authorization: Bearer` válido desde o achado `vuln-0002` do pentest (INFRAVPIA-320). Sem token, ou com token inválido ou expirado, respondem **401** com `WWW-Authenticate: Bearer`, antes de ler o corpo e sem chamar a PGM. As rotas de saúde continuam públicas (o kubelet não manda token).
 
-Se for necessário proteger uma `custom_route` (recomendado para as rotas de pagamento acima), o padrão é usar `get_access_token()` do próprio FastMCP, que já reflete o resultado do `HybridTokenVerifier` (nenhuma lógica de parsing de token precisa ser duplicada):
+A proteção é o decorator `require_authenticated` de `src/middleware/http_guard.py`. O provider de auth do FastMCP instala o `AuthenticationMiddleware` do Starlette no app inteiro, com o mesmo `HybridTokenVerifier` do `/mcp`, e deixa o resultado em `request.scope["user"]`; o decorator só exige que ele seja um `AuthenticatedUser`. Nenhuma lógica de token é duplicada, então vale tanto o token estático quanto o JWT do Keycloak. Fora do ambiente local, a ausência de usuário autenticado é sempre 401 (falha fechada); com `IS_LOCAL=true` a rota segue sem auth, como o `/mcp`.
 
-```python
-# src/middleware/http_guard.py
-from functools import wraps
-
-from fastmcp.server.dependencies import get_access_token
-from starlette.responses import JSONResponse
-
-from src.config.env import IS_LOCAL
-
-
-def require_authenticated(handler):
-    """Decorator para exigir autenticação em uma `custom_route` Starlette.
-
-    Deve ser aplicado ABAIXO de `@mcp.custom_route(...)` (decorators aplicam
-    de baixo pra cima). Reaproveita o mesmo HybridTokenVerifier configurado
-    em `FastMCP(auth=...)` — nenhuma lógica de token é duplicada aqui.
-    """
-
-    @wraps(handler)
-    async def wrapper(request):
-        if IS_LOCAL:
-            return await handler(request)
-        if get_access_token() is None:
-            return JSONResponse(
-                {"error": "invalid_token", "error_description": "Authentication required"},
-                status_code=401,
-                headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
-            )
-        return await handler(request)
-
-    return wrapper
-```
-
-Uso em `src/app.py`:
+Para proteger outra `custom_route`, aplique o decorator **abaixo** de `@mcp.custom_route(...)` (o decorator de rota registra a função que recebe):
 
 ```python
 from src.middleware.http_guard import require_authenticated
@@ -162,9 +129,9 @@ async def da_consulta_debitos(request: Request) -> JSONResponse:
     ...
 ```
 
-Isso funciona tanto com o token estático quanto com JWT do Keycloak, já que `get_access_token()` é populado pelo mesmo `HybridTokenVerifier` independente de qual dos dois métodos autenticou a requisição. **Não crie um novo mecanismo de auth para cada rota — sempre reaproveite este mesmo verifier.**
+**Não crie um novo mecanismo de auth para cada rota — sempre reaproveite este mesmo verifier.**
 
-Se, no futuro, for necessário restringir uma rota específica só para OAuth (rejeitando o token estático legado), dá pra checar `get_access_token().claims.get("auth_method")` (`"oauth"` ou `"static"`) dentro do handler — mas isso não está implementado hoje; adicione somente se surgir um caso de uso concreto.
+Se, no futuro, for necessário restringir uma rota específica só para OAuth (rejeitando o token estático legado), dá pra checar `request.user.access_token.claims.get("auth_method")` (`"oauth"` ou `"static"`) dentro do handler — mas isso não está implementado hoje; adicione somente se surgir um caso de uso concreto.
 
 ## 🧪 Testando localmente sem depender do Keycloak
 

@@ -104,6 +104,34 @@ HTTP 401
 header "WWW-Authenticate" contains "invalid_token"
 
 
+# As rotas de Dívida Ativa são `custom_route`s, fora do `auth=` do FastMCP, e
+# por isso ficaram abertas até o achado de pentest INFRAVPIA-320. O
+# `require_authenticated` precisa estar de fato aplicado à rota servida pela
+# imagem: sem token é 401, antes de qualquer chamada à PGM. O corpo é
+# sintético e nunca chega a ser lido.
+
+POST {{base_url}}/consulta_debitos
+Content-Type: application/json
+```
+{"consulta_debitos":"inscricaoImobiliaria","inscricaoImobiliaria":"0"}
+```
+HTTP 401
+[Asserts]
+header "WWW-Authenticate" startsWith "Bearer"
+jsonpath "$.error" == "invalid_token"
+
+
+POST {{base_url}}/v2/emitir_guia
+Authorization: Bearer token-que-nao-existe
+Content-Type: application/json
+```
+{}
+```
+HTTP 401
+[Asserts]
+header "WWW-Authenticate" contains "invalid_token"
+
+
 # ===== HANDSHAKE MCP SOBRE STREAMABLE HTTP =====
 # O produto é um servidor MCP; nada no CI exercitava o protocolo em si.
 # As três requisições abaixo são independentes de propósito: em modo
