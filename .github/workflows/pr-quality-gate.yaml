@@ -229,7 +229,12 @@ jobs:
 
   build:
     name: Build + Image Scan + Smoke HTTP
-    runs-on: ubuntu-latest
+    # Fixado em 24.04: o .deb do Hurl depende do pacote `libxml2`
+    # (libxml2.so.2), que o Ubuntu 26.04 não tem mais — lá só existe o
+    # `libxml2-16`. Com `ubuntu-latest` apontando para 26.04, o passo
+    # `Install Hurl` quebrava antes do build (DEV-214). Revisitar quando o
+    # Hurl publicar pacote para 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       HURL_VERSION: "8.0.1"
@@ -280,7 +285,9 @@ jobs:
         run: |
           curl -fsSL -o /tmp/hurl.deb \
             "https://github.com/Orange-OpenSource/hurl/releases/download/${HURL_VERSION}/hurl_${HURL_VERSION}_amd64.deb"
-          sudo dpkg -i /tmp/hurl.deb
+          # `apt-get install` resolve as dependências do .deb; `dpkg -i`
+          # só falhava se alguma não estivesse instalada.
+          sudo apt-get install -y /tmp/hurl.deb
           hurl --version
 
       - name: Start container under test
