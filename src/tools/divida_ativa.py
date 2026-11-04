@@ -475,7 +475,9 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
         )
         return {
             "api_resposta_sucesso": False,
-            "api_descricao_erro": f"Erro ao emitir guia de regularização: {str(e)}",
+            "api_descricao_erro": (
+                "Erro ao emitir guia de regularização. Tente novamente mais tarde."
+            ),
         }
 
 
@@ -516,7 +518,9 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
 
         return {
             "api_resposta_sucesso": False,
-            "api_descricao_erro": f"Erro ao emitir guia à vista: {str(e)}",
+            "api_descricao_erro": (
+                "Erro ao emitir guia à vista. Tente novamente mais tarde."
+            ),
         }
 
 
@@ -594,9 +598,74 @@ def _itens_da_consulta(
     return itens
 
 
+# Tipos aceitos em `consulta_debitos`, na ordem em que a mensagem de erro os
+# lista. Cada um é também o nome do campo que traz o valor consultado.
+TIPOS_CONSULTA_DEBITOS = (
+    "cpfCnpj",
+    "inscricaoImobiliaria",
+    "cda",
+    "numeroExecucaoFiscal",
+    "numeroAutoInfracao",
+)
+
+
+def _erro_entrada_consulta(parameters: Any) -> Optional[str]:
+    """Mensagem que nomeia o campo obrigatório ausente ou inválido, ou ``None``.
+
+    Roda antes de qualquer chamada à PGM. O texto nunca ecoa o valor recebido
+    em `consulta_debitos`: ele vem do cliente e não tem tamanho nem formato
+    garantidos.
+    """
+    tipos = ", ".join(TIPOS_CONSULTA_DEBITOS)
+
+    if not isinstance(parameters, dict):
+        return (
+            "Parâmetros inválidos: envie um objeto JSON com o campo 'consulta_debitos'."
+        )
+
+    tipo_consulta = parameters.get("consulta_debitos")
+    if tipo_consulta is None or tipo_consulta == "":
+        return (
+            "Campo obrigatório 'consulta_debitos' ausente. "
+            f"Informe o tipo da consulta: {tipos}."
+        )
+
+    if (
+        not isinstance(tipo_consulta, str)
+        or tipo_consulta not in TIPOS_CONSULTA_DEBITOS
+    ):
+        return f"Valor inválido em 'consulta_debitos'. Use um destes: {tipos}."
+
+    valor = parameters.get(tipo_consulta)
+    if valor is None:
+        return (
+            f"Campo obrigatório '{tipo_consulta}' ausente: informe o valor a "
+            "consultar nesse campo."
+        )
+
+    if not isinstance(valor, str):
+        return f"O campo '{tipo_consulta}' deve ser um texto."
+
+    if tipo_consulta == "numeroAutoInfracao":
+        ano = parameters.get("anoAutoInfracao")
+        if ano is None:
+            return (
+                "Campo obrigatório 'anoAutoInfracao' ausente: informe o ano do "
+                "Auto de Infração."
+            )
+        if not isinstance(ano, str):
+            return "O campo 'anoAutoInfracao' deve ser um texto."
+
+    return None
+
+
 @interceptor(source={"source": "mcp", "tool": "divida_ativa"})
 @log_execution_time
 async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    erro_entrada = _erro_entrada_consulta(parameters)
+    if erro_entrada:
+        return {"api_resposta_sucesso": False, "api_descricao_erro": erro_entrada}
+
     try:
         return_dict = {}
 
@@ -754,5 +823,7 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
 
         return {
             "api_resposta_sucesso": False,
-            "api_descricao_erro": f"Erro ao consultar débitos: {str(e)}",
+            "api_descricao_erro": (
+                "Erro ao consultar débitos. Tente novamente mais tarde."
+            ),
         }
