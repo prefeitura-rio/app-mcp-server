@@ -23,13 +23,9 @@ env:
 
 jobs:
   build-and-deploy:
-    # Fixado em 24.04: a imagem ubuntu-26.04 (para onde `ubuntu-latest`
-    # passou a apontar) traz o gcloud 591.0.0, que o setup-gcloud reaproveita;
-    # nele o `gcloud config config-helper` chamado pelo gke-gcloud-auth-plugin
-    # quebra com `AttributeError: 'Credentials' object has no attribute
-    # 'private_key_id'` e todo `kubectl` falha (DEV-239, DEV-241). Revisitar
-    # quando o gcloud da imagem 26.04 voltar a autenticar com a chave da conta
-    # de serviço.
+    # Fixado em 24.04, a imagem do último release verde (`ubuntu-latest`
+    # passou a ser 26.04); a correção do erro de autenticação é a versão do
+    # gcloud fixada no passo `Set up gcloud SDK` (DEV-241).
     runs-on: ubuntu-24.04
     environment: production
 
@@ -112,6 +108,16 @@ jobs:
 
       - name: Set up gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          # Fixado em 570.0.0: a partir do gcloud 571, com a variável
+          # CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE que o `auth` exporta para
+          # `credentials_json`, o `gcloud config config-helper` chamado pelo
+          # gke-gcloud-auth-plugin quebra com `AttributeError: 'Credentials'
+          # object has no attribute 'private_key_id'` e todo `kubectl` falha
+          # (google-github-actions/auth#535; DEV-239, DEV-241). Com `latest`,
+          # o job pegaria o 591.0.0. Revisitar quando o gcloud corrigir a
+          # regressão.
+          version: "570.0.0"
 
       - name: Install gke-gcloud-auth-plugin
         run: gcloud components install gke-gcloud-auth-plugin
