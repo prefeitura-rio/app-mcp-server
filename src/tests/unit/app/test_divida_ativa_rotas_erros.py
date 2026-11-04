@@ -191,3 +191,55 @@ def test_consulta_debitos_sem_o_campo_nomeia_o_campo(app_env, monkeypatch):
     assert corpo["api_resposta_sucesso"] is False
     assert "Campo obrigatório 'consulta_debitos' ausente" in corpo["api_descricao_erro"]
     assert "Erro ao consultar débitos" not in corpo["api_descricao_erro"]
+
+
+# Payloads sintéticos que passam pela validação de cada rota e chegam à PGM.
+# Nenhum CPF, inscrição, CDA ou guia real.
+_CDA = "01/000000/2024-00"
+_GUIA = "99/000000/2023-00"
+PAYLOAD_ATE_A_PGM = {
+    "/consulta_debitos": {"consulta_debitos": "cda", "cda": "0"},
+    "/emitir_guia": {
+        "dicionario_itens": f'{{"1": "{_CDA}"}}',
+        "lista_cdas": f'["{_CDA}"]',
+        "apenas_um_item": "1",
+    },
+    "/emitir_guia_regularizacao": {
+        "dicionario_itens": f'{{"1": "{_GUIA}"}}',
+        "lista_guias": f'["{_GUIA}"]',
+        "apenas_um_item": "1",
+    },
+}
+PAYLOAD_ATE_A_PGM["/v2/emitir_guia"] = PAYLOAD_ATE_A_PGM["/emitir_guia"]
+PAYLOAD_ATE_A_PGM["/v2/emitir_guia_regularizacao"] = PAYLOAD_ATE_A_PGM[
+    "/emitir_guia_regularizacao"
+]
+
+
+@pytest.mark.parametrize("route", list(DIVIDA_ATIVA_ROUTES))
+def test_falha_da_pgm_nao_vaza_o_texto_da_excecao(app_env, monkeypatch, route):
+    """Exceção vinda da dependência, pelas funções de negócio reais.
+
+    `pgm_api` relança o que não é timeout (PGM inacessível, token recusado,
+    resposta fora do formato). O texto dessa exceção não pode chegar ao
+    chamador por nenhuma das cinco rotas.
+    """
+    chamadas_pgm = []
+
+    async def _pgm_quebrada(**kwargs):
+        chamadas_pgm.append(kwargs["endpoint"])
+        raise RuntimeError(TEXTO_INTERNO)
+
+    for modulo in ("src.tools.divida_ativa", "src.tools.divida_ativa_v2.service"):
+        monkeypatch.setattr(sys.modules[modulo], "pgm_api", _pgm_quebrada)
+
+    client = TestClient(app_env.create_app().http_app(), raise_server_exceptions=False)
+
+    response = client.post(route, json=PAYLOAD_ATE_A_PGM[route], headers=HEADERS)
+
+    assert chamadas_pgm, "o payload deveria chegar à PGM"
+    assert response.status_code == 200
+    corpo = response.json()
+    assert corpo["api_resposta_sucesso"] is False
+    assert corpo["api_descricao_erro"].startswith("Erro ao ")
+    assert TEXTO_INTERNO not in response.text

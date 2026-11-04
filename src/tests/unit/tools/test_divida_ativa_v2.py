@@ -572,7 +572,10 @@ async def test_excecao_inesperada_da_pgm_e_convertida_em_falha(monkeypatch):
     resultado = await emitir_guia_a_vista_v2(dict(PAYLOAD_LEGADO))
 
     assert resultado["api_resposta_sucesso"] is False
-    assert "conexão recusada" in resultado["api_descricao_erro"]
+    # DEV-240: o texto da exceção (que pode vir de uma dependência) não vai ao
+    # chamador.
+    assert "conexão recusada" not in resultado["api_descricao_erro"]
+    assert resultado["api_descricao_erro"].startswith("Erro ao emitir guia à vista.")
 
 
 @pytest.mark.asyncio
@@ -588,7 +591,7 @@ async def test_excecao_na_regularizacao_e_convertida_em_falha(monkeypatch):
 
     assert resultado["api_resposta_sucesso"] is False
     assert "Erro ao emitir guia de regularização" in resultado["api_descricao_erro"]
-    assert "timeout na PGM" in resultado["api_descricao_erro"]
+    assert "timeout na PGM" not in resultado["api_descricao_erro"]
 
 
 @pytest.mark.asyncio
