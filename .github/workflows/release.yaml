@@ -23,7 +23,14 @@ env:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    # Fixado em 24.04: a imagem ubuntu-26.04 (para onde `ubuntu-latest`
+    # passou a apontar) traz o gcloud 591.0.0, que o setup-gcloud reaproveita;
+    # nele o `gcloud config config-helper` chamado pelo gke-gcloud-auth-plugin
+    # quebra com `AttributeError: 'Credentials' object has no attribute
+    # 'private_key_id'` e todo `kubectl` falha (DEV-239, DEV-241). Revisitar
+    # quando o gcloud da imagem 26.04 voltar a autenticar com a chave da conta
+    # de serviço.
+    runs-on: ubuntu-24.04
     environment: production
 
     steps:
