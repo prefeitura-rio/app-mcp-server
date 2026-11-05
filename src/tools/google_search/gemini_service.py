@@ -371,7 +371,9 @@ class GeminiService:
         ]
         return f"query_chars={len(query)} pii_redigida={tipos}"
 
-    @interceptor(source={"source": "mcp", "tool": "gemini"})
+    @interceptor(
+        source={"source": "mcp", "tool": "gemini"}, free_text_params=("query",)
+    )
     async def google_search(
         self,
         query: str,
