@@ -1,7 +1,7 @@
 """Tools to interact with a user's chat memories"""
 
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -85,11 +85,42 @@ async def get_memories(
         return response.json()
 
 
+_MAX_CHARS_NOME_DA_CHAVE = 64
+
+
+def _tamanho_do_valor(valor: Any) -> Dict[str, Any]:
+    if isinstance(valor, str):
+        return {"chars": len(valor)}
+    return {"tipo": type(valor).__name__}
+
+
+def _input_body_do_upsert(args: tuple, kwargs: dict) -> Dict[str, Any]:
+    """
+    `input_body` do `upsert_memory` no error interceptor: os nomes das chaves do
+    `memory_bank` e o tamanho de cada valor, nunca o valor (DEV-280).
+
+    O banco de memórias guarda o que o cidadão contou (saúde, família, endereço),
+    e texto livre não se redige. O `user_id` já vai, mascarado, no campo próprio
+    do report.
+    Se a extração falhar, o `@interceptor` manda só o nome e o tipo dos argumentos.
+    """
+    memory_bank = kwargs["memory_bank"] if "memory_bank" in kwargs else args[1]
+    if not isinstance(memory_bank, dict):
+        return {"memory_bank": {"tipo": type(memory_bank).__name__}}
+    return {
+        "memory_bank": {
+            str(chave)[:_MAX_CHARS_NOME_DA_CHAVE]: _tamanho_do_valor(valor)
+            for chave, valor in memory_bank.items()
+        }
+    }
+
+
 @interceptor(
     source={"source": "mcp", "tool": "memory"},
     extract_user_id=lambda args, kwargs: (
         kwargs.get("user_id") or (args[0] if args else "unknown")
     ),
+    extract_input_body=_input_body_do_upsert,
 )
 async def upsert_memory(
     user_id: str,

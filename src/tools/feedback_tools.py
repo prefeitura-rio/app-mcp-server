@@ -12,6 +12,9 @@ from src.utils.error_interceptor import interceptor
 
 @interceptor(
     source={"source": "mcp", "tool": "feedback"},
+    # O feedback é texto livre do cidadão: no input_body vão só o tamanho e os
+    # tipos de dado pessoal, nunca o texto (DEV-280).
+    free_text_params=("feedback",),
     extract_user_id=lambda args, kwargs: (
         kwargs.get("user_id") or (args[0] if args else "unknown")
     ),
