@@ -1149,10 +1149,18 @@ async def save_feedback_in_bq_background(
     extract_user_id=lambda args, kwargs: (
         kwargs.get("user_id") or (args[1] if len(args) > 1 else "unknown")
     ),
-    # Descrição, endereço e bairro são texto livre do cidadão: no input_body vão
-    # só o tamanho e os tipos de dado pessoal. Latitude e longitude localizam o
-    # cidadão: vão só com o tipo, nunca a coordenada (DEV-316).
-    free_text_params=("description", "address", "bairro_raw", "latitude", "longitude"),
+    # Descrição, endereço e bairro são texto livre do cidadão (o bairro
+    # normalizado é o informado, sem acento): no input_body vão só o tamanho e
+    # os tipos de dado pessoal. Latitude e longitude localizam o cidadão: vão só
+    # com o tipo, nunca a coordenada (DEV-316).
+    free_text_params=(
+        "description",
+        "address",
+        "bairro_raw",
+        "bairro_normalizado",
+        "latitude",
+        "longitude",
+    ),
 )
 def save_cor_alert_in_bq(
     alert_id: str,

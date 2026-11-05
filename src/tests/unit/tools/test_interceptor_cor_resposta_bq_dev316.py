@@ -9,8 +9,8 @@ livre do alerta, o endereço, o bairro informado, a latitude e a longitude, e o
 externo, só com a redação por padrão.
 
 Invariantes cobertos aqui:
-- em `save_cor_alert_in_bq`, descrição, endereço e bairro informado viram
-  `resumir_texto_livre` (tamanho e tipos de dado pessoal); latitude e longitude
+- em `save_cor_alert_in_bq`, descrição, endereço e bairro (o informado e o
+  normalizado, que é o mesmo sem acento) viram `resumir_texto_livre` (tamanho e tipos de dado pessoal); latitude e longitude
   vão só com o tipo; os campos de código (tipo, severidade, ambiente) seguem;
 - em `save_response_in_bq`, `data` vira os nomes das chaves e o tamanho de cada
   valor; um `data` que não é dict vira só o tipo e o tamanho; endpoint, tabela e
@@ -106,9 +106,9 @@ def _payload_enviado(transport: _CapturingTransport) -> dict:
 
 
 def _sem_dado_do_cidadao(payload: dict) -> None:
-    corpo = json.dumps(payload, ensure_ascii=False)
+    corpo = json.dumps(payload, ensure_ascii=False).lower()
     for trecho in TRECHOS_PROIBIDOS:
-        assert trecho not in corpo
+        assert trecho.lower() not in corpo
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +151,12 @@ async def test_falha_ao_gravar_alerta_cor_em_background_nao_envia_o_texto(
     )
 
     payload = _payload_enviado(transport)
-    _assert_input_body_do_alerta(json.loads(payload["input_body"]))
+    input_body = json.loads(payload["input_body"])
+    _assert_input_body_do_alerta(input_body)
+    # O wrapper deriva o bairro normalizado do informado: é o mesmo dado.
+    assert input_body["bairro_normalizado"] == resumir_texto_livre(
+        "vila ficticia do norte"
+    )
     assert "falha ao gravar no BigQuery" in payload["error_response"]
     _sem_dado_do_cidadao(payload)
 
@@ -172,10 +177,13 @@ def test_save_cor_alert_in_bq_por_posicao_nao_envia_o_texto(
             "2026-11-05T12:00:00",
             "staging",
             BAIRRO,
+            BAIRRO,
         )
 
     payload = _payload_enviado(transport)
-    _assert_input_body_do_alerta(json.loads(payload["input_body"]))
+    input_body = json.loads(payload["input_body"])
+    _assert_input_body_do_alerta(input_body)
+    assert input_body["bairro_normalizado"] == resumir_texto_livre(BAIRRO)
     _sem_dado_do_cidadao(payload)
 
 
