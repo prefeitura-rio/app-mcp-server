@@ -14,7 +14,8 @@ Invariantes cobertos aqui:
   posição ou por nome; um `memory_bank` que não é dict vira só o tipo;
 - o `user_id` não entra no `input_body` do `upsert_memory` (vai mascarado no
   campo próprio do report, `customer_whatsapp_number`);
-- `get_memories`, sem texto livre, segue com o `input_body` de antes.
+- `get_memories` manda só o resumo do nome da memória, sem o `user_id`
+  (DEV-336: o nome é tratado como dado sensível).
 """
 
 import json
@@ -280,17 +281,17 @@ def test_resumo_do_memory_bank_corta_nome_longo_e_nao_leva_valor():
 
 
 # ---------------------------------------------------------------------------
-# get_memories: sem texto livre, sem mudança
+# get_memories: só o resumo do nome da memória (DEV-336)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_memories_mantem_o_input_body(transport, memoria_com_oauth):
+async def test_get_memories_envia_so_o_resumo_do_nome(transport, memoria_com_oauth):
     with pytest.raises(RuntimeError, match="falha interna da tool"):
         await memory.get_memories(USER_ID, "saude_familia")
 
     payload = _payload_enviado(transport)
     assert json.loads(payload["input_body"]) == {
-        "user_id": USER_ID,
-        "memory_name": "saude_familia",
+        "memory_name": resumir_texto_livre("saude_familia"),
     }
+    assert "saude_familia" not in json.dumps(payload, ensure_ascii=False)
