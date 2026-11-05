@@ -17,6 +17,7 @@ from src.config.env import (
     GOOGLE_MAPS_API_KEY,
 )
 from src.utils.log import logger
+from src.utils.pii import resumir_texto_livre
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 
@@ -145,7 +146,8 @@ async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict
                         "bairro_normalizado": normalize_neighborhood(bairro_raw),
                     }
     except Exception as e:
-        logger.warning(f"Erro ao fazer reverse geocoding: {str(e)}")
+        # Só o tipo: `str(e)` do httpx traz a URL, com a coordenada exata (DEV-340).
+        logger.warning(f"Erro ao fazer reverse geocoding: {type(e).__name__}")
     return {}
 
 
@@ -190,7 +192,8 @@ async def get_coordinates_google(address: str) -> dict:
                 "bairro_normalizado": normalize_neighborhood(bairro_raw),
             }
     except Exception as e:
-        logger.warning(f"Erro ao geolocalizar com Google Maps: {str(e)}")
+        # Só o tipo: `str(e)` do httpx traz a URL, com o endereço do cidadão (DEV-340).
+        logger.warning(f"Erro ao geolocalizar com Google Maps: {type(e).__name__}")
 
     return {}
 
@@ -219,7 +222,7 @@ async def geocode_address(address: str) -> dict:
             coords["bairro_raw"] = neighborhood["bairro_raw"]
             coords["bairro_normalizado"] = neighborhood["bairro_normalizado"]
             logger.info(
-                f"Bairro encontrado via reverse geocoding: {coords['bairro_raw']}"
+                f"Bairro encontrado via reverse geocoding: {coords['bairro_normalizado']}"
             )
 
     return coords
@@ -309,8 +312,10 @@ async def create_cor_alert(
     # Generate unique alert ID
     alert_id = str(uuid.uuid4())
 
-    # Geocode address
-    logger.info(f"Geolocalizando endereço: {address}")
+    # Geocode address. O log leva só metadado do endereço: texto livre do
+    # cidadão, que a redação por padrão não alcança (DEV-340).
+    resumo_endereco = resumir_texto_livre(address)
+    logger.info(f"Geolocalizando endereço do alerta {alert_id}: {resumo_endereco}")
     coords = await geocode_address(address.strip())
 
     latitude = None
@@ -326,10 +331,13 @@ async def create_cor_alert(
         bairro_normalizado = coords.get("bairro_normalizado") or None
         resolved_address = str(coords.get("address") or address.strip())
         logger.info(
-            f"Endereço geolocalizado: lat={latitude}, lng={longitude}, bairro={bairro_raw or 'nao_identificado'}"
+            f"Endereço do alerta {alert_id} geolocalizado: sim, "
+            f"bairro={bairro_normalizado or 'nao_identificado'}"
         )
     else:
-        logger.warning(f"Não foi possível geolocalizar o endereço: {address}")
+        logger.warning(
+            f"Endereço do alerta {alert_id} geolocalizado: não, {resumo_endereco}"
+        )
 
     # Get timestamp
     timestamp = get_datetime()
