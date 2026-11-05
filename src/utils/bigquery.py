@@ -1021,6 +1021,9 @@ async def save_response_in_bq_background(
     extract_user_id=lambda args, kwargs: (
         kwargs.get("user_id") or (args[0] if args else "unknown")
     ),
+    # O feedback é texto livre do cidadão: no input_body vão só o tamanho e os
+    # tipos de dado pessoal, nunca o texto (DEV-280).
+    free_text_params=("feedback",),
 )
 def save_feedback_in_bq(
     user_id: str,
