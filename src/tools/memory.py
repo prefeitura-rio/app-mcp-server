@@ -31,6 +31,13 @@ class MemoryBank(BaseModel):
     value: str
 
 
+# Campos do corpo do PUT/POST à API de memória que o `InterceptedHTTPClient`
+# reporta como texto livre: no `request_body` do error interceptor vão só o nome
+# e o tamanho de cada valor, nunca o valor (DEV-315). Todos os campos do
+# `MemoryBank`, para um campo novo não sair em claro por omissão.
+_CAMPOS_DO_MEMORY_BANK = tuple(MemoryBank.model_fields)
+
+
 @interceptor(
     source={"source": "mcp", "tool": "memory"},
     extract_user_id=lambda args, kwargs: (
@@ -154,7 +161,10 @@ async def upsert_memory(
 
     # Tries to update the memory bank
     async with InterceptedHTTPClient(
-        user_id=user_id, source={"source": "mcp", "tool": "memory"}, timeout=120.0
+        user_id=user_id,
+        source={"source": "mcp", "tool": "memory"},
+        timeout=120.0,
+        free_text_fields=_CAMPOS_DO_MEMORY_BANK,
     ) as client:
         try:
             response = await client.put(
