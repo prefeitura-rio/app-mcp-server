@@ -207,7 +207,9 @@ class AddressAPIService:
             client = AsyncClient(maps_session, key=env.GMAPS_API_TOKEN)
             geocode_result = await client.geocode(address)
 
-        logger.info(f"GEOCODE RESULT:\n{geocode_result}")
+        # Só a contagem: o resultado traz o endereço formatado e a coordenada
+        # do cidadão (DEV-354).
+        logger.info(f"GEOCODE RESULT: {len(geocode_result)} resultado(s)")
 
         if len(geocode_result) == 0:
             return {"valid": False, "error": "Endereço não encontrado"}
@@ -228,7 +230,7 @@ class AddressAPIService:
         logradouro_lat = resultado["geometry"]["location"]["lat"]
         logradouro_long = resultado["geometry"]["location"]["lng"]
 
-        logger.info(f"Lat, Long: {logradouro_lat}, {logradouro_long}")
+        logger.info("Coordenadas do logradouro obtidas")
 
         logradouro_fora_do_rj = validate_city(address_info.get("cidade"))
         if logradouro_fora_do_rj:
@@ -316,7 +318,7 @@ class AddressAPIService:
             logger.info(f"Nome bairro obtido: {bairro_nome_ipp}")
         except Exception as e:
             logger.info(
-                f"Falha ao obter endereço usando get_nearest_logradouro_and_bairro(): {e}"
+                f"Falha ao obter endereço usando get_nearest_logradouro_and_bairro(): {type(e).__name__}"
             )
             bairro_id_ipp = "0"
             logradouro_id_ipp = "0"
@@ -356,7 +358,7 @@ class AddressAPIService:
                 "longitude": longitude,
             }
         except Exception as e:
-            logger.info(f"Erro ao processar endereço: {e}")
+            logger.info(f"Erro ao processar endereço: {type(e).__name__}")
             return {"error": str(e), "abertura_manual": True}
 
     async def substitute_digits(self, address: str) -> str:
@@ -484,7 +486,7 @@ class AddressAPIService:
             if bairro_nome_ipp == " ":
                 best_distance = 1000000000
                 logger.info(
-                    f"Logradouro será o mais próximo do lat/long retornado pelo Google. Lat:{latitude} | Long:{longitude}"
+                    "Logradouro será o mais próximo do lat/long retornado pelo Google"
                 )
                 for candidato in candidates:
                     distance = self.haversine_distance(
@@ -591,5 +593,5 @@ class AddressAPIService:
                     "bairro_nome": logradouro_bairro_ipp,
                 }
         except Exception as e:
-            logger.info(f"Erro ao buscar código IPP: {e}")
+            logger.info(f"Erro ao buscar código IPP: {type(e).__name__}")
             return {"error": str(e)}
