@@ -7,7 +7,9 @@ banco de memórias inteiro (o que o cidadão contou sobre saúde, família,
 endereço) iam ao error interceptor externo, só com a redação por padrão.
 
 Invariantes cobertos aqui:
-- o feedback vira `resumir_texto_livre` (tamanho e tipos de dado pessoal);
+- o feedback vira `resumir_texto_livre` (tamanho e tipos de dado pessoal) em
+  `store_user_feedback` e em `save_feedback_in_bq` (a gravação no BigQuery que
+  falha, o caminho real);
 - o `memory_bank` vira os nomes das chaves e o tamanho de cada valor, por
   posição ou por nome; um `memory_bank` que não é dict vira só o tipo;
 - o `user_id` não entra no `input_body` do `upsert_memory` (vai mascarado no
@@ -21,7 +23,7 @@ import httpx
 import pytest
 
 from src.tools import feedback_tools, memory
-from src.utils import error_interceptor
+from src.utils import bigquery, error_interceptor
 from src.utils.pii import resumir_texto_livre
 
 # Capturado no import, antes do fixture autouse `block_real_error_interceptor`
@@ -143,6 +145,59 @@ async def test_feedback_por_nome_tambem_e_resumido(transport, monkeypatch):
 
     with pytest.raises(RuntimeError):
         await feedback_tools.store_user_feedback(user_id=USER_ID, feedback=FEEDBACK)
+
+    payload = _payload_enviado(transport)
+    assert json.loads(payload["input_body"])["feedback"] == resumir_texto_livre(
+        FEEDBACK
+    )
+    _sem_texto_do_cidadao(payload)
+
+
+# ---------------------------------------------------------------------------
+# save_feedback_in_bq: o caminho real da falha ao gravar o feedback
+# ---------------------------------------------------------------------------
+
+
+def _gravacao_que_falha(*_args, **_kwargs):
+    raise RuntimeError("falha ao gravar no BigQuery")
+
+
+@pytest.mark.asyncio
+async def test_falha_ao_gravar_feedback_no_bigquery_nao_envia_o_texto(
+    transport, monkeypatch
+):
+    """Caminho de produção: `store_user_feedback` dispara
+    `save_feedback_in_bq_background`, que roda `save_feedback_in_bq` numa
+    thread do executor; a falha da gravação é reportada pelo `@interceptor`
+    dela e engolida pelo wrapper de background."""
+    monkeypatch.setattr(bigquery, "_gravar_linha", _gravacao_que_falha)
+
+    await bigquery.save_feedback_in_bq_background(
+        user_id=USER_ID,
+        feedback=FEEDBACK,
+        timestamp="2026-11-05T12:00:00",
+        environment="staging",
+    )
+
+    payload = _payload_enviado(transport)
+    input_body = json.loads(payload["input_body"])
+    assert input_body["feedback"] == resumir_texto_livre(FEEDBACK)
+    assert "cpf" in input_body["feedback"]["pii_redigida"]
+    assert input_body["environment"] == "staging"
+    assert "falha ao gravar no BigQuery" in payload["error_response"]
+    _sem_texto_do_cidadao(payload)
+
+
+def test_save_feedback_in_bq_sync_por_nome_nao_envia_o_texto(transport, monkeypatch):
+    monkeypatch.setattr(bigquery, "_gravar_linha", _gravacao_que_falha)
+
+    with pytest.raises(RuntimeError, match="falha ao gravar no BigQuery"):
+        bigquery.save_feedback_in_bq(
+            user_id=USER_ID,
+            feedback=FEEDBACK,
+            timestamp="2026-11-05T12:00:00",
+            environment="staging",
+        )
 
     payload = _payload_enviado(transport)
     assert json.loads(payload["input_body"])["feedback"] == resumir_texto_livre(
