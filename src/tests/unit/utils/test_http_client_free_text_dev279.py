@@ -128,6 +128,22 @@ def test_summarize_corpo_cru_com_campos_declarados_vira_resumo():
     }
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        [("q", PERGUNTA), ("limite", "5")],
+        (("q", PERGUNTA), ("limite", "5")),
+        httpx.QueryParams([("q", PERGUNTA), ("limite", "5")]),
+    ],
+)
+def test_summarize_params_em_pares_ou_query_params(params):
+    """`params` do httpx também aceita lista de pares e `QueryParams`."""
+    resumido = summarize_free_text(params, frozenset({"q"}))
+
+    assert resumido == [["q", resumir_texto_livre(PERGUNTA)], ["limite", "5"]]
+    _sem_texto_da_pergunta(resumido)
+
+
 def test_summarize_campo_que_nao_e_texto_vira_o_tipo():
     assert summarize_free_text(
         {"message": ["lista", "de", "texto"]}, frozenset({"message"})
@@ -229,6 +245,27 @@ async def test_async_params_de_get_tambem_sao_resumidos(interceptor_spy):
         "q": resumir_texto_livre(PERGUNTA),
         "limite": "5",
     }
+    _sem_texto_da_pergunta(reportado)
+
+
+@pytest.mark.asyncio
+async def test_async_params_em_pares_tambem_sao_resumidos(interceptor_spy):
+    client = InterceptedHTTPClient(
+        user_id="u1",
+        source=FONTE,
+        free_text_fields=("q",),
+        transport=httpx.MockTransport(_levanta(httpx.ConnectError)),
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        async with client:
+            await client.get(URL, params=[("q", PERGUNTA), ("limite", "5")])
+
+    (reportado,) = interceptor_spy
+    assert reportado["request_body"] == [
+        ["q", resumir_texto_livre(PERGUNTA)],
+        ["limite", "5"],
+    ]
     _sem_texto_da_pergunta(reportado)
 
 

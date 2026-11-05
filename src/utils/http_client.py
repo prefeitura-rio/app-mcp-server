@@ -25,6 +25,7 @@ Uso sync:
 
 import asyncio
 import traceback as tb
+from collections.abc import Mapping
 from typing import AbstractSet, Any, Dict, FrozenSet, Optional, Sequence, Union
 
 import httpx
@@ -97,8 +98,15 @@ def redact_body(body: Any) -> Any:
 
 
 def _summarize_free_text_fields(body: Any, free_text_fields: AbstractSet[str]) -> Any:
-    """Troca, em qualquer nível de dict ou lista, os campos nomeados pelo resumo."""
-    if isinstance(body, dict):
+    """
+    Troca, em qualquer nível de dict ou lista, os campos nomeados pelo resumo.
+
+    `params` e `data` também chegam como lista de pares (`[("q", texto)]`) ou
+    `httpx.QueryParams`: o par cujo nome casa vira `(nome, resumo)`.
+    """
+    if isinstance(body, httpx.QueryParams):
+        body = list(body.multi_items())
+    if isinstance(body, Mapping):
         return {
             chave: (
                 resumir_texto_livre(valor)
@@ -108,8 +116,19 @@ def _summarize_free_text_fields(body: Any, free_text_fields: AbstractSet[str]) -
             for chave, valor in body.items()
         }
     if isinstance(body, (list, tuple)):
-        return [_summarize_free_text_fields(item, free_text_fields) for item in body]
+        return [_summarize_free_text_item(item, free_text_fields) for item in body]
     return body
+
+
+def _summarize_free_text_item(item: Any, free_text_fields: AbstractSet[str]) -> Any:
+    if (
+        isinstance(item, (list, tuple))
+        and len(item) == 2
+        and isinstance(item[0], str)
+        and item[0].lower() in free_text_fields
+    ):
+        return [item[0], resumir_texto_livre(item[1])]
+    return _summarize_free_text_fields(item, free_text_fields)
 
 
 def summarize_free_text(body: Any, free_text_fields: AbstractSet[str]) -> Any:
