@@ -39,6 +39,7 @@ from src.tools.multi_step_service.workflows.poda_de_arvore.api.api_service impor
     AddressAPIService,
 )
 
+from src.utils.pii import resumir_texto_livre
 from src.utils.typesense_api import HubSearchRequest, hub_search_by_id
 
 from prefeitura_rio.integrations.sgrc import async_new_ticket
@@ -474,12 +475,18 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 validation_state.validated = True
                 state.data["address_validation"] = validation_state.model_dump()
 
-                logger.info(f"Endereço identificado: {address_text}")
+                # Só metadado: o endereço é texto livre do cidadão, que a
+                # redação por padrão não alcança (DEV-354).
+                logger.info(
+                    f"Endereço identificado: sim, {resumir_texto_livre(address_text)}"
+                )
                 state.agent_response = None  # Não envia resposta, vai para confirmação
                 return state
 
             except Exception as e:
-                logger.error(f"Erro ao processar endereço: {e}")
+                # Só o tipo: a mensagem pode trazer o endereço (validação do
+                # payload, URL do geolocalizador) (DEV-354).
+                logger.error(f"Erro ao processar endereço: {type(e).__name__}")
                 validation_state.last_error = str(e)
                 state.data["address_validation"] = validation_state.model_dump()
 
