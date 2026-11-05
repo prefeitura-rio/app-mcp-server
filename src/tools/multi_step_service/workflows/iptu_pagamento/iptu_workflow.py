@@ -165,9 +165,7 @@ class IPTUWorkflow(BaseWorkflow):
                 if dados_imovel:
                     state.data["endereco"] = dados_imovel["endereco"]
                     state.data["proprietario"] = dados_imovel["proprietario"]
-                    logger.info(
-                        f"✅ Dados do imóvel carregados - Proprietário: {dados_imovel['proprietario'][:30]}..."
-                    )
+                    logger.info("✅ Dados do imóvel carregados")
                 else:
                     # Não encontrou dados mas inscrição é válida
                     state.data["endereco"] = None
@@ -252,9 +250,9 @@ class IPTUWorkflow(BaseWorkflow):
 
             # Se encontrou dívida ativa, informa ao usuário
             if divida_ativa_info and divida_ativa_info.tem_divida_ativa:
-                logger.info(
-                    f"Dívida ativa encontrada para inscrição {inscricao}: {len(divida_ativa_info.cdas)} CDAs, {len(divida_ativa_info.efs)} EFs, {len(divida_ativa_info.parcelamentos)} parcelamentos"
-                )
+                # Sem as contagens: junto da inscrição, elas dizem quanto o dono
+                # do imóvel deve à Prefeitura.
+                logger.info(f"Dívida ativa encontrada para inscrição {inscricao}")
                 # Salva dados da dívida ativa
                 state.data["divida_ativa_data"] = divida_ativa_info.model_dump()
 

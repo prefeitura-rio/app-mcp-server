@@ -26,6 +26,8 @@ from src.tools.divida_ativa import (
     MENSAGEM_SEM_GUIA,
     log_execution_time,
     pgm_api,
+    resumir_parametros_pgm,
+    resumir_resposta_pgm,
 )
 from src.tools.divida_ativa_v2.models import (
     EmitirGuiaRequest,
@@ -91,6 +93,22 @@ def formatar_erro_validacao(erro: ValidationError) -> str:
     return "Parâmetros inválidos. " + " | ".join(partes)
 
 
+def _resumir_erro_validacao(erro: ValidationError) -> Dict[str, List[str]]:
+    """
+    Resumo para log da falha de validação: campos e tipos de erro, nunca a mensagem.
+
+    A mensagem do Pydantic e a dos validadores repetem o valor recebido. Num
+    payload malformado, esse valor é o número da CDA ou da execução fiscal.
+    """
+    detalhes = erro.errors()
+    return {
+        "campos_invalidos": sorted(
+            {str(d["loc"][0]) if d["loc"] else "payload" for d in detalhes}
+        ),
+        "tipos_de_erro": sorted({d["type"] for d in detalhes}),
+    }
+
+
 def _resolver_sequencial(
     requisicao: EmitirGuiaRequest, sequencial: str, tipo: str
 ) -> Optional[Tuple[str, str]]:
@@ -144,7 +162,7 @@ def montar_parametros_entrada(
             {
                 "event": "emitir_guia_v2_sequenciais_descartados",
                 "tipo": tipo,
-                "sequenciais": descartados,
+                "qtd_sequenciais": len(descartados),
             }
         )
 
@@ -217,7 +235,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
             {
                 "event": "emitir_guia_v2_validation_error",
                 "tipo": tipo,
-                "erro": descricao,
+                **_resumir_erro_validacao(erro),
             }
         )
         await _reportar_falha_validacao("ValidationError", tipo, descricao, parameters)
@@ -234,7 +252,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
             {
                 "event": "emitir_guia_v2_selecao_vazia",
                 "tipo": tipo,
-                "parametros_entrada": parametros_entrada,
+                "parametros": resumir_parametros_pgm(parametros_entrada),
             }
         )
         await _reportar_falha_validacao(
@@ -246,7 +264,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
         {
             "event": "emitir_guia_v2_started",
             "tipo": tipo,
-            "parametros_entrada": parametros_entrada,
+            "parametros": resumir_parametros_pgm(parametros_entrada),
         }
     )
 
@@ -266,7 +284,7 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
             {
                 "event": "emitir_guia_v2_sem_guia",
                 "tipo": tipo,
-                "registros": registros,
+                "resposta": resumir_resposta_pgm(registros),
             }
         )
         return EmitirGuiaResponse.de_erro(MENSAGEM_SEM_GUIA)
@@ -314,7 +332,7 @@ async def emitir_guia_a_vista_v2(parameters: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(
             {
                 "event": "emitir_guia_a_vista_v2_error",
-                "error": str(e),
+                "error_type": type(e).__name__,
             }
         )
         resposta = EmitirGuiaResponse.de_erro(
@@ -334,7 +352,7 @@ async def emitir_guia_regularizacao_v2(parameters: Dict[str, Any]) -> Dict[str, 
         logger.error(
             {
                 "event": "emitir_guia_regularizacao_v2_error",
-                "error": str(e),
+                "error_type": type(e).__name__,
             }
         )
         resposta = EmitirGuiaResponse.de_erro(

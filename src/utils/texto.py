@@ -10,6 +10,23 @@ ser lido de um jeito pelo filtro e de outro pelo redator.
 import unicodedata
 
 
+def sem_acento(texto: str) -> str:
+    """Tira acento, cedilha e caracteres de formatação invisíveis, preservando a
+    caixa e a pontuação.
+
+    É a parte de `normalizar` que não mexe na caixa: o redator de PII precisa
+    dela para decidir sobre a chave `Proprietário` sem perder o camelCase que
+    separa `proprietarioPrincipal` em tokens.
+    """
+    if texto.isascii():
+        return texto
+    return "".join(
+        c
+        for c in unicodedata.normalize("NFKD", texto)
+        if not unicodedata.combining(c) and unicodedata.category(c) != "Cf"
+    )
+
+
 def normalizar(texto: str) -> str:
     """Forma canônica para comparação: minúsculas, sem acento, só letras e dígitos
     separados por um espaço.
@@ -22,10 +39,5 @@ def normalizar(texto: str) -> str:
     O sinal de grau ("°") é tratado como o ordinal ("º"): no teclado os dois são
     trocados o tempo todo ("2° turno"), e o `NFKD` só decompõe o ordinal.
     """
-    decomposto = unicodedata.normalize("NFKD", texto.replace("°", "º"))
-    limpo = "".join(
-        c
-        for c in decomposto
-        if not unicodedata.combining(c) and unicodedata.category(c) != "Cf"
-    ).casefold()
+    limpo = sem_acento(texto.replace("°", "º")).casefold()
     return " ".join("".join(c if c.isalnum() else " " for c in limpo).split())
