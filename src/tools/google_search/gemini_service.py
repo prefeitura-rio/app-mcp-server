@@ -761,11 +761,14 @@ class GeminiService:
             f"models_tried={models_tried} | Último erro: {ultimo_erro}"
         )
 
+        # O interceptor é um serviço externo e só redige padrões (CPF, telefone):
+        # o contexto livre da pergunta passaria inteiro. Vai o resumo, como no log
+        # (DEV-277).
         await send_api_error(
             user_id="unknown",
             source={"source": "mcp", "tool": "gemini", "function": "google_search"},
             api_endpoint=f"gemini:{model}:generate_content",
-            request_body={"query": query},
+            request_body={"query_resumo": self._resumo_da_query(query)},
             status_code=error_details["code"] or 0,
             error_message=(
                 f"{error_kind}: busca Google falhou após {attempts_used} tentativas "
