@@ -3,6 +3,7 @@ import atexit
 import contextlib
 import functools
 import hashlib
+import inspect
 import random
 import re
 import signal
@@ -946,7 +947,52 @@ def _gravar_linha(table_full_name: str, row: dict, use_batch: bool, span=None) -
             span.set_attribute("bigquery.durable", True)
 
 
-@interceptor(source={"source": "mcp", "tool": "bigquery"})
+def _tamanho_do_valor_da_resposta(valor) -> dict:
+    """Tamanho de um valor de `data`, nunca o valor."""
+    if isinstance(valor, str):
+        return {"chars": len(valor)}
+    if isinstance(valor, (dict, list, tuple)):
+        return {"tipo": type(valor).__name__, "itens": len(valor)}
+    return {"tipo": type(valor).__name__}
+
+
+_MAX_CHARS_NOME_DA_CHAVE = 64
+
+
+def _input_body_do_save_response(args: tuple, kwargs: dict) -> dict:
+    """
+    `input_body` do `save_response_in_bq` no error interceptor: de `data`, só os
+    nomes das chaves e o tamanho de cada valor, nunca o valor (DEV-316).
+
+    `data` é a resposta inteira de uma tool, com o que o cidadão perguntou (a
+    query da busca, o endereço dos equipamentos); texto livre não se redige. Os
+    demais argumentos (endpoint, tabela, ambiente) são do código e seguem.
+    Se a extração falhar, o `@interceptor` manda só o nome e o tipo dos
+    argumentos.
+    """
+    arguments = (
+        inspect.signature(save_response_in_bq).bind_partial(*args, **kwargs).arguments
+    )
+    input_body = {}
+    for name, value in arguments.items():
+        if name != "data":
+            input_body[name] = value
+        elif isinstance(value, dict):
+            input_body[name] = {
+                str(chave)[:_MAX_CHARS_NOME_DA_CHAVE]: _tamanho_do_valor_da_resposta(
+                    valor
+                )
+                for chave, valor in value.items()
+            }
+        else:
+            input_body[name] = _tamanho_do_valor_da_resposta(value)
+    return input_body
+
+
+@interceptor(
+    source={"source": "mcp", "tool": "bigquery"},
+    extract_input_body=_input_body_do_save_response,
+)
 def save_response_in_bq(
     data: dict,
     endpoint: str,
@@ -1102,6 +1148,18 @@ async def save_feedback_in_bq_background(
     source={"source": "mcp", "tool": "bigquery"},
     extract_user_id=lambda args, kwargs: (
         kwargs.get("user_id") or (args[1] if len(args) > 1 else "unknown")
+    ),
+    # Descrição, endereço e bairro são texto livre do cidadão (o bairro
+    # normalizado é o informado, sem acento): no input_body vão só o tamanho e
+    # os tipos de dado pessoal. Latitude e longitude localizam o cidadão: vão só
+    # com o tipo, nunca a coordenada (DEV-316).
+    free_text_params=(
+        "description",
+        "address",
+        "bairro_raw",
+        "bairro_normalizado",
+        "latitude",
+        "longitude",
     ),
 )
 def save_cor_alert_in_bq(
