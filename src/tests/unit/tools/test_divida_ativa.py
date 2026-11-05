@@ -122,6 +122,80 @@ async def test_pgm_api_none_timeout_and_timeout_message(divida_module, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_pgm_api_loga_erro_sem_o_numero_do_processo(divida_module, monkeypatch):
+    """
+    A mensagem de erro da PGM traz o número da execução fiscal, um processo
+    consultável no TJRJ que leva ao executado. O log guarda o tipo do erro, sem
+    os números; o motivo devolvido ao consumidor não muda.
+    """
+    ef = "0123456-78.2019.8.19.0001"
+    mensagem = f"Execução fiscal {ef} não encontrada"
+    linhas = []
+    monkeypatch.setattr(
+        divida_module,
+        "logger",
+        types.SimpleNamespace(
+            info=lambda m, *_a, **_k: linhas.append(m),
+            error=lambda m, *_a, **_k: linhas.append(m),
+        ),
+    )
+
+    async def fake_erro(url, method, request_kwargs):
+        if url.endswith("/security/token"):
+            return {"access_token": "token-123"}
+        return {"success": False, "data": [{"key": "efs", "value": mensagem}]}
+
+    monkeypatch.setattr(divida_module, "internal_request", fake_erro)
+    result = await divida_module.pgm_api(
+        endpoint="v2/guiapagamento/emitir/avista", consumidor="x", data={}
+    )
+
+    assert result == {"erro": True, "motivos": mensagem}
+    assert {
+        "event": "pgm_api_erro",
+        "endpoint": "v2/guiapagamento/emitir/avista",
+        "mensagem": "Execução fiscal #-#.#.#.#.# não encontrada",
+    } in linhas
+    # O dump da resposta inteira é do R2 e sai no PR dele; aqui só não pode
+    # sobrar o número em nenhuma outra linha.
+    outras = [
+        str(linha)
+        for linha in linhas
+        if not str(linha).startswith("pgm_api - Resposta recebida")
+    ]
+    assert not any("0123456" in linha for linha in outras)
+
+
+@pytest.mark.asyncio
+async def test_pgm_api_erro_sem_mensagem_continua_levantando(
+    divida_module, monkeypatch
+):
+    """O log novo mantém o acesso de antes: erro sem mensagem não vira sucesso."""
+
+    async def fake_erro_vazio(url, method, request_kwargs):
+        if url.endswith("/security/token"):
+            return {"access_token": "token-123"}
+        return {"success": False, "data": []}
+
+    monkeypatch.setattr(divida_module, "internal_request", fake_erro_vazio)
+    with pytest.raises(IndexError):
+        await divida_module.pgm_api(endpoint="v2/x", consumidor="x", data={})
+
+
+@pytest.mark.parametrize(
+    "mensagem,esperado",
+    [
+        ("CDA 01/999999/2024-00 já paga", "CDA #/#/#-# já paga"),
+        ("Sistema indisponível", "Sistema indisponível"),
+        (None, "None"),
+        (12345, "#"),
+    ],
+)
+def test_modelo_da_mensagem_pgm(divida_module, mensagem, esperado):
+    assert divida_module.modelo_da_mensagem_pgm(mensagem) == esperado
+
+
+@pytest.mark.asyncio
 async def test_da_emitir_guia_and_processar_registros(divida_module, monkeypatch):
     entrada = await divida_module.da_emitir_guia(
         {
