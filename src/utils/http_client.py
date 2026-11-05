@@ -179,6 +179,10 @@ class InterceptedHTTPClient:
             texto livre do cidadão. No report ao interceptor viram tamanho e
             tipos de dado pessoal (`resumir_texto_livre`), nunca o texto. A
             requisição de saída não muda (DEV-279).
+        report_endpoint: Rótulo que vai no `api_endpoint` do report ao
+            interceptor no lugar da URL real, para quando o caminho leva dado
+            do cidadão (por exemplo `/v1/memory/{user_id}/{memory_name}`). A
+            requisição de saída não muda (DEV-336).
         **httpx_kwargs: Argumentos passados para httpx.Client/AsyncClient
 
     Example - Async (padrão):
@@ -205,6 +209,7 @@ class InterceptedHTTPClient:
         source: Dict[str, Any],
         sync: bool = False,
         free_text_fields: Sequence[str] = (),
+        report_endpoint: Optional[str] = None,
         **httpx_kwargs,
     ):
         self.user_id = user_id
@@ -216,6 +221,7 @@ class InterceptedHTTPClient:
         self.free_text_fields: FrozenSet[str] = frozenset(
             str(campo).lower() for campo in free_text_fields
         )
+        self.report_endpoint = report_endpoint
         self.httpx_kwargs = httpx_kwargs
         self._client: Optional[Union[httpx.Client, httpx.AsyncClient]] = None
 
@@ -242,6 +248,12 @@ class InterceptedHTTPClient:
             self._client.close()
 
     # --- Error interception ---
+    def _report_endpoint(self, url: Any) -> Optional[str]:
+        """Endpoint como vai ao interceptor: o rótulo, se houver, e sem credenciais."""
+        if self.report_endpoint is not None:
+            return redact_text(self.report_endpoint)
+        return redact_text(str(url))
+
     def _report_body(self, request_body: Any) -> Any:
         """Corpo como vai ao interceptor: sem texto livre e sem credenciais."""
         return redact_body(summarize_free_text(request_body, self.free_text_fields))
@@ -258,7 +270,7 @@ class InterceptedHTTPClient:
         await send_api_error(
             user_id=self.user_id,
             source=self.source,
-            api_endpoint=redact_text(str(url)),
+            api_endpoint=self._report_endpoint(url),
             request_body=self._report_body(request_body),
             status_code=status_code,
             error_message=redact_text(error_message),
@@ -280,7 +292,7 @@ class InterceptedHTTPClient:
                 send_api_error(
                     user_id=self.user_id,
                     source=self.source,
-                    api_endpoint=redact_text(str(url)),
+                    api_endpoint=self._report_endpoint(url),
                     request_body=self._report_body(request_body),
                     status_code=status_code,
                     error_message=redact_text(error_message),
@@ -293,7 +305,7 @@ class InterceptedHTTPClient:
                     send_api_error(
                         user_id=self.user_id,
                         source=self.source,
-                        api_endpoint=redact_text(str(url)),
+                        api_endpoint=self._report_endpoint(url),
                         request_body=self._report_body(request_body),
                         status_code=status_code,
                         error_message=redact_text(error_message),

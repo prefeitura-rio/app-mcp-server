@@ -10,6 +10,7 @@ from src.config.env import RMI_API_URL
 from src.utils.rmi_oauth2 import get_authorization_header, is_oauth2_configured
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
+from src.utils.pii import resumir_texto_livre
 
 
 class MemoryType(Enum):
@@ -38,11 +39,28 @@ class MemoryBank(BaseModel):
 _CAMPOS_DO_MEMORY_BANK = tuple(MemoryBank.model_fields)
 
 
+def _input_body_do_get(args: tuple, kwargs: dict) -> Dict[str, Any]:
+    """
+    `input_body` do `get_memories` no error interceptor: só o tamanho e os tipos
+    de dado pessoal do nome da memória, nunca o nome (DEV-336).
+
+    O nome é escolhido pelo agente a partir da conversa (um rótulo de saúde ou
+    de família) e é tratado como dado sensível. O `user_id` já vai, mascarado,
+    no campo próprio do report.
+    """
+    if "memory_name" in kwargs:
+        memory_name = kwargs["memory_name"]
+    else:
+        memory_name = args[1] if len(args) > 1 else None
+    return {"memory_name": resumir_texto_livre(memory_name)}
+
+
 @interceptor(
     source={"source": "mcp", "tool": "memory"},
     extract_user_id=lambda args, kwargs: (
         kwargs.get("user_id") or (args[0] if args else "unknown")
     ),
+    extract_input_body=_input_body_do_get,
 )
 async def get_memories(
     user_id: str, memory_name: Optional[str] = None
@@ -65,8 +83,12 @@ async def get_memories(
         memory_name = None
 
     url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
+    # O `api_endpoint` reportado ao interceptor é o rótulo, nunca o caminho com
+    # o `user_id` e o nome da memória (DEV-336).
+    report_endpoint = "{}/v1/memory/{{user_id}}".format(RMI_API_URL)
     if memory_name is not None:
         url += "/{}".format(memory_name)
+        report_endpoint += "/{memory_name}"
 
     # Use OAuth2 if configured, otherwise return unauthorized error
     if not is_oauth2_configured():
@@ -75,7 +97,10 @@ async def get_memories(
     headers = {"Authorization": await get_authorization_header()}
 
     async with InterceptedHTTPClient(
-        user_id=user_id, source={"source": "mcp", "tool": "memory"}, timeout=120.0
+        user_id=user_id,
+        source={"source": "mcp", "tool": "memory"},
+        timeout=120.0,
+        report_endpoint=report_endpoint,
     ) as client:
         response = await client.get(url, headers=headers)
 
