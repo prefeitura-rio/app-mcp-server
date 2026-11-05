@@ -335,7 +335,9 @@ async def emitir_guia_a_vista_v2(parameters: Dict[str, Any]) -> Dict[str, Any]:
                 "error_type": type(e).__name__,
             }
         )
-        resposta = EmitirGuiaResponse.de_erro(f"Erro ao emitir guia à vista: {str(e)}")
+        resposta = EmitirGuiaResponse.de_erro(
+            "Erro ao emitir guia à vista. Tente novamente mais tarde."
+        )
 
     return resposta.para_dict()
 
@@ -354,7 +356,7 @@ async def emitir_guia_regularizacao_v2(parameters: Dict[str, Any]) -> Dict[str, 
             }
         )
         resposta = EmitirGuiaResponse.de_erro(
-            f"Erro ao emitir guia de regularização: {str(e)}"
+            "Erro ao emitir guia de regularização. Tente novamente mais tarde."
         )
 
     return resposta.para_dict()

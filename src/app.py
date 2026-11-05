@@ -58,6 +58,7 @@ from src.tools.divida_ativa_v2 import (
     emitir_guia_a_vista_v2,
     emitir_guia_regularizacao_v2,
 )
+from src.utils.http_json_route import executar_rota_json
 from src.tools.langgraph_workflows import (
     multi_step_service as mss,
     tools_description as mss_tools_description,
@@ -710,13 +711,7 @@ def create_app() -> FastMCP:
         """
         Endpoint para consultar débitos do contribuinte
         """
-        try:
-            parameters = await request.json()
-            result = await consultar_debitos(parameters)
-            return JSONResponse(content=result, status_code=200)
-        except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        return await executar_rota_json(request, consultar_debitos)
 
     @mcp.custom_route("/emitir_guia", methods=["POST"])
     @require_authenticated
@@ -727,13 +722,7 @@ def create_app() -> FastMCP:
         DEPRECATED: use POST /v2/emitir_guia, que valida a entrada com
         Pydantic antes de chamar a PGM.
         """
-        try:
-            parameters = await request.json()
-            result = await emitir_guia_a_vista(parameters)
-            return JSONResponse(content=result, status_code=200)
-        except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        return await executar_rota_json(request, emitir_guia_a_vista)
 
     @mcp.custom_route("/emitir_guia_regularizacao", methods=["POST"])
     @require_authenticated
@@ -744,13 +733,7 @@ def create_app() -> FastMCP:
         DEPRECATED: use POST /v2/emitir_guia_regularizacao, que valida a
         entrada com Pydantic antes de chamar a PGM.
         """
-        try:
-            parameters = await request.json()
-            result = await emitir_guia_regularizacao(parameters)
-            return JSONResponse(content=result, status_code=200)
-        except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        return await executar_rota_json(request, emitir_guia_regularizacao)
 
     # ===== DÍVIDA ATIVA V2 (entrada e saída validadas com Pydantic) =====
     # Erros de validação retornam HTTP 200 com api_resposta_sucesso=false,
@@ -762,13 +745,7 @@ def create_app() -> FastMCP:
         """
         Endpoint para emitir guia de pagamento à vista, com validação de entrada
         """
-        try:
-            parameters = await request.json()
-            result = await emitir_guia_a_vista_v2(parameters)
-            return JSONResponse(content=result, status_code=200)
-        except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        return await executar_rota_json(request, emitir_guia_a_vista_v2)
 
     @mcp.custom_route("/v2/emitir_guia_regularizacao", methods=["POST"])
     @require_authenticated
@@ -776,13 +753,7 @@ def create_app() -> FastMCP:
         """
         Endpoint para emitir guia de regularização, com validação de entrada
         """
-        try:
-            parameters = await request.json()
-            result = await emitir_guia_regularizacao_v2(parameters)
-            return JSONResponse(content=result, status_code=200)
-        except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+        return await executar_rota_json(request, emitir_guia_regularizacao_v2)
 
     # ===== LOG DE INICIALIZAÇÃO =====
 
