@@ -29,6 +29,7 @@ async def dharma_search(query: str):
         user_id="unknown",
         source={"source": "mcp", "tool": "dharma_search"},
         timeout=120.0,
+        free_text_fields=("message",),
     ) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()

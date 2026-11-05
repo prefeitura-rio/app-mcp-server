@@ -31,6 +31,7 @@ async def surkai_search(query: str, k: int = 6, lang: str = "pt-BR"):
         user_id="unknown",
         source={"source": "mcp", "tool": "surkai_search"},
         timeout=120.0,
+        free_text_fields=("query",),
     ) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
