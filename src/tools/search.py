@@ -43,7 +43,10 @@ QUERY_SEM_ASSUNTO_MESSAGE = (
 _MENSAGEM_POR_MOTIVO = {filtro.REASON_SEM_ASSUNTO: QUERY_SEM_ASSUNTO_MESSAGE}
 
 
-@interceptor(source={"source": "mcp", "tool": "search"})
+@interceptor(
+    source={"source": "mcp", "tool": "search"},
+    free_text_params=("query", "contexto"),
+)
 async def get_google_search(query: str, contexto: str | None = None):
     """
     Obtém resultados de busca via Typesense (se ativo) ou Google Search como fallback.
