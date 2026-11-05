@@ -1019,6 +1019,30 @@ def redigir_query(texto: Optional[str]) -> Tuple[Optional[str], Tuple[str, ...]]
     return texto, tuple(dict.fromkeys(tipos))
 
 
+def resumir_texto_livre(texto: Any) -> Dict[str, Any]:
+    """
+    Metadado de um texto livre do cidadão: tamanho e tipos de dado pessoal. Nunca
+    o texto (DEV-278).
+
+    A redação por padrão tira CPF e telefone, mas o que sobra da pergunta é o
+    contexto que o cidadão escreve (doença, filho, dívida), e texto livre não se
+    redige. É o mesmo resumo que `GeminiService._resumo_da_query` põe no log.
+
+    Aceita o texto cru ou já redigido: os tipos saem dos marcadores que ficam
+    depois de `redigir_query`, e redigir de novo não muda nada. Valor que não é
+    texto vira só o nome do tipo.
+    """
+    if texto is None:
+        return {"chars": 0, "pii_redigida": []}
+    if not isinstance(texto, str):
+        return {"tipo": type(texto).__name__}
+    redigido, _ = redigir_query(texto)
+    tipos = [
+        tipo for tipo, marcador in MARCADORES_QUERY.items() if marcador in redigido
+    ]
+    return {"chars": len(texto), "pii_redigida": tipos}
+
+
 # ---------------------------------------------------------------------------
 # Máscaras para uso no call site
 # ---------------------------------------------------------------------------

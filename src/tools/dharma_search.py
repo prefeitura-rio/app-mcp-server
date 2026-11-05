@@ -3,7 +3,9 @@ from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 
 
-@interceptor(source={"source": "mcp", "tool": "dharma_search"})
+@interceptor(
+    source={"source": "mcp", "tool": "dharma_search"}, free_text_params=("query",)
+)
 async def dharma_search(query: str):
     """
     Busca informações usando a API Dharma

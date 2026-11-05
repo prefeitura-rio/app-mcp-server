@@ -3,7 +3,9 @@ from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 
 
-@interceptor(source={"source": "mcp", "tool": "surkai_search"})
+@interceptor(
+    source={"source": "mcp", "tool": "surkai_search"}, free_text_params=("query",)
+)
 async def surkai_search(query: str, k: int = 6, lang: str = "pt-BR"):
     """
     Busca informações usando a API Surkai
