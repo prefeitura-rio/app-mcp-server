@@ -122,6 +122,80 @@ async def test_pgm_api_none_timeout_and_timeout_message(divida_module, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_pgm_api_loga_erro_sem_o_numero_do_processo(divida_module, monkeypatch):
+    """
+    A mensagem de erro da PGM traz o número da execução fiscal, um processo
+    consultável no TJRJ que leva ao executado. O log guarda o tipo do erro, sem
+    os números; o motivo devolvido ao consumidor não muda.
+    """
+    ef = "0123456-78.2019.8.19.0001"
+    mensagem = f"Execução fiscal {ef} não encontrada"
+    linhas = []
+    monkeypatch.setattr(
+        divida_module,
+        "logger",
+        types.SimpleNamespace(
+            info=lambda m, *_a, **_k: linhas.append(m),
+            error=lambda m, *_a, **_k: linhas.append(m),
+        ),
+    )
+
+    async def fake_erro(url, method, request_kwargs):
+        if url.endswith("/security/token"):
+            return {"access_token": "token-123"}
+        return {"success": False, "data": [{"key": "efs", "value": mensagem}]}
+
+    monkeypatch.setattr(divida_module, "internal_request", fake_erro)
+    result = await divida_module.pgm_api(
+        endpoint="v2/guiapagamento/emitir/avista", consumidor="x", data={}
+    )
+
+    assert result == {"erro": True, "motivos": mensagem}
+    assert {
+        "event": "pgm_api_erro",
+        "endpoint": "v2/guiapagamento/emitir/avista",
+        "mensagem": "Execução fiscal #-#.#.#.#.# não encontrada",
+    } in linhas
+    # O dump da resposta inteira é do R2 e sai no PR dele; aqui só não pode
+    # sobrar o número em nenhuma outra linha.
+    outras = [
+        str(linha)
+        for linha in linhas
+        if not str(linha).startswith("pgm_api - Resposta recebida")
+    ]
+    assert not any("0123456" in linha for linha in outras)
+
+
+@pytest.mark.asyncio
+async def test_pgm_api_erro_sem_mensagem_continua_levantando(
+    divida_module, monkeypatch
+):
+    """O log novo mantém o acesso de antes: erro sem mensagem não vira sucesso."""
+
+    async def fake_erro_vazio(url, method, request_kwargs):
+        if url.endswith("/security/token"):
+            return {"access_token": "token-123"}
+        return {"success": False, "data": []}
+
+    monkeypatch.setattr(divida_module, "internal_request", fake_erro_vazio)
+    with pytest.raises(IndexError):
+        await divida_module.pgm_api(endpoint="v2/x", consumidor="x", data={})
+
+
+@pytest.mark.parametrize(
+    "mensagem,esperado",
+    [
+        ("CDA 01/999999/2024-00 já paga", "CDA #/#/#-# já paga"),
+        ("Sistema indisponível", "Sistema indisponível"),
+        (None, "None"),
+        (12345, "#"),
+    ],
+)
+def test_modelo_da_mensagem_pgm(divida_module, mensagem, esperado):
+    assert divida_module.modelo_da_mensagem_pgm(mensagem) == esperado
+
+
+@pytest.mark.asyncio
 async def test_da_emitir_guia_and_processar_registros(divida_module, monkeypatch):
     entrada = await divida_module.da_emitir_guia(
         {
@@ -483,3 +557,393 @@ def test_itens_da_consulta_ignora_entrada_que_nao_e_item(divida_module):
         guias=[],
     )
     assert itens == []
+
+
+# ===== Log da PGM sem situação fiscal (R2 do card de PII nos logs de prod) =====
+#
+# `pgm_api` logava a requisição e a resposta inteiras. O redator tirava nome,
+# CPF e endereço, mas inscrição, bairro, CDA, número de execução fiscal, saldos e
+# protesto saíam em claro: a situação fiscal de uma pessoa identificável pelo
+# cadastro do imóvel. O log passa a ser uma lista positiva de forma e contagens.
+
+INSCRICAO = "12345678"
+CDA_ID = "01/999999/2024-00"
+EF = "0123456-78.2019.8.19.0001"
+GUIA_PARCELADA = "99/111111/2023-11"
+
+RESPOSTA_CONSULTA = {
+    "success": True,
+    "data": {
+        "nomeContribuinte": "FULANO DE TAL",
+        "enderecoImovel": "RUA EXEMPLO 123",
+        "bairroImovel": "TIJUCA",
+        "debitosNaoParceladosComSaldoTotal": {
+            "cdasNaoAjuizadasNaoParceladas": [
+                {
+                    "cdaId": CDA_ID,
+                    "codigoInscricaoImobiliaria": INSCRICAO,
+                    "valorSaldoTotal": "R$ 1.922,05",
+                    "ehCdaProtestada": "Sim",
+                }
+            ],
+            "efsNaoParceladas": [
+                {"numeroExecucaoFiscal": EF, "saldoTotalNaoParcelado": "R$ 7.001,10"}
+            ],
+        },
+        "guiasParceladasComSaldoTotal": {
+            "guiasParceladas": [
+                {
+                    "numero": GUIA_PARCELADA,
+                    "qtdPagas": 3,
+                    "dataUltimoPagamento": "01/02/2026",
+                }
+            ]
+        },
+    },
+}
+
+# Valores que não podem aparecer em nenhuma linha de log da PGM.
+VALORES_DE_NEGOCIO = (
+    INSCRICAO,
+    CDA_ID,
+    EF,
+    GUIA_PARCELADA,
+    "TIJUCA",
+    "1.922,05",
+    "7.001,10",
+    "01/02/2026",
+    "FULANO",
+    "RUA EXEMPLO",
+)
+
+
+@pytest.fixture
+def logs_pgm(divida_module, monkeypatch):
+    """Substitui o logger do módulo e guarda as mensagens por nível."""
+    registros = {"info": [], "error": []}
+    monkeypatch.setattr(
+        divida_module,
+        "logger",
+        types.SimpleNamespace(
+            info=lambda mensagem, *_a, **_k: registros["info"].append(mensagem),
+            error=lambda mensagem, *_a, **_k: registros["error"].append(mensagem),
+        ),
+    )
+    return registros
+
+
+def _resumos_pgm(registros):
+    return [
+        m
+        for m in registros["info"]
+        if isinstance(m, dict) and m.get("event") == "pgm_api_resposta"
+    ]
+
+
+def _token_falso(resposta):
+    async def fake_internal_request(url, method, request_kwargs):
+        if url.endswith("/security/token"):
+            return {"access_token": "token-123"}
+        return resposta
+
+    return fake_internal_request
+
+
+@pytest.mark.asyncio
+async def test_pgm_api_loga_so_forma_e_contagens(divida_module, monkeypatch, logs_pgm):
+    monkeypatch.setattr(
+        divida_module, "internal_request", _token_falso(RESPOSTA_CONSULTA)
+    )
+
+    await divida_module.pgm_api(
+        endpoint="v2/cdas/dividas-contribuinte",
+        consumidor="consultar-dividas-contribuinte",
+        data={
+            "origem_solicitação": 0,
+            "inscricaoImobiliaria": INSCRICAO,
+            "cdas": [CDA_ID],
+            "efs": [EF],
+        },
+    )
+
+    assert _resumos_pgm(logs_pgm) == [
+        {
+            "event": "pgm_api_resposta",
+            "endpoint": "v2/cdas/dividas-contribuinte",
+            "parametros": {
+                "campos": ["cdas", "efs", "inscricaoImobiliaria", "origem_solicitação"],
+                "qtd_cdas": 1,
+                "qtd_efs": 1,
+            },
+            "success": True,
+            "resposta": {
+                "tipo": "objeto",
+                "campos": [
+                    "bairroImovel",
+                    "debitosNaoParceladosComSaldoTotal",
+                    "enderecoImovel",
+                    "guiasParceladasComSaldoTotal",
+                    "nomeContribuinte",
+                ],
+                "qtd_cdas": 1,
+                "qtd_efs": 1,
+                "qtd_parcelamentos": 1,
+            },
+        }
+    ]
+    todas = " ".join(str(m) for m in logs_pgm["info"] + logs_pgm["error"])
+    for valor in VALORES_DE_NEGOCIO:
+        assert valor not in todas
+
+
+@pytest.mark.asyncio
+async def test_pgm_api_resumo_de_erro_e_de_resposta_vazia(
+    divida_module, monkeypatch, logs_pgm
+):
+    monkeypatch.setattr(
+        divida_module,
+        "internal_request",
+        _token_falso({"success": False, "data": [{"key": "ef", "value": "Erro A"}]}),
+    )
+    await divida_module.pgm_api(endpoint="v2/x", consumidor="x", data={"efs": [EF]})
+
+    monkeypatch.setattr(divida_module, "internal_request", _token_falso(None))
+    await divida_module.pgm_api(endpoint="v2/y", consumidor="x", data=None)
+
+    erro, vazio = _resumos_pgm(logs_pgm)
+    assert erro["success"] is False
+    assert erro["parametros"] == {"campos": ["efs"], "qtd_efs": 1}
+    assert erro["resposta"] == {
+        "tipo": "lista",
+        "qtd_registros": 1,
+        "campos": ["key", "value"],
+    }
+    assert vazio["parametros"] == {"campos": []}
+    assert vazio["resposta"] == {"tipo": "NoneType"}
+    assert "success" not in vazio
+    assert EF not in str(erro)
+
+
+@pytest.mark.asyncio
+async def test_processar_registros_sem_guia_loga_resumo_e_nao_a_resposta(
+    divida_module, monkeypatch, logs_pgm
+):
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [{"cdaId": CDA_ID, "valorSaldoTotal": "R$ 1.922,05"}]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    await divida_module.processar_registros(
+        endpoint="v2/guias", consumidor="emitir", parametros_entrada={"cdas": [CDA_ID]}
+    )
+
+    assert logs_pgm["error"] == [
+        {
+            "event": "processar_registros_sem_guia",
+            "endpoint": "v2/guias",
+            "resposta": {
+                "tipo": "lista",
+                "qtd_registros": 1,
+                "campos": ["cdaId", "valorSaldoTotal"],
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "parametros,esperado",
+    [
+        (None, {"tipo": "NoneType"}),
+        ("cpfCnpj=123", {"tipo": "str"}),
+        ([CDA_ID], {"tipo": "list"}),
+        ({"cdas": "nao-e-lista"}, {"campos": ["cdas"]}),
+        ({"guias": (GUIA_PARCELADA,)}, {"campos": ["guias"], "qtd_guias": 1}),
+        ({1: "x"}, {"campos": ["1"]}),
+    ],
+)
+def test_resumir_parametros_pgm_aceita_qualquer_forma(
+    divida_module, parametros, esperado
+):
+    assert divida_module.resumir_parametros_pgm(parametros) == esperado
+
+
+@pytest.mark.parametrize(
+    "dados,esperado",
+    [
+        (None, {"tipo": "NoneType"}),
+        ("texto", {"tipo": "str"}),
+        (42, {"tipo": "int"}),
+        ([], {"tipo": "lista", "qtd_registros": 0, "campos": []}),
+        (
+            ["solto", {"a": 1}, None, {"b": 2, "a": 3}],
+            {"tipo": "lista", "qtd_registros": 4, "campos": ["a", "b"]},
+        ),
+        (
+            {
+                "debitosNaoParceladosComSaldoTotal": "inesperado",
+                "guiasParceladasComSaldoTotal": {"guiasParceladas": None},
+            },
+            {
+                "tipo": "objeto",
+                "campos": [
+                    "debitosNaoParceladosComSaldoTotal",
+                    "guiasParceladasComSaldoTotal",
+                ],
+            },
+        ),
+        (
+            {"debitosNaoParceladosComSaldoTotal": {"efsNaoParceladas": []}},
+            {
+                "tipo": "objeto",
+                "campos": ["debitosNaoParceladosComSaldoTotal"],
+                "qtd_efs": 0,
+            },
+        ),
+    ],
+)
+def test_resumir_resposta_pgm_aceita_qualquer_forma(divida_module, dados, esperado):
+    """A PGM devolve objeto, lista ou nada; o resumo nunca pode levantar, senão
+    derruba a consulta do cidadão por causa de uma linha de log."""
+    assert divida_module.resumir_resposta_pgm(dados) == esperado
+
+
+# Os `parameters` da v1 levam `dicionario_itens` e `lista_cdas`/`lista_efs`, com
+# os números de CDA e de execução fiscal, e toda emissão pelo workflow do agente
+# passa por aqui. O log guarda só os nomes dos campos.
+
+PARAMETROS_EMISSAO = {
+    "dicionario_itens": f'{{"1": "{CDA_ID}", "2": "{EF}"}}',
+    "lista_cdas": f'["{CDA_ID}"]',
+    "lista_efs": f'["{EF}"]',
+    "lista_guias": "",
+    "apenas_um_item": "1",
+}
+CAMPOS_EMISSAO = sorted(PARAMETROS_EMISSAO)
+
+
+def _evento(registros, nome):
+    return next(
+        m
+        for m in registros["info"] + registros["error"]
+        if isinstance(m, dict) and m.get("event") == nome
+    )
+
+
+def _assert_sem_identificador(registros):
+    todas = " ".join(str(m) for m in registros["info"] + registros["error"])
+    for valor in (CDA_ID, EF, GUIA_PARCELADA, INSCRICAO):
+        assert valor not in todas
+
+
+@pytest.mark.asyncio
+async def test_inicio_da_emissao_v1_nao_loga_os_identificadores(
+    divida_module, monkeypatch, logs_pgm
+):
+    async def fake_pgm_api(endpoint, consumidor, data):
+        return [{"codigoDeBarras": "836", "pdf": "https://pgm.example/g.pdf"}]
+
+    monkeypatch.setattr(divida_module, "pgm_api", fake_pgm_api)
+    await divida_module.emitir_guia_a_vista(dict(PARAMETROS_EMISSAO))
+
+    assert _evento(logs_pgm, "da_emitir_guia_started") == {
+        "event": "da_emitir_guia_started",
+        "tipo": "a_vista",
+        "parametros": {"campos": CAMPOS_EMISSAO},
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_item_malformado_nao_loga_os_identificadores(divida_module, logs_pgm):
+    """
+    `itens_informados` cru é texto que veio de fora: fica só o tipo dele. A
+    exceção também sai do log, porque `float()` repete o valor na mensagem:
+    `could not convert string to float: '[01/999999/2024-00'`.
+    """
+    resultado = await divida_module.emitir_guia_a_vista(
+        {**PARAMETROS_EMISSAO, "itens_informados": f"[{CDA_ID}"}
+    )
+
+    assert resultado["api_resposta_sucesso"] is False
+    parse_error = _evento(logs_pgm, "da_emitir_guia_parse_error")
+    assert parse_error["itens_informados_tipo"] == "str"
+    assert "itens_informados_raw" not in parse_error
+    assert "parameters" not in parse_error
+    assert "itens_informados" in parse_error["parametros"]["campos"]
+    assert "parameters" not in _evento(logs_pgm, "emitir_guia_a_vista_error")
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_lista_malformada_nao_loga_os_identificadores(divida_module, logs_pgm):
+    resultado = await divida_module.da_emitir_guia(
+        {**PARAMETROS_EMISSAO, "lista_cdas": f'["{CDA_ID}"'}, "a_vista"
+    )
+
+    assert resultado == {"opcao_invalida": True}
+    assert _evento(logs_pgm, "da_emitir_guia_processing_error")["parametros"] == {
+        "campos": CAMPOS_EMISSAO
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "funcao,evento",
+    [
+        ("emitir_guia_regularizacao", "emitir_guia_regularizacao_error"),
+        ("emitir_guia_a_vista", "emitir_guia_a_vista_error"),
+    ],
+)
+async def test_falha_na_emissao_nao_loga_os_identificadores(
+    divida_module, monkeypatch, logs_pgm, funcao, evento
+):
+    async def explode(parameters, tipo):
+        raise RuntimeError("falha simulada")
+
+    monkeypatch.setattr(divida_module, "da_emitir_guia", explode)
+    resultado = await getattr(divida_module, funcao)(dict(PARAMETROS_EMISSAO))
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert _evento(logs_pgm, evento) == {
+        "event": evento,
+        "error_type": "RuntimeError",
+        "parametros": {"campos": CAMPOS_EMISSAO},
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_falha_na_consulta_nao_loga_a_inscricao(
+    divida_module, monkeypatch, logs_pgm
+):
+    async def explode(endpoint, consumidor, data):
+        raise RuntimeError("falha simulada")
+
+    monkeypatch.setattr(divida_module, "pgm_api", explode)
+    resultado = await divida_module.consultar_debitos(
+        {"consulta_debitos": "inscricaoImobiliaria", "inscricaoImobiliaria": INSCRICAO}
+    )
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert _evento(logs_pgm, "consultar_debitos_error")["parametros"] == {
+        "campos": ["consulta_debitos", "inscricaoImobiliaria"]
+    }
+    _assert_sem_identificador(logs_pgm)
+
+
+@pytest.mark.asyncio
+async def test_excecao_no_decorator_nao_loga_os_identificadores(
+    divida_module, logs_pgm
+):
+    @divida_module.log_execution_time
+    async def explode(parameters):
+        raise RuntimeError("falha simulada")
+
+    with pytest.raises(RuntimeError, match="falha simulada"):
+        await explode(dict(PARAMETROS_EMISSAO))
+
+    falha = _evento(logs_pgm, "request_failed")
+    assert "parameters" not in falha
+    assert falha["error_type"] == "RuntimeError"
+    assert falha["parametros"] == {"campos": CAMPOS_EMISSAO}
+    _assert_sem_identificador(logs_pgm)
