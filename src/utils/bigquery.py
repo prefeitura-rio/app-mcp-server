@@ -1019,85 +1019,6 @@ async def save_response_in_bq_background(
 @interceptor(
     source={"source": "mcp", "tool": "bigquery"},
     extract_user_id=lambda args, kwargs: (
-        kwargs.get("user_id") or (args[0] if args else "unknown")
-    ),
-)
-def save_feedback_in_bq(
-    user_id: str,
-    feedback: str,
-    timestamp: str,
-    environment: str,
-    dataset_id: str = "brutos_eai_logs",
-    table_id: str = "feedback",
-    project_id: str = "rj-iplanrio",
-    use_batch: bool = False,
-):
-    table_full_name = f"{project_id}.{dataset_id}.{table_id}"
-    logger.info(f"Salvando feedback no BigQuery: {table_full_name}")
-
-    data_to_save = {
-        "user_id": user_id,
-        "feedback": feedback,
-        "environment": environment,
-        "timestamp": timestamp,
-        "data_particao": timestamp.split("T")[0],
-    }
-
-    tracer = get_tracer()
-    with tracer.start_as_current_span("bigquery.save_feedback") as span:
-        span.set_attribute("bigquery.project_id", project_id)
-        span.set_attribute("bigquery.dataset_id", dataset_id)
-        span.set_attribute("bigquery.table_id", table_id)
-        span.set_attribute("bigquery.row_count", 1)
-        try:
-            _gravar_linha(table_full_name, data_to_save, use_batch, span)
-            logger.info(f"Feedback salvo no BigQuery: {table_full_name}")
-            span.set_attribute("bigquery.success", True)
-            span.set_status(Status(StatusCode.OK))
-        except Exception as e:
-            span.set_attribute("bigquery.success", False)
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            logger.error(f"Erro ao salvar feedback no BigQuery: {str(e)}")
-            raise
-
-
-async def save_feedback_in_bq_background(
-    user_id: str,
-    feedback: str,
-    timestamp: str,
-    environment: str,
-    dataset_id: str = "brutos_eai_logs",
-    table_id: str = "feedback",
-):
-    """
-    Asynchronous wrapper for saving feedback in BigQuery using batching buffer.
-    Catches and logs exceptions to prevent crashing background tasks.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-        await run_in_executor_with_context(
-            loop,
-            _get_write_executor(),
-            save_feedback_in_bq,
-            user_id,
-            feedback,
-            timestamp,
-            environment,
-            dataset_id,
-            table_id,
-            "rj-iplanrio",
-            True,  # use_batch=True
-        )
-    except Exception:
-        logger.exception(
-            f"Failed to save feedback to BigQuery in background for user: {user_id}"
-        )
-
-
-@interceptor(
-    source={"source": "mcp", "tool": "bigquery"},
-    extract_user_id=lambda args, kwargs: (
         kwargs.get("user_id") or (args[1] if len(args) > 1 else "unknown")
     ),
 )
@@ -1661,8 +1582,8 @@ class BigQueryQueryError(Exception):
 #
 # O `wait_for` libera o `await` no prazo, mas não mata a thread: ela segue
 # ocupada até a query terminar sozinha. Com o executor default do loop, essas
-# threads presas são as mesmas que `save_response_in_bq_background`,
-# `save_feedback_in_bq_background` e `save_cor_alert_in_bq_background` usam —
+# threads presas são as mesmas que `save_response_in_bq_background` e
+# `save_cor_alert_in_bq_background` usam —
 # ou seja, um BigQuery lento na *leitura* acabava enfileirando a gravação de
 # log e de alerta do COR, que não têm nada a ver com o problema.
 #
@@ -2095,8 +2016,8 @@ async def get_bigquery_result(
 #
 # Contrato de entrega: o item só sai da DLQ *depois* de o BigQuery confirmar a
 # escrita. Uma queda entre a confirmação e a remoção reprocessa o item na
-# próxima varredura, ou seja, duplica. É a troca deliberada — para log,
-# feedback e alerta, registro duplicado é um incômodo de análise; registro
+# próxima varredura, ou seja, duplica. É a troca deliberada — para log e
+# alerta, registro duplicado é um incômodo de análise; registro
 # perdido é o defeito que esta história inteira existe para eliminar.
 # ---------------------------------------------------------------------------
 

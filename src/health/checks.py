@@ -174,7 +174,7 @@ async def check_bigquery_dlq() -> CheckStatus:
     ninguém reprocessa.
 
     Degradado, e não `critical`, de propósito. Item na DLQ significa escrita de
-    log/feedback atrasada, não servidor incapaz de atender: derrubar o pod por
+    log/alerta atrasada, não servidor incapaz de atender: derrubar o pod por
     causa disso trocaria perda de log por indisponibilidade da aplicação
     inteira. O worker de drain (`drain_bigquery_dlq_loop`) tende a zerar isto
     sozinho assim que o BigQuery volta; o que este check pega é justamente o
