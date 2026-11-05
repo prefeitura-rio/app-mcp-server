@@ -165,9 +165,7 @@ class IPTUWorkflow(BaseWorkflow):
                 if dados_imovel:
                     state.data["endereco"] = dados_imovel["endereco"]
                     state.data["proprietario"] = dados_imovel["proprietario"]
-                    logger.info(
-                        f"✅ Dados do imóvel carregados - Proprietário: {dados_imovel['proprietario'][:30]}..."
-                    )
+                    logger.info("✅ Dados do imóvel carregados")
                 else:
                     # Não encontrou dados mas inscrição é válida
                     state.data["endereco"] = None

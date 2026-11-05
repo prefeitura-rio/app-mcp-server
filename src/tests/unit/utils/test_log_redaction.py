@@ -109,6 +109,16 @@ def test_redige_argumento_interpolado(capturado):
     assert "12345678901" not in capturado[0]
 
 
+def test_redige_rotulo_acentuado_escrito_a_mao(capturado):
+    """O caso do log de prod do IPTU: rótulo em português, com acento."""
+    logger.info(
+        "✅ Dados do imóvel carregados - Proprietário: {}...", "JOAO DA SILVA PEREIRA"
+    )
+
+    assert "JOAO DA SILVA PEREIRA" not in capturado[0]
+    assert "Proprietário: [REDACTED]" in capturado[0]
+
+
 def test_redige_campo_extra(records):
     logger.bind(user_id="5521999998888").info("chamada de tool")
 

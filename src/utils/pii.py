@@ -45,7 +45,7 @@ import re
 from functools import lru_cache
 from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
-from src.utils.texto import normalizar
+from src.utils.texto import normalizar, sem_acento
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +230,13 @@ def _chave_e_sensivel(chave: str) -> bool:
     chaves distintas de um serviço é pequeno e repete sem parar -- 32× medido.
     O cache é keyed em `str(chave)` e não na chave crua de propósito: `1` e
     `True` são iguais para o `lru_cache` e teriam normalizações diferentes.
+
+    O acento sai antes de tudo, porque a decisão é sobre a forma ASCII da chave.
+    Sem isso, `Proprietário` tokenizava como {propriet, rio} e `Endereço` como
+    {endere, o}, nenhum dos dois sensível, e o rótulo escrito à mão em português
+    saía em claro. A caixa fica: é ela que parte o camelCase em tokens.
     """
+    chave = sem_acento(chave)
     normalizada = re.sub(r"[^a-z0-9]", "", chave.lower())
     if normalizada in CHAVES_EXATAS_SENSIVEIS:
         return True
@@ -443,7 +449,13 @@ _TELEFONE_COM_GATILHO = re.compile(
 # O scanner continua entrando no valor, que é o que faz a chave aninhada ser
 # examinada: `{'parameters': {'cpf': '...'}}` casa `parameters`, que não é
 # sensível, o `pos` não avança, e o `cpf` de dentro é examinado na sequência.
-_FORMA_DA_CHAVE = r"[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?"
+#
+# A forma da chave usa `\w`, que em `str` é Unicode: com `[A-Za-z0-9_]`, o
+# rótulo `Proprietário:` não casava inteiro -- o motor via só `rio`, que não é
+# sensível --, e o nome do proprietário saía em claro. A guarda abaixo usa a
+# mesma classe; se uma mudar sem a outra, o motor reinicia a tentativa dentro do
+# run de letras acentuadas e o custo volta a ser O(n²).
+_FORMA_DA_CHAVE = r"\w(?:[\w-]*\w)?"
 
 _CHAVE_VALOR = re.compile(
     # O `-` entra na guarda junto com a classe da chave, e os dois têm de andar
@@ -455,7 +467,7 @@ _CHAVE_VALOR = re.compile(
     # Não custa cobertura: uma chave hifenizada é casada a partir do primeiro
     # caractere dela (`x-goog-credential` começa no `x`, precedido de aspas ou
     # `{`), nunca do meio.
-    r"(?<![A-Za-z0-9_-])"
+    r"(?<![\w-])"
     r"(?P<abre>['\"]?)"
     rf"(?P<chave>{_FORMA_DA_CHAVE})"
     r"(?P<meio>['\"]?\s*[:=]\s*)",
