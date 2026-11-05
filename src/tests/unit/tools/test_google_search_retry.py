@@ -394,6 +394,36 @@ def test_log_da_busca_nao_traz_o_texto_da_query(gemini, logs_gemini, outcomes):
     )
 
 
+@pytest.mark.parametrize(
+    "outcomes",
+    [
+        pytest.param([server_error()], id="gemini-indisponivel"),
+        pytest.param([client_error(400)], id="erro-4xx"),
+        pytest.param(
+            [gemini_response(FinishReason.RECITATION, grounding=False)],
+            id="finish-reason",
+        ),
+    ],
+)
+def test_falha_da_busca_nao_manda_o_texto_da_query_ao_interceptor(gemini, outcomes):
+    """
+    DEV-277: o interceptor é um serviço HTTP externo e só redige padrões (CPF,
+    telefone); o contexto livre da pergunta passava inteiro em `request_body`.
+    Vai o mesmo resumo do log: tamanho e tipos redigidos.
+    """
+    _buscar(gemini, QUERY_COM_CONTEXTO_PESSOAL, outcomes)
+
+    [reportado] = gemini.reported_errors
+    enviado = json.dumps(reportado, ensure_ascii=False, default=str)
+    for trecho in ("leucemia", "meu filho", "laudo", QUERY_COM_CONTEXTO_PESSOAL):
+        assert trecho not in enviado
+    assert reportado["request_body"] == {
+        "query_resumo": (
+            f"query_chars={len(QUERY_COM_CONTEXTO_PESSOAL)} pii_redigida=['cpf']"
+        )
+    }
+
+
 def test_resumo_da_query_aceita_vazio_e_lista_os_tipos_redigidos(gemini):
     resumo = gemini.module.GeminiService._resumo_da_query
 
