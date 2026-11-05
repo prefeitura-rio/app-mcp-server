@@ -116,7 +116,10 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 self.service_knowledge = result
 
                 logger.info("[KNOWLEDGE] Conhecimento carregado sobre poda de árvore")
-                logger.debug(f"[KNOWLEDGE] Dados: {self.service_knowledge}")
+                # Só as chaves: o conteúdo do Typesense não ajuda o log (DEV-360).
+                logger.debug(
+                    f"[KNOWLEDGE] Chaves: {sorted(self.service_knowledge.keys())}"
+                )
             else:
                 logger.warning(
                     "[KNOWLEDGE] Não foi possível carregar conhecimento do Typesense"
@@ -240,8 +243,11 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 return True
 
             except Exception as e:
+                # Só o tipo: a mensagem de validação traz a resposta do cidadão
+                # (DEV-360).
                 logger.error(
-                    f"Erro ao processar confirmação de endereço da memória: {e}"
+                    "Erro ao processar confirmação de endereço da memória: "
+                    f"{type(e).__name__}"
                 )
                 self._clear_address_data(state)
 
@@ -551,7 +557,12 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 ponto_ref = validated.ponto_referencia
                 if ponto_ref and isinstance(ponto_ref, str) and ponto_ref.strip():
                     state.data["ponto_referencia"] = ponto_ref
-                    logger.info(f"Ponto de referência coletado: {ponto_ref}")
+                    # Só metadado: o ponto de referência é texto livre do
+                    # cidadão, que a redação por padrão não alcança (DEV-360).
+                    logger.info(
+                        "Ponto de referência coletado: sim, "
+                        f"{resumir_texto_livre(ponto_ref)}"
+                    )
                 else:
                     state.data["ponto_referencia"] = None
                     logger.info("Usuário optou por não informar ponto de referência")
@@ -570,7 +581,10 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 return state
 
             except Exception as e:
-                logger.warning(f"Erro ao processar ponto de referência: {e}")
+                # Só o tipo: a mensagem de validação traz o texto (DEV-360).
+                logger.warning(
+                    f"Erro ao processar ponto de referência: {type(e).__name__}"
+                )
                 state.data["ponto_referencia"] = None
                 state.data["reference_point_collected"] = True
 
@@ -644,7 +658,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
                 except Exception as e:
                     logger.error(
-                        f"Erro ao processar confirmação de dados pessoais: {e}"
+                        "Erro ao processar confirmação de dados pessoais: "
+                        f"{type(e).__name__}"
                     )
             else:
                 user_input = (
@@ -752,7 +767,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                     return state
 
                 state.data["cpf"] = cpf_novo
-                logger.info(f"CPF coletado: {cpf_novo}")
+                # Nunca o CPF, nem contando com a redação global (DEV-360).
+                logger.info("CPF coletado: sim")
 
                 if not self.use_fake_api:
                     try:
@@ -776,18 +792,24 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
                     except AttributeError as e:
                         logger.error(
-                            f"Erro ao processar resposta da API de cadastro: {str(e)}"
+                            "Erro ao processar resposta da API de cadastro: "
+                            f"{type(e).__name__}"
                         )
                         state.data["cadastro_verificado"] = False
 
                     except (ConnectionError, TimeoutError) as e:
-                        logger.error(f"API de cadastro indisponível: {str(e)}")
+                        logger.error(
+                            f"API de cadastro indisponível: {type(e).__name__}"
+                        )
                         state.data["cadastro_verificado"] = False
                         state.data["api_indisponivel"] = True
 
                     except Exception as e:
+                        # Só o tipo: a mensagem pode citar o CPF consultado
+                        # (DEV-360).
                         logger.info(
-                            f"Usuário não encontrado no cadastro ou erro na consulta: {str(e)}"
+                            "Usuário não encontrado no cadastro ou erro na "
+                            f"consulta: {type(e).__name__}"
                         )
                         state.data["cadastro_verificado"] = False
 
@@ -867,14 +889,18 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
                 state.data["email"] = email_novo
                 state.data["email_processed"] = True
-                logger.info(f"Email coletado: {email_novo}")
+                # Nunca o e-mail, nem contando com a redação global (DEV-360).
+                logger.info("Email coletado: sim")
 
                 state.agent_response = None
                 return state
 
             except Exception as e:
                 attempts = self.increment_attempts(state, "email_attempts")
-                logger.info(f"[EMAIL] Tentativa {attempts}/3 - Erro: {str(e)}")
+                # Só o tipo: a mensagem de validação traz o e-mail (DEV-360).
+                logger.info(
+                    f"[EMAIL] Tentativa {attempts}/3 - Erro: {type(e).__name__}"
+                )
 
                 if attempts >= 3:
                     state.data["email_skipped"] = True
@@ -940,7 +966,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
                 state.data["name"] = nome_novo
                 state.data["name_processed"] = True
-                logger.info(f"Nome coletado: {nome_novo}")
+                # Só metadado: o nome é dado pessoal sem formato (DEV-360).
+                logger.info(f"Nome coletado: sim, {resumir_texto_livre(nome_novo)}")
 
                 state.agent_response = None
                 return state
@@ -1045,7 +1072,12 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                 elif validated.confirmacao is False or validated.correcao:
                     # Usuário quer corrigir algo
                     correcao_text = validated.correcao or ""
-                    logger.info(f"Usuário solicitou correção: {correcao_text}")
+                    # Só metadado: a correção é texto livre do cidadão e pode
+                    # trazer o dado novo (DEV-360).
+                    logger.info(
+                        "Usuário solicitou correção: "
+                        f"{resumir_texto_livre(correcao_text)}"
+                    )
 
                     if not correcao_text:
                         logger.info(
@@ -1151,7 +1183,11 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
                         return state
 
             except Exception as e:
-                logger.error(f"Erro ao processar confirmação de dados do ticket: {e}")
+                # Só o tipo: a mensagem de validação traz a resposta (DEV-360).
+                logger.error(
+                    "Erro ao processar confirmação de dados do ticket: "
+                    f"{type(e).__name__}"
+                )
                 state.agent_response = AgentResponse(
                     description=tpl.confirmar_resposta_invalida(),
                     payload_schema=TicketDataConfirmationPayload.model_json_schema(),
@@ -1376,7 +1412,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         logger.info(
             f"[STATE.DATA] address_validated: {state.data.get('address_validated')}"
         )
-        logger.info(f"[STATE] agent_response: {state.agent_response}")
+        # Só a presença: a resposta carrega endereço e dados do cidadão (DEV-360).
+        logger.info(f"[STATE] agent_response: {state.agent_response is not None}")
 
         if state.agent_response:
             if not (
@@ -1438,7 +1475,8 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
 
     def _route_after_cpf(self, state: ServiceState) -> str:
         logger.info("[ROTEAMENTO] _route_after_cpf")
-        logger.info(f"[STATE.DATA] cpf: {state.data.get('cpf')}")
+        # Só se há CPF, nunca o valor (DEV-360).
+        logger.info(f"[STATE.DATA] cpf: {bool(state.data.get('cpf'))}")
         logger.info(
             f"[STATE.DATA] cadastro_verificado: {state.data.get('cadastro_verificado')}"
         )
