@@ -336,6 +336,105 @@ def test_esgotamento_e_reportado_ao_interceptor(gemini):
     assert reported["source"]["function"] == "google_search"
 
 
+# Texto livre do cidadão que sobra depois de `redigir_query`: contexto de saúde e
+# família não tem formato, e o redator não o alcança. Não pode ir para o log.
+QUERY_COM_CONTEXTO_PESSOAL = (
+    "meu filho faz tratamento de leucemia, como pedir o laudo? meu cpf é [cpf]"
+)
+
+
+@pytest.fixture
+def logs_gemini(gemini, monkeypatch):
+    """Troca o logger mudo por um que guarda todas as linhas, de todo nível."""
+    linhas = []
+
+    def guardar(mensagem, *_args, **_kwargs):
+        linhas.append(str(mensagem))
+
+    monkeypatch.setattr(
+        gemini.module,
+        "logger",
+        types.SimpleNamespace(
+            info=guardar,
+            warning=guardar,
+            error=guardar,
+            debug=guardar,
+            exception=guardar,
+        ),
+    )
+    return linhas
+
+
+def _buscar(gemini, query, outcomes):
+    gemini.module.gemini_service.client = types.SimpleNamespace(
+        aio=types.SimpleNamespace(models=FakeModels(outcomes))
+    )
+    return asyncio.run(gemini.module.gemini_service.google_search(query=query))
+
+
+@pytest.mark.parametrize(
+    "outcomes",
+    [
+        pytest.param([success_response()], id="sucesso"),
+        pytest.param([server_error()], id="falha-em-todos-os-modelos"),
+    ],
+)
+def test_log_da_busca_nao_traz_o_texto_da_query(gemini, logs_gemini, outcomes):
+    """
+    O log levava a query inteira (148 linhas em meio dia de prod, 4 com saúde).
+    Fica só o metadado: tamanho e tipos redigidos.
+    """
+    _buscar(gemini, QUERY_COM_CONTEXTO_PESSOAL, outcomes)
+
+    todas = "\n".join(logs_gemini)
+    for trecho in ("leucemia", "meu filho", "laudo", QUERY_COM_CONTEXTO_PESSOAL):
+        assert trecho not in todas
+    assert (
+        f"query_chars={len(QUERY_COM_CONTEXTO_PESSOAL)} pii_redigida=['cpf']" in todas
+    )
+
+
+@pytest.mark.parametrize(
+    "outcomes",
+    [
+        pytest.param([server_error()], id="gemini-indisponivel"),
+        pytest.param([client_error(400)], id="erro-4xx"),
+        pytest.param(
+            [gemini_response(FinishReason.RECITATION, grounding=False)],
+            id="finish-reason",
+        ),
+    ],
+)
+def test_falha_da_busca_nao_manda_o_texto_da_query_ao_interceptor(gemini, outcomes):
+    """
+    DEV-277: o interceptor é um serviço HTTP externo e só redige padrões (CPF,
+    telefone); o contexto livre da pergunta passava inteiro em `request_body`.
+    Vai o mesmo resumo do log: tamanho e tipos redigidos.
+    """
+    _buscar(gemini, QUERY_COM_CONTEXTO_PESSOAL, outcomes)
+
+    [reportado] = gemini.reported_errors
+    enviado = json.dumps(reportado, ensure_ascii=False, default=str)
+    for trecho in ("leucemia", "meu filho", "laudo", QUERY_COM_CONTEXTO_PESSOAL):
+        assert trecho not in enviado
+    assert reportado["request_body"] == {
+        "query_resumo": (
+            f"query_chars={len(QUERY_COM_CONTEXTO_PESSOAL)} pii_redigida=['cpf']"
+        )
+    }
+
+
+def test_resumo_da_query_aceita_vazio_e_lista_os_tipos_redigidos(gemini):
+    resumo = gemini.module.GeminiService._resumo_da_query
+
+    assert resumo("") == "query_chars=0 pii_redigida=[]"
+    assert resumo(None) == "query_chars=0 pii_redigida=[]"
+    assert (
+        resumo("[nome] mora na [endereço], tel [telefone]")
+        == "query_chars=41 pii_redigida=['telefone', 'endereco', 'nome']"
+    )
+
+
 def test_erro_4xx_nao_retenta_no_mesmo_modelo(gemini):
     """4xx não melhora com repetição no mesmo modelo, mas pode ser do modelo (ex.:
     modelo inexistente): vai direto para o próximo, sem espera."""

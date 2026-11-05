@@ -27,6 +27,7 @@ import random
 import time
 
 from src.utils.log import logger
+from src.utils.pii import MARCADORES_QUERY
 from src.utils.error_interceptor import interceptor, send_api_error
 from src.utils.http_client import InterceptedHTTPClient
 from google.genai import errors as genai_errors
@@ -355,6 +356,21 @@ class GeminiService:
         """Retorna a instância do cliente Gemini."""
         return self.client
 
+    @staticmethod
+    def _resumo_da_query(query: str) -> str:
+        """Metadado da query para log: tamanho e tipos de dado pessoal redigidos.
+
+        Nunca o texto. A query já chega redigida por `redigir_query`, mas o que
+        sobra é o contexto pessoal que o cidadão escreve (doença, filho, dívida),
+        e texto livre não se redige: sai da linha de log. A query redigida segue
+        indo para o BigQuery, que é onde os temas são analisados.
+        """
+        query = query or ""
+        tipos = [
+            tipo for tipo, marcador in MARCADORES_QUERY.items() if marcador in query
+        ]
+        return f"query_chars={len(query)} pii_redigida={tipos}"
+
     @interceptor(source={"source": "mcp", "tool": "gemini"})
     async def google_search(
         self,
@@ -371,7 +387,7 @@ class GeminiService:
         `models` substitui a lista do env (`GEMINI_SEARCH_MODELS`). O prazo total é a
         soma dos prazos dos modelos mais a reserva da resolução de URLs.
         """
-        logger.info(f"Iniciando pesquisa Google para: {query}")
+        logger.info(f"Iniciando pesquisa Google | {self._resumo_da_query(query)}")
         request_id = str(uuid4())
         models = tuple(models or env.GEMINI_SEARCH_CONFIG.models)
         last_exception = None
@@ -736,17 +752,21 @@ class GeminiService:
         )
 
         logger.error(
-            f"Pesquisa falhou após {attempts_used} tentativa(s) para a query: {query} | "
+            f"Pesquisa falhou após {attempts_used} tentativa(s) | "
+            f"{self._resumo_da_query(query)} "
             f"outcome=failed error_kind={error_kind} "
             f"error_code={error_details['code']} elapsed_ms={elapsed_ms} "
             f"models_tried={models_tried} | Último erro: {ultimo_erro}"
         )
 
+        # O interceptor é um serviço externo e só redige padrões (CPF, telefone):
+        # o contexto livre da pergunta passaria inteiro. Vai o resumo, como no log
+        # (DEV-277).
         await send_api_error(
             user_id="unknown",
             source={"source": "mcp", "tool": "gemini", "function": "google_search"},
             api_endpoint=f"gemini:{model}:generate_content",
-            request_body={"query": query},
+            request_body={"query_resumo": self._resumo_da_query(query)},
             status_code=error_details["code"] or 0,
             error_message=(
                 f"{error_kind}: busca Google falhou após {attempts_used} tentativas "
