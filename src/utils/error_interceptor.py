@@ -12,7 +12,7 @@ import asyncio
 import inspect
 import json
 import traceback as tb
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Sequence, Set
 
 import httpx
 from google.cloud import bigquery
@@ -21,7 +21,11 @@ from opentelemetry import trace
 
 from src.config import env
 from src.utils.json_utils import CustomJSONEncoder
-from src.utils.pii import mascarar_ultimos_quatro, redigir_padroes_pii
+from src.utils.pii import (
+    mascarar_ultimos_quatro,
+    redigir_padroes_pii,
+    resumir_texto_livre,
+)
 from src.utils.tool_errors import JA_REPORTADA
 
 
@@ -523,11 +527,85 @@ def _ja_reportada(e: BaseException) -> bool:
     return getattr(e, JA_REPORTADA, False) is True
 
 
+_SIMPLE_ARGUMENT_TYPES = (str, int, float, bool, list, dict, type(None))
+
+
+def _named_call_arguments(func: Callable, args: tuple, kwargs: dict) -> Dict[str, Any]:
+    """Argumentos da chamada por nome, sem `self`/`cls`. Posicional que sobra
+    da assinatura (`*args`) fica de fora, como sempre ficou."""
+    param_names = list(inspect.signature(func).parameters.keys())
+    arguments: Dict[str, Any] = {}
+    for i, arg in enumerate(args):
+        if i < len(param_names):
+            param_name = param_names[i]
+            if param_name not in ("self", "cls"):
+                arguments[param_name] = arg
+    arguments.update(kwargs)
+    return arguments
+
+
+def _describe_call_arguments(
+    func: Callable, args: tuple, kwargs: dict
+) -> Dict[str, str]:
+    """Nome e tipo de cada argumento, nunca o valor (DEV-278)."""
+    try:
+        arguments = _named_call_arguments(func, args, kwargs)
+    except Exception:
+        arguments = dict(kwargs)
+    return {name: type(value).__name__ for name, value in arguments.items()}
+
+
+def _build_input_body(
+    func: Callable,
+    args: tuple,
+    kwargs: dict,
+    extract_input_body: Optional[Callable],
+    free_text_params: Sequence[str],
+) -> Any:
+    """
+    `input_body` do report de `@interceptor`.
+
+    Sem configuração, são os argumentos da chamada: tipos simples com o valor,
+    o resto só com o nome da classe. Os de `free_text_params` (a pergunta do
+    cidadão) viram `resumir_texto_livre`: tamanho e tipos de dado pessoal, nunca
+    o texto. `extract_input_body` substitui tudo isso; se ele falhar, vão só o
+    nome e o tipo de cada argumento, porque a função pediu para controlar o que
+    sai e o padrão levaria os valores (DEV-278).
+    """
+    if extract_input_body is not None:
+        try:
+            return extract_input_body(args, kwargs)
+        except Exception as extract_error:
+            # Só o tipo: a mensagem pode trazer o valor que se quis esconder.
+            logger.warning(
+                f"extract_input_body falhou ({type(extract_error).__name__}); "
+                "input_body vai só com o nome e o tipo dos argumentos."
+            )
+            return _describe_call_arguments(func, args, kwargs)
+
+    try:
+        arguments = _named_call_arguments(func, args, kwargs)
+    except Exception:
+        arguments = dict(kwargs)
+
+    input_body: Dict[str, Any] = {}
+    for name, value in arguments.items():
+        if name in free_text_params:
+            input_body[name] = resumir_texto_livre(value)
+        elif isinstance(value, _SIMPLE_ARGUMENT_TYPES):
+            input_body[name] = value
+        else:
+            input_body[name] = str(type(value).__name__)
+    return input_body
+
+
 def interceptor(
     source: Dict[str, Any],
     error_types: tuple = (Exception,),
     extract_user_id: Optional[Callable] = None,
     extract_source: Optional[Callable] = None,
+    extract_input_body: Optional[Callable] = None,
+    free_text_params: Sequence[str] = (),
 ):
     """
     Decorator para capturar e reportar erros automaticamente.
@@ -543,6 +621,12 @@ def interceptor(
         extract_user_id: Função para extrair user_id: (args, kwargs) -> str
         extract_source: Função para extrair/modificar source: (args, kwargs, base_source) -> dict
             Permite adicionar informações dinâmicas ao source base.
+        extract_input_body: Função que define o input_body do report: (args, kwargs) -> Any.
+            Substitui a cópia dos argumentos; se levantar, o input_body leva só o
+            nome e o tipo de cada argumento, nunca o valor.
+        free_text_params: Nomes dos argumentos de texto livre do cidadão (a pergunta,
+            o contexto). No input_body viram tamanho e tipos de dado pessoal
+            (`resumir_texto_livre`), nunca o texto (DEV-278).
 
     Returns:
         Decorator que intercepta erros
@@ -572,6 +656,10 @@ def interceptor(
         # Flowname: "source=mcp | tool=equipments | address=Av. Presidente Vargas | function=get_nearby_equipments"
     """
     from functools import wraps
+
+    if isinstance(free_text_params, str):
+        free_text_params = (free_text_params,)
+    free_text_params = tuple(free_text_params)
 
     def decorator(func):
         @wraps(func)
@@ -645,33 +733,9 @@ def interceptor(
             error_traceback = tb.format_exc()
 
             # Captura parâmetros da função para input_body
-            try:
-                sig = inspect.signature(func)
-                param_names = list(sig.parameters.keys())
-                input_body = {}
-                # Mapeia args posicionais
-                for i, arg in enumerate(args):
-                    if i < len(param_names):
-                        param_name = param_names[i]
-                        # Evita incluir 'self' ou 'cls'
-                        if param_name not in ("self", "cls"):
-                            # Serializa apenas tipos simples
-                            if isinstance(
-                                arg, (str, int, float, bool, list, dict, type(None))
-                            ):
-                                input_body[param_name] = arg
-                            else:
-                                input_body[param_name] = str(type(arg).__name__)
-                # Adiciona kwargs
-                for key, value in kwargs.items():
-                    if isinstance(
-                        value, (str, int, float, bool, list, dict, type(None))
-                    ):
-                        input_body[key] = value
-                    else:
-                        input_body[key] = str(type(value).__name__)
-            except Exception:
-                input_body = kwargs if kwargs else {}
+            input_body = _build_input_body(
+                func, args, kwargs, extract_input_body, free_text_params
+            )
 
             # Reporta o erro com novo formato de dicionário
             await send_general_error(
