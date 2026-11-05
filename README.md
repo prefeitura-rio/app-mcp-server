@@ -74,6 +74,12 @@ Use `MCP_STATELESS_HTTP=false` apenas como rollback operacional se algum cliente
 | `POST /v2/emitir_guia` | ativo, com validação |
 | `POST /v2/emitir_guia_regularizacao` | ativo, com validação |
 
+Todas exigem `Authorization: Bearer <token>`, o mesmo do endpoint `/mcp`
+(token de `VALID_TOKENS` ou JWT do Keycloak com `azp` permitido; ver
+`AUTHENTICATION.md`). Sem token, ou com token inválido ou expirado, respondem
+**401** antes de ler o corpo, sem chamar a PGM. Em `IS_LOCAL=true` seguem sem
+autenticação, como o `/mcp`.
+
 ### v2: validação com Pydantic
 
 A v2 (`src/tools/divida_ativa_v2/`) valida entrada e saída com Pydantic antes de
@@ -108,6 +114,7 @@ como se acompanha se o SFMC parou de enviar placeholders.
 ```bash
 # payload legado (strings JSON escapadas) — aceito
 curl -X POST http://localhost:80/v2/emitir_guia \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "dicionario_itens": "{\"1\": \"01/225716/2024-00\"}",
@@ -119,6 +126,7 @@ curl -X POST http://localhost:80/v2/emitir_guia \
 
 # payload nativo — também aceito
 curl -X POST http://localhost:80/v2/emitir_guia \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "dicionario_itens": {"1": "01/225716/2024-00"},

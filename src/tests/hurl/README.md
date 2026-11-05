@@ -30,6 +30,9 @@ obrigatória faltando, middleware de auth desligado do `/mcp`,
 - **Fronteira de autenticação** — `/mcp` sem token e com token inválido
   devolvem 401; com token válido, 200. Os unitários testam o
   `HybridTokenVerifier` isolado; aqui se verifica que ele está **plugado**.
+  As rotas HTTP de Dívida Ativa (`custom_route`, fora do `auth=` do FastMCP)
+  também ficam atrás do Bearer: `/consulta_debitos` sem token e
+  `/v2/emitir_guia` com token inválido devolvem 401 antes de ler o corpo.
 - **Handshake MCP sobre Streamable HTTP** — `initialize`, `tools/list` e
   `tools/call`, em requisições independentes (modo stateless).
 - **Sanitização do `/health/detail`** — a rota é pública e não pode devolver

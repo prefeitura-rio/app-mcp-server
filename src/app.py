@@ -20,6 +20,7 @@ from src.tools.web_search_surkai import surkai_search
 from src.tools.dharma_search import dharma_search
 from src.utils.log import logger
 from src.config.settings import Settings
+from src.middleware.http_guard import require_authenticated
 from src.middleware.hybrid_verifier import HybridTokenVerifier
 from src.observability.metrics import setup_metrics
 from src.observability.tracing import ToolCallTracingMiddleware, setup_tracing
@@ -699,7 +700,13 @@ def create_app() -> FastMCP:
 
         return base_prompt
 
+    # ===== DÍVIDA ATIVA =====
+    # Rotas HTTP próprias, fora do protocolo MCP: o `auth=` do FastMCP não as
+    # cobre. `require_authenticated` exige o mesmo `Bearer` do `/mcp`
+    # (INFRAVPIA-320) e responde 401 antes de ler o corpo.
+
     @mcp.custom_route("/consulta_debitos", methods=["POST"])
+    @require_authenticated
     async def da_consulta_debitos(request: Request) -> JSONResponse:
         """
         Endpoint para consultar débitos do contribuinte
@@ -707,6 +714,7 @@ def create_app() -> FastMCP:
         return await executar_rota_json(request, consultar_debitos)
 
     @mcp.custom_route("/emitir_guia", methods=["POST"])
+    @require_authenticated
     async def da_emitir_guia_pagamento_a_vista(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de pagamento à vista
@@ -717,6 +725,7 @@ def create_app() -> FastMCP:
         return await executar_rota_json(request, emitir_guia_a_vista)
 
     @mcp.custom_route("/emitir_guia_regularizacao", methods=["POST"])
+    @require_authenticated
     async def da_emitir_guia_regularizacao(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de regularização
@@ -731,6 +740,7 @@ def create_app() -> FastMCP:
     # mantendo o contrato que os consumidores (SFMC/LLM) já tratam.
 
     @mcp.custom_route("/v2/emitir_guia", methods=["POST"])
+    @require_authenticated
     async def da_emitir_guia_pagamento_a_vista_v2(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de pagamento à vista, com validação de entrada
@@ -738,6 +748,7 @@ def create_app() -> FastMCP:
         return await executar_rota_json(request, emitir_guia_a_vista_v2)
 
     @mcp.custom_route("/v2/emitir_guia_regularizacao", methods=["POST"])
+    @require_authenticated
     async def da_emitir_guia_regularizacao_v2(request: Request) -> JSONResponse:
         """
         Endpoint para emitir guia de regularização, com validação de entrada
