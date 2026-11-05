@@ -113,7 +113,19 @@ async def get_memories(
                 else {"status": "not_found", "memory_name": memory_name}
             )
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # A mensagem do httpx traz a URL com o `user_id` e o nome da memória,
+            # e o `@interceptor` a reporta como `error_message` (DEV-336). Sem a
+            # exceção original no traceback (`from None`).
+            raise httpx.HTTPStatusError(
+                "HTTP {} da API de memória em GET {}".format(
+                    response.status_code, report_endpoint
+                ),
+                request=e.request,
+                response=e.response,
+            ) from None
         return response.json()
 
 

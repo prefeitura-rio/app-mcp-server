@@ -16,6 +16,8 @@ Invariantes cobertos aqui:
   (ou `/v1/memory/{user_id}` sem nome), nunca a URL real;
 - o `input_body` do `@interceptor` leva só o tamanho e os tipos de dado pessoal
   do nome (`resumir_texto_livre`), e não leva o `user_id`;
+- com a API respondendo erro HTTP (4xx/5xx, exceto o 404 de memória ausente),
+  a exceção e o report do `@interceptor` levam o rótulo, nunca a URL real;
 - `report_endpoint` do `InterceptedHTTPClient` troca só o que vai ao
   interceptor: sem ele, o `api_endpoint` segue sendo a URL redigida.
 """
@@ -207,6 +209,57 @@ async def test_api_fora_sem_nome_nao_envia_user_id(
     assert json.loads(_report_do_decorator(payloads)["input_body"]) == {
         "memory_name": resumir_texto_livre(None)
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403, 500, 502])
+async def test_api_com_erro_http_nao_envia_nome_nem_user_id(
+    interceptor_externo, memoria_com_api, status_code
+):
+    """A mensagem do `raise_for_status` traz a URL; o decorator a reporta."""
+    instalar, requisicoes_da_api = memoria_com_api
+    instalar(lambda request: httpx.Response(status_code, text="erro da API"))
+
+    with pytest.raises(httpx.HTTPStatusError) as erro:
+        await memory.get_memories(USER_ID, MEMORIA_NOME)
+
+    assert erro.value.response.status_code == status_code
+    assert str(erro.value) == (
+        f"HTTP {status_code} da API de memória em GET {ENDPOINT_COM_NOME}"
+    )
+    assert len(requisicoes_da_api) == 1
+    payloads = _payloads_sem_dado_do_cidadao(interceptor_externo)
+    report = _report_do_decorator(payloads)
+    assert json.loads(report["input_body"]) == {
+        "memory_name": resumir_texto_livre(MEMORIA_NOME)
+    }
+    assert ENDPOINT_COM_NOME in report["error_response"]
+
+
+@pytest.mark.asyncio
+async def test_api_com_erro_http_sem_nome_nao_envia_user_id(
+    interceptor_externo, memoria_com_api
+):
+    instalar, _ = memoria_com_api
+    instalar(lambda request: httpx.Response(500, text="erro da API"))
+
+    with pytest.raises(httpx.HTTPStatusError, match="GET .*/v1/memory/{user_id}$"):
+        await memory.get_memories(USER_ID)
+
+    _report_do_decorator(_payloads_sem_dado_do_cidadao(interceptor_externo))
+
+
+@pytest.mark.asyncio
+async def test_404_continua_sendo_not_found(interceptor_externo, memoria_com_api):
+    instalar, _ = memoria_com_api
+    instalar(lambda request: httpx.Response(404, json={"detail": "not found"}))
+
+    assert await memory.get_memories(USER_ID, MEMORIA_NOME) == {
+        "status": "not_found",
+        "memory_name": MEMORIA_NOME,
+    }
+    assert await memory.get_memories(USER_ID) == []
+    assert interceptor_externo.requests == []
 
 
 @pytest.mark.asyncio
