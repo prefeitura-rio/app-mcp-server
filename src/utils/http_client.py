@@ -25,7 +25,7 @@ Uso sync:
 
 import asyncio
 import traceback as tb
-from typing import AbstractSet, Any, Dict, FrozenSet, Optional, Union
+from typing import AbstractSet, Any, Dict, FrozenSet, Optional, Sequence, Union
 
 import httpx
 from loguru import logger
@@ -36,6 +36,7 @@ from src.utils.pii import (
     MARCADOR_CREDENCIAL,
     redigir_credenciais,
     redigir_padroes_pii,
+    resumir_texto_livre,
 )
 
 
@@ -95,6 +96,40 @@ def redact_body(body: Any) -> Any:
     return body
 
 
+def _summarize_free_text_fields(body: Any, free_text_fields: AbstractSet[str]) -> Any:
+    """Troca, em qualquer nível de dict ou lista, os campos nomeados pelo resumo."""
+    if isinstance(body, dict):
+        return {
+            chave: (
+                resumir_texto_livre(valor)
+                if str(chave).lower() in free_text_fields
+                else _summarize_free_text_fields(valor, free_text_fields)
+            )
+            for chave, valor in body.items()
+        }
+    if isinstance(body, (list, tuple)):
+        return [_summarize_free_text_fields(item, free_text_fields) for item in body]
+    return body
+
+
+def summarize_free_text(body: Any, free_text_fields: AbstractSet[str]) -> Any:
+    """
+    Troca os campos de texto livre do cidadão por `resumir_texto_livre`.
+
+    O campo vira tamanho e tipos de dado pessoal, nunca o texto (DEV-279): a
+    redação por padrão de `redact_body` tira CPF e telefone, mas o resto da
+    pergunta (doença, família, dívida) não se redige. Os nomes (já em
+    minúsculas) casam sem diferenciar maiúsculas, em qualquer nível do corpo.
+    Corpo que não é dict nem lista (texto ou bytes crus) não tem onde achar o
+    campo: com campos declarados, vai inteiro como resumo.
+    """
+    if not free_text_fields or body is None:
+        return body
+    if isinstance(body, (str, bytes, bytearray)):
+        return resumir_texto_livre(body)
+    return _summarize_free_text_fields(body, free_text_fields)
+
+
 def raise_for_status_except(
     response: httpx.Response, skip_codes: AbstractSet[int]
 ) -> None:
@@ -121,6 +156,10 @@ class InterceptedHTTPClient:
         user_id: ID do usuário (WhatsApp number) para tracking
         source: Dicionário identificando a origem do erro
         sync: Se True, usa modo síncrono. Padrão: False (async)
+        free_text_fields: Nomes dos campos do corpo (json, data ou params) com
+            texto livre do cidadão. No report ao interceptor viram tamanho e
+            tipos de dado pessoal (`resumir_texto_livre`), nunca o texto. A
+            requisição de saída não muda (DEV-279).
         **httpx_kwargs: Argumentos passados para httpx.Client/AsyncClient
 
     Example - Async (padrão):
@@ -146,11 +185,18 @@ class InterceptedHTTPClient:
         user_id: str,
         source: Dict[str, Any],
         sync: bool = False,
+        free_text_fields: Sequence[str] = (),
         **httpx_kwargs,
     ):
         self.user_id = user_id
         self.source = source
         self.sync = sync
+        if isinstance(free_text_fields, str):
+            # Uma string sozinha é um nome, não uma sequência de letras.
+            free_text_fields = (free_text_fields,)
+        self.free_text_fields: FrozenSet[str] = frozenset(
+            str(campo).lower() for campo in free_text_fields
+        )
         self.httpx_kwargs = httpx_kwargs
         self._client: Optional[Union[httpx.Client, httpx.AsyncClient]] = None
 
@@ -177,6 +223,10 @@ class InterceptedHTTPClient:
             self._client.close()
 
     # --- Error interception ---
+    def _report_body(self, request_body: Any) -> Any:
+        """Corpo como vai ao interceptor: sem texto livre e sem credenciais."""
+        return redact_body(summarize_free_text(request_body, self.free_text_fields))
+
     async def _intercept_error_async(
         self,
         url: str,
@@ -190,7 +240,7 @@ class InterceptedHTTPClient:
             user_id=self.user_id,
             source=self.source,
             api_endpoint=redact_text(str(url)),
-            request_body=redact_body(request_body),
+            request_body=self._report_body(request_body),
             status_code=status_code,
             error_message=redact_text(error_message),
             traceback=redact_text(traceback_str),
@@ -212,7 +262,7 @@ class InterceptedHTTPClient:
                     user_id=self.user_id,
                     source=self.source,
                     api_endpoint=redact_text(str(url)),
-                    request_body=redact_body(request_body),
+                    request_body=self._report_body(request_body),
                     status_code=status_code,
                     error_message=redact_text(error_message),
                     traceback=redact_text(traceback_str),
@@ -225,7 +275,7 @@ class InterceptedHTTPClient:
                         user_id=self.user_id,
                         source=self.source,
                         api_endpoint=redact_text(str(url)),
-                        request_body=redact_body(request_body),
+                        request_body=self._report_body(request_body),
                         status_code=status_code,
                         error_message=redact_text(error_message),
                         traceback=redact_text(traceback_str),
