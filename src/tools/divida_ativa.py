@@ -95,14 +95,87 @@ def log_execution_time(func):
                     "timestamp_epoch": end_time,
                     "duration_seconds": elapsed,
                     "status": "error",
-                    "error": str(e),
-                    "parameters": args[0] if args else kwargs.get("parameters", {}),
+                    "error_type": type(e).__name__,
+                    "parametros": resumir_parametros_pgm(
+                        args[0] if args else kwargs.get("parameters", {})
+                    ),
                 }
             )
 
             raise
 
     return wrapper
+
+
+# Campos de lista da requisição à PGM: o resumo de log conta os itens, nunca os
+# mostra.
+_LISTAS_DA_REQUISICAO_PGM = ("cdas", "efs", "guias")
+
+
+def _contar(valor: Any) -> Optional[int]:
+    return len(valor) if isinstance(valor, (list, tuple)) else None
+
+
+def resumir_parametros_pgm(parametros: Any) -> Dict[str, Any]:
+    """
+    Resumo para log da requisição à PGM: quais campos foram enviados e quantos
+    itens por lista. Nunca os valores.
+
+    Inscrição, CDA e número de execução fiscal ficam fora da redação de PII por
+    decisão de projeto, e juntos com bairro e saldo formam a situação fiscal de
+    uma pessoa identificável. Por isso o log da PGM é uma lista positiva montada
+    aqui, e não o dump do payload confiando no redator.
+    """
+    if not isinstance(parametros, dict):
+        return {"tipo": type(parametros).__name__}
+    resumo: Dict[str, Any] = {"campos": sorted(str(campo) for campo in parametros)}
+    for campo in _LISTAS_DA_REQUISICAO_PGM:
+        quantidade = _contar(parametros.get(campo))
+        if quantidade is not None:
+            resumo[f"qtd_{campo}"] = quantidade
+    return resumo
+
+
+def resumir_resposta_pgm(dados: Any) -> Dict[str, Any]:
+    """
+    Resumo para log do `data` devolvido pela PGM: tipo, nomes de campos e
+    contagens. Nunca os valores.
+
+    A PGM devolve objeto na consulta, lista na emissão de guia e no erro, e às
+    vezes `None`. Qualquer forma é aceita sem levantar: uma exceção aqui
+    derrubaria a consulta do cidadão por causa de uma linha de log. Os nomes dos
+    campos são do contrato da PGM, não do cidadão, e ficam porque denunciam
+    mudança de contrato.
+    """
+    if isinstance(dados, list):
+        campos = set()
+        for item in dados:
+            if isinstance(item, dict):
+                campos.update(str(campo) for campo in item)
+        return {"tipo": "lista", "qtd_registros": len(dados), "campos": sorted(campos)}
+
+    if not isinstance(dados, dict):
+        return {"tipo": type(dados).__name__}
+
+    resumo: Dict[str, Any] = {
+        "tipo": "objeto",
+        "campos": sorted(str(campo) for campo in dados),
+    }
+    debitos = dados.get("debitosNaoParceladosComSaldoTotal")
+    if isinstance(debitos, dict):
+        for chave, nome in (
+            ("cdasNaoAjuizadasNaoParceladas", "qtd_cdas"),
+            ("efsNaoParceladas", "qtd_efs"),
+        ):
+            quantidade = _contar(debitos.get(chave))
+            if quantidade is not None:
+                resumo[nome] = quantidade
+    parceladas = dados.get("guiasParceladasComSaldoTotal")
+    if isinstance(parceladas, dict):
+        quantidade = _contar(parceladas.get("guiasParceladas"))
+        if quantidade is not None:
+            resumo["qtd_parcelamentos"] = quantidade
+    return resumo
 
 
 @interceptor(source={"source": "mcp", "tool": "divida_ativa"})
@@ -156,7 +229,17 @@ async def pgm_api(
             },
         )
 
-        logger.info(f"pgm_api - Resposta recebida para [{data}]: {response}")
+        resumo: Dict[str, Any] = {
+            "event": "pgm_api_resposta",
+            "endpoint": endpoint,
+            "parametros": resumir_parametros_pgm(data),
+        }
+        if isinstance(response, dict):
+            resumo["success"] = response.get("success")
+            resumo["resposta"] = resumir_resposta_pgm(response.get("data"))
+        else:
+            resumo["resposta"] = resumir_resposta_pgm(response)
+        logger.info(resumo)
 
         if response is None:
             logger.info(
@@ -242,7 +325,11 @@ async def da_emitir_guia(
         Parâmetros processados ou None se inválido
     """
     logger.info(
-        {"event": "da_emitir_guia_started", "tipo": tipo, "parameters": parameters}
+        {
+            "event": "da_emitir_guia_started",
+            "tipo": tipo,
+            "parametros": resumir_parametros_pgm(parameters),
+        }
     )
 
     itens_raw = parameters.get("itens_informados", [])
@@ -261,9 +348,9 @@ async def da_emitir_guia(
         logger.error(
             {
                 "event": "da_emitir_guia_parse_error",
-                "error": str(e),
-                "parameters": parameters,
-                "itens_informados_raw": itens_raw,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
+                "itens_informados_tipo": type(itens_raw).__name__,
             }
         )
         itens_informados = [str(int(float(parameters.get("itens_informados", 1))))]
@@ -307,8 +394,8 @@ async def da_emitir_guia(
         logger.error(
             {
                 "event": "da_emitir_guia_processing_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
         return {"opcao_invalida": True}
@@ -438,7 +525,7 @@ async def processar_registros(
             {
                 "event": "processar_registros_sem_guia",
                 "endpoint": endpoint,
-                "registros": registros,
+                "resposta": resumir_resposta_pgm(registros),
             }
         )
         return {
@@ -491,8 +578,8 @@ async def emitir_guia_regularizacao(parameters: Dict[str, Any]) -> Dict[str, Any
         logger.error(
             {
                 "event": "emitir_guia_regularizacao_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
         return {
@@ -531,8 +618,8 @@ async def emitir_guia_a_vista(parameters: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(
             {
                 "event": "emitir_guia_a_vista_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
 
@@ -769,8 +856,8 @@ async def consultar_debitos(parameters: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(
             {
                 "event": "consultar_debitos_error",
-                "error": str(e),
-                "parameters": parameters,
+                "error_type": type(e).__name__,
+                "parametros": resumir_parametros_pgm(parameters),
             }
         )
 
