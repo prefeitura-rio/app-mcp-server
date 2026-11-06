@@ -113,3 +113,101 @@ def test_401_nao_ecoa_o_token_recebido(guard, monkeypatch):
     assert response.status_code == 401
     assert "segredo-123" not in response.text
     assert "segredo-123" not in response.headers["WWW-Authenticate"]
+
+
+# --- `RequireAuthenticatedByDefault`: nega por padrão (CHATR-311) ----------
+
+
+def _app_com_guard(guard, user=None):
+    """App com rotas que NÃO usam o decorator, atrás do middleware que nega
+    por padrão — o caso de uma `custom_route` nova que esqueceu a proteção."""
+    chamadas = []
+
+    async def rota(request):
+        chamadas.append(request.url.path)
+        return JSONResponse({"ok": True})
+
+    paths = ["/health", "/health/ready", "/health/detail", "/rota_nova"]
+    paths += ["/mcp", "/mcp/sub", "/mcp-debug"]
+    routes = [Route(p, rota, methods=["GET", "POST"]) for p in paths]
+
+    middleware = []
+    if user is not None:
+
+        class _ComUsuario:
+            def __init__(self, app):
+                self.app = app
+
+            async def __call__(self, scope, receive, send):
+                if scope["type"] == "http":
+                    scope["user"] = user
+                await self.app(scope, receive, send)
+
+        middleware.append(Middleware(_ComUsuario))
+    middleware.append(Middleware(guard.RequireAuthenticatedByDefault))
+
+    return TestClient(Starlette(routes=routes, middleware=middleware)), chamadas
+
+
+def _usuario_do_verifier():
+    return AuthenticatedUser(
+        AccessToken(token="t", client_id="legacy-static-token", scopes=[])
+    )
+
+
+@pytest.mark.parametrize("path", ["/health", "/health/ready"])
+def test_guard_libera_liveness_e_readiness_sem_token(guard, path):
+    client, chamadas = _app_com_guard(guard)
+
+    assert client.get(path).status_code == 200
+    assert chamadas == [path]
+
+
+@pytest.mark.parametrize("path", ["/mcp", "/mcp/sub"])
+def test_guard_delega_o_mcp_ao_fastmcp(guard, path):
+    client, chamadas = _app_com_guard(guard)
+
+    assert client.post(path).status_code == 200
+    assert chamadas == [path]
+
+
+@pytest.mark.parametrize("path", ["/health/detail", "/rota_nova", "/mcp-debug"])
+def test_guard_nega_por_padrao_sem_token(guard, path):
+    """`/health/detail` deixa de ser público (R12); rota sem decorator não nasce
+    pública; `/mcp-debug` não herda a isenção do `/mcp`."""
+    client, chamadas = _app_com_guard(guard)
+
+    response = client.post(path)
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert response.json()["error"] == "invalid_token"
+    assert chamadas == []
+
+
+def test_guard_token_recusado_marca_invalid_token(guard):
+    client, chamadas = _app_com_guard(guard)
+
+    response = client.post(
+        "/rota_nova", headers={"Authorization": "Bearer segredo-123"}
+    )
+
+    assert response.status_code == 401
+    assert 'error="invalid_token"' in response.headers["WWW-Authenticate"]
+    assert "segredo-123" not in response.text
+    assert chamadas == []
+
+
+def test_guard_nao_aceita_usuario_que_nao_e_do_verifier(guard):
+    client, chamadas = _app_com_guard(guard, user=SimpleUser("intruso"))
+
+    assert client.post("/rota_nova").status_code == 401
+    assert chamadas == []
+
+
+@pytest.mark.parametrize("path", ["/health/detail", "/rota_nova"])
+def test_guard_libera_usuario_autenticado(guard, path):
+    client, chamadas = _app_com_guard(guard, user=_usuario_do_verifier())
+
+    assert client.get(path).status_code == 200
+    assert chamadas == [path]
