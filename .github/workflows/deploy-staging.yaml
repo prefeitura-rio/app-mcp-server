@@ -126,12 +126,12 @@ jobs:
       - name: Commit resolved image to git
         if: steps.check-changes.outputs.k8s_only != 'true'
         run: |
+          # Edita o manifesto sobre a ponta atual da main e refaz o push com
+          # fetch novo quando perde a corrida para o update-tool-version;
+          # falha se não entrar, em vez de engolir o erro (DEV-412).
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          sed -i "s|image: ghcr.io/prefeitura-rio/app-mcp-server:.*|image: ${FULL_IMAGE}  # Updated by deploy-staging workflow|" k8s/staging/resources.yaml
-          git add k8s/staging/resources.yaml
-          git commit -m "chore: update staging image to $(git rev-parse --short HEAD)" || echo "No changes to commit"
-          git push origin HEAD:main || echo "Nothing to push"
+          bash scripts/ci/commit_staging_image.sh
 
       - name: Capture current Argo CD image override (for rollback)
         if: steps.check-changes.outputs.k8s_only != 'true'
