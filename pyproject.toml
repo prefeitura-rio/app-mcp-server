@@ -38,6 +38,10 @@ dependencies = [
     "jellyfish>=1.2.1",
     "num2words>=0.5.14",
     "prefeitura-rio>=1.1.2",
+    # Exigida por `prefeitura_rio.integrations.sgrc` (abertura de chamado no
+    # SGRC) e ausente sem o extra `[sgrc]`. Direta, e não pelo extra, porque o
+    # extra fixa `pendulum<3`, sem wheel para Python 3.11 (DEV-380).
+    "pendulum>=3.0",
     # Lê `src/tools/google_search/query_filter.yaml`. Já vinha de carona (fastmcp,
     # langchain-core); declarada porque agora é usada em produção.
     "pyyaml>=6.0",
