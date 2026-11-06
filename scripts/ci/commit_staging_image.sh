@@ -59,13 +59,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+retry_or_fail() {
+  if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+    fail "$1 em ${MAX_ATTEMPTS} tentativas; o manifesto não foi atualizado"
+  fi
+  local delay=$((RETRY_DELAY * attempt))
+  echo "$1; nova tentativa em ${delay}s com fetch novo."
+  sleep "$delay"
+  attempt=$((attempt + 1))
+}
+
 attempt=1
 while true; do
   echo "Tentativa ${attempt}/${MAX_ATTEMPTS}: ${MANIFEST} sobre ${REMOTE}/${BRANCH}"
-  git fetch --quiet "$REMOTE" "+refs/heads/${BRANCH}:refs/remotes/${REMOTE}/${BRANCH}"
+  if ! git fetch --quiet "$REMOTE" "+refs/heads/${BRANCH}:refs/remotes/${REMOTE}/${BRANCH}"; then
+    retry_or_fail "fetch de ${REMOTE}/${BRANCH} falhou"
+    continue
+  fi
   # SHA explícito: o FETCH_HEAD é de cada worktree.
   tip="$(git rev-parse "refs/remotes/${REMOTE}/${BRANCH}^{commit}")"
-  if [ "$attempt" -eq 1 ]; then
+  if [ ! -e "${WORKTREE}/.git" ]; then
     git worktree add --quiet --detach "$WORKTREE" "$tip"
   else
     git -C "$WORKTREE" reset --quiet --hard "$tip"
@@ -89,11 +102,5 @@ while true; do
     exit 0
   fi
 
-  if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
-    fail "push de ${MANIFEST} para ${REMOTE}/${BRANCH} recusado em ${MAX_ATTEMPTS} tentativas; o manifesto não foi atualizado"
-  fi
-  delay=$((RETRY_DELAY * attempt))
-  echo "Push recusado (a branch andou?); nova tentativa em ${delay}s com fetch novo."
-  sleep "$delay"
-  attempt=$((attempt + 1))
+  retry_or_fail "push de ${MANIFEST} para ${REMOTE}/${BRANCH} recusado"
 done

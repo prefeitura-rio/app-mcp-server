@@ -208,6 +208,40 @@ def test_falha_quando_o_push_e_recusado_em_todas_as_tentativas(repos: Repos):
     assert repos.git(repos.remote, "rev-parse", "main") == before
 
 
+def test_refaz_o_fetch_quando_ele_falha_uma_vez(repos: Repos):
+    # Falha passageira do GitHub no fetch: o primeiro upload-pack cai.
+    marker = repos.tmp / "fetch-falhou"
+    flaky = repos.tmp / "flaky-upload-pack"
+    flaky.write_text(
+        "#!/usr/bin/env bash\n"
+        f'if [ ! -e "{marker}" ]; then touch "{marker}"; exit 1; fi\n'
+        'exec git-upload-pack "$@"\n'
+    )
+    flaky.chmod(0o755)
+    repos.git(repos.runner, "config", "remote.origin.uploadpack", str(flaky))
+
+    result = repos.run_script()
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+    assert "falhou; nova tentativa" in result.stdout
+    assert "Tentativa 2/5" in result.stdout
+    assert NEW_IMAGE in repos.remote_file(MANIFEST)
+
+
+def test_falha_quando_o_fetch_falha_em_todas_as_tentativas(repos: Repos):
+    repos.git(
+        repos.runner, "remote", "set-url", "origin", str(repos.tmp / "nao-existe.git")
+    )
+    before = repos.git(repos.remote, "rev-parse", "main")
+
+    result = repos.run_script(MAX_ATTEMPTS="2")
+
+    assert result.returncode != 0
+    assert "falhou em 2 tentativas" in result.stderr
+    assert repos.git(repos.remote, "rev-parse", "main") == before
+
+
 def test_nao_cria_commit_quando_o_manifesto_ja_tem_a_imagem(repos: Repos):
     first = repos.run_script()
     assert first.returncode == 0, first.stderr
