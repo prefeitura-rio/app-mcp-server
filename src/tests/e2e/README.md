@@ -21,7 +21,7 @@ O runner [`run_preview_e2e.py`](src/tests/e2e/run_preview_e2e.py) cobre:
 
 Quando a massa de staging nao retorna itens para emissao, os happy paths de guia sao pulados e o restante da suite continua valido.
 
-No happy path de `/emitir_guia`, quando a PGM responde "sem registros", "temporariamente indisponivel" ou "tente novamente mais tarde", o runner tenta de novo (`PREVIEW_E2E_EXTERNAL_RETRIES` vezes, com `PREVIEW_E2E_EXTERNAL_RETRY_DELAY` segundos entre elas). Se "sem registros" ou "indisponivel" persistirem, o passo e pulado com `SKIPPED` explicito; "tente novamente mais tarde" (que tambem pode ser excecao do nosso codigo) e qualquer outro erro reprovam. Sucesso nunca e repetido: cada emissao gera uma guia real.
+No happy path de `/emitir_guia`, quando a PGM responde "sem registros", o runner tenta de novo (`PREVIEW_E2E_EXTERNAL_RETRIES` vezes, com `PREVIEW_E2E_EXTERNAL_RETRY_DELAY` segundos entre elas) e, se persistir, pula o passo com `SKIPPED` explicito. "Temporariamente indisponivel" (timeout da PGM) pula sem nova tentativa. "Tente novamente mais tarde" (que tambem pode ser excecao do nosso codigo) e qualquer outro erro reprovam. Sucesso, timeout e erro generico nunca sao repetidos: podem ter gerado uma guia real.
 
 As falhas imprimem so um resumo da resposta (status HTTP, `api_resposta_sucesso`, chaves presentes, tamanho do corpo), nunca `api_descricao_erro` nem valores: eles citam a execucao fiscal e os identificadores do contribuinte.
 
@@ -34,7 +34,7 @@ As falhas imprimem so um resumo da resposta (status HTTP, `api_resposta_sucesso`
 - `PREVIEW_CONSULTA_ANO_AUTO_INFRACAO`: obrigatorio apenas quando o tipo for `numeroAutoInfracao`
 - `PREVIEW_AVISTA_PAYLOAD`: payload final real usado no happy path de `/emitir_guia`
 - `PREVIEW_REGULARIZACAO_PAYLOAD`: payload final real usado no happy path de `/emitir_guia_regularizacao`
-- `PREVIEW_E2E_EXTERNAL_RETRIES`: tentativas do happy path de `/emitir_guia` diante de falha conhecida da PGM. Padrao: `3`
+- `PREVIEW_E2E_EXTERNAL_RETRIES`: tentativas do happy path de `/emitir_guia` quando a PGM responde "sem registros". Padrao: `3`
 - `PREVIEW_E2E_EXTERNAL_RETRY_DELAY`: segundos entre as tentativas. Padrao: `20`
 
 ## Execucao Local

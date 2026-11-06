@@ -136,24 +136,34 @@ def test_sucesso_nunca_e_repetido(runner, monkeypatch, sleeps):
     assert sleeps == []
 
 
-@pytest.mark.parametrize(
-    ("resposta", "classe"),
-    [(SEM_REGISTROS, "sem_registros"), (INDISPONIVEL, "indisponivel")],
-)
-def test_falha_do_upstream_persistente_vira_skip_explicito(
-    runner, monkeypatch, sleeps, capsys, resposta, classe
+def test_sem_registros_persistente_vira_skip_explicito(
+    runner, monkeypatch, sleeps, capsys
 ):
-    rotas = responder(runner, monkeypatch, [(200, resposta)] * 3)
+    rotas = responder(runner, monkeypatch, [(200, SEM_REGISTROS)] * 3)
 
     runner.run_emitir_guia_happy_paths()
 
     assert rotas == ["/emitir_guia"] * 3
     assert sleeps == [7, 7]
     saida = capsys.readouterr().out
-    assert f"emitir_guia happy path: SKIPPED - PGM answered '{classe}'" in saida
+    assert "emitir_guia happy path: SKIPPED - PGM answered 'sem_registros'" in saida
     assert "in 3 attempt(s)" in saida
     assert "FAIL" not in saida
     assert_sem_dados_da_resposta(saida)
+
+
+def test_indisponivel_vira_skip_sem_nova_tentativa(runner, monkeypatch, sleeps, capsys):
+    """Timeout: a PGM pode ter emitido a guia sem responder; não repete."""
+    rotas = responder(runner, monkeypatch, [(200, INDISPONIVEL)])
+
+    runner.run_emitir_guia_happy_paths()
+
+    assert rotas == ["/emitir_guia"]
+    assert sleeps == []
+    saida = capsys.readouterr().out
+    assert "emitir_guia happy path: SKIPPED - PGM answered 'indisponivel'" in saida
+    assert "in 1 attempt(s)" in saida
+    assert "FAIL" not in saida
 
 
 def test_skip_do_emitir_guia_nao_pula_o_regularizacao(runner, monkeypatch, sleeps):
@@ -169,18 +179,20 @@ def test_skip_do_emitir_guia_nao_pula_o_regularizacao(runner, monkeypatch, sleep
     assert rotas == ["/emitir_guia"] * 3 + ["/emitir_guia_regularizacao"]
 
 
-def test_erro_generico_persistente_reprova(runner, monkeypatch, sleeps, capsys):
+def test_erro_generico_reprova_sem_nova_tentativa(runner, monkeypatch, sleeps, capsys):
     """
     "Tente novamente mais tarde" é o `except Exception` da rota: pode ser uma
-    exceção do nosso código, então tenta de novo mas não vira skip.
+    exceção do nosso código depois de a PGM emitir a guia, então não repete
+    (nova emissão real) nem vira skip.
     """
-    rotas = responder(runner, monkeypatch, [(200, ERRO_GENERICO)] * 3)
+    rotas = responder(runner, monkeypatch, [(200, ERRO_GENERICO)])
 
     with pytest.raises(SystemExit) as excinfo:
         runner.run_emitir_guia_happy_paths()
 
     assert excinfo.value.code == 1
-    assert rotas == ["/emitir_guia"] * 3
+    assert rotas == ["/emitir_guia"]
+    assert sleeps == []
     saida = capsys.readouterr().out
     assert "FAIL: emitir_guia happy path: expected api_resposta_sucesso=true" in saida
     assert '"upstream_failure": "erro_generico"' in saida

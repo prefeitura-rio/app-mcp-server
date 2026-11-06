@@ -23,10 +23,10 @@ STALE_REGULARIZACAO_HINTS = (
     "nao ha parcelas em atraso",
     "não há parcelas em atraso",
 )
-# A PGM responde de forma intermitente "sem registros" ou fica indisponível para
-# o mesmo payload que passa minutos depois (DEV-415). Nesses casos o happy path
-# de `/emitir_guia` tenta de novo antes de concluir: uma regressão do nosso
-# código falha em todas as tentativas, uma oscilação da PGM não.
+# A PGM responde de forma intermitente "sem registros" para o mesmo payload que
+# passa minutos depois (DEV-415). Nesse caso o happy path de `/emitir_guia`
+# tenta de novo antes de concluir: a PGM não emitiu guia, então repetir não
+# duplica nada.
 EXTERNAL_API_MAX_ATTEMPTS = max(
     1, int(os.environ.get("PREVIEW_E2E_EXTERNAL_RETRIES", "3"))
 )
@@ -34,18 +34,19 @@ EXTERNAL_API_RETRY_DELAY_SECONDS = max(
     0, int(os.environ.get("PREVIEW_E2E_EXTERNAL_RETRY_DELAY", "20"))
 )
 # Classes de `api_descricao_erro`, comparadas sem acento e em minúsculas.
-# "sem_registros" vem da própria PGM; "indisponivel" só é produzida pelo
-# timeout de `pgm_api`. As duas dizem que a PGM não respondeu ao payload agora,
-# e esgotadas as tentativas viram SKIP explícito, como a fixture velha do
-# `regularizacao`.
-# "erro_generico" é a resposta do `except Exception` das rotas: pode ser
-# oscilação da PGM, mas também uma exceção do nosso código, então tenta de novo
-# e, se persistir, falha.
+# - "sem_registros" vem da própria PGM: repete e, se persistir, vira SKIP
+#   explícito, como a fixture velha do `regularizacao`.
+# - "indisponivel" só é produzida pelo timeout de `pgm_api`: vira SKIP sem nova
+#   tentativa, porque a PGM pode ter emitido a guia sem responder a tempo.
+# - "erro_generico" é a resposta do `except Exception` das rotas: pode ser uma
+#   exceção do nosso código depois de a PGM emitir a guia, então não repete
+#   nem vira skip: reprova.
 UPSTREAM_FAILURE_HINTS = (
     ("sem_registros", ("nao foram encontrados registros",)),
     ("indisponivel", ("temporariamente indisponivel",)),
     ("erro_generico", ("tente novamente mais tarde",)),
 )
+RETRYABLE_UPSTREAM_FAILURES = frozenset({"sem_registros"})
 SKIPPABLE_UPSTREAM_FAILURES = frozenset({"sem_registros", "indisponivel"})
 
 
@@ -327,9 +328,10 @@ def run_emitir_guia_minimal_payload_checks() -> None:
 
 def request_guide_with_upstream_retry(path: str, payload, token: str, label: str):
     """
-    Chama a rota de emissão e repete só quando a PGM respondeu com uma falha
-    conhecida do upstream (`classify_upstream_failure`). Sucesso nunca se
-    repete: cada emissão bem-sucedida gera uma guia real. Devolve
+    Chama a rota de emissão e repete só quando a PGM respondeu que não achou
+    registros (`RETRYABLE_UPSTREAM_FAILURES`): nada foi emitido. Sucesso,
+    timeout e erro genérico nunca se repetem, porque podem ter gerado uma guia
+    real. Devolve
     `(status, raw, parsed, upstream, attempts)` da última chamada.
     """
     attempts = EXTERNAL_API_MAX_ATTEMPTS
@@ -341,7 +343,7 @@ def request_guide_with_upstream_retry(path: str, payload, token: str, label: str
             timeout=GUIDE_POST_TIMEOUT,
         )
         upstream = classify_upstream_failure(parsed) if status == 200 else None
-        if upstream is None or attempt == attempts:
+        if upstream not in RETRYABLE_UPSTREAM_FAILURES or attempt == attempts:
             return status, raw, parsed, upstream, attempt
 
         info(
