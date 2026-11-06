@@ -19,6 +19,11 @@ from jellyfish import jaro_similarity
 from num2words import num2words
 
 
+def _sim_nao(valor) -> str:
+    """Metadado de log: se o valor foi obtido, nunca o valor (DEV-365)."""
+    return "sim" if valor else "não"
+
+
 class SGRCAPIService:
     def __init__(self):
         self.api_base_url = "https://api.prefeitura.rio/poda_de_arvore"
@@ -314,8 +319,9 @@ class AddressAPIService:
             logradouro_nome_ipp = str(nearest_location.name_logradouro)
             bairro_nome_ipp = str(nearest_location.name_bairro)
 
-            logger.info(f"Código bairro obtido: {bairro_id_ipp}")
-            logger.info(f"Nome bairro obtido: {bairro_nome_ipp}")
+            logger.info(
+                f"Bairro obtido pela geolocalização: {_sim_nao(bairro_id_ipp != '0')}"
+            )
         except Exception as e:
             logger.info(
                 f"Falha ao obter endereço usando get_nearest_logradouro_and_bairro(): {type(e).__name__}"
@@ -419,18 +425,13 @@ class AddressAPIService:
         logradouro_ipp = logradouro_nome_ipp.lstrip("0123456789 -")
         logradouro_completo = f"{logradouro_google}, {bairro_nome_ipp}"
 
-        logger.info(f"Logradouro IPP: {logradouro_ipp}")
+        logger.info(f"Logradouro IPP obtido: {_sim_nao(logradouro_ipp.strip())}")
 
         address_similarity = jaro_similarity(logradouro_google, logradouro_ipp)
 
         if (address_similarity > THRESHOLD) and bairro_nome_ipp != " ":
             logger.info(f"Similaridade alta o suficiente: {address_similarity}")
-            geocode_logradouro_ipp_url = str(
-                "https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Geocode/Geocode_Logradouros_WGS84/GeocodeServer/findAddressCandidates?"
-                + f"Address={logradouro_completo}&Address2=&Address3=&Neighborhood=&City=&Subregion=&Region=&Postal=&PostalExt=&CountryCode=&SingleLine=&outFields=cl"
-                + "&maxLocations=&matchOutOfRange=true&langCode=&locationType=&sourceCountry=&category=&location=&searchExtent=&outSR=&magicKey=&preferredLabelValues=&f=pjson"
-            )
-            logger.info(f"Geocode IPP URL: {geocode_logradouro_ipp_url}")
+            logger.info("Similaridade alta: mantém o logradouro da geolocalização")
             return
 
         if address_similarity < THRESHOLD:
@@ -447,9 +448,7 @@ class AddressAPIService:
                 else:
                     logradouro_completo = logradouro_google
         elif bairro_nome_ipp == " ":
-            logger.info(
-                f"Bairro IPP não identificado. Valor Bairro IPP: {bairro_nome_ipp}. Vou considerar o do Google."
-            )
+            logger.info("Bairro IPP não identificado. Vou considerar o do Google.")
             logger.info(
                 "Atualizando o logradouro que vai ser geolocalizado para considerar o logradouro_ipp em vez do Google"
             )
@@ -464,7 +463,7 @@ class AddressAPIService:
             + f"Address={logradouro_completo}&Address2=&Address3=&Neighborhood=&City=&Subregion=&Region=&Postal=&PostalExt=&CountryCode=&SingleLine=&outFields=cl"
             + "&maxLocations=&matchOutOfRange=true&langCode=&locationType=&sourceCountry=&category=&location=&searchExtent=&outSR=&magicKey=&preferredLabelValues=&f=pjson"
         )
-        logger.info(f"Geocode IPP URL: {geocode_logradouro_ipp_url}")
+        logger.info("Consultando o geocode do IPP")
 
         async with InterceptedHTTPClient(
             user_id="unknown",
@@ -500,7 +499,7 @@ class AddressAPIService:
                         logradouro_codigo = candidato["attributes"]["cl"]
                         logradouro_real = candidato["address"]
                 logger.info(
-                    f"Logradouro no IPP com maior semelhança: {logradouro_real}, cl: {logradouro_codigo}, distância: {best_distance} metros"
+                    f"Logradouro no IPP mais próximo encontrado: {_sim_nao(logradouro_codigo is not None)}, distância: {best_distance:.0f} metros"
                 )
             else:
                 best_similarity = 0
@@ -514,11 +513,8 @@ class AddressAPIService:
                         logradouro_codigo = candidato["attributes"]["cl"]
                         logradouro_real = candidato["address"]
                 logger.info(
-                    f"Logradouro no IPP com maior similaridade: {logradouro_real}, cl: {logradouro_codigo}, similaridade: {best_similarity}"
+                    f"Logradouro no IPP mais similar encontrado: {_sim_nao(logradouro_codigo is not None)}, similaridade: {best_similarity}"
                 )
-            logger.info(
-                f"Logradouro encontrado no Google, com bairro do IPP: {logradouro_completo}"
-            )
 
             logradouro_id_ipp = logradouro_codigo
             logradouro_nome_ipp = logradouro_real.split(",")[0]
@@ -555,7 +551,7 @@ class AddressAPIService:
                 # pegamos o codigo correto buscando o nome do bairro desse endereço na base do IPP e pegando o codigo correspondente
                 logger.info("Foi necessário atualizar o bairro")
                 logger.info(
-                    f"Bairro obtido anteriormente com geolocalização: {bairro_nome_ipp if 'bairro_nome_ipp' in locals() else 'não definido'}"
+                    f"Bairro obtido anteriormente com geolocalização: {_sim_nao(str(bairro_nome_ipp).strip())}"
                 )
 
                 sgrc_service = SGRCAPIService()
@@ -583,7 +579,7 @@ class AddressAPIService:
                     logradouro_bairro_ipp = response_json["name"]
 
                 logger.info(
-                    f"Bairro obtido agora com busca por similaridade: {logradouro_bairro_ipp}"
+                    f"Bairro obtido agora com busca por similaridade: {_sim_nao(logradouro_bairro_ipp)}"
                 )
 
                 return {
