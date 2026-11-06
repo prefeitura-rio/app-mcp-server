@@ -1,19 +1,25 @@
 """
 Testes da DEV-379: a falha em `get_endereco_info` e `get_ipp_street_code` (poda
-de árvore, `api_service.py`) não manda nome de rua, bairro nem coordenada no
-`input_body` do `@interceptor`.
+de árvore, `api_service.py`) não manda nome de rua, bairro nem coordenada ao
+error interceptor: nem no `input_body` do `@interceptor`, nem no `api_endpoint`
+do report do `InterceptedHTTPClient` do geocode do IPP.
 
 Antes, o decorator copiava os argumentos `str` e `float` das duas funções: o
 logradouro do Google e o do IPP, o bairro do IPP e o do Google, a latitude e a
 longitude iam ao error interceptor externo, só com a redação por padrão (que
-tira CPF e telefone, não endereço).
+tira CPF e telefone, não endereço). E a falha de conexão ou o timeout do
+geocode do IPP mandava a URL inteira, com `Address=<logradouro>, <bairro>` na
+query, no `api_endpoint` do report do cliente HTTP.
 
 Invariantes cobertos aqui:
 - em `get_ipp_street_code`, logradouros e bairros viram `resumir_texto_livre`
   (tamanho e tipos de dado pessoal) e latitude e longitude vão só com o tipo,
   por nome e por posição;
+- o report do cliente HTTP real (falha de conexão e timeout do geocode) vai
+  com o endpoint sem a query; a requisição de saída continua com ela;
 - vale pelo caminho real: `get_endereco_info` chama `get_ipp_street_code`, a
-  consulta ao geocode do IPP falha e o report sai do decorator da interna;
+  consulta ao geocode do IPP falha e saem os dois reports, o do cliente HTTP e
+  o do decorator da interna;
 - em `get_endereco_info`, os quatro argumentos viram só metadado, também com a
   coordenada em texto;
 - o fluxo não muda: a exceção continua subindo e `get_endereco_info` continua
@@ -57,13 +63,22 @@ TRECHOS_PROIBIDOS = (
     "2468024",
 )
 ERRO_DO_IPP = "geocode do IPP fora do ar"
+GEOCODE_IPP_HOST = "pgeo3.rio.rj.gov.br"
 
 
 class _CapturingTransport(httpx.AsyncBaseTransport):
+    """Responde ao error interceptor e guarda os envios. A consulta ao geocode
+    do IPP passa pelo `InterceptedHTTPClient` real e falha com `falha_do_ipp`."""
+
     def __init__(self):
         self.requests = []
+        self.consultas_ao_ipp = []
+        self.falha_do_ipp = httpx.ConnectError(ERRO_DO_IPP)
 
     async def handle_async_request(self, request):
+        if request.url.host == GEOCODE_IPP_HOST:
+            self.consultas_ao_ipp.append(request)
+            raise self.falha_do_ipp
         self.requests.append(request)
         return httpx.Response(200, json={"status": "ok"})
 
@@ -83,46 +98,41 @@ def transport(monkeypatch):
         "send_error_to_interceptor",
         _real_send_error_to_interceptor,
     )
-    real_async_client = httpx.AsyncClient
 
-    def fake_async_client(*args, **kwargs):
-        kwargs["transport"] = capturing
-        return real_async_client(*args, **kwargs)
+    class _AsyncClientCapturado(httpx.AsyncClient):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = capturing
+            super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(error_interceptor.httpx, "AsyncClient", fake_async_client)
+    # `httpx.AsyncClient` é o mesmo para o error interceptor e para o
+    # `InterceptedHTTPClient` do geocode: os dois passam pelo transporte acima.
+    # Subclasse, e não função, porque o cliente HTTP confere o tipo com
+    # `isinstance`.
+    monkeypatch.setattr(httpx, "AsyncClient", _AsyncClientCapturado)
     return capturing
 
 
-class _ClienteDoIPPQueFalha:
-    """Substitui o `InterceptedHTTPClient`: a consulta ao geocode do IPP, que
-    fica fora do `try` de `get_ipp_street_code`, não conecta."""
-
-    urls = []
-
-    def __init__(self, **_kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_exc):
-        return False
-
-    async def get(self, url):
-        _ClienteDoIPPQueFalha.urls.append(url)
-        raise httpx.ConnectError(ERRO_DO_IPP)
-
-
-@pytest.fixture
-def ipp_fora_do_ar(monkeypatch):
-    _ClienteDoIPPQueFalha.urls = []
-    monkeypatch.setattr(api_service, "InterceptedHTTPClient", _ClienteDoIPPQueFalha)
-    return _ClienteDoIPPQueFalha
+def _payloads_enviados(transport: _CapturingTransport) -> list:
+    return [json.loads(r.content.decode("utf-8")) for r in transport.requests]
 
 
 def _payload_enviado(transport: _CapturingTransport) -> dict:
-    assert len(transport.requests) == 1
-    return json.loads(transport.requests[0].content.decode("utf-8"))
+    payloads = _payloads_enviados(transport)
+    assert len(payloads) == 1
+    return payloads[0]
+
+
+def _reports_da_falha_do_ipp(transport: _CapturingTransport) -> tuple:
+    """Os dois reports da falha do geocode: o do `InterceptedHTTPClient` e o do
+    `@interceptor` de `get_ipp_street_code`, nessa ordem."""
+    payloads = _payloads_enviados(transport)
+    assert len(payloads) == 2
+    do_cliente, do_decorator = payloads
+    assert do_cliente["api_endpoint"] == api_service._GEOCODE_IPP_URL
+    assert "get_ipp_street_code" in do_decorator["flowname"]
+    for payload in payloads:
+        _sem_endereco(payload)
+    return do_cliente, do_decorator
 
 
 def _sem_endereco(payload: dict) -> None:
@@ -152,10 +162,20 @@ def _assert_input_body_do_ipp(input_body: dict, bairro_google) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "falha, status",
+    [
+        (httpx.ConnectError(ERRO_DO_IPP), 0),
+        (httpx.ReadTimeout(ERRO_DO_IPP), 408),
+    ],
+    ids=["conexao", "timeout"],
+)
 async def test_get_ipp_street_code_por_nome_nao_envia_endereco(
-    transport, ipp_fora_do_ar
+    transport, falha, status
 ):
-    with pytest.raises(httpx.ConnectError, match=ERRO_DO_IPP):
+    transport.falha_do_ipp = falha
+
+    with pytest.raises(type(falha), match=ERRO_DO_IPP):
         await api_service.AddressAPIService().get_ipp_street_code(
             logradouro_nome=LOGRADOURO_GOOGLE,
             logradouro_nome_ipp=LOGRADOURO_IPP,
@@ -166,28 +186,25 @@ async def test_get_ipp_street_code_por_nome_nao_envia_endereco(
         )
 
     # A consulta ao IPP continua levando o logradouro: só o report muda.
-    assert len(ipp_fora_do_ar.urls) == 1
-    assert "Quimera" in ipp_fora_do_ar.urls[0]
+    assert len(transport.consultas_ao_ipp) == 1
+    assert "Quimera" in str(transport.consultas_ao_ipp[0].url)
 
-    payload = _payload_enviado(transport)
-    assert "get_ipp_street_code" in payload["flowname"]
-    _assert_input_body_do_ipp(json.loads(payload["input_body"]), BAIRRO_GOOGLE)
-    assert ERRO_DO_IPP in payload["error_response"]
-    _sem_endereco(payload)
+    do_cliente, do_decorator = _reports_da_falha_do_ipp(transport)
+    assert do_cliente["http_status_code"] == status
+    assert "function=get_ipp_street_code" in do_cliente["flowname"]
+    _assert_input_body_do_ipp(json.loads(do_decorator["input_body"]), BAIRRO_GOOGLE)
+    assert ERRO_DO_IPP in do_decorator["error_response"]
 
 
 @pytest.mark.asyncio
-async def test_get_ipp_street_code_por_posicao_nao_envia_endereco(
-    transport, ipp_fora_do_ar
-):
+async def test_get_ipp_street_code_por_posicao_nao_envia_endereco(transport):
     with pytest.raises(httpx.ConnectError):
         await api_service.AddressAPIService().get_ipp_street_code(
             LOGRADOURO_GOOGLE, LOGRADOURO_IPP, BAIRRO_IPP, LATITUDE, LONGITUDE
         )
 
-    payload = _payload_enviado(transport)
-    _assert_input_body_do_ipp(json.loads(payload["input_body"]), None)
-    _sem_endereco(payload)
+    _, do_decorator = _reports_da_falha_do_ipp(transport)
+    _assert_input_body_do_ipp(json.loads(do_decorator["input_body"]), None)
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +223,11 @@ def _localizacao_sintetica(_latitude, _longitude):
 
 @pytest.mark.asyncio
 async def test_get_endereco_info_com_ipp_fora_do_ar_nao_envia_endereco(
-    transport, ipp_fora_do_ar, monkeypatch
+    transport, monkeypatch
 ):
     """Caminho de produção (`workflow.py` chama `get_endereco_info` por nome):
-    a falha do geocode do IPP é reportada pelo decorator de
-    `get_ipp_street_code` e `get_endereco_info` devolve a abertura manual."""
+    a falha do geocode do IPP é reportada pelo cliente HTTP e pelo decorator
+    de `get_ipp_street_code`, e `get_endereco_info` devolve a abertura manual."""
     servico = api_service.AddressAPIService()
     monkeypatch.setattr(
         servico, "get_nearest_logradouro_and_bairro", _localizacao_sintetica
@@ -224,10 +241,9 @@ async def test_get_endereco_info_com_ipp_fora_do_ar_nao_envia_endereco(
     )
 
     assert resultado == {"error": ERRO_DO_IPP, "abertura_manual": True}
-    payload = _payload_enviado(transport)
-    assert "get_ipp_street_code" in payload["flowname"]
-    _assert_input_body_do_ipp(json.loads(payload["input_body"]), BAIRRO_GOOGLE)
-    _sem_endereco(payload)
+    assert len(transport.consultas_ao_ipp) == 1
+    _, do_decorator = _reports_da_falha_do_ipp(transport)
+    _assert_input_body_do_ipp(json.loads(do_decorator["input_body"]), BAIRRO_GOOGLE)
 
 
 class _LogQueFalha:

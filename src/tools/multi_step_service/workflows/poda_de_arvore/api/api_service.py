@@ -43,6 +43,13 @@ _ARGUMENTOS_DO_IPP_STREET_CODE = (
     "bairro_google",
 )
 
+# Geocode de logradouros do IPP. A query da consulta leva o logradouro e o
+# bairro; o report de falha do cliente HTTP vai só com este endpoint (DEV-379).
+_GEOCODE_IPP_URL = (
+    "https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Geocode/"
+    "Geocode_Logradouros_WGS84/GeocodeServer/findAddressCandidates"
+)
+
 
 class SGRCAPIService:
     def __init__(self):
@@ -481,7 +488,8 @@ class AddressAPIService:
 
         # Call IPP api
         geocode_logradouro_ipp_url = str(
-            "https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Geocode/Geocode_Logradouros_WGS84/GeocodeServer/findAddressCandidates?"
+            _GEOCODE_IPP_URL
+            + "?"
             + f"Address={logradouro_completo}&Address2=&Address3=&Neighborhood=&City=&Subregion=&Region=&Postal=&PostalExt=&CountryCode=&SingleLine=&outFields=cl"
             + "&maxLocations=&matchOutOfRange=true&langCode=&locationType=&sourceCountry=&category=&location=&searchExtent=&outSR=&magicKey=&preferredLabelValues=&f=pjson"
         )
@@ -496,6 +504,9 @@ class AddressAPIService:
                 "function": "get_ipp_street_code",
             },
             timeout=30.0,
+            # A query leva o logradouro e o bairro: o report da falha de
+            # conexão vai com o endpoint sem ela (DEV-379).
+            report_endpoint=_GEOCODE_IPP_URL,
         ) as client:
             response = await client.get(geocode_logradouro_ipp_url)
             data = response.json()
