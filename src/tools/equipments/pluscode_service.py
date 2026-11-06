@@ -47,7 +47,16 @@ async def _geocodificar(address: str):
     )
 
 
-@interceptor(source={"source": "mcp", "tool": "equipments"})
+# Argumentos que o `@interceptor` de equipamentos reporta só como metadado
+# (tamanho e tipos de dado pessoal), nunca o valor: é o endereço que o cidadão
+# digitou para achar os equipamentos próximos (DEV-411).
+_ARGUMENTOS_DO_ENDERECO: tuple[str, ...] = ("address",)
+
+
+@interceptor(
+    source={"source": "mcp", "tool": "equipments"},
+    free_text_params=_ARGUMENTOS_DO_ENDERECO,
+)
 async def get_pluscode_coords_equipments(
     address, categories: Optional[List[str]] = None
 ) -> dict:
@@ -61,8 +70,11 @@ async def get_pluscode_coords_equipments(
     # montagem dos parâmetros — fora do `try`, portanto sem virar o dict de
     # erro que a tool espera. O guarda original (`if plus8:`) admitia que o
     # caso existia, mas não tratava o ramo negativo.
+    #
+    # A mensagem não leva o endereço: ela vai ao error interceptor (no
+    # `error_message` e no traceback) e ao agente (DEV-411).
     if not plus8:
-        raise GeocodingError(f"No plus8 code for address: {address}")
+        raise GeocodingError("No plus8 code for the geocoded address")
 
     latitude = coords["lat"]
     longitude = coords["lng"]
