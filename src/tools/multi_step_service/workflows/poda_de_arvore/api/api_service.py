@@ -24,6 +24,33 @@ def _sim_nao(valor) -> str:
     return "sim" if valor else "não"
 
 
+# Argumentos que o `@interceptor` reporta só como metadado (tamanho e tipos de
+# dado pessoal do texto; da coordenada, só o tipo), nunca o valor: são o nome da
+# rua, o bairro e a localização do cidadão (DEV-379). Todos os argumentos das
+# duas funções, para nenhum sair em claro no `input_body`.
+_ARGUMENTOS_DO_ENDERECO_INFO = (
+    "latitude",
+    "longitude",
+    "logradouro_google",
+    "bairro_google",
+)
+_ARGUMENTOS_DO_IPP_STREET_CODE = (
+    "logradouro_nome",
+    "logradouro_nome_ipp",
+    "bairro_nome_ipp",
+    "latitude",
+    "longitude",
+    "bairro_google",
+)
+
+# Geocode de logradouros do IPP. A query da consulta leva o logradouro e o
+# bairro; o report de falha do cliente HTTP vai só com este endpoint (DEV-379).
+_GEOCODE_IPP_URL = (
+    "https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Geocode/"
+    "Geocode_Logradouros_WGS84/GeocodeServer/findAddressCandidates"
+)
+
+
 class SGRCAPIService:
     def __init__(self):
         self.api_base_url = "https://api.prefeitura.rio/poda_de_arvore"
@@ -301,7 +328,8 @@ class AddressAPIService:
             "source": "mcp",
             "tool": "multi_step_service",
             "workflow": "poda_de_arvore",
-        }
+        },
+        free_text_params=_ARGUMENTOS_DO_ENDERECO_INFO,
     )
     async def get_endereco_info(
         self, latitude, longitude, logradouro_google=None, bairro_google=None
@@ -409,7 +437,8 @@ class AddressAPIService:
             "source": "mcp",
             "tool": "multi_step_service",
             "workflow": "poda_de_arvore",
-        }
+        },
+        free_text_params=_ARGUMENTOS_DO_IPP_STREET_CODE,
     )
     async def get_ipp_street_code(
         self,
@@ -459,7 +488,8 @@ class AddressAPIService:
 
         # Call IPP api
         geocode_logradouro_ipp_url = str(
-            "https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Geocode/Geocode_Logradouros_WGS84/GeocodeServer/findAddressCandidates?"
+            _GEOCODE_IPP_URL
+            + "?"
             + f"Address={logradouro_completo}&Address2=&Address3=&Neighborhood=&City=&Subregion=&Region=&Postal=&PostalExt=&CountryCode=&SingleLine=&outFields=cl"
             + "&maxLocations=&matchOutOfRange=true&langCode=&locationType=&sourceCountry=&category=&location=&searchExtent=&outSR=&magicKey=&preferredLabelValues=&f=pjson"
         )
@@ -474,6 +504,9 @@ class AddressAPIService:
                 "function": "get_ipp_street_code",
             },
             timeout=30.0,
+            # A query leva o logradouro e o bairro: o report da falha de
+            # conexão vai com o endpoint sem ela (DEV-379).
+            report_endpoint=_GEOCODE_IPP_URL,
         ) as client:
             response = await client.get(geocode_logradouro_ipp_url)
             data = response.json()
