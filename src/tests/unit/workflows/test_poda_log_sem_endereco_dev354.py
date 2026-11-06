@@ -30,6 +30,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from async_googlemaps import exceptions as gmaps_exceptions
 
 from src.utils.pii import resumir_texto_livre
 
@@ -364,7 +365,9 @@ def api_service(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "async_googlemaps",
-        types.SimpleNamespace(AsyncClient=_ClienteGoogleFake),
+        types.SimpleNamespace(
+            AsyncClient=_ClienteGoogleFake, exceptions=gmaps_exceptions
+        ),
     )
     _ClienteGoogleFake.enderecos = []
 
