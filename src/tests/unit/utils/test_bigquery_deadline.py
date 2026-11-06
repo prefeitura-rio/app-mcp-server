@@ -270,27 +270,79 @@ async def test_quem_espera_na_fila_nao_ganha_orcamento_novo(monkeypatch):
     assert cliente.execucoes <= 2
 
 
+class _ClienteRetido(_ClienteContado):
+    """Client falso cuja query só responde quando o teste soltar `liberar`."""
+
+    def __init__(self):
+        super().__init__(delay=0)
+        self.liberar = threading.Event()
+
+    def query(self, _query, **_kwargs):
+        with self._lock:
+            self.execucoes += 1
+        outer = self
+
+        class Job:
+            def result(self, page_size=None, timeout=None):
+                # Teto de segurança: se o teste falhar antes de soltar, a
+                # thread não segura o processo para sempre.
+                outer.liberar.wait(timeout=QUERY_LENTA * 10)
+                return outer._linhas
+
+            def cancel(self):
+                return None
+
+        return Job()
+
+
 @pytest.mark.asyncio
 async def test_orcamento_esgotado_na_fila_nao_dispara_query(monkeypatch):
-    """Query cujo resultado ninguém vai esperar é só custo no BigQuery."""
-    module, cliente, _redis = _montar(monkeypatch, "bq_deadline_sem_query_inutil")
+    """Query cujo resultado ninguém vai esperar é só custo no BigQuery.
+
+    O dono do lock segura a query até o fim do teste, então o orçamento de
+    quem espera na fila acaba com o lock ainda preso, por construção, sem
+    depender do relógio real nem da carga da máquina (DEV-378). Com todos
+    começando juntos e com o mesmo orçamento, o lock era liberado no mesmo
+    instante em que os prazos da fila venciam: sob carga, um deles adquiria
+    com um resíduo de prazo e submetia uma segunda query (1 falha em 4 na
+    suíte inteira com cobertura).
+    """
+    module, _cliente, _redis = _montar(monkeypatch, "bq_deadline_sem_query_inutil")
+    cliente = _ClienteRetido()
+    monkeypatch.setattr(module, "get_bigquery_client", lambda: cliente)
     partes = {"cache_namespace": "eq", "cache_key_parts": {"plus8": "MESMA"}}
 
-    await asyncio.gather(
-        *[
-            _medir(
-                module,
-                query="select 1",
-                cache_ttl_seconds=120,
-                timeout_seconds=ORCAMENTO,
-                **partes,
-            )
-            for _ in range(CONCORRENTES)
-        ]
-    )
+    def leitura(orcamento):
+        return _medir(
+            module,
+            query="select 1",
+            cache_ttl_seconds=120,
+            timeout_seconds=orcamento,
+            **partes,
+        )
 
+    # O dono tem orçamento de sobra: só sai da query quando o teste soltar.
+    dono = asyncio.create_task(leitura(QUERY_LENTA * 10))
+    try:
+        async with asyncio.timeout(QUERY_LENTA):
+            while cliente.execucoes == 0:
+                await asyncio.sleep(0.01)
+
+        # Fila sem teto ficaria presa no lock até o `finally`; o limite troca
+        # esse travamento por uma falha legível.
+        async with asyncio.timeout(QUERY_LENTA):
+            fila = await asyncio.gather(
+                *[leitura(ORCAMENTO) for _ in range(CONCORRENTES - 1)]
+            )
+    finally:
+        cliente.liberar.set()
+        _d_dono, erro_dono = await dono
+
+    # Ninguém da fila chegou a adquirir: todos estouraram esperando o lock.
+    assert all(isinstance(erro, TimeoutError) for _d, erro in fila), fila
     # Só quem pegou o lock consultou; os outros nem chegaram a submeter.
     assert cliente.execucoes == 1
+    assert erro_dono is None, erro_dono
 
 
 @pytest.mark.asyncio
