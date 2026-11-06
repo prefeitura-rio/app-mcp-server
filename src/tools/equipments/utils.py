@@ -22,6 +22,8 @@ def get_coords_from_nominatim_api(address: str) -> dict:
             "tool": "equipments",
             "function": "get_coords_from_nominatim_api",
         },
+        # O endereço vai nos `params`: no report da falha, só metadado (DEV-411).
+        free_text_fields=("q",),
         sync=True,
         timeout=10.0,
     ) as client:
@@ -52,6 +54,8 @@ def get_coords_from_google_maps_api(address: str) -> dict:
             "tool": "equipments",
             "function": "get_coords_from_google_maps_api",
         },
+        # O endereço vai nos `params`: no report da falha, só metadado (DEV-411).
+        free_text_fields=("address",),
         sync=True,
         timeout=10.0,
     ) as client:
