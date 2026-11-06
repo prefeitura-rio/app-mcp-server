@@ -336,7 +336,7 @@ async def test_orcamento_esgotado_na_fila_nao_dispara_query(monkeypatch):
             )
     finally:
         cliente.liberar.set()
-    _d_dono, erro_dono = await dono
+        _d_dono, erro_dono = await dono
 
     # Ninguém da fila chegou a adquirir: todos estouraram esperando o lock.
     assert all(isinstance(erro, TimeoutError) for _d, erro in fila), fila
