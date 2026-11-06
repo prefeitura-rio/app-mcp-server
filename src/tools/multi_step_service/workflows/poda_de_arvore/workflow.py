@@ -1045,7 +1045,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
         except Exception as exc:
             end_time = end_time if end_time else time.time()
             logger.error(
-                f"Erro ao criar ticket. Tempo: {end_time - start_time:.2f}s. Erro: {exc}"
+                f"Erro ao criar ticket. Tempo: {end_time - start_time:.2f}s. Erro: {type(exc).__name__}"
             )
             raise exc
 
@@ -1278,7 +1278,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             SGRCMalformedBodyException,
             ValueError,
         ) as exc:
-            logger.exception(exc)
+            logger.error(f"Erro ao abrir ticket no SGRC: {type(exc).__name__}")
             return ticket_failed(
                 state,
                 error_code="erro_interno",
@@ -1287,7 +1287,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             )
 
         except (SGRCDuplicateTicketException, SGRCEquivalentTicketException) as exc:
-            logger.exception(exc)
+            logger.error(f"Erro ao abrir ticket no SGRC: {type(exc).__name__}")
             return ticket_failed(
                 state,
                 error_code="erro_ticket_duplicado",
@@ -1298,7 +1298,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             )
 
         except SGRCInternalErrorException as exc:
-            logger.exception(exc)
+            logger.error(f"Erro ao abrir ticket no SGRC: {type(exc).__name__}")
             return ticket_failed(
                 state,
                 error_code="erro_sgrc",
@@ -1307,7 +1307,7 @@ class PodaDeArvoreWorkflow(BaseWorkflow):
             )
 
         except Exception as exc:
-            logger.exception(exc)
+            logger.error(f"Erro ao abrir ticket no SGRC: {type(exc).__name__}")
             return ticket_failed(
                 state,
                 error_code="erro_geral",
