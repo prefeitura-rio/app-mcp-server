@@ -119,14 +119,25 @@ async def get_memories(
             # A mensagem do httpx traz a URL com o `user_id` e o nome da memória,
             # e o `@interceptor` a reporta como `error_message` (DEV-336). Sem a
             # exceção original no traceback (`from None`).
-            raise httpx.HTTPStatusError(
-                "HTTP {} da API de memória em GET {}".format(
-                    response.status_code, report_endpoint
-                ),
-                request=e.request,
-                response=e.response,
-            ) from None
+            raise _erro_http_sem_url(e, "GET", report_endpoint) from None
         return response.json()
+
+
+def _erro_http_sem_url(
+    erro: httpx.HTTPStatusError, metodo: str, report_endpoint: str
+) -> httpx.HTTPStatusError:
+    """
+    O `HTTPStatusError` da API de memória com o rótulo do endpoint no lugar da
+    URL, que leva o `user_id` (e o nome da memória) no caminho. Quem relança usa
+    `from None`, para a exceção original não ir no traceback ao interceptor.
+    """
+    return httpx.HTTPStatusError(
+        "HTTP {} da API de memória em {} {}".format(
+            erro.response.status_code, metodo, report_endpoint
+        ),
+        request=erro.request,
+        response=erro.response,
+    )
 
 
 _MAX_CHARS_NOME_DA_CHAVE = 64
@@ -189,6 +200,9 @@ async def upsert_memory(
         return {"status": "Error", "detail": "Invalid memory bank"}
 
     url = "{}/v1/memory/{}".format(RMI_API_URL, user_id)
+    # O `api_endpoint` reportado ao interceptor e a mensagem do erro HTTP levam
+    # o rótulo, nunca o caminho com o `user_id` (DEV-374).
+    report_endpoint = "{}/v1/memory/{{user_id}}".format(RMI_API_URL)
 
     # Use OAuth2 if configured, otherwise return unauthorized error
     if not is_oauth2_configured():
@@ -202,6 +216,7 @@ async def upsert_memory(
         source={"source": "mcp", "tool": "memory"},
         timeout=120.0,
         free_text_fields=_CAMPOS_DO_MEMORY_BANK,
+        report_endpoint=report_endpoint,
     ) as client:
         try:
             response = await client.put(
@@ -209,21 +224,24 @@ async def upsert_memory(
             )
             response.raise_for_status()
             return response.json()
-        # If the memory bank does not exist, creates it
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                response = await client.post(
-                    url, headers=headers, json=validated_memory_bank
-                )
-                # 409 no POST = memória já existe com esse nome (race condition);
-                # tratar como upsert bem-sucedido para não explodir o turno.
-                if response.status_code == 409:
-                    return {"status": "skipped", "reason": "conflict"}
-                response.raise_for_status()
-                return response.json()
-            elif e.response.status_code == 409:
+            if e.response.status_code == 409:
                 # PUT retornou 409 — memória existe mas update conflitou;
                 # não é falha crítica.
                 return {"status": "skipped", "reason": "conflict"}
-            else:
-                raise
+            if e.response.status_code != 404:
+                raise _erro_http_sem_url(e, "PUT", report_endpoint) from None
+
+        # 404 no PUT: the memory bank does not exist, creates it. Fora do
+        # `except`, para o traceback de um erro do POST não levar o erro do PUT
+        # (com a URL) como contexto.
+        response = await client.post(url, headers=headers, json=validated_memory_bank)
+        # 409 no POST = memória já existe com esse nome (race condition);
+        # tratar como upsert bem-sucedido para não explodir o turno.
+        if response.status_code == 409:
+            return {"status": "skipped", "reason": "conflict"}
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise _erro_http_sem_url(e, "POST", report_endpoint) from None
+        return response.json()
