@@ -1,6 +1,8 @@
 import json
 from typing import Tuple, Optional
 
+import httpx
+
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
 from src.utils.http_client import InterceptedHTTPClient
@@ -30,7 +32,15 @@ def get_coords_from_nominatim_api(address: str) -> dict:
         response = client.get_sync(
             env.NOMINATIM_API_URL, params=params, headers=headers
         )
-        response.raise_for_status()
+        # Sem `raise_for_status`: a mensagem dele traz a URL com o endereço na
+        # query, e ela chega ao error interceptor pelo `@interceptor` de quem
+        # chama (DEV-411). Do erro fica só o status.
+        if response.is_error:
+            raise httpx.HTTPStatusError(
+                f"Nominatim respondeu HTTP {response.status_code}",
+                request=response.request,
+                response=response,
+            )
         data = response.json()
 
     if data:

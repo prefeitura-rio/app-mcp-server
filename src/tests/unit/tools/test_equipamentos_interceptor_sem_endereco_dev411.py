@@ -53,6 +53,7 @@ TRECHOS_PROIBIDOS = (
 )
 ERRO_DO_GOOGLE = "google maps fora do ar"
 GOOGLE_HOST = "maps.googleapis.com"
+NOMINATIM_HOST = "nominatim.openstreetmap.org"
 ENDERECO_CONSULTADO = f"{ENDERECO} - Rio de Janeiro, RJ"
 
 
@@ -68,20 +69,23 @@ class _CapturingTransport(httpx.AsyncBaseTransport):
 
 
 class _GoogleTransport(httpx.BaseTransport):
-    """Transporte síncrono do geocode do Google Maps (o `InterceptedHTTPClient`
-    de equipamentos é `sync=True`): guarda as consultas e responde, na ordem, o
-    que estiver em `respostas`; uma exceção é levantada, o resto vira JSON."""
+    """Transporte síncrono dos geocoders (Google Maps e Nominatim; o
+    `InterceptedHTTPClient` de equipamentos é `sync=True`): guarda as consultas
+    e responde, na ordem, o que estiver em `respostas`; uma exceção é
+    levantada, um `httpx.Response` vai como está, o resto vira JSON."""
 
     def __init__(self):
         self.consultas = []
         self.respostas = []
 
     def handle_request(self, request):
-        assert request.url.host == GOOGLE_HOST
+        assert request.url.host in (GOOGLE_HOST, NOMINATIM_HOST)
         self.consultas.append(request)
         resposta = self.respostas.pop(0)
         if isinstance(resposta, Exception):
             raise resposta
+        if isinstance(resposta, httpx.Response):
+            return resposta
         return httpx.Response(200, json=resposta)
 
 
@@ -303,6 +307,43 @@ async def test_google_sem_resultado_nao_envia_endereco(transport, google):
     assert len(google.consultas) == 1
     (do_decorator,) = _payloads_enviados(transport)
     _assert_report_do_decorator(do_decorator, None)
+
+
+# ---------------------------------------------------------------------------
+# Nominatim (hoje sem uso em `get_plus8_coords_from_address`)
+# ---------------------------------------------------------------------------
+
+
+def test_nominatim_fora_nao_envia_endereco(transport, google):
+    """Fora de event loop, como no executor de `_geocodificar`: o cliente
+    reporta com `asyncio.run` antes de relançar."""
+    google.respostas = [httpx.ConnectError(ERRO_DO_GOOGLE)]
+
+    with pytest.raises(httpx.ConnectError):
+        equipments_utils.get_coords_from_nominatim_api(ENDERECO)
+
+    query = parse_qs(google.consultas[0].url.query.decode("utf-8"))
+    assert query["q"] == [ENDERECO]
+
+    (do_cliente,) = _payloads_enviados(transport)
+    assert "function=get_coords_from_nominatim_api" in do_cliente["flowname"]
+    corpo = json.loads(do_cliente["input_body"])
+    assert corpo["q"] == resumir_texto_livre(ENDERECO)
+
+
+def test_nominatim_com_erro_http_nao_poe_a_url_na_mensagem(google):
+    """A mensagem do `raise_for_status` traz a URL com o endereço na query; ela
+    chegaria ao interceptor pelo `@interceptor` de quem chama."""
+    google.respostas = [httpx.Response(503, text="indisponível")]
+
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        equipments_utils.get_coords_from_nominatim_api(ENDERECO)
+
+    assert exc.value.response.status_code == 503
+    mensagem = str(exc.value)
+    assert mensagem == "Nominatim respondeu HTTP 503"
+    for trecho in TRECHOS_PROIBIDOS:
+        assert trecho not in mensagem
 
 
 # ---------------------------------------------------------------------------
