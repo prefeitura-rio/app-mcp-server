@@ -16,16 +16,26 @@ todos os reports que saem:
 - o report do cliente HTTP real do geocode (conexão e timeout) leva o endereço
   resumido e o do reverse geocode leva a coordenada resumida; a requisição de
   saída continua com os dois;
-- o fluxo não muda: a exceção continua subindo, e a falha do Google continua
-  virando `{}` em `get_coordinates_google`.
+- em `google_geolocator`, pelo cliente real do `async_googlemaps`, a falha do
+  aiohttp cuja mensagem traz a URL da consulta (endereço, coordenada e chave
+  na query) chega ao interceptor só com o tipo do erro, sem a URL na mensagem
+  nem no traceback; o status e o texto de um erro da API do Google seguem;
+- o fluxo não muda: a exceção continua subindo (no `google_geolocator`, com o
+  mesmo tipo), e a falha do Google continua virando `{}` em
+  `get_coordinates_google`.
 """
 
 import json
+import types
 from urllib.parse import parse_qs
 
+import aiohttp
 import httpx
 import pytest
+from aiohttp.client_reqrep import RequestInfo
 from async_googlemaps import exceptions as gmaps_exceptions
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
 from src.tools import cor_alert_tools
 from src.tools.multi_step_service.workflows.poda_de_arvore.api import api_service
@@ -315,3 +325,169 @@ async def test_google_geolocator_com_google_fora_nao_envia_endereco(
     (do_decorator,) = _payloads_enviados(transport)
     _assert_report_do_decorator(do_decorator, "google_geolocator")
     assert type(falha).__name__ in do_decorator["error_response"]
+
+
+# Pelo cliente real do `async_googlemaps`: só a sessão do aiohttp é trocada. A
+# biblioteca monta a URL com o endereço (ou a coordenada) e a chave na query e
+# embrulha a falha do aiohttp em `TransportError(e)`, cuja mensagem é a do erro
+# do aiohttp, com a URL inteira.
+CHAVE_GOOGLE = "AIzaChaveSinteticaDev387"
+
+
+def _content_type_error(url: str) -> Exception:
+    return aiohttp.ContentTypeError(
+        RequestInfo(URL(url), "GET", CIMultiDictProxy(CIMultiDict()), URL(url)),
+        (),
+        status=200,
+        message="Attempt to decode JSON with unexpected mimetype: text/html",
+    )
+
+
+def _too_many_redirects(url: str) -> Exception:
+    return aiohttp.TooManyRedirects(
+        RequestInfo(URL(url), "GET", CIMultiDictProxy(CIMultiDict()), URL(url)),
+        (),
+    )
+
+
+class _RespostaDoGoogle:
+    def __init__(self, corpo: dict):
+        self.status = 200
+        self._corpo = corpo
+
+    async def json(self):
+        return self._corpo
+
+
+@pytest.fixture
+def sessao_do_google(monkeypatch):
+    """Troca `aiohttp.ClientSession.get`: cada consulta recebe, na ordem, o que
+    estiver em `respostas` (uma função da URL que devolve a exceção a levantar,
+    ou o corpo JSON da resposta) e a URL fica em `urls`."""
+    estado = types.SimpleNamespace(respostas=[], urls=[])
+
+    class _Consulta:
+        def __init__(self, url):
+            self.url = url
+
+        async def __aenter__(self):
+            resposta = estado.respostas.pop(0)
+            if callable(resposta):
+                raise resposta(self.url)
+            return _RespostaDoGoogle(resposta)
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    def _get(_sessao, url, **_kwargs):
+        estado.urls.append(url)
+        return _Consulta(url)
+
+    monkeypatch.setattr(aiohttp.ClientSession, "get", _get)
+    monkeypatch.setattr(api_service.env, "GMAPS_API_TOKEN", CHAVE_GOOGLE)
+    return estado
+
+
+def _sem_url_do_google(payload: dict) -> None:
+    corpo = json.dumps(payload, ensure_ascii=False)
+    assert CHAVE_GOOGLE not in corpo
+    assert "address=" not in corpo
+    assert "latlng=" not in corpo
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "falha_do_aiohttp",
+    [_content_type_error, _too_many_redirects],
+    ids=["content_type", "redirects"],
+)
+async def test_google_geolocator_falha_do_aiohttp_com_url_nao_envia_endereco(
+    transport, sessao_do_google, falha_do_aiohttp
+):
+    sessao_do_google.respostas = [falha_do_aiohttp]
+
+    with pytest.raises(gmaps_exceptions.TransportError) as excinfo:
+        await api_service.AddressAPIService().google_geolocator(ENDERECO)
+
+    # A consulta continua levando o endereço, e a falha original o trazia.
+    (url,) = sessao_do_google.urls
+    assert "Quimera" in url
+    assert "Quimera" in str(falha_do_aiohttp(url))
+    # Quem chama recebe o mesmo tipo, com o tipo do erro interno na mensagem.
+    nome_do_erro = falha_do_aiohttp(url).__class__.__name__
+    assert str(excinfo.value) == f"{nome_do_erro} na consulta ao Google Maps"
+
+    (do_decorator,) = _payloads_enviados(transport)
+    _assert_report_do_decorator(do_decorator, "google_geolocator")
+    _sem_url_do_google(do_decorator)
+    assert nome_do_erro in do_decorator["error_response"]
+
+
+@pytest.mark.asyncio
+async def test_google_geolocator_reverse_geocode_com_url_nao_envia_coordenada(
+    transport, sessao_do_google
+):
+    """O geocode acha a coordenada sem endereço formatado e o reverse geocode
+    falha com a coordenada na URL."""
+    sessao_do_google.respostas = [
+        {
+            "status": "OK",
+            "results": [
+                {
+                    "geometry": {"location": {"lat": LATITUDE, "lng": LONGITUDE}},
+                    "address_components": [],
+                }
+            ],
+        },
+        _content_type_error,
+    ]
+
+    with pytest.raises(gmaps_exceptions.TransportError):
+        await api_service.AddressAPIService().google_geolocator(ENDERECO)
+
+    assert len(sessao_do_google.urls) == 2
+    assert "9471358" in sessao_do_google.urls[1]
+
+    (do_decorator,) = _payloads_enviados(transport)
+    _assert_report_do_decorator(do_decorator, "google_geolocator")
+    _sem_url_do_google(do_decorator)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resposta",
+    [
+        {"status": "REQUEST_DENIED", "error_message": "chave recusada"},
+        {"status": "UNKNOWN_ERROR"},
+    ],
+    ids=["negada", "desconhecido"],
+)
+async def test_google_geolocator_erro_da_api_mantem_status_do_google(
+    transport, sessao_do_google, resposta
+):
+    """O `ApiError` que a biblioteca embrulha não leva URL: a mensagem dele (o
+    status e o texto do Google) segue para o diagnóstico."""
+    sessao_do_google.respostas = [resposta]
+
+    with pytest.raises(gmaps_exceptions.TransportError) as excinfo:
+        await api_service.AddressAPIService().google_geolocator(ENDERECO)
+
+    assert resposta["status"] in str(excinfo.value)
+    (do_decorator,) = _payloads_enviados(transport)
+    _assert_report_do_decorator(do_decorator, "google_geolocator")
+    _sem_url_do_google(do_decorator)
+    assert resposta["status"] in do_decorator["error_response"]
+
+
+def test_erro_do_google_sem_url_preserva_http_error_e_erro_vazio():
+    http = api_service._erro_do_google_sem_url(gmaps_exceptions.HTTPError(503))
+    assert isinstance(http, gmaps_exceptions.HTTPError)
+    assert str(http) == "HTTP Error: 503"
+
+    embrulhado = api_service._erro_do_google_sem_url(
+        gmaps_exceptions.TransportError(gmaps_exceptions.HTTPError(500))
+    )
+    assert str(embrulhado) == "HTTP Error: 500"
+
+    vazio = api_service._erro_do_google_sem_url(gmaps_exceptions.TransportError())
+    assert str(vazio) == "An unknown error occurred."
