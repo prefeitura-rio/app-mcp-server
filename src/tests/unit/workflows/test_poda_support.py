@@ -8,6 +8,7 @@ import types
 from pathlib import Path
 
 import pytest
+from async_googlemaps import exceptions as gmaps_exceptions
 
 from src.tools.multi_step_service.core.models import AgentResponse, ServiceState
 
@@ -139,7 +140,7 @@ def prepare_poda_api_module(
     monkeypatch.setitem(
         sys.modules,
         "async_googlemaps",
-        types.SimpleNamespace(AsyncClient=object),
+        types.SimpleNamespace(AsyncClient=object, exceptions=gmaps_exceptions),
     )
     if stub_shapely:
         monkeypatch.setitem(

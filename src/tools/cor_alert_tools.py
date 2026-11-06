@@ -29,6 +29,11 @@ from src.utils.http_client import InterceptedHTTPClient
 VALID_ALERT_TYPES: tuple[str, ...] = ("alagamento", "enchente", "bolsao")
 VALID_SEVERITIES: tuple[str, ...] = ("baixa", "alta", "critica")
 
+# Argumentos que o `@interceptor` da geolocalização reporta só como metadado
+# (tamanho e tipos de dado pessoal), nunca o valor: é o endereço que o cidadão
+# digitou (DEV-387).
+_ARGUMENTOS_DO_ENDERECO: tuple[str, ...] = ("address",)
+
 NEIGHBORHOOD_ALIASES: Mapping[str, str] = MappingProxyType(
     {
         "jd america": "jardim america",
@@ -131,6 +136,8 @@ async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict
                 "tool": "cor_alert",
                 "function": "reverse_geocode",
             },
+            # A coordenada do cidadão: no report da falha, só metadado (DEV-387).
+            free_text_fields=("latlng",),
             timeout=10.0,
         ) as client:
             response = await client.get(GOOGLE_MAPS_API_URL, params=params)
@@ -151,7 +158,10 @@ async def _get_neighborhood_from_reverse_geocode(lat: float, lng: float) -> dict
     return {}
 
 
-@interceptor(source={"source": "mcp", "tool": "cor_alert"})
+@interceptor(
+    source={"source": "mcp", "tool": "cor_alert"},
+    free_text_params=_ARGUMENTOS_DO_ENDERECO,
+)
 async def get_coordinates_google(address: str) -> dict:
     """
     Get coordinates from Google Maps API.
@@ -173,6 +183,8 @@ async def get_coordinates_google(address: str) -> dict:
                 "tool": "cor_alert",
                 "function": "get_coordinates_google",
             },
+            # O endereço vai nos `params`: no report da falha, só metadado (DEV-387).
+            free_text_fields=("address",),
             timeout=10.0,
         ) as client:
             response = await client.get(GOOGLE_MAPS_API_URL, params=params)
@@ -198,7 +210,10 @@ async def get_coordinates_google(address: str) -> dict:
     return {}
 
 
-@interceptor(source={"source": "mcp", "tool": "cor_alert"})
+@interceptor(
+    source={"source": "mcp", "tool": "cor_alert"},
+    free_text_params=_ARGUMENTOS_DO_ENDERECO,
+)
 async def geocode_address(address: str) -> dict:
     """
     Geocode an address using Google Maps API.

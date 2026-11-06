@@ -11,6 +11,7 @@ from loguru import logger
 from src.utils.error_interceptor import interceptor
 from src.utils.http_client import InterceptedHTTPClient
 from async_googlemaps import AsyncClient
+from async_googlemaps import exceptions as gmaps_exceptions
 from shapely import STRtree
 from shapely.geometry import Point
 from shapely.wkt import loads
@@ -49,6 +50,30 @@ _GEOCODE_IPP_URL = (
     "https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Geocode/"
     "Geocode_Logradouros_WGS84/GeocodeServer/findAddressCandidates"
 )
+
+
+def _erro_do_google_sem_url(
+    erro: gmaps_exceptions.TransportError,
+) -> gmaps_exceptions.TransportError:
+    """
+    O `TransportError` do `async_googlemaps` sem a URL da consulta. A biblioteca
+    embrulha qualquer falha do aiohttp em `TransportError(e)`, e a mensagem de
+    erros como `ContentTypeError` e `TooManyRedirects` traz a URL inteira, com o
+    endereço do cidadão e a chave da API na query (DEV-387). Do erro interno
+    fica só o tipo; `HTTPError` e `ApiError`, cuja mensagem é só o status e o
+    texto do Google, seguem como estão. Quem relança usa `from None`, para a
+    exceção original não ir no traceback ao interceptor.
+    """
+    if isinstance(erro, gmaps_exceptions.HTTPError):
+        return gmaps_exceptions.HTTPError(erro.status_code)
+    interno = getattr(erro, "base_exception", None)
+    if interno is None:
+        return gmaps_exceptions.TransportError()
+    if isinstance(interno, (gmaps_exceptions.HTTPError, gmaps_exceptions.ApiError)):
+        return gmaps_exceptions.TransportError(interno)
+    return gmaps_exceptions.TransportError(
+        RuntimeError(f"{type(interno).__name__} na consulta ao Google Maps")
+    )
 
 
 class SGRCAPIService:
@@ -169,7 +194,10 @@ class AddressAPIService:
             "source": "mcp",
             "tool": "multi_step_service",
             "workflow": "poda_de_arvore",
-        }
+        },
+        # O endereço que o cidadão digitou: no `input_body`, só tamanho e tipos
+        # de dado pessoal (DEV-387).
+        free_text_params=("address",),
     )
     async def google_geolocator(self, address: str) -> dict:
         """
@@ -237,7 +265,10 @@ class AddressAPIService:
 
         async with aiohttp.ClientSession() as maps_session:
             client = AsyncClient(maps_session, key=env.GMAPS_API_TOKEN)
-            geocode_result = await client.geocode(address)
+            try:
+                geocode_result = await client.geocode(address)
+            except gmaps_exceptions.TransportError as erro:
+                raise _erro_do_google_sem_url(erro) from None
 
         # Só a contagem: o resultado traz o endereço formatado e a coordenada
         # do cidadão (DEV-354).
@@ -251,7 +282,10 @@ class AddressAPIService:
             lat, long = geocode_result[0]["geometry"]["location"].values()
             async with aiohttp.ClientSession() as maps_session:
                 client = AsyncClient(maps_session, key=env.GMAPS_API_TOKEN)
-                geocode_result = await client.reverse_geocode((lat, long))
+                try:
+                    geocode_result = await client.reverse_geocode((lat, long))
+                except gmaps_exceptions.TransportError as erro:
+                    raise _erro_do_google_sem_url(erro) from None
 
         logradouro, resultado = set_logradouro(geocode_result, ACCEPTED_LOGRADOUROS)
         if not logradouro:
