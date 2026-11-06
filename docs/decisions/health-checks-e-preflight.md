@@ -51,6 +51,8 @@ Retornar 503 no readiness tiraria o pod do balanceador e derrubaria **todas** el
 
 ### D4 — `/health/detail` público, sem dados sensíveis
 
+> **Revisto (CHATR-311, R12):** `/health/detail` deixou de ser público. Fora do modo local, o middleware `RequireAuthenticatedByDefault` (`src/middleware/http_guard.py`) exige o mesmo token do `/mcp`; só `/health` e `/health/ready`, usados pelos probes do kubelet, seguem sem credencial. A sanitização abaixo continua valendo, como defesa em profundidade.
+
 Só o **nome da classe** da exceção atravessa para a resposta; a exceção completa vai para o log. Mensagens de clientes de rede embutem rotineiramente a URL de conexão — no caso do Redis, com a senha dentro.
 
 A exceção à regra é `HealthCheckError`, cuja mensagem é escrita por nós e portanto segura (ex.: `"ping sem resposta"`, `"jwks respondeu HTTP 503"`).

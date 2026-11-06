@@ -29,15 +29,24 @@ if __name__ == "__main__":
     if env.IS_LOCAL:
         mcp.run()
     else:
+        from starlette.middleware import Middleware as StarletteMiddleware
+
+        from src.middleware.http_guard import RequireAuthenticatedByDefault
+
         # `create_app()` (importado acima via `src.app`) já chamou
         # `setup_tracing()`; aqui apenas verificamos se ficou habilitado
-        # para decidir se instrumenta a camada ASGI/HTTP.
-        http_middleware = None
+        # para decidir se instrumenta a camada ASGI/HTTP. Vem primeiro para
+        # que o 401 do guard abaixo também gere span.
+        http_middleware = []
         if is_tracing_enabled():
-            from starlette.middleware import Middleware as StarletteMiddleware
             from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
 
-            http_middleware = [StarletteMiddleware(OpenTelemetryMiddleware)]
+            http_middleware.append(StarletteMiddleware(OpenTelemetryMiddleware))
+
+        # Nega por padrão nas rotas HTTP próprias: uma `custom_route` sem
+        # `@require_authenticated` não nasce pública. Fica dentro do
+        # `AuthenticationMiddleware` do FastMCP, que já populou o usuário.
+        http_middleware.append(StarletteMiddleware(RequireAuthenticatedByDefault))
 
         mcp.run(
             transport="streamable-http",
