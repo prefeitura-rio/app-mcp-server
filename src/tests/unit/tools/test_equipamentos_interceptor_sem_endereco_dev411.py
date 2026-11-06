@@ -331,17 +331,19 @@ def test_nominatim_fora_nao_envia_endereco(transport, google):
     assert corpo["q"] == resumir_texto_livre(ENDERECO)
 
 
-def test_nominatim_com_erro_http_nao_poe_a_url_na_mensagem(google):
+@pytest.mark.parametrize("status", [503, 404, 302], ids=["5xx", "4xx", "3xx"])
+def test_nominatim_com_erro_http_nao_poe_a_url_na_mensagem(google, status):
     """A mensagem do `raise_for_status` traz a URL com o endereço na query; ela
-    chegaria ao interceptor pelo `@interceptor` de quem chama."""
-    google.respostas = [httpx.Response(503, text="indisponível")]
+    chegaria ao interceptor pelo `@interceptor` de quem chama. Como no
+    `raise_for_status`, qualquer resposta fora de 2xx levanta."""
+    google.respostas = [httpx.Response(status, text="indisponível")]
 
     with pytest.raises(httpx.HTTPStatusError) as exc:
         equipments_utils.get_coords_from_nominatim_api(ENDERECO)
 
-    assert exc.value.response.status_code == 503
+    assert exc.value.response.status_code == status
     mensagem = str(exc.value)
-    assert mensagem == "Nominatim respondeu HTTP 503"
+    assert mensagem == f"Nominatim respondeu HTTP {status}"
     for trecho in TRECHOS_PROIBIDOS:
         assert trecho not in mensagem
 
