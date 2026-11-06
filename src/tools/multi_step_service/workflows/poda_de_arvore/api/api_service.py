@@ -169,7 +169,10 @@ class AddressAPIService:
             "source": "mcp",
             "tool": "multi_step_service",
             "workflow": "poda_de_arvore",
-        }
+        },
+        # O endereço que o cidadão digitou: no `input_body`, só tamanho e tipos
+        # de dado pessoal (DEV-387).
+        free_text_params=("address",),
     )
     async def google_geolocator(self, address: str) -> dict:
         """
