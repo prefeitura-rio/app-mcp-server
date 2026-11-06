@@ -431,11 +431,6 @@ class AddressAPIService:
 
         if (address_similarity > THRESHOLD) and bairro_nome_ipp != " ":
             logger.info(f"Similaridade alta o suficiente: {address_similarity}")
-            geocode_logradouro_ipp_url = str(
-                "https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Geocode/Geocode_Logradouros_WGS84/GeocodeServer/findAddressCandidates?"
-                + f"Address={logradouro_completo}&Address2=&Address3=&Neighborhood=&City=&Subregion=&Region=&Postal=&PostalExt=&CountryCode=&SingleLine=&outFields=cl"
-                + "&maxLocations=&matchOutOfRange=true&langCode=&locationType=&sourceCountry=&category=&location=&searchExtent=&outSR=&magicKey=&preferredLabelValues=&f=pjson"
-            )
             logger.info("Similaridade alta: mantém o logradouro da geolocalização")
             return
 
