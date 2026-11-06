@@ -1,8 +1,6 @@
 import json
 from typing import Tuple, Optional
 
-import httpx
-
 from src.config import env
 import src.tools.equipments.openlocationcode as olc
 from src.utils.http_client import InterceptedHTTPClient
@@ -24,24 +22,13 @@ def get_coords_from_nominatim_api(address: str) -> dict:
             "tool": "equipments",
             "function": "get_coords_from_nominatim_api",
         },
-        # O endereço vai nos `params`: no report da falha, só metadado (DEV-411).
-        free_text_fields=("q",),
         sync=True,
         timeout=10.0,
     ) as client:
         response = client.get_sync(
             env.NOMINATIM_API_URL, params=params, headers=headers
         )
-        # Sem `raise_for_status`: a mensagem dele traz a URL com o endereço na
-        # query, e ela chega ao error interceptor pelo `@interceptor` de quem
-        # chama (DEV-411). Do erro fica só o status; como no `raise_for_status`,
-        # qualquer resposta fora de 2xx levanta.
-        if not response.is_success:
-            raise httpx.HTTPStatusError(
-                f"Nominatim respondeu HTTP {response.status_code}",
-                request=response.request,
-                response=response,
-            )
+        response.raise_for_status()
         data = response.json()
 
     if data:
@@ -65,8 +52,6 @@ def get_coords_from_google_maps_api(address: str) -> dict:
             "tool": "equipments",
             "function": "get_coords_from_google_maps_api",
         },
-        # O endereço vai nos `params`: no report da falha, só metadado (DEV-411).
-        free_text_fields=("address",),
         sync=True,
         timeout=10.0,
     ) as client:

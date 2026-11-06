@@ -873,8 +873,7 @@ async def test_plus8_vazio_com_coords_nao_estoura_unbound_local(
         await module.get_pluscode_coords_equipments("Rua A")
 
     assert not isinstance(exc.value, UnboundLocalError)
-    # A mensagem vai ao error interceptor e ao agente: sem o endereço (DEV-411).
-    assert "Rua A" not in str(exc.value)
+    assert "Rua A" in str(exc.value)
     assert chamadas == []
 
 
