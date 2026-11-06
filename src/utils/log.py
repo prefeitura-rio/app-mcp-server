@@ -44,6 +44,12 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger.disable("httpx")
 logger.disable("httpcore")
 
+# DEV-382: `post`/`apost` do SGRC (biblioteca `prefeitura-rio`) logam em DEBUG o
+# corpo (token, solicitante, endereço) e os cabeçalhos (`Authorization`) como
+# dict interpolado, que a redação não reconhece. A linha morre na origem, em
+# qualquer `LOG_LEVEL`; é o único log do pacote.
+logger.disable("prefeitura_rio.integrations.sgrc")
+
 
 # Mesmo formato do handler default do loguru. As tags de cor são inertes em
 # sink de função (`colorize` é False), e ficam aqui para o caso de alguém
