@@ -619,6 +619,30 @@ def test_resumo_do_payload_aceita_qualquer_forma():
     }
 
 
+@pytest.mark.asyncio
+async def test_campo_ignorado_aninhado_sem_limite_nao_derruba_o_report(
+    pgm_mock, interceptor_mock
+):
+    aninhado = [CDA]
+    for _ in range(5000):
+        aninhado = [aninhado]
+
+    resultado = await emitir_guia_a_vista_v2(
+        {"lista_cdas": PLACEHOLDER, "campo_extra": aninhado}
+    )
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert "placeholder" in resultado["api_descricao_erro"]
+    assert len(interceptor_mock) == 1
+    campos = interceptor_mock[0]["input_body"]["payload"]["campos"]
+    assert campos["campo_extra"] == {
+        "tipo": "list",
+        "tamanho": 1,
+        "aninhamento_excessivo": True,
+    }
+    assert campos["lista_cdas"]["placeholder"] is True
+
+
 def test_resumo_do_payload_limita_a_quantidade_de_campos():
     payload = {f"campo_{i}": CDA for i in range(40)}
 

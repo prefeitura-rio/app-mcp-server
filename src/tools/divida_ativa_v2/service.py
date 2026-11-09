@@ -64,8 +64,13 @@ def _resumir_campo(valor: Any) -> Dict[str, Any]:
     resumo: Dict[str, Any] = {"tipo": type(valor).__name__}
     if isinstance(valor, (str, list, tuple, dict)):
         resumo["tamanho"] = len(valor)
-    if _contem_placeholder(valor):
-        resumo["placeholder"] = True
+    try:
+        if _contem_placeholder(valor):
+            resumo["placeholder"] = True
+    except RecursionError:
+        # Campo ignorado pelo modelo pode chegar aninhado sem limite; sem isto o
+        # report inteiro se perderia por causa de um campo.
+        resumo["aninhamento_excessivo"] = True
     return resumo
 
 
