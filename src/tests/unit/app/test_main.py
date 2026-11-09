@@ -53,14 +53,19 @@ def test_main_runs_default_transport_locally(monkeypatch):
 def test_main_runs_streamable_http_when_not_local(monkeypatch):
     mcp, _ = run_main_with_env(monkeypatch, is_local=False)
 
-    mcp.run.assert_called_once_with(
+    mcp.run.assert_called_once()
+    kwargs = mcp.run.call_args.kwargs
+    middleware = kwargs.pop("middleware")
+    assert kwargs == dict(
         transport="streamable-http",
         host="0.0.0.0",
         port=80,
         path="/mcp",
-        middleware=None,
         stateless_http=True,
     )
+    # Fora do modo local, as rotas HTTP próprias ganham o guard que nega por
+    # padrão (sem tracing, é o único middleware).
+    assert [m.cls.__name__ for m in middleware] == ["RequireAuthenticatedByDefault"]
 
 
 def test_main_runs_config_preflight(monkeypatch):
