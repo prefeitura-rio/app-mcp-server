@@ -33,6 +33,7 @@ from src.tools.divida_ativa_v2.models import (
     EmitirGuiaRequest,
     EmitirGuiaResponse,
     GuiaEmitida,
+    _contem_placeholder,
 )
 from src.utils.error_interceptor import interceptor, send_general_error
 from src.utils.log import logger
@@ -52,8 +53,87 @@ MENSAGEM_SELECAO_VAZIA = (
 )
 
 
+# Limites do resumo do payload: o SFMC manda meia dúzia de campos, e um payload
+# com centenas de chaves não pode inflar o report.
+_MAX_CAMPOS_NO_RESUMO = 30
+_MAX_CHARS_NOME_CAMPO = 64
+
+
+def _resumir_campo(valor: Any) -> Dict[str, Any]:
+    """Tipo, tamanho e presença de placeholder de um campo. Nunca o valor."""
+    resumo: Dict[str, Any] = {"tipo": type(valor).__name__}
+    if isinstance(valor, (str, list, tuple, dict)):
+        resumo["tamanho"] = len(valor)
+    if _contem_placeholder(valor):
+        resumo["placeholder"] = True
+    return resumo
+
+
+def resumir_payload_emissao(parameters: Any) -> Dict[str, Any]:
+    """
+    Resumo do payload de emissão para o error interceptor (DEV-448).
+
+    O payload carrega CDA, execução fiscal e guia do contribuinte em
+    `lista_cdas`/`lista_efs`/`lista_guias`/`dicionario_itens`. Esses números
+    não têm formato que a redação por padrão do interceptor reconheça, então
+    o report leva só a forma de cada campo: tipo, tamanho e se veio com
+    placeholder não renderizado — o que basta para acompanhar o SFMC
+    (CHATR-120). Os nomes dos campos são do contrato com o SFMC, não do
+    cidadão, e ficam porque denunciam campo renomeado.
+    """
+    if not isinstance(parameters, dict):
+        return {"tipo": type(parameters).__name__}
+
+    campos = {
+        str(chave)[:_MAX_CHARS_NOME_CAMPO]: _resumir_campo(valor)
+        for chave, valor in list(parameters.items())[:_MAX_CAMPOS_NO_RESUMO]
+    }
+    resumo: Dict[str, Any] = {"campos": campos}
+    if len(parameters) > _MAX_CAMPOS_NO_RESUMO:
+        resumo["qtd_campos"] = len(parameters)
+    return resumo
+
+
+def _input_body_da_tool(args: tuple, kwargs: dict) -> Dict[str, Any]:
+    """`input_body` do `@interceptor` das tools v2: o resumo, nunca o payload cru."""
+    parameters = kwargs["parameters"] if "parameters" in kwargs else args[0]
+    return {"parameters": resumir_payload_emissao(parameters)}
+
+
+def _descrever_erro_validacao_para_report(
+    erro: ValidationError, resumo_payload: Dict[str, Any]
+) -> str:
+    """
+    Mensagem da falha de validação para o error interceptor, sem o valor recebido.
+
+    `formatar_erro_validacao` repete o valor (o validador embute `{texto!r}` e
+    `{chave!r}`) e segue só na resposta, que volta a quem o enviou.
+    """
+    resumo_erro = _resumir_erro_validacao(erro)
+    mensagem = (
+        "Parâmetros inválidos. Campos: "
+        f"{', '.join(resumo_erro['campos_invalidos'])}. Tipos de erro: "
+        f"{', '.join(resumo_erro['tipos_de_erro'])}."
+    )
+    com_placeholder = sorted(
+        campo
+        for campo, forma in resumo_payload.get("campos", {}).items()
+        if forma.get("placeholder")
+    )
+    if com_placeholder:
+        mensagem += (
+            " Campo(s) com placeholder de template não renderizado: "
+            f"{', '.join(com_placeholder)}. Verifique a configuração do SFMC."
+        )
+    return mensagem
+
+
 async def _reportar_falha_validacao(
-    tipo_erro: str, tipo: str, descricao: str, parameters: Any
+    tipo_erro: str,
+    tipo: str,
+    descricao: str,
+    parameters: Any,
+    contexto: Dict[str, Any],
 ) -> None:
     """
     Reporta uma falha de validação ao error interceptor.
@@ -64,8 +144,9 @@ async def _reportar_falha_validacao(
     para os padrões que motivaram o CHATR-120 — e é por ela que se acompanha
     se o SFMC parou de enviar placeholder.
 
-    `send_general_error` já redige PII (CPF/telefone) do `input_body` e nunca
-    propaga exceção, então é seguro passar o payload cru.
+    O `input_body` é o resumo do payload mais o `contexto` do chamador, nunca
+    o payload cru: a redação do interceptor não reconhece CDA, execução fiscal
+    nem guia (DEV-448). `descricao` também não pode carregar o valor recebido.
     """
     user_id = "unknown"
     if isinstance(parameters, dict):
@@ -76,7 +157,7 @@ async def _reportar_falha_validacao(
         source={**SOURCE_V2, "function": f"emitir_guia_{tipo}_v2"},
         error_type=tipo_erro,
         error_message=descricao,
-        input_body=parameters,
+        input_body={"payload": resumir_payload_emissao(parameters), **contexto},
     )
 
 
@@ -231,14 +312,23 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
         requisicao = EmitirGuiaRequest.model_validate(parameters or {})
     except ValidationError as erro:
         descricao = formatar_erro_validacao(erro)
+        resumo_erro = _resumir_erro_validacao(erro)
         logger.error(
             {
                 "event": "emitir_guia_v2_validation_error",
                 "tipo": tipo,
-                **_resumir_erro_validacao(erro),
+                **resumo_erro,
             }
         )
-        await _reportar_falha_validacao("ValidationError", tipo, descricao, parameters)
+        await _reportar_falha_validacao(
+            "ValidationError",
+            tipo,
+            _descrever_erro_validacao_para_report(
+                erro, resumir_payload_emissao(parameters)
+            ),
+            parameters,
+            {"validacao": resumo_erro},
+        )
         return EmitirGuiaResponse.de_erro(descricao)
 
     parametros_entrada = montar_parametros_entrada(requisicao, tipo)
@@ -256,7 +346,11 @@ async def _emitir(parameters: Dict[str, Any], tipo: str) -> EmitirGuiaResponse:
             }
         )
         await _reportar_falha_validacao(
-            "SelecaoVaziaError", tipo, MENSAGEM_SELECAO_VAZIA, parameters
+            "SelecaoVaziaError",
+            tipo,
+            MENSAGEM_SELECAO_VAZIA,
+            parameters,
+            {"parametros_pgm": resumir_parametros_pgm(parametros_entrada)},
         )
         return EmitirGuiaResponse.de_erro(MENSAGEM_SELECAO_VAZIA)
 
@@ -322,7 +416,10 @@ def _rota_da_pgm(tipo: str) -> Tuple[str, str]:
     return ENDPOINT_REGULARIZACAO, CONSUMIDOR_REGULARIZACAO
 
 
-@interceptor(source={"source": "mcp", "tool": "divida_ativa_v2"})
+@interceptor(
+    source={"source": "mcp", "tool": "divida_ativa_v2"},
+    extract_input_body=_input_body_da_tool,
+)
 @log_execution_time
 async def emitir_guia_a_vista_v2(parameters: Dict[str, Any]) -> Dict[str, Any]:
     """Emite guia de pagamento à vista com validação Pydantic da entrada."""
@@ -342,7 +439,10 @@ async def emitir_guia_a_vista_v2(parameters: Dict[str, Any]) -> Dict[str, Any]:
     return resposta.para_dict()
 
 
-@interceptor(source={"source": "mcp", "tool": "divida_ativa_v2"})
+@interceptor(
+    source={"source": "mcp", "tool": "divida_ativa_v2"},
+    extract_input_body=_input_body_da_tool,
+)
 @log_execution_time
 async def emitir_guia_regularizacao_v2(parameters: Dict[str, Any]) -> Dict[str, Any]:
     """Emite guia de regularização com validação Pydantic da entrada."""

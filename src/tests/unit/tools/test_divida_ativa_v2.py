@@ -5,6 +5,8 @@ Cobrem a validação Pydantic da entrada (formato legado e nativo, placeholders
 do SFMC, tipos inválidos), a montagem do payload da PGM e o modelo de resposta.
 """
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,7 +19,10 @@ from src.tools.divida_ativa_v2.service import (
     emitir_guia_regularizacao_v2,
     formatar_erro_validacao,
     montar_parametros_entrada,
+    resumir_payload_emissao,
 )
+from src.utils import error_interceptor as error_interceptor_module
+from src.utils.error_interceptor import _build_interceptor_payload
 
 
 CDA = "01/225716/2024-00"
@@ -447,7 +452,20 @@ async def test_placeholder_e_reportado_ao_interceptor(pgm_mock, interceptor_mock
     assert report["source"]["tool"] == "divida_ativa_v2"
     assert report["source"]["function"] == "emitir_guia_a_vista_v2"
     assert "placeholder de template não renderizado" in report["error_message"]
-    assert report["input_body"] == payload
+    assert "lista_cdas" in report["error_message"]
+    assert report["input_body"]["payload"] == {
+        "campos": {
+            "lista_cdas": {
+                "tipo": "str",
+                "tamanho": len(PLACEHOLDER),
+                "placeholder": True,
+            }
+        }
+    }
+    assert report["input_body"]["validacao"] == {
+        "campos_invalidos": ["lista_cdas"],
+        "tipos_de_erro": ["value_error"],
+    }
 
 
 @pytest.mark.asyncio
@@ -466,6 +484,189 @@ async def test_toda_falha_de_validacao_e_reportada(
     assert resultado["api_resposta_sucesso"] is False
     assert pgm_mock == []
     assert [r["error_type"] for r in interceptor_mock] == ["ValidationError"]
+
+
+EF = "2024.123456-7"
+
+
+def _payload_enviado_ao_interceptor(report):
+    """O payload que de fato sai do processo, montado pelo interceptor real."""
+    return _build_interceptor_payload(
+        customer_whatsapp_number=report["user_id"],
+        flowname="teste",
+        api_endpoint="teste",
+        input_body=report.get("input_body"),
+        http_status_code=0,
+        error_message=report["error_message"],
+        traceback=None,
+        source=report["source"],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "emitir,payload",
+    [
+        pytest.param(
+            emitir_guia_a_vista_v2,
+            {
+                "dicionario_itens": {"1": CDA, "2": EF},
+                "lista_cdas": [CDA],
+                "lista_efs": [EF],
+                "itens_informados": PLACEHOLDER,
+            },
+            id="placeholder",
+        ),
+        pytest.param(
+            emitir_guia_a_vista_v2,
+            {"dicionario_itens": {"1": CDA}, "lista_cdas": f'["{CDA}", "{EF}"'},
+            id="json-malformado-lista",
+        ),
+        pytest.param(
+            emitir_guia_a_vista_v2,
+            {"dicionario_itens": f'{{"1": "{CDA}", "2": "{EF}"', "apenas_um_item": 1},
+            id="json-malformado-dicionario",
+        ),
+        pytest.param(
+            emitir_guia_a_vista_v2,
+            {
+                "dicionario_itens": {"1": CDA, "2": EF},
+                "lista_cdas": [CDA],
+                "lista_efs": [EF],
+                "apenas_um_item": "9",
+            },
+            id="selecao-vazia-a-vista",
+        ),
+        pytest.param(
+            emitir_guia_regularizacao_v2,
+            {"dicionario_itens": {"1": GUIA}, "lista_guias": [GUIA], "lista_cdas": "["},
+            id="json-malformado-regularizacao",
+        ),
+        pytest.param(
+            emitir_guia_regularizacao_v2,
+            {"dicionario_itens": {"1": GUIA}, "lista_guias": [], "apenas_um_item": 1},
+            id="selecao-vazia-regularizacao",
+        ),
+    ],
+)
+async def test_report_ao_interceptor_nao_leva_cda_ef_nem_guia(
+    pgm_mock, interceptor_mock, emitir, payload
+):
+    """
+    DEV-448: CDA, execução fiscal e guia não têm formato que a redação por
+    padrão do interceptor reconheça; o report leva só a forma do payload.
+    """
+    resultado = await emitir(dict(payload))
+
+    assert resultado["api_resposta_sucesso"] is False
+    assert pgm_mock == []
+    assert len(interceptor_mock) == 1
+    enviado = json.dumps(
+        _payload_enviado_ao_interceptor(interceptor_mock[0]), ensure_ascii=False
+    )
+    for identificador in (CDA, EF, GUIA):
+        assert identificador not in enviado
+    assert set(interceptor_mock[0]["input_body"]["payload"]["campos"]) == set(payload)
+
+
+@pytest.mark.asyncio
+async def test_report_de_validacao_preserva_a_forma_do_payload(
+    pgm_mock, interceptor_mock
+):
+    await emitir_guia_a_vista_v2(
+        {
+            "dicionario_itens": {"1": CDA},
+            "lista_cdas": f'["{CDA}"',
+            "user_id": "5521900000000",
+        }
+    )
+
+    report = interceptor_mock[0]
+    assert report["user_id"] == "5521900000000"
+    assert report["input_body"]["payload"] == {
+        "campos": {
+            "dicionario_itens": {"tipo": "dict", "tamanho": 1},
+            "lista_cdas": {"tipo": "str", "tamanho": len(CDA) + 3},
+            "user_id": {"tipo": "str", "tamanho": 13},
+        }
+    }
+    assert report["input_body"]["validacao"]["campos_invalidos"] == ["lista_cdas"]
+    assert report["error_message"] == (
+        "Parâmetros inválidos. Campos: lista_cdas. Tipos de erro: value_error."
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_de_selecao_vazia_leva_as_contagens(pgm_mock, interceptor_mock):
+    await emitir_guia_a_vista_v2(
+        {"dicionario_itens": {"1": CDA}, "lista_cdas": [CDA], "apenas_um_item": "9"}
+    )
+
+    report = interceptor_mock[0]
+    assert report["error_message"] == MENSAGEM_SELECAO_VAZIA
+    assert report["input_body"]["parametros_pgm"] == {
+        "campos": ["cdas", "efs", "origem_solicitação"],
+        "qtd_cdas": 0,
+        "qtd_efs": 0,
+    }
+
+
+def test_resumo_do_payload_aceita_qualquer_forma():
+    assert resumir_payload_emissao(None) == {"tipo": "NoneType"}
+    assert resumir_payload_emissao([CDA]) == {"tipo": "list"}
+    assert resumir_payload_emissao({"apenas_um_item": 1}) == {
+        "campos": {"apenas_um_item": {"tipo": "int"}}
+    }
+
+
+def test_resumo_do_payload_limita_a_quantidade_de_campos():
+    payload = {f"campo_{i}": CDA for i in range(40)}
+
+    resumo = resumir_payload_emissao(payload)
+
+    assert len(resumo["campos"]) == 30
+    assert resumo["qtd_campos"] == 40
+    assert CDA not in json.dumps(resumo)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "emitir", [emitir_guia_a_vista_v2, emitir_guia_regularizacao_v2]
+)
+async def test_excecao_que_escapa_da_tool_nao_leva_o_payload_ao_interceptor(
+    monkeypatch, emitir
+):
+    """O `@interceptor` das tools copiava o dict `parameters` cru (DEV-448)."""
+    reports = []
+
+    async def fake_send_general_error(**kwargs):
+        reports.append(kwargs)
+        return True
+
+    class _RespostaQuebrada:
+        def para_dict(self):
+            raise RuntimeError("falha ao serializar")
+
+    async def emitir_quebrado(parameters, tipo):
+        return _RespostaQuebrada()
+
+    monkeypatch.setattr(
+        error_interceptor_module, "send_general_error", fake_send_general_error
+    )
+    monkeypatch.setattr(service_module, "_emitir", emitir_quebrado)
+    payload = {
+        "dicionario_itens": {"1": CDA},
+        "lista_cdas": [CDA],
+        "lista_guias": [GUIA],
+    }
+
+    with pytest.raises(RuntimeError):
+        await emitir(payload)
+
+    assert len(reports) == 1
+    assert reports[0]["input_body"] == {"parameters": resumir_payload_emissao(payload)}
+    assert CDA not in json.dumps(reports[0], default=str)
+    assert GUIA not in json.dumps(reports[0], default=str)
 
 
 @pytest.mark.asyncio
