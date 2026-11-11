@@ -148,7 +148,8 @@ __replace_divida_ativa__
         guias_em_aberto = [g for g in guias if g.get("esta_em_aberto")]
         from src.utils.log import logger
 
-        logger.debug(f"Guias em aberto: {guias_em_aberto}")
+        # Só a contagem: os dados da guia não vão para o log (DEV-514)
+        logger.debug(f"Guias em aberto: {len(guias_em_aberto)}")
         if len(guias_em_aberto) == 0:
             texto += "✅ Todas as guias deste imóvel estão quitadas.\n"
             texto += """

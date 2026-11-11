@@ -46,6 +46,7 @@ from src.tools.multi_step_service.workflows.iptu_pagamento.pix_page_service impo
 )
 
 from loguru import logger
+from pydantic import ValidationError
 from src.utils.gcs_storage import upload_to_gcs
 from src.utils.http_client import InterceptedHTTPClient
 from src.utils.short_url import format_expires_at, get_short_url
@@ -82,6 +83,46 @@ def _sanitizar_erro(mensagem: str) -> str:
     vê no chat.
     """
     return re.sub(r"\?[^\s'\"]*", "?<redacted>", mensagem or "")
+
+
+def _resumo_corpo(response) -> str:
+    """
+    Metadado do corpo de uma resposta de erro para o log: só o tamanho.
+
+    O corpo vem do backend do IPTU e pode ecoar a inscrição, a guia ou dados do
+    contribuinte; a redação global não alcança esses valores sem formato nem
+    rótulo (DEV-514).
+    """
+    return f"{len(_corpo_resposta(response))} chars"
+
+
+def _resumo_lista(dados: Any) -> str:
+    """Formato de uma resposta da API para o log, sem o conteúdo (DEV-514)."""
+    if isinstance(dados, list):
+        return f"list with {len(dados)} items"
+    if isinstance(dados, dict):
+        cotas = dados.get("Cotas")
+        if isinstance(cotas, list):
+            return f"dict with {len(cotas)} cotas"
+        return f"dict with {len(dados)} keys"
+    return type(dados).__name__
+
+
+def _detalhe_erro(erro: Exception, inscricao: str) -> str:
+    """
+    Detalhe de uma exceção inesperada para o log e para a mensagem de erro, sem
+    dado do contribuinte (DEV-514).
+
+    Tira a query string (token), troca a inscrição (que vai no caminho da URL do
+    imóvel) por um marcador e, num erro de validação do Pydantic, cuja mensagem
+    repete os valores recebidos (CDA, nome, endereço), fica só com o tipo.
+    """
+    if isinstance(erro, ValidationError):
+        return type(erro).__name__
+    detalhe = _sanitizar_erro(str(erro))
+    if inscricao:
+        detalhe = detalhe.replace(inscricao, "<inscricao>")
+    return detalhe
 
 
 def _e_erro_transitorio(response) -> bool:
@@ -131,12 +172,18 @@ def _tratar_resposta(endpoint: str, response, expect_json: bool) -> Any:
         raise AuthenticationError("Falha na autenticação do serviço IPTU")
 
     if response.status_code in [500, 503]:
-        logger.error(f"API internal error for {endpoint}: {response.text}")
+        logger.error(
+            f"API internal error for {endpoint} "
+            f"(HTTP {response.status_code}, body {_resumo_corpo(response)})"
+        )
         raise APIUnavailableError(
             f"Serviço IPTU temporariamente indisponível (HTTP {response.status_code})"
         )
 
-    logger.error(f"API error {response.status_code} for {endpoint}: {response.text}")
+    logger.error(
+        f"API error {response.status_code} for {endpoint} "
+        f"(body {_resumo_corpo(response)})"
+    )
     raise APIUnavailableError(
         f"Erro ao comunicar com serviço IPTU (HTTP {response.status_code})"
     )
@@ -236,8 +283,8 @@ class IPTUAPIService:
                         logger.warning(
                             f"Transient API error for {endpoint} "
                             f"(HTTP {response.status_code}, "
-                            f"attempt {tentativa + 1}/{API_MAX_TENTATIVAS}): "
-                            f"{_corpo_resposta(response)[:200]} - "
+                            f"attempt {tentativa + 1}/{API_MAX_TENTATIVAS}, "
+                            f"body {_resumo_corpo(response)}) - "
                             f"retrying in {espera}s"
                         )
                         await asyncio.sleep(espera)
@@ -328,15 +375,14 @@ class IPTUAPIService:
             endpoint="ConsultarGuias",
             params={"inscricao": inscricao_clean, "exercicio": str(exercicio)},
         )
-        logger.debug(f"Guias response: {guias_response}")
+        # Só o formato da resposta: o corpo traz inscrição, guias e valores (DEV-514)
+        logger.debug(f"Guias response: {_resumo_lista(guias_response)}")
         if not guias_response:
-            logger.info(
-                f"No guides found for inscricao {inscricao_clean}, exercicio {exercicio}"
-            )
+            logger.info(f"No guides found (exercicio {exercicio})")
             return None
 
         if not isinstance(guias_response, list) or len(guias_response) == 0:
-            logger.info(f"Empty guide list for inscricao {inscricao_clean}")
+            logger.info("Empty guide list")
             return None
 
         # Converte response para objetos Guia usando Pydantic
@@ -360,13 +406,14 @@ class IPTUAPIService:
 
                 guias.append(guia)
             except Exception as e:
-                logger.warning(f"Failed to parse guia data: {guia_data}, error: {e}")
+                # Sem o dado nem a mensagem: a do Pydantic repete o valor recebido
+                logger.warning(f"Failed to parse guia data: {type(e).__name__}")
                 continue
 
         # Retorna TODAS as guias (pagas e em aberto)
         # O workflow decidirá se há guias pagáveis ou não
         if not guias:
-            logger.info(f"No guides found for inscricao {inscricao_clean}")
+            logger.info("No guides parsed from response")
             return None
 
         # Cria objeto de dados das guias usando a estrutura simplificada
@@ -416,10 +463,10 @@ class IPTUAPIService:
                 "guia": numero_guia,
             },
         )
-        logger.debug(f"Cotas response: {cotas_response}")
+        logger.debug(f"Cotas response: {_resumo_lista(cotas_response)}")
 
         if not cotas_response or "Cotas" not in cotas_response:
-            logger.warning(f"No cotas found for guia {numero_guia}")
+            logger.warning("No cotas found for guia")
             return None
 
         # Converte response para objetos Cota usando Pydantic
@@ -443,7 +490,7 @@ class IPTUAPIService:
 
                 cotas.append(cota)
             except Exception as e:
-                logger.warning(f"Failed to parse cota data: {cota_data}, error: {e}")
+                logger.warning(f"Failed to parse cota data: {type(e).__name__}")
                 continue
 
         # Calcula valor total
@@ -464,9 +511,7 @@ class IPTUAPIService:
             valor_total=valor_total,
         )
 
-        logger.info(
-            f"Cotas data retrieved for guia {numero_guia} with {len(cotas)} cotas"
-        )
+        logger.info(f"Cotas data retrieved for guia with {len(cotas)} cotas")
         return dados_cotas
 
     async def consultar_darm(
@@ -506,7 +551,7 @@ class IPTUAPIService:
         )
 
         if not darm_response:
-            logger.warning(f"No DARM found for guia {numero_guia} cotas {cotas_str}")
+            logger.warning(f"No DARM found for guia ({len(cotas_selecionadas)} cotas)")
             return None
 
         try:
@@ -542,11 +587,15 @@ class IPTUAPIService:
                 darm=darm,
             )
 
-            logger.info(f"DARM data retrieved for guia {numero_guia} cotas {cotas_str}")
+            logger.info(
+                f"DARM data retrieved for guia ({len(cotas_selecionadas)} cotas)"
+            )
             return dados_darm
 
         except Exception as e:
-            logger.error(f"Error processing DARM data: {str(e)}")
+            # Só o tipo: a mensagem do Pydantic repete os campos do DARM (nome,
+            # endereço, inscrição)
+            logger.error(f"Error processing DARM data: {type(e).__name__}")
             return None
 
     async def download_pdf_darm(
@@ -588,7 +637,7 @@ class IPTUAPIService:
 
         if pdf_base64 and not pdf_base64.startswith("<!DOCTYPE"):
             # Retorna apenas se não for uma página de erro HTML
-            logger.info(f"PDF downloaded successfully for inscricao {inscricao_clean}")
+            logger.info("DARM PDF downloaded successfully")
             signed_url = await upload_to_gcs(
                 conteudo=base64.b64decode(pdf_base64),
                 blob_path=f"iptu/{uuid.uuid4()}.pdf",
@@ -629,9 +678,7 @@ class IPTUAPIService:
         """
         inscricao_clean = self._limpar_inscricao(inscricao=inscricao)
 
-        logger.info(
-            f"Iniciando consulta de imóvel via VPN para inscrição: {inscricao_clean}"
-        )
+        logger.info("Iniciando consulta de imóvel via VPN")
         url = f"{env.WA_IPTU_URL}/{inscricao_clean}"
         try:
             encrypted_token = encrypt_token_rsa(
@@ -640,7 +687,8 @@ class IPTUAPIService:
             auth_header = f"Basic {encrypted_token}"
             headers = {"Authorization": auth_header}
 
-            logger.info(f"Imovel info URL: {url}")
+            # A inscrição vai no caminho: o log leva só a base (DEV-514)
+            logger.info(f"Imovel info URL: {env.WA_IPTU_URL}/<inscricao>")
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
                 source=ERROR_SOURCE,
@@ -671,9 +719,7 @@ class IPTUAPIService:
                     f"Serviço de dados do imóvel temporariamente indisponível (HTTP {response.status_code})"
                 )
             elif response.status_code == 404:
-                logger.warning(
-                    f"Imóvel não encontrado para inscrição: {inscricao_clean}"
-                )
+                logger.warning("Imóvel não encontrado para a inscrição informada")
                 return None
             elif response.status_code == 400:
                 logger.error(
@@ -681,9 +727,7 @@ class IPTUAPIService:
                 )
                 error_data = response.json()
                 if error_data.get("codigo") == "033":
-                    logger.warning(
-                        f"Inscrição inválida: {inscricao_clean} - Código 033"
-                    )
+                    logger.warning("Inscrição inválida - Código 033")
                     raise InvalidInscricaoError(
                         inscricao=inscricao_clean,
                         message=f"Inscrição imobiliária {inscricao_clean} não encontrada no sistema",
@@ -702,7 +746,7 @@ class IPTUAPIService:
         except (APIUnavailableError, AuthenticationError, InvalidInscricaoError):
             raise
         except Exception as e:
-            detalhe = _sanitizar_erro(str(e))
+            detalhe = _detalhe_erro(e, inscricao_clean)
             logger.error(f"Erro ao consultar dados do imóvel: {detalhe}")
             raise APIUnavailableError(
                 f"Erro ao comunicar com serviço de dados do imóvel: {detalhe}"
@@ -726,9 +770,7 @@ class IPTUAPIService:
         """
         inscricao_clean = self._limpar_inscricao(inscricao=inscricao)
 
-        logger.info(
-            f"Iniciando consulta de dívida ativa para inscrição: {inscricao_clean}"
-        )
+        logger.info("Iniciando consulta de dívida ativa")
 
         try:
             async with InterceptedHTTPClient(
@@ -786,9 +828,7 @@ class IPTUAPIService:
                     logger.info("Consulta de dívida ativa realizada com sucesso")
                     return DadosDividaAtiva.from_api_response(response_data)
                 elif response.status_code == 404:
-                    logger.info(
-                        f"Nenhuma dívida ativa encontrada para inscrição {inscricao_clean}"
-                    )
+                    logger.info("Nenhuma dívida ativa encontrada")
                     return None
                 elif response.status_code == 401:
                     logger.error("Erro de autenticação ao consultar dívidas")
@@ -818,7 +858,7 @@ class IPTUAPIService:
         except (APIUnavailableError, AuthenticationError):
             raise
         except Exception as e:
-            detalhe = _sanitizar_erro(str(e))
+            detalhe = _detalhe_erro(e, inscricao_clean)
             logger.error(f"Erro ao consultar dívida ativa: {detalhe}")
             raise APIUnavailableError(
                 f"Erro ao comunicar com serviço de Dívida Ativa: {detalhe}"

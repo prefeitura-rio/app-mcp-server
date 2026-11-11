@@ -798,8 +798,8 @@ async def test_iptu_divida_ativa_encontrada_nao_loga_contagens(
 ):
     """
     Junto da inscrição, as contagens de CDA, execução fiscal e parcelamento dizem
-    quanto o dono do imóvel deve. A inscrição fica para diagnóstico; as
-    contagens saem.
+    quanto o dono do imóvel deve: as contagens saem. A inscrição também não vai
+    para o log (DEV-514, AGENTS.md).
     """
     linhas = []
     monkeypatch.setattr(
@@ -849,10 +849,11 @@ async def test_iptu_divida_ativa_encontrada_nao_loga_contagens(
     encontradas = [
         linha for linha in linhas if linha.startswith("Dívida ativa encontrada")
     ]
-    assert encontradas == ["Dívida ativa encontrada para inscrição 12345678"]
+    assert encontradas == ["Dívida ativa encontrada para a inscrição"]
     for linha in linhas:
         assert "CDAs" not in linha
         assert "parcelamentos" not in linha
+        assert "12345678" not in linha
 
 
 @pytest.mark.asyncio
