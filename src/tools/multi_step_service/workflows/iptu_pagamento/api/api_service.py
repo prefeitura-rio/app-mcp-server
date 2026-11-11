@@ -59,6 +59,19 @@ ERROR_SOURCE = {
     "workflow": "iptu_pagamento",
 }
 
+# Campos dos parâmetros enviados às APIs do IPTU e da Dívida Ativa que
+# identificam o contribuinte ou o imóvel (inscrição imobiliária, número da guia,
+# cotas e exercício). No report ao error interceptor externo viram só tamanho e
+# tipo (`resumir_texto_livre`), nunca o valor; a requisição de saída não muda
+# (DEV-510).
+CAMPOS_DO_CONTRIBUINTE = (
+    "inscricao",
+    "exercicio",
+    "guia",
+    "cotas",
+    "inscricaoImobiliaria",
+)
+
 # Validade do PDF do DARM: vale para a signed URL do GCS e para o link curto,
 # que não faz sentido sobreviver ao destino.
 PDF_DARM_TTL = dt.timedelta(days=7)
@@ -220,6 +233,7 @@ class IPTUAPIService:
                     proxy=self.proxy,
                     timeout=30.0,
                     params={"token": self.api_token},
+                    free_text_fields=CAMPOS_DO_CONTRIBUINTE,
                 ) as client:
                     # Só reporta ao interceptor na última tentativa, para não gerar
                     # um alerta por retry de um erro que ainda pode se resolver
@@ -641,10 +655,13 @@ class IPTUAPIService:
             headers = {"Authorization": auth_header}
 
             logger.info(f"Imovel info URL: {url}")
+            # A inscrição vai no caminho da URL: o report ao interceptor leva só a
+            # base, sem ela (DEV-510)
             async with InterceptedHTTPClient(
                 user_id=self.user_id,
                 source=ERROR_SOURCE,
                 timeout=30.0,
+                report_endpoint=f"{env.WA_IPTU_URL}/<inscricao>",
             ) as client:
                 # Erros de status code são automaticamente interceptados
                 response = await client.get(url, headers=headers)
@@ -736,6 +753,7 @@ class IPTUAPIService:
                 source=ERROR_SOURCE,
                 timeout=30.0,
                 proxy=self.proxy,
+                free_text_fields=CAMPOS_DO_CONTRIBUINTE,
             ) as client:
                 # Autenticação - erros são automaticamente interceptados
                 auth_response = await client.post(
