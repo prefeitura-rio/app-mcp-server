@@ -52,8 +52,22 @@ jsonpath "$.reason" == "redis_unavailable"
 # roda com credenciais falsas e sem Redis, então esses checks reprovam de
 # propósito. Se este assert quebrar com `ok`, significa que os checks
 # pararam de detectar dependência fora do ar.
+#
+# A rota descreve versão e estado das dependências, então exige token
+# (`RequireAuthenticatedByDefault` em src/middleware/http_guard.py; CHATR-311,
+# R12): sem `Authorization` é 401 antes de qualquer check, com o mesmo corpo
+# das demais rotas próprias.
 
 GET {{base_url}}/health/detail
+HTTP 401
+[Asserts]
+header "WWW-Authenticate" startsWith "Bearer"
+jsonpath "$.error" == "invalid_token"
+jsonpath "$.status" not exists
+
+
+GET {{base_url}}/health/detail
+Authorization: Bearer {{token}}
 HTTP 200
 [Asserts]
 jsonpath "$.status" == "degraded"
@@ -67,8 +81,8 @@ jsonpath "$.checks[?(@.name=='data_files')].status" == "up"
 jsonpath "$.checks[?(@.name=='gcp_credentials')].status" == "up"
 jsonpath "$.checks[?(@.name=='tool_registry')].status" == "up"
 jsonpath "$.checks[?(@.name=='redis')].critical" == true
-# Contrato de `registry.sanitize_error`: a rota é pública e não pode devolver
-# URL, host ou credencial. Mensagens de cliente de rede embutem a URL de
+# Contrato de `registry.sanitize_error`: mesmo autenticada, a rota não pode
+# devolver URL, host ou credencial. Mensagens de cliente de rede embutem a URL de
 # conexão — no caso do Redis, com a senha dentro.
 body not matches "[a-z][a-z0-9+.-]*://"
 
