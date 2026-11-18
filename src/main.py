@@ -31,7 +31,10 @@ if __name__ == "__main__":
     else:
         from starlette.middleware import Middleware as StarletteMiddleware
 
-        from src.middleware.http_guard import RequireAuthenticatedByDefault
+        from src.middleware.http_guard import (
+            DELEGATED_PATH,
+            RequireAuthenticatedByDefault,
+        )
 
         # `create_app()` (importado acima via `src.app`) já chamou
         # `setup_tracing()`; aqui apenas verificamos se ficou habilitado
@@ -52,7 +55,7 @@ if __name__ == "__main__":
             transport="streamable-http",
             host="0.0.0.0",
             port=80,
-            path="/mcp",
+            path=DELEGATED_PATH,
             middleware=http_middleware,
             stateless_http=env.MCP_STATELESS_HTTP,
         )
