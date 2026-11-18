@@ -279,4 +279,104 @@ def instalar_redacao() -> None:
     _redacao_instalada = True
 
 
+# DEV-639: o FastMCP loga pelo `logging` da stdlib, não pelo loguru, então a
+# barreira acima não o alcança. Quando uma chamada a tool não casa com a
+# assinatura, `fastmcp/server/server.py` (`call_tool`) faz
+# `logger.warning("Invalid arguments for tool %r: %s", name, detail)` com
+# `detail = cause.errors(include_url=False)`, e cada erro do pydantic carrega em
+# `input` o valor que o cliente mandou -- inscrição imobiliária, CPF, endereço,
+# em campo de qualquer nome, que a redação por padrão não reconhece. A linha sai
+# em WARNING, sempre ativa.
+_LOGGER_FASTMCP_SERVER = "fastmcp.server.server"
+_PREFIXO_ARGUMENTOS_INVALIDOS = "Invalid arguments for tool"
+_DETALHE_OMITIDO = "[detalhe omitido: {tipo}]"
+
+
+def _resumir_erros_de_validacao(detalhe: Any) -> Any:
+    """
+    Só o que localiza o erro: o tipo e o caminho do campo (`loc`), por erro.
+
+    `input` e `ctx` levam o valor recebido e saem. `msg` também sai: a de um
+    validador próprio (`value_error`) costuma repetir o valor. Detalhe que não é
+    a lista de `errors()` do pydantic (o `str(e)` do ramo alternativo do
+    FastMCP, que imprime `input_value=`) vira marcador com o tipo, sem o texto.
+    """
+    if not isinstance(detalhe, (list, tuple)):
+        return _DETALHE_OMITIDO.format(tipo=type(detalhe).__name__)
+    resumo = []
+    for erro in detalhe:
+        if not isinstance(erro, dict):
+            resumo.append({"type": _DETALHE_OMITIDO.format(tipo=type(erro).__name__)})
+            continue
+        loc = erro.get("loc", ())
+        if not isinstance(loc, (list, tuple)):
+            loc = (loc,)
+        resumo.append(
+            {
+                "type": str(erro.get("type", "?")),
+                "loc": tuple(p if isinstance(p, int) else str(p) for p in loc),
+            }
+        )
+    return resumo
+
+
+class FiltroArgumentosInvalidosFastMCP(logging.Filter):
+    """
+    Reescreve a linha `Invalid arguments for tool` do FastMCP sem os valores.
+
+    Mantém a linha -- ela diz qual tool recebeu chamada mal formada e em qual
+    campo -- e troca os argumentos pelo resumo de `_resumir_erros_de_validacao`.
+    O texto final ainda passa por `redigir_texto`, porque o nome de um campo
+    também vem do cliente.
+
+    Filtro de logger, e não de handler: roda no `Logger.handle` do logger de
+    origem, antes de qualquer handler, e sobrevive ao `configure_logging` do
+    FastMCP, que troca os handlers do logger `fastmcp`.
+
+    Nunca levanta e falha fechado, como `_redigir_record`: se o resumo quebrar,
+    sai um marcador com o tipo do erro, nunca o detalhe original.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not str(record.msg).startswith(_PREFIXO_ARGUMENTOS_INVALIDOS):
+            return True
+        try:
+            args = record.args if isinstance(record.args, tuple) else ()
+            if len(args) == 2:
+                nome, detalhe = args
+                texto = (
+                    f"{_PREFIXO_ARGUMENTOS_INVALIDOS} {str(nome)!r}: "
+                    f"{_resumir_erros_de_validacao(detalhe)}"
+                )
+            else:
+                texto = (
+                    f"{_PREFIXO_ARGUMENTOS_INVALIDOS}: "
+                    f"{_DETALHE_OMITIDO.format(tipo=type(record.args).__name__)}"
+                )
+            texto = redigir_texto(texto) or ""
+        except Exception as erro:
+            texto = (
+                f"{_PREFIXO_ARGUMENTOS_INVALIDOS}: "
+                f"{_MARCADOR_FALHA.format(tipo=type(erro).__name__)}"
+            )
+        record.msg = texto
+        record.args = None
+        return True
+
+
+def instalar_filtro_fastmcp() -> None:
+    """
+    Instala o filtro no logger de origem. Idempotente, inclusive entre objetos
+    de módulo: o logger da stdlib é global e sobrevive a um reimport deste
+    arquivo, então o filtro de uma execução anterior é trocado pelo desta, em vez
+    de acumular (ver `instalar_redacao`).
+    """
+    alvo = logging.getLogger(_LOGGER_FASTMCP_SERVER)
+    for existente in list(alvo.filters):
+        if type(existente).__name__ == FiltroArgumentosInvalidosFastMCP.__name__:
+            alvo.removeFilter(existente)
+    alvo.addFilter(FiltroArgumentosInvalidosFastMCP())
+
+
 instalar_redacao()
+instalar_filtro_fastmcp()
