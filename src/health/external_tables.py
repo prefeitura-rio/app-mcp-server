@@ -16,7 +16,8 @@ Duas restrições forçam isso:
 
 Por isso a query roda num laço de background, e o check exposto em
 `/health/detail` apenas lê o veredito já calculado — sem I/O, sem risco de
-pendurar a resposta e sem permitir que um endpoint público martele o BigQuery.
+pendurar a resposta e sem permitir que chamadas ao endpoint (que exige token
+desde o CHATR-311) martelem o BigQuery.
 """
 
 from __future__ import annotations
@@ -125,8 +126,8 @@ async def probe_external_tables() -> Dict[str, Optional[str]]:
         except Exception as exc:  # noqa: BLE001 - o probe nunca derruba o laço
             elapsed_ms = int((time.monotonic() - started) * 1000)
             # A exceção completa (que carrega o ID da planilha) fica no log;
-            # só o nome da classe entra no veredito, que chega ao
-            # `/health/detail` público.
+            # só o nome da classe entra no veredito, que chega aos clientes
+            # do `/health/detail` (rota que exige token).
             logger.error(
                 f"Tabela externa '{table}' indisponível após {elapsed_ms}ms: {exc!r}"
             )

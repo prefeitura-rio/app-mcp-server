@@ -47,10 +47,12 @@ class _SpanFalso:
 class _TracerFalso:
     def __init__(self):
         self.spans = {}
+        self.opcoes = {}
 
-    def start_as_current_span(self, name):
+    def start_as_current_span(self, name, **opcoes):
         span = _SpanFalso()
         self.spans.setdefault(name, []).append(span)
+        self.opcoes.setdefault(name, []).append(opcoes)
         return span
 
 
@@ -353,8 +355,16 @@ async def test_middleware_marca_erro_e_reergue(monkeypatch):
     span = tracer.spans["mcp.tool_call"][0]
     assert span.attrs["mcp.tool.success"] is False
     assert span.attrs["mcp.tool.user_id"] == "unknown"
-    assert span.exceptions == [erro]
+    # Só o tipo do erro: a mensagem pode trazer os argumentos recebidos
+    # (DEV-640), então nem `record_exception` nem descrição no status.
+    assert span.attrs["error.type"] == "RuntimeError"
+    assert span.exceptions == []
     assert span.status.status_code is tracing.StatusCode.ERROR
+    assert span.status.description is None
+    assert tracer.opcoes["mcp.tool_call"][0] == {
+        "record_exception": False,
+        "set_status_on_exception": False,
+    }
 
 
 def test_get_tracer_usa_o_nome_do_servico():

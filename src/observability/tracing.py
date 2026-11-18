@@ -18,15 +18,19 @@ import contextvars
 import time
 from concurrent.futures import Executor, Future
 from contextlib import contextmanager, nullcontext
-from typing import Any, Callable, Generator, TypeVar
+from typing import Any, Callable, Generator, Sequence, TypeVar
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from mcp.types import CallToolRequestParams
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 from opentelemetry.trace import Status, StatusCode
 
 import src.config.env as env
@@ -42,6 +46,75 @@ _T = TypeVar("_T")
 # para o resto da aplicação (ex.: `main.py`), se o tracing está ativo.
 _tracing_enabled = False
 _setup_attempted = False
+
+
+# Atributos do evento `exception` (convenção semântica do OTel) que podem ir ao
+# backend: o tipo e se a exceção escapou do span. `exception.message` e
+# `exception.stacktrace` ficam de fora — a última linha do stacktrace repete a
+# mensagem.
+_EXCEPTION_EVENT_ALLOWED_ATTRIBUTES = frozenset({"exception.type", "exception.escaped"})
+
+
+class ExceptionTextRedactingSpanExporter(SpanExporter):
+    """Exportador que tira o texto das exceções de todo span antes de exportar.
+
+    O `mark_span_error` cobre os spans que nós abrimos, mas não os que as
+    bibliotecas abrem: o `server_span` do FastMCP (`tools/call <tool>`, e o
+    `delegate_span`) chama `span.record_exception(e)` e
+    `Status(ERROR, str(e))`. Para argumento inválido de tool, `str(e)` é o erro
+    do pydantic com `input_value=` e os argumentos recebidos (inscrição, CPF,
+    guia...), e isso ia parar no SigNoz (DEV-640).
+
+    A redação fica aqui, na saída do processo, para valer para qualquer span
+    sem depender de como cada biblioteca registra o erro: o evento `exception`
+    fica só com `exception.type`/`exception.escaped` e o status de erro perde a
+    descrição. O `error.type` que o FastMCP grava nos atributos do span é
+    preservado. Spans sem texto de erro passam sem cópia.
+    """
+
+    def __init__(self, delegate: SpanExporter) -> None:
+        self._delegate = delegate
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self._delegate.export([_redact_exception_text(s) for s in spans])
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._delegate.force_flush(timeout_millis)
+
+
+def _redact_exception_event(event: Event) -> Event:
+    if event.name != "exception":
+        return event
+    attributes = {
+        key: value
+        for key, value in (event.attributes or {}).items()
+        if key in _EXCEPTION_EVENT_ALLOWED_ATTRIBUTES
+    }
+    return Event(event.name, attributes, timestamp=event.timestamp)
+
+
+def _redact_exception_text(span: ReadableSpan) -> ReadableSpan:
+    has_exception_event = any(event.name == "exception" for event in span.events)
+    if not has_exception_event and span.status.description is None:
+        return span
+
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=span.attributes,
+        events=[_redact_exception_event(event) for event in span.events],
+        links=span.links,
+        kind=span.kind,
+        status=Status(span.status.status_code),
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
 
 
 def is_tracing_enabled() -> bool:
@@ -124,8 +197,10 @@ def setup_tracing() -> bool:
         traces_endpoint = endpoint.rstrip("/") + "/v1/traces"
         otlp_exporter = OTLPSpanExporter(endpoint=traces_endpoint, headers=headers)
 
+        # Nenhum span sai do processo com texto de exceção: ver
+        # `ExceptionTextRedactingSpanExporter`.
         batch_processor = BatchSpanProcessor(
-            otlp_exporter,
+            ExceptionTextRedactingSpanExporter(otlp_exporter),
             max_queue_size=8192,
             schedule_delay_millis=1000,
             export_timeout_millis=10000,
@@ -247,8 +322,12 @@ class ToolCallTracingMiddleware(Middleware):
     - Métricas de baixa cardinalidade (`src.observability.metrics`):
       contagem, duração e trabalho-em-andamento por `mcp.tool.name` +
       `status`, e latência/falha de dependência quando aplicável — nunca o
-      `user_id` ou texto de exceção, que ficam só no span (consumido em
-      ambiente de trace, não em séries temporais/dashboards agregados).
+      `user_id`, que fica só no span (consumido em ambiente de trace, não em
+      séries temporais/dashboards agregados).
+
+    Erro de tool vai ao span só como `error.type` (`mark_span_error`): a
+    mensagem da exceção não, porque a `ValidationError` de argumento inválido
+    traz os argumentos recebidos no texto (DEV-640).
 
     Se nem tracing nem métricas estiverem habilitados, este middleware é um
     passthrough sem overhead relevante.
@@ -265,8 +344,14 @@ class ToolCallTracingMiddleware(Middleware):
         tool_name = context.message.name
         started = time.monotonic()
 
+        # Sem `record_exception`/`set_status_on_exception`: senão o `__exit__`
+        # do span gravaria a mensagem da exceção por conta própria.
         span_context = (
-            get_tracer().start_as_current_span("mcp.tool_call")
+            get_tracer().start_as_current_span(
+                "mcp.tool_call",
+                record_exception=False,
+                set_status_on_exception=False,
+            )
             if _tracing_enabled
             else nullcontext()
         )
@@ -289,8 +374,7 @@ class ToolCallTracingMiddleware(Middleware):
             except Exception as e:
                 if span is not None:
                     span.set_attribute("mcp.tool.success", False)
-                    span.record_exception(e)
-                    span.set_status(Status(StatusCode.ERROR, str(e)))
+                    mark_span_error(span, e)
                 metrics.record_tool_call(
                     tool_name, success=False, duration_s=time.monotonic() - started
                 )
