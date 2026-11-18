@@ -24,37 +24,11 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Update tool version
-        run: |
-          # Get current commit hash
-          COMMIT_HASH=$(git rev-parse --short HEAD)
-          echo "Current commit: $COMMIT_HASH"
-          
-          # Create version data
-          cat > src/utils/tool_version.json << EOF
-          {
-            "version": "v$COMMIT_HASH",
-            "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "description": "Tool version for cache invalidation"
-          }
-          EOF
-          
-          echo "✅ Tool version updated to: v$COMMIT_HASH"
-
-      - name: Check if version file changed
-        id: check_changes
-        run: |
-          if git diff --quiet src/utils/tool_version.json; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
-          fi
-
       - name: Commit and push version update
-        if: steps.check_changes.outputs.changed == 'true'
         run: |
+          # Grava a versão sobre a ponta atual da main e refaz o push com fetch
+          # novo quando a main anda antes dele; falha se nenhuma tentativa
+          # entrar (DEV-641).
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add src/utils/tool_version.json
-          git commit -m "chore: update tool version to $(git rev-parse --short HEAD) 🤖"
-          git push
+          bash scripts/ci/commit_tool_version.sh
