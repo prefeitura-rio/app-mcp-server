@@ -125,7 +125,11 @@ class SGRCAPIService:
             return data
 
         except Exception as exc:  # noqa
-            raise Exception(f"Failed to get user info: {exc}") from exc
+            # Só o tipo, e `from None` para a original não ir no traceback ao
+            # interceptor: a mensagem da falha da API de cadastro pode trazer o
+            # CPF consultado e o nome, e nome sem rótulo nenhuma redação pega
+            # (DEV-555).
+            raise Exception(f"Failed to get user info: {type(exc).__name__}") from None
 
 
 class NearestLocation(BaseModel):
