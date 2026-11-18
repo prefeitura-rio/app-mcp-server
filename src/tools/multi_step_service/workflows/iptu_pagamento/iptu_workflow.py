@@ -149,18 +149,18 @@ class IPTUWorkflow(BaseWorkflow):
         if "inscricao_imobiliaria" in state.payload:
             validated_data = InscricaoImobiliariaPayload.model_validate(state.payload)
             inscricao_clean = validated_data.inscricao_imobiliaria
-            # ANTES de salvar a inscrição, valida consultando dados do imóvel
-            logger.debug(
-                f"🔍 Validando inscrição e buscando dados do imóvel: {inscricao_clean}"
-            )
+            # ANTES de salvar a inscrição, valida consultando dados do imóvel.
+            # Os logs deste passo não levam a inscrição nem os dados do imóvel
+            # (endereço, proprietário): a redação global não os reconhece (DEV-514)
+            logger.debug("🔍 Validando inscrição e buscando dados do imóvel")
             try:
                 dados_imovel = await self.api_service.get_imovel_info(
                     inscricao=inscricao_clean
                 )
-                logger.debug(dados_imovel)
+                logger.debug(f"Dados do imóvel encontrados: {bool(dados_imovel)}")
                 # Validação passou - salva a inscrição
                 state.data["inscricao_imobiliaria"] = inscricao_clean
-                logger.info(f"✅ Inscrição salva: {inscricao_clean}")
+                logger.info("✅ Inscrição salva")
 
                 if dados_imovel:
                     state.data["endereco"] = dados_imovel["endereco"]
@@ -173,7 +173,7 @@ class IPTUWorkflow(BaseWorkflow):
 
             except InvalidInscricaoError:
                 # Inscrição inválida (código 033) - NÃO salva no state
-                logger.warning(f"❌ Inscrição inválida rejeitada: {inscricao_clean}")
+                logger.warning("❌ Inscrição inválida rejeitada")
                 response = AgentResponse(
                     description=IPTUMessageTemplates.solicitar_inscricao(),
                     payload_schema=InscricaoImobiliariaPayload.model_json_schema(),
@@ -245,14 +245,14 @@ class IPTUWorkflow(BaseWorkflow):
         exercicio = state.data.get("ano_exercicio", "")
         divida_ativa_info = None
         try:
-            logger.info(f"Consultando dívida ativa para inscrição {inscricao}")
+            logger.info("Consultando dívida ativa da inscrição")
             divida_ativa_info = await self.api_service.get_divida_ativa_info(inscricao)
 
             # Se encontrou dívida ativa, informa ao usuário
             if divida_ativa_info and divida_ativa_info.tem_divida_ativa:
                 # Sem as contagens: junto da inscrição, elas dizem quanto o dono
                 # do imóvel deve à Prefeitura.
-                logger.info(f"Dívida ativa encontrada para inscrição {inscricao}")
+                logger.info("Dívida ativa encontrada para a inscrição")
                 # Salva dados da dívida ativa
                 state.data["divida_ativa_data"] = divida_ativa_info.model_dump()
 
@@ -359,15 +359,11 @@ class IPTUWorkflow(BaseWorkflow):
                     tipo_guia=guia.tipo,
                 )
             except (APIUnavailableError, AuthenticationError) as e:
-                logger.warning(
-                    f"Falha ao validar cotas da guia {guia.numero_guia}: {str(e)}"
-                )
+                logger.warning(f"Falha ao validar cotas da guia: {str(e)}")
                 guias_filtradas.append(guia)
                 continue
             except DataNotFoundError as e:
-                logger.info(
-                    f"Guia {guia.numero_guia} removida por não ter cotas pagáveis: {str(e)}"
-                )
+                logger.info(f"Guia removida por não ter cotas pagáveis: {str(e)}")
                 continue
 
             if dados_cotas and any(not cota.esta_paga for cota in dados_cotas.cotas):
