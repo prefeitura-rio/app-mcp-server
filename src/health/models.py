@@ -39,7 +39,8 @@ class CheckResult:
     """Resultado de um check, já pronto para serialização.
 
     `error` sempre chega aqui sanitizado (ver `registry.sanitize_error`): a
-    resposta é pública, então nunca pode carregar URL, host ou credencial.
+    resposta vai para clientes do serviço, então nunca pode carregar URL, host
+    ou credencial.
     """
 
     name: str

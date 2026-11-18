@@ -159,7 +159,8 @@ async def check_external_tables() -> CheckStatus:
     failed = [table for table, error in results.items() if error is not None]
     if failed:
         # Só o nome curto da tabela: o texto do BigQuery embute o ID da
-        # planilha, e `/health/detail` é público.
+        # planilha, que não é para os clientes do `/health/detail` (rota que
+        # exige token desde o CHATR-311).
         names = ", ".join(table.rsplit(".", 1)[-1] for table in sorted(failed))
         raise HealthCheckError(f"tabela(s) externa(s) indisponível(is): {names}")
     return CheckStatus.UP

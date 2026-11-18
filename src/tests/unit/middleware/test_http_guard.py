@@ -163,18 +163,20 @@ def test_guard_libera_liveness_e_readiness_sem_token(guard, path):
     assert chamadas == [path]
 
 
-@pytest.mark.parametrize("path", ["/mcp", "/mcp/sub"])
-def test_guard_delega_o_mcp_ao_fastmcp(guard, path):
+def test_guard_delega_o_endpoint_mcp_ao_fastmcp(guard):
     client, chamadas = _app_com_guard(guard)
 
-    assert client.post(path).status_code == 200
-    assert chamadas == [path]
+    assert client.post(guard.DELEGATED_PATH).status_code == 200
+    assert chamadas == ["/mcp"]
 
 
-@pytest.mark.parametrize("path", ["/health/detail", "/rota_nova", "/mcp-debug"])
+@pytest.mark.parametrize(
+    "path", ["/health/detail", "/rota_nova", "/mcp-debug", "/mcp/sub", "/mcp/"]
+)
 def test_guard_nega_por_padrao_sem_token(guard, path):
     """`/health/detail` deixa de ser público (R12); rota sem decorator não nasce
-    pública; `/mcp-debug` não herda a isenção do `/mcp`."""
+    pública; `/mcp-debug` e uma rota sob `/mcp/` não herdam a isenção do
+    endpoint MCP, que o FastMCP só protege no caminho exato (DEV-608)."""
     client, chamadas = _app_com_guard(guard)
 
     response = client.post(path)
@@ -205,7 +207,7 @@ def test_guard_nao_aceita_usuario_que_nao_e_do_verifier(guard):
     assert chamadas == []
 
 
-@pytest.mark.parametrize("path", ["/health/detail", "/rota_nova"])
+@pytest.mark.parametrize("path", ["/health/detail", "/rota_nova", "/mcp/sub"])
 def test_guard_libera_usuario_autenticado(guard, path):
     client, chamadas = _app_com_guard(guard, user=_usuario_do_verifier())
 
