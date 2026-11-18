@@ -224,6 +224,9 @@ jobs:
 
       - name: Send Discord notification
         if: always()
+        # O aviso é informativo: falha no envio não reprova a release
+        # (DEV-629). O script já sai com 0 quando o envio falha.
+        continue-on-error: true
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -232,10 +235,10 @@ jobs:
             exit 0
           fi
 
-          COMMIT_MSG=$(git log -1 --pretty=format:'%s' "${{ github.sha }}")
-          COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an' "${{ github.sha }}")
-          COMMIT_URL="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
-          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
+          COMMIT_MSG=$(git log -1 --pretty=format:'%s' "$GITHUB_SHA")
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an' "$GITHUB_SHA")
+          COMMIT_URL="https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/$VERSION"
           PHASE=$(kubectl get rollout "$ROLLOUT_NAME" -n "$K8S_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
 
           if [ "$PHASE" = "Healthy" ]; then
@@ -260,53 +263,15 @@ jobs:
             DESCRIPTION="Rollout status could not be determined. Manual investigation required."
           fi
 
-          DISCORD_PAYLOAD=$(cat <<EOF
-          {
-            "embeds": [{
-              "title": "${STATUS_EMOJI} Production Release ${STATUS_TEXT}",
-              "description": "${DESCRIPTION}",
-              "color": ${COLOR},
-              "fields": [
-                {
-                  "name": "🏷️ Version",
-                  "value": "[${VERSION}](${RELEASE_URL})",
-                  "inline": true
-                },
-                {
-                  "name": "📊 Status",
-                  "value": "\`${PHASE}\`",
-                  "inline": true
-                },
-                {
-                  "name": "📝 Commit",
-                  "value": "[${COMMIT_MSG:0:50}](${COMMIT_URL})",
-                  "inline": false
-                },
-                {
-                  "name": "👤 Author",
-                  "value": "${COMMIT_AUTHOR}",
-                  "inline": true
-                },
-                {
-                  "name": "🔖 Hash",
-                  "value": "\`${COMMIT_HASH}\`",
-                  "inline": true
-                },
-                {
-                  "name": "🐳 Image",
-                  "value": "\`${FULL_IMAGE:-not-resolved}\`",
-                  "inline": false
-                }
-              ],
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
-              "footer": {
-                "text": "GitHub Actions"
-              }
-            }]
-          }
-          EOF
-          )
-
-          curl -fsS -H "Content-Type: application/json" \
-            -d "$DISCORD_PAYLOAD" \
-            "$DISCORD_WEBHOOK"
+          # O texto do commit vai como argumento: o script monta o JSON com
+          # jq e escapa aspas e barras (DEV-629).
+          bash scripts/ci/discord_notify.sh \
+            --title "${STATUS_EMOJI} Production Release ${STATUS_TEXT}" \
+            --description "$DESCRIPTION" \
+            --color "$COLOR" \
+            --link-field "🏷️ Version" "$VERSION" "$RELEASE_URL" true \
+            --field "📊 Status" "\`${PHASE}\`" true \
+            --link-field "📝 Commit" "$COMMIT_MSG" "$COMMIT_URL" false \
+            --field "👤 Author" "$COMMIT_AUTHOR" true \
+            --field "🔖 Hash" "\`${COMMIT_HASH}\`" true \
+            --field "🐳 Image" "\`${FULL_IMAGE:-not-resolved}\`" false
