@@ -190,6 +190,50 @@ class BaseWorkflow(ABC):
             raise
 
 
+_CAUSA_DIRETA = (
+    "\nThe above exception was the direct cause of the following exception:\n\n"
+)
+_CONTEXTO = "\nDuring handling of the above exception, another exception occurred:\n\n"
+
+
+def _traceback_sem_mensagem(erro: BaseException) -> str:
+    """
+    Traceback da exceção com os frames e o tipo de cada exceção da cadeia, sem
+    `str(exceção)` (DEV-579).
+
+    A última linha de um traceback do Python é `str(exceção)`, e exceção de
+    domínio embute o valor que a provocou: `InvalidInscricaoError` leva a
+    inscrição imobiliária na mensagem. Inscrição, guia e CDA não têm formato nem
+    rótulo que a barreira de `src/utils/log.py` reconheça, então a redação não os
+    alcança; a mensagem não pode entrar no log. Os frames (arquivo, linha, função
+    e a linha de código-fonte) e o tipo bastam para localizar a falha, e não
+    carregam valor de runtime.
+
+    Segue `__cause__` e `__context__` como o traceback do Python, porque a
+    exceção de origem costuma ser justamente a que ecoa a resposta da API.
+    """
+    partes: List[str] = []
+    vistas = set()
+    atual: BaseException | None = erro
+    while atual is not None and id(atual) not in vistas:
+        vistas.add(id(atual))
+        tipo = type(atual)
+        bloco = [
+            "Traceback (most recent call last):\n",
+            *traceback.format_tb(atual.__traceback__),
+            f"{tipo.__module__}.{tipo.__qualname__}\n",
+        ]
+        if atual.__cause__ is not None:
+            proxima, ligacao = atual.__cause__, _CAUSA_DIRETA
+        elif atual.__context__ is not None and not atual.__suppress_context__:
+            proxima, ligacao = atual.__context__, _CONTEXTO
+        else:
+            proxima, ligacao = None, ""
+        partes[:0] = [ligacao, *bloco] if proxima is not None else bloco
+        atual = proxima
+    return "".join(partes)
+
+
 def handle_errors(node_func: Callable) -> Callable:
     """
     Decorator para envolver nós assíncronos do grafo com tratamento de exceções.
@@ -209,7 +253,7 @@ def handle_errors(node_func: Callable) -> Callable:
         try:
             return await node_func(instance, state)
         except Exception as e:
-            traceback_str = traceback.format_exc()
+            traceback_str = _traceback_sem_mensagem(e)
             logger.error(
                 f"\nError in service: {state.service_name}\nuser_id:{state.user_id}\nnode:{node_func.__name__}\n{traceback_str}",
             )
