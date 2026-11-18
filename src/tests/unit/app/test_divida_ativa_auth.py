@@ -301,6 +301,37 @@ def test_guard_health_detail_exige_token(client_com_guard):
     assert com_token.status_code == 200
 
 
+# Barra codificada: no staging, `GET /mcp/health%2fdetail` sem token chegou à
+# rota e devolveu o diagnóstico enquanto o caminho literal era barrado no edge
+# (DEV-621). O guard decide por `scope["path"]`, que o servidor ASGI entrega já
+# decodificado: a variante codificada é a mesma rota e exige o mesmo token.
+HEALTH_DETAIL_CODIFICADO = ["/health%2fdetail", "/health%2Fdetail"]
+
+
+@pytest.mark.parametrize("path", HEALTH_DETAIL_CODIFICADO)
+def test_guard_health_detail_com_barra_codificada_exige_token(client_com_guard, path):
+    sem_token = client_com_guard.get(path)
+
+    assert sem_token.status_code == 401
+    assert sem_token.headers["WWW-Authenticate"] == "Bearer"
+    assert sem_token.json()["error"] == "invalid_token"
+    assert "checks" not in sem_token.json()
+
+
+@pytest.mark.parametrize("path", HEALTH_DETAIL_CODIFICADO)
+def test_guard_health_detail_com_barra_codificada_e_a_mesma_rota(
+    client_com_guard, path
+):
+    """Com token, a variante codificada responde o diagnóstico: prova que o 401
+    acima vem do guard sobre `/health/detail`, não de uma rota inexistente."""
+    com_token = client_com_guard.get(
+        path, headers={"Authorization": f"Bearer {STATIC_TOKEN}"}
+    )
+
+    assert com_token.status_code == 200
+    assert "checks" in com_token.json()
+
+
 @pytest.mark.parametrize("path", ["/health", "/health/ready"])
 def test_guard_mantem_liveness_e_readiness_publicos(client_com_guard, path):
     # `/health/ready` pode dar 503 sem lifespan; o que importa é não ser 401.
