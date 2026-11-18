@@ -93,13 +93,17 @@ jobs:
           echo "Resolved image: $FULL_IMAGE"
 
       - name: Commit resolved image to git
+        env:
+          MANIFEST: k8s/prod/resources.yaml
+          IMAGE_COMMENT: Updated by release workflow
         run: |
+          # Edita o manifesto sobre a ponta atual da main e refaz o push com
+          # fetch novo quando perde a corrida para outro commit na main; falha
+          # se não entrar, em vez de engolir o erro (DEV-416, como no DEV-412).
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          sed -i "s|image: ghcr.io/prefeitura-rio/app-mcp-server:.*|image: ${FULL_IMAGE}  # Updated by release workflow|" k8s/prod/resources.yaml
-          git add k8s/prod/resources.yaml
-          git commit -m "chore: update prod image to ${VERSION}" || echo "No changes to commit"
-          git push origin HEAD:main || echo "Nothing to push"
+          COMMIT_MESSAGE="chore: update prod image to ${VERSION}" \
+            bash scripts/ci/commit_staging_image.sh
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
