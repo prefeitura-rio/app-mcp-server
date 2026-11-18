@@ -178,7 +178,32 @@ def resumir_resposta_pgm(dados: Any) -> Dict[str, Any]:
     return resumo
 
 
-@interceptor(source={"source": "mcp", "tool": "divida_ativa"})
+def _input_body_do_pgm_api(args: tuple, kwargs: dict) -> Dict[str, Any]:
+    """
+    `input_body` do `pgm_api` no error interceptor (DEV-488).
+
+    `data` é a requisição à PGM com CPF, inscrição, CDA, execução fiscal ou
+    guia do contribuinte, e a falha de `internal_request` (JSON inválido do
+    proxy, por exemplo) sobe por aqui. Vai o mesmo resumo do log local
+    (`resumir_parametros_pgm`): campos e contagens, nunca os valores.
+    `endpoint` e `consumidor` são constantes do código e ficam.
+    """
+    nomes = ("endpoint", "consumidor", "data")
+    argumentos = dict(zip(nomes, args))
+    argumentos.update({nome: kwargs[nome] for nome in nomes if nome in kwargs})
+    endpoint = argumentos.get("endpoint", "")
+    consumidor = argumentos.get("consumidor", "")
+    return {
+        "endpoint": endpoint if isinstance(endpoint, str) else None,
+        "consumidor": consumidor if isinstance(consumidor, str) else None,
+        "data": resumir_parametros_pgm(argumentos.get("data") or {}),
+    }
+
+
+@interceptor(
+    source={"source": "mcp", "tool": "divida_ativa"},
+    extract_input_body=_input_body_do_pgm_api,
+)
 async def pgm_api(
     endpoint: str = "", consumidor: str = "", data: dict | None = None
 ) -> dict:
