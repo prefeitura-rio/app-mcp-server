@@ -33,7 +33,7 @@ Fallback: compara contra VALID_TOKENS (comportamento de hoje, inalterado)
         ✗ não está ──────► 401
 ```
 
-Importante: o `FastMCP(auth=...)` em `src/app.py` só exige o token no endpoint `/mcp`. As `custom_route`s Starlette **não são cobertas automaticamente**: as rotas de Dívida Ativa (`/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`, `/v2/emitir_guia`, `/v2/emitir_guia_regularizacao`) são protegidas explicitamente com `require_authenticated`, e as de saúde (`/health`, `/health/ready`, `/health/detail`) são públicas — ver seção [Protegendo outros endpoints](#-protegendo-outros-endpoints-custom_route) abaixo.
+Importante: o `FastMCP(auth=...)` em `src/app.py` só exige o token no endpoint `/mcp`. As `custom_route`s Starlette **não são cobertas automaticamente**: as rotas de Dívida Ativa (`/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`, `/v2/emitir_guia`, `/v2/emitir_guia_regularizacao`) são protegidas explicitamente com `require_authenticated`, e, além disso, um middleware nega por padrão qualquer outra rota sem token, exceto `/health` e `/health/ready` — ver seção [Protegendo outros endpoints](#-protegendo-outros-endpoints-custom_route) abaixo.
 
 ## 🔑 Variáveis de ambiente
 
@@ -114,7 +114,7 @@ Este servidor atua como **Resource Server** (só valida tokens; não emite nem g
 
 O servidor expõe algumas rotas HTTP "puras" fora do protocolo MCP, via `@mcp.custom_route(...)` em `src/app.py`. **Essas rotas não são cobertas automaticamente** pelo `auth=` do `FastMCP`, que só exige o token no endpoint `/mcp`.
 
-As rotas de Dívida Ativa (`/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`, `/v2/emitir_guia`, `/v2/emitir_guia_regularizacao`) exigem `Authorization: Bearer` válido desde o achado `vuln-0002` do pentest (INFRAVPIA-320). Sem token, ou com token inválido ou expirado, respondem **401** com `WWW-Authenticate: Bearer`, antes de ler o corpo e sem chamar a PGM. As rotas de saúde continuam públicas (o kubelet não manda token).
+As rotas de Dívida Ativa (`/consulta_debitos`, `/emitir_guia`, `/emitir_guia_regularizacao`, `/v2/emitir_guia`, `/v2/emitir_guia_regularizacao`) exigem `Authorization: Bearer` válido desde o achado `vuln-0002` do pentest (INFRAVPIA-320). Sem token, ou com token inválido ou expirado, respondem **401** com `WWW-Authenticate: Bearer`, antes de ler o corpo e sem chamar a PGM. Só `/health` e `/health/ready` continuam públicas (o kubelet não manda token); `/health/detail`, que descreve as dependências do serviço, exige token (CHATR-311, R12).
 
 A proteção é o decorator `require_authenticated` de `src/middleware/http_guard.py`. O provider de auth do FastMCP instala o `AuthenticationMiddleware` do Starlette no app inteiro, com o mesmo `HybridTokenVerifier` do `/mcp`, e deixa o resultado em `request.scope["user"]`; o decorator só exige que ele seja um `AuthenticatedUser`. Nenhuma lógica de token é duplicada, então vale tanto o token estático quanto o JWT do Keycloak. Fora do ambiente local, a ausência de usuário autenticado é sempre 401 (falha fechada); com `IS_LOCAL=true` a rota segue sem auth, como o `/mcp`.
 
@@ -130,6 +130,17 @@ async def da_consulta_debitos(request: Request) -> JSONResponse:
 ```
 
 **Não crie um novo mecanismo de auth para cada rota — sempre reaproveite este mesmo verifier.**
+
+### Nega por padrão: `RequireAuthenticatedByDefault`
+
+O decorator só protege onde foi aplicado: uma `custom_route` nova sem ele nasceria pública, como nasceram as de Dívida Ativa. Por isso, fora do modo local, `src/main.py` monta também o middleware `RequireAuthenticatedByDefault` (mesmo arquivo), que exige o mesmo `AuthenticatedUser` em **toda** requisição HTTP, exceto:
+
+| Rota | Por quê |
+|---|---|
+| `/health`, `/health/ready` | Probes do kubelet, sem credencial. |
+| `/mcp` (e o que estiver abaixo de `/mcp/`) | Autenticado pelo próprio FastMCP, que devolve o 401 no formato da spec do MCP. `/mcp-debug` **não** herda a isenção. |
+
+Fora dessa lista, sem usuário autenticado a resposta é o mesmo 401 do decorator, inclusive para rota inexistente (sem token, nem a existência da rota é revelada). O decorator continua nas rotas de Dívida Ativa como segunda camada; numa rota nova, aplicá-lo segue sendo recomendado para deixar a intenção explícita no código. Uma rota que precise ser pública entra em `PUBLIC_PATHS`, com justificativa — é decisão de revisão, não ajuste solto.
 
 Se, no futuro, for necessário restringir uma rota específica só para OAuth (rejeitando o token estático legado), dá pra checar `request.user.access_token.claims.get("auth_method")` (`"oauth"` ou `"static"`) dentro do handler — mas isso não está implementado hoje; adicione somente se surgir um caso de uso concreto.
 
