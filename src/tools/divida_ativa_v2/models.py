@@ -9,7 +9,6 @@ todo campo chega como string JSON escapada.
 
 import ast
 import json
-import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -21,7 +20,8 @@ from src.tools.valores_pagamento import valor_da_guia
 
 # Placeholder de template não renderizado pelo SFMC, ex.:
 # "{{Event.DEAudience-abc.\"itens_informados\"}}"
-PLACEHOLDER_PATTERN = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+PLACEHOLDER_ABRE = "{{"
+PLACEHOLDER_FECHA = "}}"
 
 # As chaves são dobradas porque a mensagem passa por str.format().
 PLACEHOLDER_ERRO = (
@@ -31,10 +31,25 @@ PLACEHOLDER_ERRO = (
 )
 
 
+def _texto_contem_placeholder(texto: str) -> bool:
+    """
+    Diz se há um "{{" seguido, em algum ponto depois dele, de um "}}".
+
+    Equivale a `re.search(r"\\{\\{.*?\\}\\}", texto, re.DOTALL)`, mas em tempo
+    linear: o regex reexamina o resto da string a partir de cada "{{", o que
+    custa O(n²) num campo hostil com milhares de "{{" e nenhum "}}". Basta olhar
+    o primeiro "{{": se não houver "}}" depois dele, não há depois de nenhum.
+    """
+    inicio = texto.find(PLACEHOLDER_ABRE)
+    if inicio == -1:
+        return False
+    return texto.find(PLACEHOLDER_FECHA, inicio + len(PLACEHOLDER_ABRE)) != -1
+
+
 def _contem_placeholder(valor: Any) -> bool:
     """Detecta placeholder de template em strings, listas e dicionários."""
     if isinstance(valor, str):
-        return bool(PLACEHOLDER_PATTERN.search(valor))
+        return _texto_contem_placeholder(valor)
     if isinstance(valor, dict):
         return any(
             _contem_placeholder(chave) or _contem_placeholder(item)
