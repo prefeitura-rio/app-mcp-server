@@ -1,7 +1,8 @@
-"""Passo "Commit resolved image to git" do deploy de staging (DEV-412).
+"""Passo "Commit resolved image to git" do deploy de staging e do release.
 
-O deploy grava a imagem implantada em ``k8s/staging/resources.yaml`` e publica
-o commit na ``main``. Depois de cada merge, o ``update-tool-version.yaml``
+O deploy de staging (DEV-412) grava a imagem implantada em
+``k8s/staging/resources.yaml`` e o release (DEV-416) em
+``k8s/prod/resources.yaml``, e os dois publicam o commit na ``main``. Depois de cada merge, o ``update-tool-version.yaml``
 empurra outro commit na ``main`` enquanto o deploy espera a imagem, e o push
 direto do checkout do SHA implantado saía non-fast-forward, engolido por
 ``|| echo "Nothing to push"``. Estes testes rodam o script
@@ -22,7 +23,12 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = PROJECT_ROOT / "scripts" / "ci" / "commit_staging_image.sh"
 WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "deploy-staging.yaml"
+RELEASE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "release.yaml"
 MANIFEST = "k8s/staging/resources.yaml"
+PROD_MANIFEST = "k8s/prod/resources.yaml"
+STAGING_COMMENT = "Updated by deploy-staging workflow"
+RELEASE_COMMENT = "Updated by release workflow"
+RELEASE_IMAGE = "ghcr.io/prefeitura-rio/app-mcp-server:v2026.11.18-1@sha256:" + "3" * 64
 
 OLD_IMAGE = "ghcr.io/prefeitura-rio/app-mcp-server:" + "a" * 40 + "@sha256:" + "1" * 64
 NEW_IMAGE = "ghcr.io/prefeitura-rio/app-mcp-server:" + "b" * 40 + "@sha256:" + "2" * 64
@@ -35,7 +41,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: {image}  # Updated by deploy-staging workflow
+          image: {image}  # {comment}
           ports:
             - containerPort: 80
 """
@@ -50,7 +56,16 @@ def _env(home: Path) -> dict[str, str]:
     env = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith("GIT_") and key not in {"FULL_IMAGE", "GITHUB_SHA"}
+        if not key.startswith("GIT_")
+        and key
+        not in {
+            "FULL_IMAGE",
+            "GITHUB_SHA",
+            "DEPLOYED_SHA",
+            "MANIFEST",
+            "IMAGE_COMMENT",
+            "COMMIT_MESSAGE",
+        }
     }
     env.update(
         {
@@ -81,7 +96,13 @@ class Repos:
         seed = tmp_path / "seed"
         self.git(tmp_path, "clone", "--quiet", str(self.remote), str(seed))
         (seed / "k8s" / "staging").mkdir(parents=True)
-        (seed / MANIFEST).write_text(MANIFEST_TEMPLATE.format(image=OLD_IMAGE))
+        (seed / "k8s" / "prod").mkdir(parents=True)
+        (seed / MANIFEST).write_text(
+            MANIFEST_TEMPLATE.format(image=OLD_IMAGE, comment=STAGING_COMMENT)
+        )
+        (seed / PROD_MANIFEST).write_text(
+            MANIFEST_TEMPLATE.format(image=OLD_IMAGE, comment=RELEASE_COMMENT)
+        )
         (seed / "app.txt").write_text("v1\n")
         self.git(seed, "add", ".")
         self.git(seed, "commit", "--quiet", "-m", "feat: merge implantado")
@@ -110,6 +131,17 @@ class Repos:
         self.git(self.other, "commit", "--quiet", "-m", f"chore: {name}")
         self.git(self.other, "push", "--quiet", "origin", "HEAD:main")
         return self.git(self.other, "rev-parse", "HEAD")
+
+    def run_release_script(self, **extra: str) -> subprocess.CompletedProcess[str]:
+        """O passo do release.yaml: manifesto, comentário e mensagem de produção."""
+        params = {
+            "FULL_IMAGE": RELEASE_IMAGE,
+            "MANIFEST": PROD_MANIFEST,
+            "IMAGE_COMMENT": RELEASE_COMMENT,
+            "COMMIT_MESSAGE": "chore: update prod image to v2026.11.18-1",
+        }
+        params.update(extra)
+        return self.run_script(**params)
 
     def run_script(self, **extra: str) -> subprocess.CompletedProcess[str]:
         env = dict(self.env)
@@ -302,3 +334,133 @@ def test_workflow_usa_o_script_e_nao_engole_falha_de_push():
     assert names.index("Commit resolved image to git") < names.index(
         "Update Argo CD Application image override"
     )
+
+
+def _step(workflow_path: Path, job: str, name: str) -> tuple[list[str], dict]:
+    workflow = yaml.safe_load(workflow_path.read_text())
+    steps = workflow["jobs"][job]["steps"]
+    names = [step.get("name") for step in steps]
+    return names, steps[names.index(name)]
+
+
+def test_release_publica_o_manifesto_de_producao_quando_a_main_andou(repos: Repos):
+    # DEV-416: o release faz checkout da main, e um merge, o update-tool-version
+    # ou o commit do deploy de staging entra antes do push.
+    concurrent_sha = repos.advance_main("chore_staging")
+    staging_before = repos.remote_file(MANIFEST)
+
+    result = repos.run_release_script()
+
+    assert result.returncode == 0, result.stderr
+    assert repos.remote_log()[0] == "chore: update prod image to v2026.11.18-1"
+    assert repos.git(repos.remote, "rev-parse", "main~1") == concurrent_sha
+    assert f"image: {RELEASE_IMAGE}  # {RELEASE_COMMENT}" in (
+        repos.remote_file(PROD_MANIFEST)
+    )
+    assert OLD_IMAGE not in repos.remote_file(PROD_MANIFEST)
+    # Só o manifesto de produção muda; o de staging fica como estava.
+    assert repos.remote_file(MANIFEST) == staging_before
+    changed = repos.git(repos.remote, "show", "--name-only", "--format=", "main")
+    assert changed.splitlines() == [PROD_MANIFEST]
+    assert repos.git(repos.runner, "status", "--porcelain") == ""
+
+
+def test_release_falha_quando_o_push_e_recusado_em_todas_as_tentativas(
+    repos: Repos,
+):
+    hook = repos.remote / "hooks" / "pre-receive"
+    hook.write_text("#!/usr/bin/env bash\necho 'recusado pelo teste' >&2\nexit 1\n")
+    hook.chmod(0o755)
+    before = repos.git(repos.remote, "rev-parse", "main")
+
+    result = repos.run_release_script(MAX_ATTEMPTS="2")
+
+    assert result.returncode != 0
+    assert f"push de {PROD_MANIFEST} para origin/main recusado em 2" in result.stderr
+    assert repos.git(repos.remote, "rev-parse", "main") == before
+
+
+def test_release_nao_cria_commit_quando_o_manifesto_ja_tem_a_imagem(repos: Repos):
+    first = repos.run_release_script()
+    assert first.returncode == 0, first.stderr
+    head = repos.git(repos.remote, "rev-parse", "main")
+
+    second = repos.run_release_script()
+
+    assert second.returncode == 0, second.stderr
+    assert "nada a commitar" in second.stdout
+    assert repos.git(repos.remote, "rev-parse", "main") == head
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"MANIFEST": "../fora/resources.yaml"}, "MANIFEST inválido"),
+        ({"MANIFEST": "k8s/../../fora.yaml"}, "MANIFEST inválido"),
+        ({"MANIFEST": "/etc/passwd"}, "MANIFEST inválido"),
+        ({"MANIFEST": "k8s/prod/resources.yaml;x"}, "MANIFEST inválido"),
+        ({"IMAGE_COMMENT": "a|b"}, "IMAGE_COMMENT inválido"),
+        ({"IMAGE_COMMENT": "a&b"}, "IMAGE_COMMENT inválido"),
+        ({"IMAGE_COMMENT": "a\\1"}, "IMAGE_COMMENT inválido"),
+        ({"IMAGE_COMMENT": "linha\noutra"}, "IMAGE_COMMENT inválido"),
+        ({"COMMIT_MESSAGE": "chore: x\nCo-authored-by: y"}, "uma linha só"),
+    ],
+)
+def test_recusa_parametros_invalidos_sem_tocar_a_main(
+    repos: Repos, extra: dict[str, str], message: str
+):
+    before = repos.git(repos.remote, "rev-parse", "main")
+
+    result = repos.run_release_script(**extra)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert repos.git(repos.remote, "rev-parse", "main") == before
+
+
+def test_falha_quando_o_manifesto_nao_existe(repos: Repos):
+    before = repos.git(repos.remote, "rev-parse", "main")
+
+    result = repos.run_release_script(MANIFEST="k8s/outro/resources.yaml")
+
+    assert result.returncode != 0
+    assert "não existe em origin/main" in result.stderr
+    assert repos.git(repos.remote, "rev-parse", "main") == before
+
+
+def test_release_workflow_usa_o_script_e_nao_engole_falha_de_push():
+    names, step = _step(
+        RELEASE_WORKFLOW, "build-and-deploy", "Commit resolved image to git"
+    )
+    run = step["run"]
+
+    assert "bash scripts/ci/commit_staging_image.sh" in run
+    assert 'COMMIT_MESSAGE="chore: update prod image to ${VERSION}"' in run
+    assert step["env"] == {"MANIFEST": PROD_MANIFEST, "IMAGE_COMMENT": RELEASE_COMMENT}
+    assert "|| echo" not in run
+    assert "git push" not in run
+    assert "git commit" not in run
+    assert "sed " not in run
+    # O manifesto é gravado depois de resolver a imagem e antes de o release
+    # autenticar no GCP e mexer no cluster de produção.
+    commit = names.index("Commit resolved image to git")
+    assert names.index("Resolve image digest from GHCR") < commit
+    assert commit < names.index("Authenticate to Google Cloud")
+
+
+@pytest.mark.parametrize(
+    ("manifest", "comment"),
+    [(MANIFEST, STAGING_COMMENT), (PROD_MANIFEST, RELEASE_COMMENT)],
+)
+def test_manifestos_reais_tem_uma_linha_de_imagem_com_o_comentario(
+    manifest: str, comment: str
+):
+    # O script troca toda linha "image: ghcr.io/prefeitura-rio/app-mcp-server:";
+    # cada manifesto real tem exatamente uma, com o comentário do seu workflow.
+    lines = [
+        line.strip()
+        for line in (PROJECT_ROOT / manifest).read_text().splitlines()
+        if "image: ghcr.io/prefeitura-rio/app-mcp-server:" in line
+    ]
+    assert len(lines) == 1
+    assert lines[0].endswith(f"  # {comment}")
