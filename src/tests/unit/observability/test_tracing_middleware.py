@@ -2,8 +2,8 @@
 
 Cobre a combinação de tracing e métricas: os dois são opt-in
 independentemente um do outro, e nenhum atributo de métrica pode carregar o
-`user_id`/texto de exceção que o span (canal separado, consumido só em
-ferramenta de trace) tem permissão de carregar.
+`user_id` que o span (canal separado, consumido só em ferramenta de trace) tem
+permissão de carregar. Texto de exceção não vai a nenhum dos dois (DEV-640).
 """
 
 import types
@@ -127,6 +127,9 @@ async def test_falha_na_tool_marca_span_e_metrica_como_erro(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes["mcp.tool.success"] is False
+    assert span.attributes["error.type"] == "ValueError"
+    assert span.status.description is None
+    assert "boom" not in repr([dict(e.attributes) for e in span.events])
 
     calls = _points(metrics_reader, "mcp.tool.calls")
     assert calls[0].attributes["status"] == "error"
