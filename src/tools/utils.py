@@ -133,12 +133,50 @@ async def internal_request(
             return json.loads(text)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON from {url}: {e}")
-            logger.error(f"Response text: {text[:500]}")  # Log first 500 chars
-            # Check if it's a gateway timeout or other timeout-related error
-            if (
-                "504 Gateway Time-out" in text
-                or "502 Bad Gateway" in text
-                or "timeout" in text.lower()
-            ):
+            # Só a forma do corpo, nunca o texto (DEV-495).
+            logger.error(
+                {
+                    "event": "internal_request_resposta_nao_json",
+                    "resposta": resumir_resposta_nao_json(response, text),
+                }
+            )
+            if _parece_gateway_timeout(text):
                 raise TimeoutError(f"Gateway timeout from {url}")
             raise
+
+
+def _parece_gateway_timeout(texto: str) -> bool:
+    """Corpo de erro de gateway ou de timeout do proxy (502/504, CHATR-297)."""
+    return (
+        "504 Gateway Time-out" in texto
+        or "502 Bad Gateway" in texto
+        or "timeout" in texto.lower()
+    )
+
+
+def resumir_resposta_nao_json(response: object, texto: str) -> dict[str, object]:
+    """
+    Resumo para log de uma resposta que não é JSON: status HTTP, tamanho, tipo
+    de conteúdo e se parece HTML ou erro de gateway/timeout. Nunca o texto.
+
+    O corpo pode ser o HTML de erro do proxy ou uma resposta de texto do
+    serviço chamado (a PGM), com CDA, execução fiscal, guia e nome do
+    contribuinte, que a redação global de PII não reconhece (DEV-495). Aceita
+    qualquer objeto de resposta sem levantar: uma exceção aqui trocaria o erro
+    original por outro.
+    """
+    status_code = getattr(response, "status_code", None)
+    headers = getattr(response, "headers", None)
+    content_type = None
+    if headers is not None and hasattr(headers, "get"):
+        bruto = headers.get("content-type")
+        if isinstance(bruto, str):
+            content_type = bruto.split(";", 1)[0].strip().lower()[:100] or None
+    inicio = texto.lstrip()[:1000].lower()
+    return {
+        "status_code": status_code if isinstance(status_code, int) else None,
+        "tamanho": len(texto),
+        "content_type": content_type,
+        "parece_html": inicio.startswith("<!doctype html") or "<html" in inicio,
+        "parece_gateway_timeout": _parece_gateway_timeout(texto),
+    }
