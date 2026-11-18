@@ -81,17 +81,18 @@ def require_authenticated(handler: Handler) -> Handler:
 # dependências do serviço e passa a exigir token (CHATR-311, R12).
 PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/health/ready"})
 
-# `/mcp` já tem o `RequireAuthMiddleware` do próprio FastMCP, que devolve o 401
-# no formato da spec do MCP; recusar aqui trocaria essa resposta pela nossa.
-DELEGATED_PREFIX = "/mcp"
+# O endpoint MCP já tem o `RequireAuthMiddleware` do próprio FastMCP, que
+# devolve o 401 no formato da spec do MCP; recusar aqui trocaria essa resposta
+# pela nossa. O FastMCP o monta numa única `Route` com o caminho exato passado
+# em `mcp.run(path=...)` (`src/main.py` usa esta constante): nada abaixo de
+# `/mcp/` é protegido por ele, então nada abaixo de `/mcp/` é isento aqui.
+DELEGATED_PATH = "/mcp"
 
 
 def _isenta(path: str) -> bool:
-    """Allowlist do middleware. `/mcp` casa por segmento: `/mcp-debug` não é
-    `/mcp` e não pode herdar a isenção."""
-    if path in PUBLIC_PATHS:
-        return True
-    return path == DELEGATED_PREFIX or path.startswith(DELEGATED_PREFIX + "/")
+    """Allowlist do middleware, por caminho exato: `/mcp/<outra>` e
+    `/mcp-debug` não são o endpoint MCP e não herdam a isenção."""
+    return path in PUBLIC_PATHS or path == DELEGATED_PATH
 
 
 class RequireAuthenticatedByDefault:
