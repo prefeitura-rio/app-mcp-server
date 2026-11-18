@@ -53,12 +53,13 @@ class RegisteredCheck:
 
 
 def sanitize_error(exc: BaseException) -> str:
-    """Reduz uma exceção ao que pode ser exposto publicamente.
+    """Reduz uma exceção ao que pode ser exposto na resposta do health.
 
-    `/health/detail` não exige autenticação, e mensagens de exceção de
-    clientes de rede embutem rotineiramente a URL de conexão — no caso do
-    Redis, com a senha dentro. Por isso apenas o nome da classe atravessa; a
-    exceção completa vai para o log, onde o operador a alcança.
+    `/health/detail` exige token (CHATR-311), mas quem o tem é cliente do
+    serviço, não operador, e mensagens de exceção de clientes de rede embutem
+    rotineiramente a URL de conexão — no caso do Redis, com a senha dentro.
+    Por isso apenas o nome da classe atravessa; a exceção completa vai para o
+    log, onde o operador a alcança.
 
     A única exceção é `HealthCheckError`, cuja mensagem foi escrita por nós.
     """

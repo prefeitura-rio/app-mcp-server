@@ -138,7 +138,7 @@ O decorator só protege onde foi aplicado: uma `custom_route` nova sem ele nasce
 | Rota | Por quê |
 |---|---|
 | `/health`, `/health/ready` | Probes do kubelet, sem credencial. |
-| `/mcp` (e o que estiver abaixo de `/mcp/`) | Autenticado pelo próprio FastMCP, que devolve o 401 no formato da spec do MCP. `/mcp-debug` **não** herda a isenção. |
+| `/mcp` (só o caminho exato) | Autenticado pelo próprio FastMCP, que devolve o 401 no formato da spec do MCP. O `RequireAuthMiddleware` dele protege só essa rota: `/mcp/<outra>` e `/mcp-debug` **não** herdam a isenção. |
 
 Fora dessa lista, sem usuário autenticado a resposta é o mesmo 401 do decorator, inclusive para rota inexistente (sem token, nem a existência da rota é revelada). O decorator continua nas rotas de Dívida Ativa como segunda camada; numa rota nova, aplicá-lo segue sendo recomendado para deixar a intenção explícita no código. Uma rota que precise ser pública entra em `PUBLIC_PATHS`, com justificativa — é decisão de revisão, não ajuste solto.
 
