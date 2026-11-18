@@ -272,3 +272,67 @@ def test_health_continua_publico(client):
 
     assert response.status_code == 200
     assert response.text == "OK"
+
+
+# --- Guard que nega por padrão, montado como em `src/main.py` (CHATR-311) ---
+
+
+@pytest.fixture
+def client_com_guard(app_env, chamadas):
+    """O mesmo app, com o `RequireAuthenticatedByDefault` passado no
+    `middleware=` exatamente como `src/main.py` faz fora do modo local."""
+    from starlette.middleware import Middleware
+
+    http_guard = importlib.import_module("src.middleware.http_guard")
+    app = app_env.create_app().http_app(
+        middleware=[Middleware(http_guard.RequireAuthenticatedByDefault)]
+    )
+    return TestClient(app)
+
+
+def test_guard_health_detail_exige_token(client_com_guard):
+    sem_token = client_com_guard.get("/health/detail")
+    com_token = client_com_guard.get(
+        "/health/detail", headers={"Authorization": f"Bearer {STATIC_TOKEN}"}
+    )
+
+    assert sem_token.status_code == 401
+    assert sem_token.headers["WWW-Authenticate"] == "Bearer"
+    assert com_token.status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/health", "/health/ready"])
+def test_guard_mantem_liveness_e_readiness_publicos(client_com_guard, path):
+    # `/health/ready` pode dar 503 sem lifespan; o que importa é não ser 401.
+    assert client_com_guard.get(path).status_code != 401
+
+
+def test_guard_preserva_o_401_do_proprio_mcp(client_com_guard, client):
+    """O `/mcp` é delegado: o 401 continua sendo o do FastMCP, não o nosso."""
+    headers = {"Accept": "application/json, text/event-stream"}
+
+    com_guard = client_com_guard.post("/mcp", json={}, headers=headers)
+    sem_guard = client.post("/mcp", json={}, headers=headers)
+
+    assert com_guard.status_code == 401
+    assert (
+        com_guard.headers["WWW-Authenticate"] == sem_guard.headers["WWW-Authenticate"]
+    )
+    assert com_guard.content == sem_guard.content
+
+
+@pytest.mark.parametrize(("route", "funcao"), list(DIVIDA_ATIVA_ROUTES.items()))
+def test_guard_nao_atrapalha_divida_ativa_com_token(
+    client_com_guard, chamadas, route, funcao
+):
+    response = client_com_guard.post(
+        route, json=PAYLOAD, headers={"Authorization": f"Bearer {STATIC_TOKEN}"}
+    )
+
+    assert response.status_code == 200
+    assert chamadas == [funcao]
+
+
+def test_guard_rota_inexistente_sem_token_e_401(client_com_guard):
+    """Sem token, nem a existência de uma rota é revelada."""
+    assert client_com_guard.get("/rota-que-nao-existe").status_code == 401
