@@ -26,7 +26,9 @@ obrigatória faltando, middleware de auth desligado do `/mcp`,
 
 - **Trio de health** — `/health` (liveness trivial), `/health/ready`,
   `/health/detail`. Inclui o invariante de desenho: dependência fora do ar
-  aparece no `detail` sem derrubar as outras duas.
+  aparece no `detail` sem derrubar as outras duas. `/health` e `/health/ready`
+  são públicas (probes do kubelet); `/health/detail` exige o mesmo Bearer do
+  `/mcp` (CHATR-311): sem token devolve 401, com token válido, o diagnóstico.
 - **Fronteira de autenticação** — `/mcp` sem token e com token inválido
   devolvem 401; com token válido, 200. Os unitários testam o
   `HybridTokenVerifier` isolado; aqui se verifica que ele está **plugado**.
@@ -35,8 +37,8 @@ obrigatória faltando, middleware de auth desligado do `/mcp`,
   `/v2/emitir_guia` com token inválido devolvem 401 antes de ler o corpo.
 - **Handshake MCP sobre Streamable HTTP** — `initialize`, `tools/list` e
   `tools/call`, em requisições independentes (modo stateless).
-- **Sanitização do `/health/detail`** — a rota é pública e não pode devolver
-  URL, host ou credencial.
+- **Sanitização do `/health/detail`** — mesmo autenticada, a rota não pode
+  devolver URL, host ou credencial.
 
 Fora de escopo, de propósito: regra de negócio (fica no pytest, que é mais
 barato e conta para o gate de cobertura) e qualquer coisa que dependa de

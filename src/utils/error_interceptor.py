@@ -24,6 +24,7 @@ from src.utils.json_utils import CustomJSONEncoder
 from src.utils.pii import (
     mascarar_ultimos_quatro,
     redigir_padroes_pii,
+    redigir_texto,
     resumir_texto_livre,
 )
 from src.utils.tool_errors import JA_REPORTADA
@@ -98,6 +99,18 @@ def _mask_last_four_digits(value: str) -> str:
 def _redact_pii_in_text(text: str) -> str:
     """Redige PII de formato reconhecível em texto livre. Ver `redigir_padroes_pii`."""
     return redigir_padroes_pii(text)
+
+
+def _redact_error_text(text: Any) -> Any:
+    """
+    Redige a mensagem e o traceback do erro. Ver `redigir_texto`.
+
+    Valor que não é texto (um chamador que passa `None` ou o objeto da exceção)
+    vira texto antes, para não sair cru pelo `json.dumps`.
+    """
+    if text is None:
+        return None
+    return redigir_texto(text if isinstance(text, str) else str(text))
 
 
 _QUERY_PARAMETER_TYPES = (
@@ -177,10 +190,18 @@ def _build_interceptor_payload(
     masked_whatsapp_number = _mask_last_four_digits(str(customer_whatsapp_number))
     input_body_str = _redact_pii_in_text(input_body_str)
 
-    # Prepara error_response como JSON string contendo error_message e traceback
-    error_response_data = {"error_message": error_message}
+    # Prepara error_response como JSON string contendo error_message e traceback.
+    # Os dois carregam o `str(e)` da exceção, que ecoa o que a API de terceiro
+    # ou a validação devolveu -- e isso inclui dado do cidadão (DEV-555). Aqui
+    # vai `redigir_texto`, e não só `redigir_padroes_pii` como no `input_body`:
+    # além do formato, pega credencial na URL e o valor de chave rotulada
+    # (`'nome': ...`, `endereco=...`), que é como o nome chega numa resposta
+    # ecoada. O motivo de preservar `"nome"` no `input_body` (contexto de debug
+    # dos argumentos) não vale para a mensagem. Nome sem formato nem rótulo
+    # nenhuma redação alcança: quem relança tem de mandar só o tipo.
+    error_response_data = {"error_message": _redact_error_text(error_message)}
     if traceback:
-        error_response_data["traceback"] = traceback
+        error_response_data["traceback"] = _redact_error_text(traceback)
     error_response_str = json.dumps(error_response_data, ensure_ascii=False)
 
     # Serializa source como JSON string se for dicionário. Um `extract_source`

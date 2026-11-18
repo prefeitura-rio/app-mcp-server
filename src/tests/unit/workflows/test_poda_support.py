@@ -390,7 +390,8 @@ async def test_sgrc_service_get_user_info_wraps_errors(monkeypatch):
         module, "InterceptedHTTPClient", lambda **kwargs: FailingClient()
     )
 
-    with pytest.raises(Exception, match="Failed to get user info: boom"):
+    # Só o tipo: a mensagem da falha pode trazer o CPF e o nome (DEV-555).
+    with pytest.raises(Exception, match="^Failed to get user info: RuntimeError$"):
         await service.get_user_info("12345678909")
 
 
