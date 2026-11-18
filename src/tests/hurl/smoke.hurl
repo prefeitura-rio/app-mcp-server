@@ -66,6 +66,17 @@ jsonpath "$.error" == "invalid_token"
 jsonpath "$.status" not exists
 
 
+# Mesma rota com a barra codificada (DEV-621): no staging ela chegou ao app sem
+# token enquanto o caminho literal era barrado no edge. O guard decide pelo
+# path já decodificado, então a resposta tem de ser o mesmo 401.
+GET {{base_url}}/health%2fdetail
+HTTP 401
+[Asserts]
+header "WWW-Authenticate" startsWith "Bearer"
+jsonpath "$.error" == "invalid_token"
+jsonpath "$.status" not exists
+
+
 GET {{base_url}}/health/detail
 Authorization: Bearer {{token}}
 HTTP 200
