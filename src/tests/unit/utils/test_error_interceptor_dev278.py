@@ -12,8 +12,8 @@ Invariantes cobertos aqui:
   (`resumir_texto_livre`), nunca o texto, em funções async e sync.
 - `extract_input_body` define o `input_body`; se ele falhar, vão só o nome e o
   tipo de cada argumento, e o warning não traz a mensagem da exceção.
-- `get_google_search`, `GeminiService.google_search`, `dharma_search` e
-  `surkai_search` reportam só o resumo da pergunta.
+- `get_google_search` e `GeminiService.google_search` reportam só o resumo
+  da pergunta.
 - Sem configuração, o `input_body` continua igual ao de antes.
 """
 
@@ -27,7 +27,7 @@ import pytest
 # As tools são importadas antes de o fixture `transport` trocar
 # `httpx.AsyncClient` por uma função: o SDK do Gemini herda dessa classe no
 # import.
-from src.tools import dharma_search, search, web_search_surkai
+from src.tools import search
 from src.tools.google_search.gemini_service import GeminiService
 from src.utils import error_interceptor
 from src.utils.pii import resumir_texto_livre
@@ -303,22 +303,4 @@ async def test_gemini_google_search_nao_envia_a_query(transport, monkeypatch):
 
     payload = _payload_enviado(transport)
     assert json.loads(payload["input_body"]) == {"query": resumir_texto_livre(PERGUNTA)}
-    _sem_texto_da_pergunta(payload)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("module", "funcao"),
-    [(dharma_search, "dharma_search"), (web_search_surkai, "surkai_search")],
-)
-async def test_buscas_externas_nao_enviam_a_query(
-    transport, monkeypatch, module, funcao
-):
-    monkeypatch.setattr(module, "InterceptedHTTPClient", _falha)
-
-    with pytest.raises(RuntimeError, match="falha interna da busca"):
-        await getattr(module, funcao)(PERGUNTA)
-
-    payload = _payload_enviado(transport)
-    assert json.loads(payload["input_body"])["query"] == resumir_texto_livre(PERGUNTA)
     _sem_texto_da_pergunta(payload)

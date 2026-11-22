@@ -111,7 +111,6 @@ habilitado. Gera o span raiz da request (`POST /mcp`, `GET /health`, …).
 | `bigquery.read` | [bigquery.py:1364](../src/utils/bigquery.py#L1364) | `bigquery.call_type`, `bigquery.timeout_budget_seconds`, `cache.enabled`, `cache.hit`, `cache.key`, `cache.written`, `cache.ttl_seconds`, `cache.coalesced`, `cache.write_skipped`, `cache.read_error` |
 | `bigquery.query` | [bigquery.py:1078](../src/utils/bigquery.py#L1078) | `page_size`, `query_length`, `row_count`, `success`, `table_not_found` |
 | `bigquery.save_response` | [bigquery.py:321](../src/utils/bigquery.py#L321) | `project_id`, `dataset_id`, `table_id`, `endpoint`, `row_count`, `success` |
-| `bigquery.save_feedback` | [bigquery.py:397](../src/utils/bigquery.py#L397) | `project_id`, `dataset_id`, `table_id`, `row_count`, `success` |
 | `bigquery.save_cor_alert` | [bigquery.py:495](../src/utils/bigquery.py#L495) | `project_id`, `dataset_id`, `table_id`, `alert_type`, `severity`, `row_count`, `success` |
 
 ### 2.5 Span do line-up do Rock in Rio — `src/tools/rock_in_rio/cache.py`

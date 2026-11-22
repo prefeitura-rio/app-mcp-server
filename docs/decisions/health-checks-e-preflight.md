@@ -45,7 +45,7 @@ O risco que motivou a separação: enquanto os dois probes apontavam para o mesm
 
 ### D3 — Dependências de runtime não gateiam tráfego
 
-Redis fora do ar quebra **apenas** a tool `multi_step_service` (workflows IPTU, Poda, Dívida Ativa, Equipamentos), porque produção usa `StateMode.REDIS` sem fallback para JSON (`src/tools/langgraph_workflows.py:12-15`). As demais tools — `google_search`, `equipments_*`, `get_user_memory`, `web_search_surkai` — seguem funcionando.
+Redis fora do ar quebra **apenas** a tool `multi_step_service` (workflows IPTU, Poda, Dívida Ativa, Equipamentos), porque produção usa `StateMode.REDIS` sem fallback para JSON (`src/tools/langgraph_workflows.py:12-15`). As demais tools — `google_search`, `equipments_*`, `get_user_memory` — seguem funcionando.
 
 Retornar 503 no readiness tiraria o pod do balanceador e derrubaria **todas** elas. A falha aparece em `/health/detail`, nos logs e no OTel; não no roteamento.
 
@@ -59,7 +59,7 @@ A exceção à regra é `HealthCheckError`, cuja mensagem é escrita por nós e 
 
 ### D5 — APIs de negócio ficam fora dos checks
 
-Dívida Ativa, IPTU, SGRC, Google Maps, Nominatim, Gemini, Surkai, Dharma, RMI, Typesense e GCS **não** são sondadas. Cada uma afeta um subconjunto de tools, e sondar uma dúzia de APIs a cada probe custa mais do que informa. A observabilidade delas já vem do error interceptor e do OTel.
+Dívida Ativa, IPTU, SGRC, Google Maps, Nominatim, Gemini, RMI, Typesense e GCS **não** são sondadas. Cada uma afeta um subconjunto de tools, e sondar uma dúzia de APIs a cada probe custa mais do que informa. A observabilidade delas já vem do error interceptor e do OTel.
 
 ### D6 — Tabelas externas de Sheets: sonda em background, não inline (CHATR-119)
 

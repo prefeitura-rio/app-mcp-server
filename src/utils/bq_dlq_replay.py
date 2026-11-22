@@ -16,7 +16,7 @@ Uso:
     python -m src.utils.bq_dlq_replay --limit 500
 
     # reprocessa só uma tabela
-    python -m src.utils.bq_dlq_replay --table rj-iplanrio.brutos_eai_logs.feedback
+    python -m src.utils.bq_dlq_replay --table rj-iplanrio.brutos_eai_logs.mcp
 
 Para o poison — os payloads que o BigQuery recusou em definitivo, que o drain
 automático nunca reprocessa porque repeti-los não muda o desfecho:

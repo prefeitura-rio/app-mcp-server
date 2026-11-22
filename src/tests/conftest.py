@@ -31,7 +31,6 @@ TEST_ENV_DEFAULTS = {
     "GCP_SERVICE_ACCOUNT_CREDENTIALS": "e30=",
     "GEMINI_API_KEY": "test-gemini-key",
     "GEMINI_MODEL": "gemini-2.0-flash",
-    "SURKAI_API_KEY": "test-surkai-key",
     "DATA_DIR": "/tmp",
     "EQUIPMENTS_VALID_THEMES": '["geral"]',
     "MEMORY_API_URL": "https://test.memory.local/api",

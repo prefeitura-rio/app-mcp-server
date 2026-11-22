@@ -513,19 +513,6 @@ def test_bigquery_save_functions(monkeypatch):
     assert payload[0]["environment"] == "staging"
     assert payload[0]["data_particao"] == "2026-04-08"
 
-    module.save_feedback_in_bq(
-        user_id="u1",
-        feedback="ótimo",
-        timestamp="2026-04-08T12:34:56",
-        environment="prod",
-        dataset_id="dataset",
-        table_id="feedback",
-        project_id="proj-y",
-    )
-    payload, table_name = saved_payloads[-1]
-    assert table_name == "proj-y.dataset.feedback"
-    assert payload[0]["feedback"] == "ótimo"
-
     module.save_cor_alert_in_bq(
         alert_id="a1",
         user_id="u2",
@@ -631,11 +618,6 @@ async def test_bigquery_background_helpers(monkeypatch):
 
     monkeypatch.setattr(
         module,
-        "save_feedback_in_bq",
-        lambda *args: {"kind": "feedback", "args": args},
-    )
-    monkeypatch.setattr(
-        module,
         "save_cor_alert_to_queue",
         lambda *args: {"kind": "queue", "args": args},
     )
@@ -654,14 +636,6 @@ async def test_bigquery_background_helpers(monkeypatch):
 
     monkeypatch.setattr(module, "get_bigquery_client", lambda: FakeClient())
 
-    await module.save_feedback_in_bq_background(
-        user_id="u1",
-        feedback="bom",
-        timestamp="2026-04-08T12:00:00",
-        environment="staging",
-    )
-    assert calls[0][2]["kind"] == "feedback"
-
     await module.save_response_in_bq_background(
         data={"ok": True},
         endpoint="endpoint",
@@ -669,7 +643,7 @@ async def test_bigquery_background_helpers(monkeypatch):
         table_id="table",
         environment="test",
     )
-    assert calls[1][2]["kind"] == "response"
+    assert calls[0][2]["kind"] == "response"
 
     # Alerta de severidade alta/crítica não passa pelo buffer: é o registro que
     # alguém procura durante a ocorrência, e esperar o flush o deixaria

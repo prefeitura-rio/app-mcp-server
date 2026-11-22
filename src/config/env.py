@@ -95,9 +95,6 @@ GOOGLE_BIGQUERY_PAGE_SIZE = int(
 )
 NOMINATIM_API_URL = getenv_or_action("NOMINATIM_API_URL")
 
-SURKAI_API_KEY = getenv_or_action("SURKAI_API_KEY", action="ignore")
-DHARMA_API_KEY = getenv_or_action("DHARMA_API_KEY", action="ignore")
-
 TYPESENSE_HUB_SEARCH_URL = getenv_or_action("TYPESENSE_HUB_SEARCH_URL", action="ignore")
 
 # Error Interceptor Configuration
@@ -172,7 +169,7 @@ EXCLUDED_TOOLS = list(
     set(
         tool.strip()
         for tool in getenv_or_action(
-            "EXCLUDED_TOOLS", default="user_feedback", action="ignore"
+            "EXCLUDED_TOOLS", default="", action="ignore"
         ).split(",")
         if tool.strip()
     )
@@ -223,7 +220,7 @@ BIGQUERY_TIMEOUT_SECONDS = float(
 # Tamanho do pool de threads dedicado às leituras do BigQuery. Separado do
 # executor default de propósito: uma leitura que estourou o prazo mantém a
 # thread ocupada até a query terminar sozinha, e no pool default essas threads
-# são as mesmas que gravam log, feedback e alerta do COR. Com pool próprio, a
+# são as mesmas que gravam log e alerta do COR. Com pool próprio, a
 # leitura lenta só atrapalha leitura.
 BIGQUERY_READ_MAX_WORKERS = int(
     getenv_or_action("BIGQUERY_READ_MAX_WORKERS", default="8", action="ignore")
@@ -250,7 +247,7 @@ BIGQUERY_BATCH_MAX_BUFFERED_ROWS = int(
         "BIGQUERY_BATCH_MAX_BUFFERED_ROWS", default="10000", action="ignore"
     )
 )
-# Tamanho do pool de threads dedicado às escritas (log/feedback/alerta e drain
+# Tamanho do pool de threads dedicado às escritas (log/alerta e drain
 # da DLQ). Mesmo motivo do pool de leitura: o retry com backoff de
 # `insert_rows_json_with_retry_and_dlq` segura a thread em `time.sleep`, e no
 # executor default essas threads são as mesmas que atendem qualquer outra
