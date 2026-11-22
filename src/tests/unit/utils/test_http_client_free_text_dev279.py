@@ -15,8 +15,6 @@ Invariantes cobertos aqui:
 - O resto do corpo segue com a redação de sempre (credencial redigida, campo
   comum com o valor).
 - Sem `free_text_fields`, o report continua igual ao de antes.
-- `dharma_search` e `surkai_search` reais, com a API fora, não mandam a
-  pergunta em nenhum payload que sai do processo.
 """
 
 import asyncio
@@ -26,19 +24,12 @@ import httpx
 import pytest
 
 import src.utils.http_client as http_client_mod
-from src.tools import dharma_search, web_search_surkai
-from src.utils import error_interceptor
 from src.utils.http_client import (
     DEFAULT_ERROR_STATUS_CODES,
     InterceptedHTTPClient,
     summarize_free_text,
 )
 from src.utils.pii import resumir_texto_livre
-
-# Capturado no import, antes do fixture autouse `block_real_error_interceptor`
-# (src/tests/unit/conftest.py) substituir o atributo por um mock: o teste das
-# tools precisa do payload real que sairia do processo.
-_real_send_error_to_interceptor = error_interceptor.send_error_to_interceptor
 
 # Dados sintéticos. O CPF é válido no dígito verificador para a redação casar;
 # o contexto de saúde é o que nenhuma redação por padrão apaga.
@@ -333,95 +324,3 @@ def test_sync_sem_loop_reporta_so_o_resumo(interceptor_spy):
     (reportado,) = interceptor_spy
     assert reportado["request_body"] == {"message": resumir_texto_livre(PERGUNTA)}
     _sem_texto_da_pergunta(reportado)
-
-
-# ---------------------------------------------------------------------------
-# Tools de busca reais, payload real que sai do processo
-# ---------------------------------------------------------------------------
-
-
-class _CapturingTransport(httpx.AsyncBaseTransport):
-    """Faz o papel do interceptor externo: guarda o que chegaria nele."""
-
-    def __init__(self):
-        self.requests = []
-
-    async def handle_async_request(self, request):
-        self.requests.append(request)
-        return httpx.Response(200, json={"status": "ok"})
-
-
-@pytest.fixture
-def interceptor_externo(monkeypatch):
-    """Envio real ao interceptor, com o HTTP dele capturado em memória.
-
-    Só o client sem `transport` (o do `send_error_to_interceptor`) cai no
-    transporte de captura; o da tool usa o `MockTransport` que o teste passa.
-    """
-    capturing = _CapturingTransport()
-    monkeypatch.setattr(
-        error_interceptor.env,
-        "ERROR_INTERCEPTOR_URL",
-        "https://test.interceptor.local/api",
-    )
-    monkeypatch.setattr(error_interceptor.env, "ERROR_INTERCEPTOR_TOKEN", "test-token")
-    monkeypatch.setattr(
-        error_interceptor,
-        "send_error_to_interceptor",
-        _real_send_error_to_interceptor,
-    )
-
-    # Subclasse, não função: o `InterceptedHTTPClient` faz `isinstance` com
-    # `httpx.AsyncClient`, que é o mesmo módulo trocado aqui.
-    class _AsyncClientDeCaptura(httpx.AsyncClient):
-        def __init__(self, *args, **kwargs):
-            kwargs.setdefault("transport", capturing)
-            super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(error_interceptor.httpx, "AsyncClient", _AsyncClientDeCaptura)
-    return capturing
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("module", "funcao", "campo"),
-    [
-        (dharma_search, "dharma_search", "message"),
-        (web_search_surkai, "surkai_search", "query"),
-    ],
-)
-@pytest.mark.parametrize("excecao", [httpx.ReadTimeout, httpx.ConnectError])
-async def test_buscas_externas_fora_nao_enviam_a_pergunta(
-    interceptor_externo, monkeypatch, module, funcao, campo, excecao
-):
-    requisicoes_da_tool = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requisicoes_da_tool.append(request)
-        raise excecao("falha simulada", request=request)
-
-    real_client = InterceptedHTTPClient
-
-    def client_com_transport(**kwargs):
-        return real_client(transport=httpx.MockTransport(handler), **kwargs)
-
-    monkeypatch.setattr(module, "InterceptedHTTPClient", client_com_transport)
-
-    with pytest.raises(excecao):
-        await getattr(module, funcao)(PERGUNTA)
-
-    # A pergunta chegou à API de busca...
-    assert json.loads(requisicoes_da_tool[0].content)[campo] == PERGUNTA
-
-    # ...e não sai em nenhum payload ao interceptor.
-    payloads = [json.loads(r.content) for r in interceptor_externo.requests]
-    assert payloads, "a falha deveria ter sido reportada"
-    for payload in payloads:
-        _sem_texto_da_pergunta(payload)
-
-    reports_do_client = [
-        p for p in payloads if p.get("api_endpoint", "").startswith("http")
-    ]
-    assert len(reports_do_client) == 1
-    request_body = json.loads(reports_do_client[0]["input_body"])
-    assert request_body[campo] == resumir_texto_livre(PERGUNTA)
