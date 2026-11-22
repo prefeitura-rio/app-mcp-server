@@ -409,9 +409,8 @@ async def test_leitura_roda_no_pool_dedicado(monkeypatch):
 
     Antes, o `run_in_executor(None, ...)` colocava as leituras no mesmo pool
     default que `save_response_in_bq_background` e
-    `save_cor_alert_in_bq_background` usam —
-    e uma leitura que estourou o prazo mantém a thread ocupada até a query
-    terminar sozinha.
+    `save_cor_alert_in_bq_background` usam — e uma leitura que estourou o
+    prazo mantém a thread ocupada até a query terminar sozinha.
     """
     job = _Job(linhas=[])
     module, _cliente = _montar(monkeypatch, "bq_exc_pool", _Cliente(job))

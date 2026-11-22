@@ -1641,9 +1641,9 @@ class BigQueryQueryError(Exception):
 # O `wait_for` libera o `await` no prazo, mas não mata a thread: ela segue
 # ocupada até a query terminar sozinha. Com o executor default do loop, essas
 # threads presas são as mesmas que `save_response_in_bq_background` e
-# `save_cor_alert_in_bq_background` usam —
-# ou seja, um BigQuery lento na *leitura* acabava enfileirando a gravação de
-# log e de alerta do COR, que não têm nada a ver com o problema.
+# `save_cor_alert_in_bq_background` usam — ou seja, um BigQuery lento na
+# *leitura* acabava enfileirando a gravação de log e de alerta do COR, que
+# não têm nada a ver com o problema.
 #
 # Pool próprio e limitado: leitura travada só atrapalha leitura. E o limite é
 # desejável, não um efeito colateral — quando ele satura, a espera pela vaga
