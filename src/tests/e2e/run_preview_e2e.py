@@ -26,7 +26,8 @@ STALE_REGULARIZACAO_HINTS = (
 # A PGM responde de forma intermitente "sem registros" para o mesmo payload que
 # passa minutos depois (DEV-415). Nesse caso o happy path de `/emitir_guia`
 # tenta de novo antes de concluir: a PGM não emitiu guia, então repetir não
-# duplica nada.
+# duplica nada. O happy path de `/consulta_debitos` usa as mesmas tentativas
+# quando a PGM demora ou está indisponível (DEV-779): a consulta só lê.
 EXTERNAL_API_MAX_ATTEMPTS = max(
     1, int(os.environ.get("PREVIEW_E2E_EXTERNAL_RETRIES", "3"))
 )
@@ -48,6 +49,25 @@ UPSTREAM_FAILURE_HINTS = (
 )
 RETRYABLE_UPSTREAM_FAILURES = frozenset({"sem_registros"})
 SKIPPABLE_UPSTREAM_FAILURES = frozenset({"sem_registros", "indisponivel"})
+# `/consulta_debitos` não emite nada, então o timeout também pode se repetir.
+# "timeout" é o cliente deste runner desistindo de esperar a rota (a PGM não
+# respondeu a tempo); "indisponivel" é o timeout de `pgm_api` dentro da rota.
+# Persistindo, o happy path vira SKIP explícito. Conexão recusada (o preview
+# caiu), HTTP diferente de 200, erro genérico e qualquer outro erro reprovam.
+CONSULTA_TRANSIENT_FAILURES = frozenset({"timeout", "indisponivel"})
+
+
+class TransportFailure(Exception):
+    """
+    A requisição não teve resposta HTTP. `kind` é "timeout" quando o servidor
+    não respondeu dentro do prazo e "connection" quando a conexão falhou.
+    `detail` é a mensagem da exceção de rede, sem conteúdo de resposta.
+    """
+
+    def __init__(self, kind: str, detail: str):
+        super().__init__(detail)
+        self.kind = kind
+        self.detail = detail
 
 
 def is_stale_regularizacao_fixture(parsed) -> bool:
@@ -143,12 +163,24 @@ def get_auth_token() -> str:
     return ""
 
 
-def request_json(
+def _is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, (TimeoutError, socket.timeout))
+    return False
+
+
+def post_json(
     path: str,
     payload=None,
     token: str | None = None,
     timeout: int = DEFAULT_POST_TIMEOUT,
 ):
+    """
+    POST com corpo JSON. Devolve `(status, raw, parsed)` quando há resposta
+    HTTP e levanta `TransportFailure` quando não há.
+    """
     url = f"{BASE_URL}{path}"
     body = json.dumps(payload or {}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -164,7 +196,20 @@ def request_json(
         raw = exc.read().decode("utf-8")
         return exc.code, raw, parse_json(raw)
     except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
-        fail(f"{path}: request timed out or failed to connect", str(exc))
+        kind = "timeout" if _is_timeout(exc) else "connection"
+        raise TransportFailure(kind, str(exc)) from exc
+
+
+def request_json(
+    path: str,
+    payload=None,
+    token: str | None = None,
+    timeout: int = DEFAULT_POST_TIMEOUT,
+):
+    try:
+        return post_json(path, payload=payload, token=token, timeout=timeout)
+    except TransportFailure as exc:
+        fail(f"{path}: request timed out or failed to connect", exc.detail)
 
 
 def request_text(path: str, timeout: int = DEFAULT_GET_TIMEOUT):
@@ -258,14 +303,55 @@ def build_consulta_payload(valid: bool):
     return payload
 
 
+def request_consulta_with_upstream_retry(payload, token: str, label: str):
+    """
+    Chama `/consulta_debitos` e repete enquanto a falha é transitória
+    (`CONSULTA_TRANSIENT_FAILURES`). Devolve
+    `(status, raw, parsed, transient, attempts)` da última chamada, com
+    `transient` = a classe da falha transitória ou `None`.
+    """
+    path = "/consulta_debitos"
+    attempts = EXTERNAL_API_MAX_ATTEMPTS
+    for attempt in range(1, attempts + 1):
+        try:
+            status, raw, parsed = post_json(path, payload=payload, token=token)
+        except TransportFailure as exc:
+            if exc.kind not in CONSULTA_TRANSIENT_FAILURES:
+                fail(f"{path}: request timed out or failed to connect", exc.detail)
+            status, raw, parsed = None, None, None
+            transient = exc.kind
+        else:
+            upstream = classify_upstream_failure(parsed) if status == 200 else None
+            transient = upstream if upstream in CONSULTA_TRANSIENT_FAILURES else None
+
+        if transient is None or attempt == attempts:
+            return status, raw, parsed, transient, attempt
+
+        info(
+            f"{label}: attempt {attempt}/{attempts} got transient failure "
+            f"'{transient}'; retrying in {EXTERNAL_API_RETRY_DELAY_SECONDS}s"
+        )
+        time.sleep(EXTERNAL_API_RETRY_DELAY_SECONDS)
+
+    raise AssertionError("unreachable: EXTERNAL_API_MAX_ATTEMPTS >= 1")
+
+
 def run_consulta_happy_path() -> None:
     info("Running authenticated consulta_debitos happy path")
     auth_token = get_auth_token()
-    status, raw, parsed = request_json(
-        "/consulta_debitos",
-        payload=build_consulta_payload(valid=True),
-        token=auth_token,
+    status, raw, parsed, transient, attempts = request_consulta_with_upstream_retry(
+        build_consulta_payload(valid=True),
+        auth_token,
+        "consulta_debitos happy path",
     )
+    if transient is not None:
+        info(
+            "consulta_debitos happy path: SKIPPED - PGM "
+            f"'{transient}' in {attempts} attempt(s). If it repeats, check the "
+            "PGM upstream and PREVIEW_CONSULTA_* em Infisical."
+        )
+        return
+
     require_status(status, 200, "consulta_debitos happy path", raw, parsed)
     require_json_object(parsed, "consulta_debitos happy path", raw)
 
