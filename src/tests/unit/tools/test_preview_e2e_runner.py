@@ -18,6 +18,7 @@ Os dados abaixo são sintéticos.
 import importlib.util
 import json
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -268,7 +269,7 @@ def test_skip_do_regularizacao_nao_imprime_a_descricao(
 def test_consulta_falha_imprime_so_o_resumo(runner, monkeypatch, capsys):
     monkeypatch.setattr(runner, "CONSULTA_TIPO", "cpfCnpj")
     monkeypatch.setattr(runner, "CONSULTA_VALOR", "00000000000")
-    responder(runner, monkeypatch, [(200, ERRO_DE_NEGOCIO)])
+    responder_post(runner, monkeypatch, [(200, ERRO_DE_NEGOCIO)])
 
     with pytest.raises(SystemExit):
         runner.run_consulta_happy_path()
@@ -331,3 +332,234 @@ def test_response_summary_so_tem_status_chaves_e_tamanho(runner):
         "json_type": "list",
         "length": 2,
     }
+
+
+# ===== /consulta_debitos: timeout e indisponibilidade da PGM (DEV-779) =====
+
+CONSULTA_SUCESSO = {
+    "api_resposta_sucesso": True,
+    "dicionario_itens": {"1": CDA_FALSA},
+    "total_itens_pagamento": 1,
+    "debitos_msg": f"CDA {CDA_FALSA}",
+    "mensagem_divida_contribuinte": f"Execução {EXECUCAO_FISCAL_FALSA}",
+}
+
+
+@pytest.fixture
+def consulta(runner, monkeypatch):
+    monkeypatch.setattr(runner, "CONSULTA_TIPO", "cpfCnpj")
+    monkeypatch.setattr(runner, "CONSULTA_VALOR", "00000000000")
+    return runner
+
+
+def responder_post(runner, monkeypatch, respostas):
+    """
+    Faz `post_json` devolver as respostas em ordem: `(status, corpo)` ou uma
+    `TransportFailure` para levantar. Registra as rotas chamadas.
+    """
+    rotas = []
+    fila = list(respostas)
+
+    def fake_post_json(path, payload=None, token=None, timeout=None):
+        rotas.append(path)
+        resposta = fila.pop(0)
+        if isinstance(resposta, Exception):
+            raise resposta
+        status, corpo = resposta
+        return status, json.dumps(corpo), corpo
+
+    monkeypatch.setattr(runner, "post_json", fake_post_json)
+    return rotas
+
+
+def timeout(runner):
+    return runner.TransportFailure("timeout", "timed out")
+
+
+def test_consulta_timeout_uma_vez_e_depois_sucesso_passa(
+    consulta, monkeypatch, sleeps, capsys
+):
+    rotas = responder_post(
+        consulta, monkeypatch, [timeout(consulta), (200, CONSULTA_SUCESSO)]
+    )
+
+    consulta.run_consulta_happy_path()
+
+    assert rotas == ["/consulta_debitos", "/consulta_debitos"]
+    assert sleeps == [7]
+    saida = capsys.readouterr().out
+    assert "attempt 1/3 got transient failure 'timeout'" in saida
+    assert "SKIPPED" not in saida
+    assert "FAIL" not in saida
+    assert_sem_dados_da_resposta(saida)
+
+
+def test_consulta_timeout_persistente_vira_skip_explicito(
+    consulta, monkeypatch, sleeps, capsys
+):
+    """O caso do run 45339075316: a PGM não respondeu e o deploy foi revertido."""
+    rotas = responder_post(consulta, monkeypatch, [timeout(consulta)] * 3)
+
+    consulta.run_consulta_happy_path()
+
+    assert rotas == ["/consulta_debitos"] * 3
+    assert sleeps == [7, 7]
+    saida = capsys.readouterr().out
+    assert "consulta_debitos happy path: SKIPPED - PGM 'timeout'" in saida
+    assert "in 3 attempt(s)" in saida
+    assert "FAIL" not in saida
+
+
+def test_consulta_indisponivel_repete_e_vira_skip(
+    consulta, monkeypatch, sleeps, capsys
+):
+    rotas = responder_post(consulta, monkeypatch, [(200, INDISPONIVEL)] * 3)
+
+    consulta.run_consulta_happy_path()
+
+    assert rotas == ["/consulta_debitos"] * 3
+    assert sleeps == [7, 7]
+    saida = capsys.readouterr().out
+    assert "consulta_debitos happy path: SKIPPED - PGM 'indisponivel'" in saida
+    assert "FAIL" not in saida
+    assert "temporariamente" not in saida
+
+
+def test_consulta_indisponivel_e_depois_sucesso_passa(consulta, monkeypatch, sleeps):
+    rotas = responder_post(
+        consulta, monkeypatch, [(200, INDISPONIVEL), (200, CONSULTA_SUCESSO)]
+    )
+
+    consulta.run_consulta_happy_path()
+
+    assert rotas == ["/consulta_debitos"] * 2
+    assert sleeps == [7]
+
+
+def test_consulta_sucesso_nao_e_repetido(consulta, monkeypatch, sleeps):
+    rotas = responder_post(consulta, monkeypatch, [(200, CONSULTA_SUCESSO)])
+
+    consulta.run_consulta_happy_path()
+
+    assert rotas == ["/consulta_debitos"]
+    assert sleeps == []
+
+
+def test_consulta_conexao_recusada_reprova_sem_nova_tentativa(
+    consulta, monkeypatch, sleeps, capsys
+):
+    """Sem conexão, o preview caiu: é regressão, não oscilação da PGM."""
+    falha = consulta.TransportFailure("connection", "[Errno 111] Connection refused")
+    rotas = responder_post(consulta, monkeypatch, [falha])
+
+    with pytest.raises(SystemExit) as excinfo:
+        consulta.run_consulta_happy_path()
+
+    assert excinfo.value.code == 1
+    assert rotas == ["/consulta_debitos"]
+    assert sleeps == []
+    saida = capsys.readouterr().out
+    assert "FAIL: /consulta_debitos: request timed out or failed to connect" in saida
+
+
+@pytest.mark.parametrize("corpo", [ERRO_GENERICO, SEM_REGISTROS, ERRO_DE_NEGOCIO])
+def test_consulta_outras_falhas_reprovam_sem_nova_tentativa(
+    consulta, monkeypatch, sleeps, capsys, corpo
+):
+    rotas = responder_post(consulta, monkeypatch, [(200, corpo)])
+
+    with pytest.raises(SystemExit) as excinfo:
+        consulta.run_consulta_happy_path()
+
+    assert excinfo.value.code == 1
+    assert rotas == ["/consulta_debitos"]
+    assert sleeps == []
+    saida = capsys.readouterr().out
+    assert "expected api_resposta_sucesso=true" in saida
+    assert "Tente novamente" not in saida
+    assert_sem_dados_da_resposta(saida)
+
+
+def test_consulta_http_500_reprova_sem_nova_tentativa(
+    consulta, monkeypatch, sleeps, capsys
+):
+    rotas = responder_post(consulta, monkeypatch, [(500, INDISPONIVEL)])
+
+    with pytest.raises(SystemExit):
+        consulta.run_consulta_happy_path()
+
+    assert rotas == ["/consulta_debitos"]
+    assert sleeps == []
+    assert "expected HTTP 200, got 500" in capsys.readouterr().out
+
+
+def test_consulta_timeout_e_depois_contrato_quebrado_reprova(
+    consulta, monkeypatch, sleeps, capsys
+):
+    """A tolerância ao timeout não afrouxa o contrato do sucesso."""
+    sem_chave = {k: v for k, v in CONSULTA_SUCESSO.items() if k != "debitos_msg"}
+    responder_post(consulta, monkeypatch, [timeout(consulta), (200, sem_chave)])
+
+    with pytest.raises(SystemExit):
+        consulta.run_consulta_happy_path()
+
+    saida = capsys.readouterr().out
+    assert "missing key 'debitos_msg'" in saida
+    assert_sem_dados_da_resposta(saida)
+
+
+class _RespostaFalsa:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return b'{"ok": true}'
+
+
+@pytest.mark.parametrize(
+    ("erro", "esperado"),
+    [
+        (TimeoutError("timed out"), "timeout"),
+        (urllib.error.URLError(TimeoutError("timed out")), "timeout"),
+        (urllib.error.URLError(ConnectionRefusedError(111, "refused")), "connection"),
+        (urllib.error.URLError("Name or service not known"), "connection"),
+    ],
+)
+def test_post_json_classifica_falha_de_transporte(runner, monkeypatch, erro, esperado):
+    def fake_urlopen(request, timeout=None):
+        raise erro
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(runner.TransportFailure) as excinfo:
+        runner.post_json("/consulta_debitos", payload={}, token="t")
+
+    assert excinfo.value.kind == esperado
+
+
+def test_post_json_devolve_resposta(runner, monkeypatch):
+    monkeypatch.setattr(
+        runner.urllib.request, "urlopen", lambda request, timeout=None: _RespostaFalsa()
+    )
+
+    assert runner.post_json("/x") == (200, '{"ok": true}', {"ok": True})
+
+
+def test_request_json_mantem_fail_em_falha_de_transporte(runner, monkeypatch, capsys):
+    """As outras rotas do runner seguem reprovando em timeout, como antes."""
+
+    def fake_urlopen(request, timeout=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(SystemExit) as excinfo:
+        runner.request_json("/emitir_guia", payload={}, token="t")
+
+    assert excinfo.value.code == 1
+    assert "FAIL: /emitir_guia: request timed out" in capsys.readouterr().out

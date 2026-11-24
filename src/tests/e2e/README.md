@@ -23,6 +23,8 @@ Quando a massa de staging nao retorna itens para emissao, os happy paths de guia
 
 No happy path de `/emitir_guia`, quando a PGM responde "sem registros", o runner tenta de novo (`PREVIEW_E2E_EXTERNAL_RETRIES` vezes, com `PREVIEW_E2E_EXTERNAL_RETRY_DELAY` segundos entre elas) e, se persistir, pula o passo com `SKIPPED` explicito. "Temporariamente indisponivel" (timeout da PGM) pula sem nova tentativa. "Tente novamente mais tarde" (que tambem pode ser excecao do nosso codigo) e qualquer outro erro reprovam. Sucesso, timeout e erro generico nunca sao repetidos: podem ter gerado uma guia real.
 
+No happy path de `/consulta_debitos` (so leitura, nao emite nada), timeout da requisicao e "temporariamente indisponivel" (timeout da PGM dentro da rota) sao repetidos com as mesmas tentativas e intervalo do `/emitir_guia` e, se persistirem, o passo e pulado com `SKIPPED` explicito (DEV-779). Conexao recusada (preview fora do ar), HTTP diferente de `200`, "tente novamente mais tarde", qualquer outro erro e o contrato do sucesso (chaves obrigatorias) continuam reprovando sem nova tentativa.
+
 As falhas imprimem so um resumo da resposta (status HTTP, `api_resposta_sucesso`, chaves presentes, tamanho do corpo), nunca `api_descricao_erro` nem valores: eles citam a execucao fiscal e os identificadores do contribuinte.
 
 ## Variaveis de Ambiente
@@ -34,7 +36,7 @@ As falhas imprimem so um resumo da resposta (status HTTP, `api_resposta_sucesso`
 - `PREVIEW_CONSULTA_ANO_AUTO_INFRACAO`: obrigatorio apenas quando o tipo for `numeroAutoInfracao`
 - `PREVIEW_AVISTA_PAYLOAD`: payload final real usado no happy path de `/emitir_guia`
 - `PREVIEW_REGULARIZACAO_PAYLOAD`: payload final real usado no happy path de `/emitir_guia_regularizacao`
-- `PREVIEW_E2E_EXTERNAL_RETRIES`: tentativas do happy path de `/emitir_guia` quando a PGM responde "sem registros". Padrao: `3`
+- `PREVIEW_E2E_EXTERNAL_RETRIES`: tentativas do happy path de `/emitir_guia` quando a PGM responde "sem registros" e do happy path de `/consulta_debitos` em timeout ou indisponibilidade da PGM. Padrao: `3`
 - `PREVIEW_E2E_EXTERNAL_RETRY_DELAY`: segundos entre as tentativas. Padrao: `20`
 
 ## Execucao Local
