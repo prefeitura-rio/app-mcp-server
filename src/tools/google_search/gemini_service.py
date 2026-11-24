@@ -285,9 +285,9 @@ async def _resolver_urls_no_prazo(chunks: List[Any], deadline_at: float) -> dict
             f"Seguindo com as URIs do grounding."
         )
         _marcar_span(**{"gemini.search.urls_degraded": True})
+        uris = (getattr(getattr(c, "web", None), "uri", None) for c in chunks)
         resolved_map = {
-            chunk.web.uri: {"url": chunk.web.uri, "error": "prazo esgotado"}
-            for chunk in chunks
+            uri: {"url": uri, "error": "prazo esgotado"} for uri in uris if uri
         }
     # Nos dois caminhos: a blacklist só é conferida de novo aqui.
     return _fontes_resolvidas(chunks, resolved_map)
@@ -676,17 +676,34 @@ class GeminiService:
                 "web_search_queries": [],
             }
 
+        web_search_queries = (
+            getattr(candidate.grounding_metadata, "web_search_queries", None) or []
+        )
         logger.info("Resolvendo URLs das fontes...")
-        resolved_urls_map = await _resolver_urls_no_prazo(
-            candidate.grounding_metadata.grounding_chunks, deadline_at
-        )
-
-        citations = get_citations(
-            response=response, resolved_urls_map=resolved_urls_map
-        )
-        modified_text = format_text_with_citations(response.text, citations)
-        sources_gathered = get_sources_list(citations, modified_text)
-        web_search_queries = candidate.grounding_metadata.web_search_queries or []
+        try:
+            resolved_urls_map = await _resolver_urls_no_prazo(
+                candidate.grounding_metadata.grounding_chunks, deadline_at
+            )
+            citations = get_citations(
+                response=response, resolved_urls_map=resolved_urls_map
+            )
+            modified_text = format_text_with_citations(response.text, citations)
+            sources_gathered = get_sources_list(citations, modified_text)
+        except Exception as exc:
+            # A geração já foi aceita: um `grounding_metadata` fora do esperado não
+            # derruba a tool (o `grounding_supports = None` de nov/2026 virava
+            # `TypeError` para o Salesforce). Sai o texto do Gemini sem citações.
+            logger.warning(
+                f"Falha ao montar as citações; resposta segue sem fontes | "
+                f"model={model} erro={type(exc).__name__}: {exc}"
+            )
+            _marcar_span(**{"gemini.search.citations_failed": True})
+            return {
+                **base,
+                "text": response.text or "",
+                "sources": [],
+                "web_search_queries": web_search_queries,
+            }
 
         # Check if all sources were filtered out by blacklist
         if not sources_gathered and citations:
@@ -1021,7 +1038,11 @@ async def resolve_urls(urls_to_resolve: List[Any]) -> Dict[str, str]:
     blacklist não é conferida aqui: é em `_fontes_resolvidas`, que também cobre o
     fallback do prazo esgotado.
     """
-    unique_urls = list(set([uri.web.uri for uri in urls_to_resolve]))
+    # Chunk sem `web.uri` (ex.: `retrieved_context`) não tem o que resolver.
+    unique_urls = list(
+        {getattr(getattr(c, "web", None), "uri", None) for c in urls_to_resolve}
+        - {None}
+    )
     urls = [{"uri": uri} for uri in unique_urls]
 
     # logger.info(f"Resolvendo {len(urls)} URLs únicas")
@@ -1086,73 +1107,60 @@ def get_citations(response, resolved_urls_map):
     construct a list of citation objects. Each citation object includes the
     start and end indices of the text segment it refers to, and a string
     containing formatted markdown links to the supporting web chunks.
+
+    Todo campo opcional do `grounding_metadata` pode vir `None` no SDK, mesmo com o
+    metadata preenchido: `grounding_supports = None` com `finish_reason=STOP`
+    derrubava a tool em nov/2026. Aqui `None` vale como lista vazia, e o suporte ou
+    chunk sem o dado necessário é pulado.
     """
     citations = []
 
-    # Ensure response and necessary nested structures are present
-    if not response or not response.candidates:
+    if not response or not getattr(response, "candidates", None):
         return citations
 
-    candidate = response.candidates[0]
-    if (
-        not hasattr(candidate, "grounding_metadata")
-        or not candidate.grounding_metadata
-        or not hasattr(candidate.grounding_metadata, "grounding_supports")
-    ):
+    metadata = getattr(response.candidates[0], "grounding_metadata", None)
+    if not metadata:
         return citations
 
-    for support in candidate.grounding_metadata.grounding_supports:
-        citation = {}
+    supports = getattr(metadata, "grounding_supports", None) or []
+    chunks = getattr(metadata, "grounding_chunks", None) or []
 
-        # Ensure segment information is present
-        if not hasattr(support, "segment") or support.segment is None:
-            continue  # Skip this support if segment info is missing
+    for support in supports:
+        segment = getattr(support, "segment", None)
+        if segment is None:
+            continue
+        end_index = getattr(segment, "end_index", None)
+        if end_index is None:
+            continue
 
-        start_index = (
-            support.segment.start_index
-            if support.segment.start_index is not None
-            else 0
+        indices = getattr(support, "grounding_chunk_indices", None) or []
+        fontes = (_fonte_da_citacao(chunks, i, resolved_urls_map) for i in indices)
+        citations.append(
+            {
+                "start_index": getattr(segment, "start_index", None) or 0,
+                "end_index": end_index,
+                "segments": [fonte for fonte in fontes if fonte],
+            }
         )
-
-        # Ensure end_index is present to form a valid segment
-        if support.segment.end_index is None:
-            continue  # Skip if end_index is missing, as it's crucial
-
-        # Add 1 to end_index to make it an exclusive end for slicing/range purposes
-        # (assuming the API provides an inclusive end_index)
-        citation["start_index"] = start_index
-        citation["end_index"] = support.segment.end_index
-
-        citation["segments"] = []
-        if (
-            hasattr(support, "grounding_chunk_indices")
-            and support.grounding_chunk_indices
-        ):
-            for ind in support.grounding_chunk_indices:
-                try:
-                    chunk = candidate.grounding_metadata.grounding_chunks[ind]
-                    resolved_url = resolved_urls_map.get(chunk.web.uri, None)
-
-                    # Skip if resolved_url is None or doesn't have the expected structure
-                    if not resolved_url or "url" not in resolved_url:
-                        continue
-
-                    citation["segments"].append(
-                        {
-                            "label": chunk.web.title,
-                            "uri": chunk.web.uri,
-                            "url": resolved_url["url"],
-                            # "text": support.segment.text,
-                            # "error": resolved_url["error"],
-                        }
-                    )
-                except (IndexError, AttributeError, NameError):
-                    # Handle cases where chunk, web, uri, or resolved_map might be problematic
-                    # For simplicity, we'll just skip adding this particular segment link
-                    # In a production system, you might want to log this.
-                    pass
-        citations.append(citation)
     return citations
+
+
+def _fonte_da_citacao(chunks, ind, resolved_urls_map) -> Optional[dict]:
+    """Fonte do chunk `ind` de um suporte, ou `None` se o índice não existe, o chunk
+    não tem `web.uri` ou a URL não está no mapa (barrada pela blacklist em
+    `_fontes_resolvidas`)."""
+    if not isinstance(ind, int) or not 0 <= ind < len(chunks):
+        return None
+    web = getattr(chunks[ind], "web", None)
+    uri = getattr(web, "uri", None)
+    resolved_url = resolved_urls_map.get(uri) if uri else None
+    if not resolved_url or "url" not in resolved_url:
+        return None
+    return {
+        "label": getattr(web, "title", None),
+        "uri": uri,
+        "url": resolved_url["url"],
+    }
 
 
 def format_text_with_citations(text, citations_data):
