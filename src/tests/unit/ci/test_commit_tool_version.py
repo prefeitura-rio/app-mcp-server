@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,33 @@ def test_publica_a_versao_sem_corrida(repos: Repos):
     assert "Tentativa 2/5" not in result.stdout
     assert repos.git(repos.remote, "rev-parse", "main~1") == repos.merge_sha
     assert repos.remote_version()["version"] == f"v{repos.short(repos.merge_sha)}"
+
+
+def test_grava_o_mesmo_conteudo_que_a_imagem_do_merge_leva(repos: Repos):
+    # DEV-794: o build-docker grava na imagem o que o stamp_tool_version.sh
+    # gera para o merge; o arquivo da main tem de ser idêntico a ele.
+    stamped = repos.tmp / "imagem.json"
+    stamp = subprocess.run(
+        ["bash", str(SCRIPT.with_name("stamp_tool_version.sh"))],
+        cwd=repos.runner,
+        env=dict(repos.env, SOURCE_SHA=repos.merge_sha, OUTPUT=str(stamped)),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert stamp.returncode == 0, stamp.stderr
+
+    result = repos.run_script()
+
+    assert result.returncode == 0, result.stderr
+    assert repos.remote_file(VERSION_FILE) == stamped.read_text().strip()
+    committed = repos.git(
+        repos.runner, "show", "-s", "--format=%cd", "--date=unix", repos.merge_sha
+    )
+    expected = datetime.fromtimestamp(int(committed), tz=timezone.utc)
+    assert repos.remote_version()["last_updated"] == expected.strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
 
 
 def test_refaz_o_push_quando_perde_a_corrida_entre_o_fetch_e_o_push(repos: Repos):

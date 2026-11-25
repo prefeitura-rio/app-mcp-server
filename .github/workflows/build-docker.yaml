@@ -12,6 +12,18 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Histórico completo: o SHA curto da versão sai com o mesmo tamanho
+          # que o update-tool-version.yaml grava na main.
+          fetch-depth: 0
+
+      - name: Stamp tool version of this commit
+        # A imagem leva a versão do próprio merge. O tool_version.json da
+        # árvore registra o merge anterior: o bump deste só entra num commit
+        # seguinte, que não vira imagem (DEV-794).
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: bash scripts/ci/stamp_tool_version.sh
 
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
