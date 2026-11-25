@@ -30,6 +30,7 @@ REMOTE="${REMOTE:-origin}"
 BRANCH="${BRANCH:-main}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-5}"
 RETRY_DELAY="${RETRY_DELAY:-5}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
   echo "::error::$*" >&2
@@ -105,14 +106,9 @@ while true; do
     exit 0
   fi
 
-  mkdir -p "$(dirname "$target")"
-  cat >"$target" <<EOF
-{
-  "version": "${VERSION}",
-  "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "description": "Tool version for cache invalidation"
-}
-EOF
+  # Mesmo conteúdo que o build-docker.yaml grava na imagem deste merge
+  # (DEV-794): a data é a do commit, não a hora deste job.
+  SOURCE_SHA="$SOURCE" OUTPUT="$target" bash "${SCRIPT_DIR}/stamp_tool_version.sh" >/dev/null
   git -C "$WORKTREE" add -- "$VERSION_FILE"
   if git -C "$WORKTREE" diff --cached --quiet; then
     echo "${VERSION_FILE} já registra ${VERSION} em ${REMOTE}/${BRANCH}; nada a commitar."
