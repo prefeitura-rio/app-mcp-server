@@ -162,6 +162,22 @@ _INSTRUCOES_DE_RESPOSTA = (
 )
 
 
+def limite_do_festival() -> datetime:
+    """Instante em que o festival deixa de estar em andamento.
+
+    É o fim da jornada do último dia — 06h do dia seguinte —, e não a meia-noite
+    de `ULTIMO_DIA`: os shows entram pela madrugada, e até `HORA_FIM_DA_JORNADA`
+    o que está acontecendo ainda é a programação do dia anterior.
+
+    `localize` do próprio timezone, e não `agora.tzinfo.localize`: o `tzinfo` de
+    um datetime já localizado pelo pytz é uma instância de offset fixo, e
+    reusá-la para localizar outra data aplicaria o offset da data errada.
+    """
+    return get_rio_timezone().localize(
+        datetime.combine(ULTIMO_DIA + timedelta(days=1), time(hour=HORA_FIM_DA_JORNADA))
+    )
+
+
 def _descrever_dia(data: date) -> Dict[str, str]:
     return {
         "data": data.isoformat(),
@@ -184,14 +200,7 @@ def _situacao_temporal(agora: datetime) -> Dict[str, Any]:
     # Antes das 6h, a jornada em andamento é a do dia anterior.
     jornada = hoje - timedelta(days=1) if agora.hour < HORA_FIM_DA_JORNADA else hoje
 
-    # `localize` do próprio timezone, e não `agora.tzinfo.localize`: o `tzinfo`
-    # de um datetime já localizado pelo pytz é uma instância de offset fixo, e
-    # reusá-la para localizar outra data aplicaria o offset da data errada.
-    limite_do_festival = get_rio_timezone().localize(
-        datetime.combine(ULTIMO_DIA + timedelta(days=1), time(hour=HORA_FIM_DA_JORNADA))
-    )
-
-    if agora >= limite_do_festival:
+    if agora >= limite_do_festival():
         status = "encerrado"
     elif hoje < PRIMEIRO_DIA:
         status = "antes_do_festival"
